@@ -70,6 +70,14 @@ openclaw-modal-dialog {
   }
 }
 
+.oc-modal-dialog__focus-guard {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
 .oc-modal-dialog__body {
   flex: 1 1 auto;
   min-height: 0;

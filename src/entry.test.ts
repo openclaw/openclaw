@@ -148,18 +148,18 @@ describe("entry precomputed command help fast path", () => {
   });
 
   it("skips the host command help fast path when a container target is active", async () => {
-    const outputPrecomputedSecretsHelpText = vi.fn();
+    const outputPrecomputedCommandHelpText = vi.fn();
 
     const handled = await runWithPrecomputedHelpMocks(
       tryHandlePrecomputedCommandHelpFastPath,
       ["node", "openclaw", "--container", "demo", "secrets", "--help"],
       {
         env: {},
-        outputPrecomputedSecretsHelpText: outputPrecomputedSecretsHelpText.mockReturnValue(true),
+        outputPrecomputedCommandHelpText: outputPrecomputedCommandHelpText.mockReturnValue(true),
       },
     );
 
     expect(handled).toBe(false);
-    expect(outputPrecomputedSecretsHelpText).not.toHaveBeenCalled();
+    expect(outputPrecomputedCommandHelpText).not.toHaveBeenCalled();
   });
 });

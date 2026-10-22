@@ -16,7 +16,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "models.providers.*.apiKey":
     "Provider credential used for API-key based authentication when the provider requires direct key auth. Use secret/env substitution and avoid storing real keys in committed config files.",
   "models.providers.*.auth":
-    'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, and "aws-sdk" for AWS credential resolution. Match this to your provider requirements.',
+    'Selects provider auth style: "api-key" for API key auth, "token" for bearer token auth, "oauth" for OAuth credentials, "aws-sdk" for AWS credential resolution, and "none" for custom openai-completions endpoints that do not enforce auth. Explicit "none" skips credentials and sends no Authorization header; other effective adapters are rejected.',
   "models.providers.*.api":
     "Provider API adapter selection controlling request/response compatibility handling for model calls. Use the adapter that matches your upstream provider protocol to avoid feature mismatch.",
   "models.providers.*.maxTokens":
@@ -204,6 +204,8 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
     "Sets the extra memory directory or file. Relative paths resolve from the agent workspace; direct file entries are indexed exactly.",
   "memory.search.extraPaths.*.pattern":
     'Limits a directory entry to supported files matching this root-relative glob, for example "runbooks/**/*.md". Omit it to scan all supported files recursively.',
+  "memory.search.extraPaths.*.evergreen":
+    "Keeps matching extra-path reference files out of filesystem-mtime temporal decay. This changes recency ranking only; it does not make the content trusted, promote it, or change source provenance.",
   "memory.search.multimodal":
     'Optional multimodal memory settings for indexing image and audio files from configured extra paths. Keep this off unless your embedding model explicitly supports cross-modal embeddings, and set `memory.search.fallback` to "none" while it is enabled. Matching files are uploaded to the configured remote embedding provider during indexing.',
   "memory.search.multimodal.enabled":
@@ -225,7 +227,7 @@ export const MODEL_FIELD_HELP: Record<string, string> = {
   "memory.search.documentInputType":
     "Optional provider-specific `input_type` value for document and indexing memory embeddings. Use this with OpenAI-compatible asymmetric embedding endpoints that require a passage or document label.",
   "memory.search.outputDimensionality":
-    "Provider-specific output vector size override for memory embeddings. Gemini models support 128-3072 dimensions and recommend 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
+    "Provider-specific output vector size override for memory embeddings. Gemini models support 128-3072 dimensions and recommend 768, 1536, or 3072; Bedrock families such as Titan V2, Cohere V4, and Nova expose their own allowed sizes. OpenAI-compatible endpoints receive it as `dimensions` and must return vectors of exactly that size. Managed local GGUF embeddings truncate and normalize locally. Expect a full reindex when you change it because stored vector dimensions must stay consistent.",
   "memory.search.remote.baseUrl":
     "Overrides the embedding API endpoint, such as an OpenAI-compatible proxy or custom Gemini base URL. Use this only when routing through your own gateway or vendor endpoint; keep provider defaults otherwise.",
   "memory.search.remote.apiKey":

@@ -1,7 +1,34 @@
+// Closed producer conditions; captured before long stack traces evict the cause.
+export const UPDATE_CANDIDATE_STARTUP_FAILURES = [
+  [/\bInvalid config at |\bOpenClaw config is invalid\b/u, "Invalid configuration field"],
+  [
+    /\bOpenClaw state database schema migration required\b|\bgateway requires (?:state migration|offline media migration|state database schema migration|cron run history migration)\b|\bOpenClaw agent database .+; run openclaw doctor --fix to migrate persisted media before using it\./u,
+    "schema migration required",
+  ],
+  [
+    /\bGateway refused startup because \d+ OpenClaw database schema\(s\) are newer than this build\./u,
+    "database schema newer than candidate",
+  ],
+  [
+    /\bplugin load failed: ([^:\r\n]+):|\[plugins\] (.+) failed during (?:validation|load|register) from /u,
+    "plugin load failed",
+  ],
+  [/\bEADDRINUSE\b|\banother gateway instance is already listening on /u, "port in use"],
+  [
+    /\bwas compiled against a different Node\.js version using\b|\bModule did not self-register\b|\bGLIBC_\d+(?:\.\d+)+['"] not found\b/u,
+    "native module ABI mismatch",
+  ],
+  [/\bCannot find (?:module|package) ['"][^\r\n]+\.node['"]/u, "native module missing"],
+  [
+    /FATAL ERROR: (?:Reached heap limit|Ineffective mark-compacts near heap limit) Allocation failed - JavaScript heap out of memory/u,
+    "startup ran out of memory",
+  ],
+] as const;
+
 // Public descriptions are fixed text: registry responses and local paths stay local.
 export const UPDATE_PREFLIGHT_DETAILS = {
   "gateway-stop-unverified":
-    "Gateway service inspection is unavailable; package replacement cannot proceed safely. Stop the Gateway through Task Scheduler, its original terminal, or openclaw gateway stop, then rerun openclaw update. No package replacement was attempted.",
+    "Gateway service inspection is unavailable; package replacement cannot proceed safely. Stop the Gateway through its service manager, its original terminal, or openclaw gateway stop, then rerun openclaw update. No package replacement was attempted.",
   "windows-task-elevation-required":
     "Windows Task Scheduler requires elevated access for this Gateway task. Rerun openclaw update from an elevated terminal (Run as administrator).",
   "windows-task-inspection-timeout":

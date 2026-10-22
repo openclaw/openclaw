@@ -17,45 +17,31 @@ import { getPreparedPluginSecretInput } from "./prepared-plugin-input.js";
 import {
   activateSecretsRuntimeSnapshotState,
   clearSecretsRuntimeSnapshotState,
-  type PreparedSecretsRuntimeSnapshot,
 } from "./runtime-state.js";
 
 const secretRef = { source: "env", provider: "default", id: "PREPARED_PLUGIN_KEY" } as const;
 
 function configWithSecret(value: unknown, id: string): OpenClawConfig {
   return {
-    plugins: {
-      entries: {
-        [id]: {
-          enabled: true,
-          config: { apiKey: value },
-        },
-      },
-    },
+    plugins: { entries: { [id]: { enabled: true, config: { apiKey: value } } } },
   } as OpenClawConfig;
-}
-
-function snapshot(value: string, id: string): PreparedSecretsRuntimeSnapshot {
-  const sourceConfig = configWithSecret(secretRef, id);
-  const config = configWithSecret(value, id);
-  return {
-    sourceConfig,
-    config,
-    authStores: [],
-    authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
-    authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
-    warnings: [],
-    webTools: {
-      search: { providerSource: "none", diagnostics: [] },
-      fetch: { providerSource: "none", diagnostics: [] },
-      diagnostics: [],
-    },
-  };
 }
 
 function activate(value: string, id: string): void {
   activateSecretsRuntimeSnapshotState({
-    snapshot: snapshot(value, id),
+    snapshot: {
+      sourceConfig: configWithSecret(secretRef, id),
+      config: configWithSecret(value, id),
+      authStores: [],
+      authStoreCredentialsRevision: getRuntimeAuthProfileStoreCredentialsRevision(),
+      authStoreSnapshotsRevision: getRuntimeAuthProfileStoreSnapshotsRevision(),
+      warnings: [],
+      webTools: {
+        search: { providerSource: "none", diagnostics: [] },
+        fetch: { providerSource: "none", diagnostics: [] },
+        diagnostics: [],
+      },
+    },
     refreshContext: {
       env: {},
       explicitAgentDirs: null,
@@ -67,9 +53,18 @@ function activate(value: string, id: string): void {
   });
 }
 
-afterEach(() => {
-  clearSecretsRuntimeSnapshotState();
-});
+afterEach(clearSecretsRuntimeSnapshotState);
+
+function loadedInstance(registry: ReturnType<typeof loadOpenClawPlugins>, id: string) {
+  const record = registry.plugins.find((entry) => entry.id === id);
+  const instance = record ? getPluginInstance(record) : undefined;
+  expect(record?.status).toBe("loaded");
+  expect(instance).toBeDefined();
+  if (!instance) {
+    throw new Error("loaded plugin instance missing");
+  }
+  return instance;
+}
 
 describe("prepared plugin secret input authority", () => {
   it("fences a loaded plugin instance from replacement credential reads", async () => {
@@ -87,13 +82,7 @@ describe("prepared plugin secret input authority", () => {
       },
     } satisfies OpenClawConfig;
     const registry = loadOpenClawPlugins({ config, activate: false, cache: false });
-    const record = registry.plugins.find((entry) => entry.id === plugin.id);
-    const instance = record ? getPluginInstance(record) : undefined;
-    expect(record?.status).toBe("loaded");
-    expect(instance).toBeDefined();
-    if (!instance) {
-      throw new Error("loaded plugin instance missing");
-    }
+    const instance = loadedInstance(registry, plugin.id);
 
     const started = createDeferredCore();
     const release = createDeferredCore();
@@ -109,13 +98,7 @@ describe("prepared plugin secret input authority", () => {
 
       const disposal = instance.dispose();
       replacementRegistry = loadOpenClawPlugins({ config, activate: false, cache: false });
-      const replacementRecord = replacementRegistry.plugins.find((entry) => entry.id === plugin.id);
-      const replacement = replacementRecord ? getPluginInstance(replacementRecord) : undefined;
-      expect(replacementRecord?.status).toBe("loaded");
-      expect(replacement).toBeDefined();
-      if (!replacement) {
-        throw new Error("replacement plugin instance missing");
-      }
+      const replacement = loadedInstance(replacementRegistry, plugin.id);
       activate("replacement-key", plugin.id);
       expect(
         replacement.run(() => getPreparedPluginSecretInput(plugin.id, "apiKey")),

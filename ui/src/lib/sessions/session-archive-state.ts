@@ -1,9 +1,9 @@
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { SessionPatchResult } from "./patch.ts";
 import { mapSessionResultRows } from "./reconcile.ts";
-import type { SessionArchiveVisibility } from "./session-capability.ts";
 import type { SessionArchiveFields } from "./session-pending-rows.ts";
 import type { createSessionRowProvenance } from "./session-row-provenance.ts";
+import type { SessionArchiveVisibility } from "./session-types.ts";
 
 export const projectSessionArchiveFields = (
   archived: boolean,

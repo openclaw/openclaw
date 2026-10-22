@@ -35,10 +35,19 @@ const { values } = parseArgs({
     entry: { type: "string", default: "dist/entry.js" },
     port: { type: "string", default: "41058" },
     "mock-port": { type: "string", default: "41059" },
-    clients: { type: "string", default: "50" },
+    clients: { type: "string" },
+    "reconnect-waves": { type: "boolean", default: false },
+    "reconnect-count": { type: "string" },
+    waves: { type: "string", default: "10" },
+    "start-at": { type: "string" },
     runs: { type: "string", default: "30" },
     seconds: { type: "string", default: "300" },
     "poll-ms": { type: "string", default: "5000" },
+    "writer-reads": { type: "boolean", default: false },
+    "worktree-churn": { type: "boolean", default: false },
+    "cheap-handlers": { type: "boolean", default: false },
+    "transcript-reads": { type: "boolean", default: false },
+    "sqlite-queues": { type: "boolean", default: false },
   },
 });
 if (!values["state-dir"]) {
@@ -51,10 +60,43 @@ const mockPort = integer(values["mock-port"], "--mock-port", 40000);
 if (port > 65535 || mockPort > 65535 || port === mockPort) {
   throw new Error("ports must be distinct and between 40000 and 65535");
 }
-const clientCount = integer(values.clients, "--clients");
+const reconnectWaves = values["reconnect-waves"];
+const clientCount = integer(values.clients ?? (reconnectWaves ? "40" : "50"), "--clients");
+const reconnectCount = values["reconnect-count"]
+  ? integer(values["reconnect-count"], "--reconnect-count")
+  : Math.min(30, clientCount - 1);
+const waveCount = integer(values.waves, "--waves");
+const measurementStartAt = values["start-at"]
+  ? integer(values["start-at"], "--start-at")
+  : undefined;
+if (measurementStartAt !== undefined && !reconnectWaves) {
+  throw new Error("--start-at requires --reconnect-waves");
+}
+if (values["reconnect-count"] !== undefined && !reconnectWaves) {
+  throw new Error("--reconnect-count requires --reconnect-waves");
+}
+if (reconnectWaves && reconnectCount >= clientCount) {
+  throw new Error("--reconnect-count must be less than --clients to retain background traffic");
+}
+if (
+  reconnectWaves &&
+  (clientCount < 2 ||
+    values["writer-reads"] ||
+    values["worktree-churn"] ||
+    values["cheap-handlers"] ||
+    values["transcript-reads"] ||
+    values["sqlite-queues"])
+) {
+  throw new Error("--reconnect-waves requires at least two clients and no restart workload flags");
+}
 const runCount = integer(values.runs, "--runs");
 const durationMs = integer(values.seconds, "--seconds") * 1000;
 const pollMs = integer(values["poll-ms"], "--poll-ms");
+if (values["worktree-churn"] && durationMs < 180_000) {
+  throw new Error(
+    "--worktree-churn requires --seconds at least 180 for a separate post-reconnect burst",
+  );
+}
 const root = path.resolve(values["state-dir"]);
 const fixture: unknown = JSON.parse(
   readFileSync(path.join(root, "team-shape-summary.json"), "utf8"),
@@ -62,19 +104,54 @@ const fixture: unknown = JSON.parse(
 if (!isRecord(fixture) || fixture.format !== "openclaw-team-shape-v1") {
   throw new Error("--state-dir must contain a generated team-shape fixture; never use live state");
 }
+const worktreeProject = Array.isArray(fixture.projectWorktrees)
+  ? fixture.projectWorktrees[0]
+  : undefined;
+const worktreeProjectId =
+  isRecord(worktreeProject) && typeof worktreeProject.projectId === "string"
+    ? worktreeProject.projectId
+    : undefined;
+if (values["worktree-churn"] && !worktreeProjectId) {
+  throw new Error("Worktree churn requires a seeded project");
+}
 const output = path.join(root, `post-restart-burst-${Date.now()}`);
 mkdirSync(output);
 const cfg = JSON.parse(readFileSync(path.join(root, "openclaw.json"), "utf8"));
 const token = "synthetic-post-restart-burst-token";
 cfg.gateway = { ...cfg.gateway, auth: { mode: "token", token } };
+if (reconnectWaves) {
+  cfg.gateway.trustedProxies = ["127.0.0.1", "::1"];
+}
 applyMockOpenAiModelConfig(cfg, { mockPort, modelRef: "openai/gpt-4.1" });
 cfg.agents.defaults = { ...cfg.agents.defaults, maxConcurrent: runCount, skipBootstrap: true };
 cfg.memory = { ...cfg.memory, search: { enabled: false } };
 cfg.tools = { codeMode: false };
 cfg.plugins = {
   ...cfg.plugins,
+  enabled: true,
   entries: { "memory-core": { config: { dreaming: { enabled: false } } } },
 };
+if (
+  values["writer-reads"] ||
+  values["cheap-handlers"] ||
+  values["transcript-reads"] ||
+  values["worktree-churn"]
+) {
+  cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
+  cfg.plugins.entries["diagnostics-prometheus"] = { enabled: true };
+}
+if (values["sqlite-queues"]) {
+  cfg.diagnostics = { ...cfg.diagnostics, enabled: true };
+}
+if (values["cheap-handlers"]) {
+  cfg.plugins.entries.github = { enabled: true };
+  cfg.plugins.entries.workboard = { enabled: true };
+}
+if (values["transcript-reads"]) {
+  cfg.plugins.entries.workboard = { enabled: true };
+}
+const previewUrl = "https://github.com/openclaw-fixture/restart/issues/1";
+const previewTitle = "Synthetic post-restart issue";
 const catalogId = "synthetic-restart-catalog";
 const pluginDir = path.join(output, catalogId);
 mkdirSync(pluginDir);
@@ -90,9 +167,18 @@ writeFileSync(
   path.join(pluginDir, "index.mjs"),
   `export default {
   id: '${catalogId}', register(api) {
+    ${
+      values["writer-reads"]
+        ? `const store = api.runtime.state.openKeyedStoreV2({ namespace: 'restart-catalog', maxEntries: 10, overflowPolicy: 'reject-new' });
+    api.registerService({ id: 'synthetic-catalog-state', async start() {
+      if (!(await store.lookup('metadata'))) await store.register('metadata', { label: 'Synthetic metadata' });
+    } });`
+        : ""
+    }
     api.registerSessionCatalog({ id: '${catalogId}', label: 'Synthetic restart metadata catalog',
       audience: 'gateway-operators', supportsProcessHomeIsolation: true,
       list: async (query) => {
+        ${values["writer-reads"] ? `if (!(await store.lookup('metadata'))) throw new Error('Synthetic catalog state missing');` : ""}
         const entries = query.sessionEntries?.entriesForAgent(query.agentId ?? 'main');
         if (!entries?.length) throw new Error('Synthetic catalog requires populated session metadata');
         return [{ hostId: 'gateway:local', label: 'Synthetic metadata', kind: 'gateway', connected: true,
@@ -113,9 +199,204 @@ const preloadPath = path.join(output, "elu-preload.mjs");
 writeFileSync(
   preloadPath,
   `import { performance, monitorEventLoopDelay } from 'node:perf_hooks';
-import { isMainThread } from 'node:worker_threads';
+import { isMainThread, MessagePort } from 'node:worker_threads';
 if (isMainThread) {
   if (!process.send) throw new Error('Benchmark requires private IPC');
+  ${
+    values["sqlite-queues"]
+      ? `if (process.env.OPENCLAW_BENCH_QUEUE_START_NS) {
+    const { onInternalDiagnosticEvent, setDiagnosticsEnabledForProcess, waitForDiagnosticEventsDrained } =
+      await import(${JSON.stringify(new URL("../../src/infra/diagnostic-events.ts", import.meta.url).href)});
+    const { deserialize } = await import('node:v8');
+    const startNs = BigInt(process.env.OPENCLAW_BENCH_QUEUE_START_NS);
+    const startWall = Number(process.env.OPENCLAW_BENCH_QUEUE_START_WALL_MS);
+    const windowMs = ${durationMs};
+    const binMs = Math.max(10000, Math.ceil(windowMs / 180));
+    const elapsed = () => Number(process.hrtime.bigint() - startNs) / 1e6;
+    const captureStartedMs = elapsed();
+    const groups = new Map();
+    const sharedSqliteKinds = new Set(['sqlite_writer', 'sqlite_read', 'stateRead']);
+    const eventSamples = [];
+    const commandCounts = new Map();
+    let events = 0;
+    let droppedDiagnosticEvents = 0;
+    let inconsistentDepths = 0;
+    let overflow = false;
+    let maxDeliveryDelayMs = 0;
+    let maxClockSkewMs = 0;
+    let lastEventMs = 0;
+    const group = (key, kind, requestClass) => {
+      let row = groups.get(key);
+      if (!row && groups.size < 512) {
+        row = { kind, requestClass, queued: 0, started: 0, completed: 0, cancelledBeforeStart: 0,
+          queueDepth: 0, active: 0, maxQueueDepth: 0, maxActive: 0,
+          queuedTimeMs: 0, serviceTimeMs: 0, startedQueueWaitMs: 0,
+          maxQueueWaitMs: 0, completedDurationMs: 0, at: 0, bins: [] };
+        groups.set(key, row);
+      }
+      if (!row) overflow = true;
+      return row;
+    };
+    const advance = (row, at) => {
+      at = Math.max(row.at, Math.min(windowMs, at));
+      while (row.at < at) {
+        const index = Math.floor(row.at / binMs);
+        const until = Math.min(at, (index + 1) * binMs);
+        const bin = row.bins[index] ??= { fromMs: index * binMs,
+          toMs: Math.min(windowMs, (index + 1) * binMs), queuedTimeMs: 0, serviceTimeMs: 0,
+          maxQueueDepth: row.queueDepth };
+        const wait = (until - row.at) * row.queueDepth;
+        const service = (until - row.at) * row.active;
+        row.queuedTimeMs += wait; row.serviceTimeMs += service;
+        bin.queuedTimeMs += wait; bin.serviceTimeMs += service;
+        bin.maxQueueDepth = Math.max(bin.maxQueueDepth, row.queueDepth);
+        row.at = until;
+      }
+    };
+    setDiagnosticsEnabledForProcess(true);
+    const unsubscribe = onInternalDiagnosticEvent((event) => {
+      if (event.type === 'diagnostic.async_queue.dropped') {
+        droppedDiagnosticEvents += event.droppedEvents;
+        return;
+      }
+      if (event.type !== 'worker.request') return;
+      const observedMs = elapsed();
+      const eventMs = event.ts - startWall;
+      if (eventMs < 0 || eventMs >= windowMs) return;
+      events++;
+      maxDeliveryDelayMs = Math.max(maxDeliveryDelayMs, observedMs - eventMs);
+      maxClockSkewMs = Math.max(maxClockSkewMs, Math.abs(Date.now() - startWall - observedMs));
+      if (eventMs < lastEventMs) inconsistentDepths++;
+      lastEventMs = Math.max(lastEventMs, eventMs);
+      const owner = group('kind:' + event.kind, event.kind);
+      const request = group('class:' + event.kind + ':' + event.requestClass, event.kind, event.requestClass);
+      const total = group('total', 'all');
+      if (!owner || !request || !total) return;
+      const shared = sharedSqliteKinds.has(event.kind) ? group('shared', 'sharedSqlite') : undefined;
+      const queueDelta = event.phase === 'queued' ? 1
+        : event.phase === 'started' || (event.phase === 'completed' && event.durationMs === undefined) ? -1 : 0;
+      const activeDelta = event.phase === 'started' ? 1
+        : event.phase === 'completed' && event.durationMs !== undefined ? -1 : 0;
+      for (const row of [owner, request, total, ...(shared ? [shared] : [])]) {
+        advance(row, eventMs);
+        row.queueDepth += queueDelta; row.active += activeDelta;
+        if (row.queueDepth < 0 || row.active < 0) inconsistentDepths++;
+        row.maxQueueDepth = Math.max(row.maxQueueDepth, row.queueDepth);
+        const index = Math.floor(eventMs / binMs);
+        const bin = row.bins[index] ??= { fromMs: index * binMs,
+          toMs: Math.min(windowMs, (index + 1) * binMs), queuedTimeMs: 0, serviceTimeMs: 0,
+          maxQueueDepth: 0 };
+        bin.maxQueueDepth = Math.max(bin.maxQueueDepth, row.queueDepth);
+        row.maxActive = Math.max(row.maxActive, row.active);
+        row[event.phase]++;
+        if (event.phase === 'completed' && event.durationMs === undefined) row.cancelledBeforeStart++;
+        row.startedQueueWaitMs += event.queueWaitMs ?? 0;
+        row.maxQueueWaitMs = Math.max(row.maxQueueWaitMs, event.queueWaitMs ?? 0);
+        row.completedDurationMs += event.durationMs ?? 0;
+      }
+      if (owner.queueDepth !== event.queueDepth) inconsistentDepths++;
+      if (eventSamples.length < 2000) eventSamples.push({ observedMs, eventMs, kind: event.kind,
+        requestClass: event.requestClass, phase: event.phase, queueDepth: event.queueDepth,
+        queueWaitMs: event.queueWaitMs, durationMs: event.durationMs });
+    }, { include: ['worker.request', 'diagnostic.async_queue.dropped'] });
+    const worktreeCommands = new Set(['abortRemoval', 'admitRunLease', 'assertPredicates', 'claimRemoval',
+      'cleanupState', 'deferCleanup', 'delete', 'finalizeRemoval', 'findLiveByOwner', 'findLiveByPath',
+      'get', 'insert', 'list', 'liveIds', 'pendingSlots', 'provisionedChunk', 'provisionedPaths',
+      'provisionedState', 'reapRunLeases', 'recoverPending', 'releasePending', 'releaseRunLease',
+      'reserveCapacity', 'reservePending', 'retireMissing', 'sessionBinding', 'slotCount', 'update',
+      'writeProvisionedSnapshot'].map((name) => 'worktrees.' + name));
+    const queueNativePost = MessagePort.prototype.postMessage;
+    MessagePort.prototype.postMessage = function(message, ...args) {
+      const body = message?.type === 'post' ? message.value : message;
+      if (elapsed() < windowMs && body?.type === 'execute' && body.input instanceof Uint8Array) {
+        const request = deserialize(body.input);
+        const command = request.command ?? request;
+        if (worktreeCommands.has(command.type)) commandCounts.set(command.type, (commandCounts.get(command.type) ?? 0) + 1);
+      }
+      return queueNativePost.call(this, message, ...args);
+    };
+    setTimeout(async () => {
+      await waitForDiagnosticEventsDrained();
+      unsubscribe();
+      for (const row of groups.values()) advance(row, windowMs);
+      const rows = [...groups.values()].map(({ at, ...row }) => row);
+      process.send?.({ channel: 'post-restart-burst-sqlite-queues', pid: process.pid, report: {
+        windowMs, binMs, captureStartedMs, snapshotObservedMs: elapsed(), events,
+        complete: events > 0 && !overflow && !droppedDiagnosticEvents && !inconsistentDepths && maxClockSkewMs < 100,
+        overflow, droppedDiagnosticEvents, inconsistentDepths, maxDeliveryDelayMs, maxClockSkewMs,
+        total: rows.find((row) => row.kind === 'all'),
+        totalBoundary: 'sum of all instrumented worker-kind queues; overlapping, not one FIFO or exclusively SQLite',
+        sharedSqliteKinds: [...sharedSqliteKinds],
+        sharedSqlite: rows.find((row) => row.kind === 'sharedSqlite'),
+        kinds: rows.filter((row) => row.kind !== 'all' && row.kind !== 'sharedSqlite' && row.requestClass === undefined),
+        classes: rows.filter((row) => row.requestClass !== undefined).sort((a, b) => b.queuedTimeMs - a.queuedTimeMs),
+        worktreeCommandDispatchCounts: Object.fromEntries(commandCounts), eventSamples,
+        eventSamplesTruncated: events > eventSamples.length,
+      } });
+    }, Math.max(0, windowMs - elapsed())).unref();
+  }`
+      : ""
+  }
+  ${
+    values["cheap-handlers"]
+      ? `const { MockAgent } = await import(${JSON.stringify(import.meta.resolve("undici"))});
+  const transport = new MockAgent();
+  transport.disableNetConnect();
+  const github = transport.get('https://api.github.com');
+  const repository = '/repos/openclaw-fixture/restart';
+  github.intercept({ path: repository, method: 'GET' }).reply(200, {
+    private: false, visibility: 'public', full_name: 'openclaw-fixture/restart',
+  }).persist();
+  github.intercept({ path: repository + '/issues/1', method: 'GET' }).reply(() => {
+    process.send?.({ channel: 'post-restart-burst-github-fixture', pid: process.pid });
+    return { statusCode: 200, data: JSON.stringify({
+      title: ${JSON.stringify(previewTitle)}, state: 'open', number: 1,
+      created_at: '2026-10-01T00:00:00Z', updated_at: '2026-10-01T00:00:00Z',
+      repository_url: 'https://api.github.com' + repository,
+      user: { login: 'synthetic-user' }, comments: 0,
+    }), responseOptions: { headers: { 'content-type': 'application/json' } } };
+  }).persist();
+  // Gateway startup replaces recognized global agents; bind this fixture per fetch instead.
+  const nativeFetch = globalThis.fetch;
+  globalThis.fetch = async (input, options) => {
+    const url = new URL(typeof input === 'string' ? input : input instanceof URL ? input.href : input.url);
+    if (url.origin === 'https://api.github.com') {
+      return nativeFetch(input, { ...options, dispatcher: transport });
+    }
+    if (url.hostname !== '127.0.0.1') throw new Error('Benchmark blocked external fetch');
+    return nativeFetch(input, options);
+  };`
+      : ""
+  }
+  const taskCounts = new Map();
+  const captureUntil = Number(process.env.OPENCLAW_BENCH_CAPTURE_DEADLINE_MS);
+  const nativePost = MessagePort.prototype.postMessage;
+  MessagePort.prototype.postMessage = function(message, ...args) {
+    const body = message?.type === 'post' ? message.value : message;
+    if (Date.now() < captureUntil && typeof body?.taskId === 'number' && body.responseId === undefined && body.input) {
+      const kind = body.input.kind;
+      const request = body.input.request?.kind;
+      if (typeof kind === 'string' && /^[a-z-]{1,80}$/.test(kind) && (taskCounts.has(kind) || taskCounts.size < 128)) {
+        const input = body.input;
+        const label = kind === 'session-exact-entries'
+          ? [kind, input.projection ?? 'full', input.selection?.kind ?? 'keys',
+              input.snapshotFields?.length === 0 ? 'metadata' : 'snapshots',
+              input.transcript ? 'transcript' : 'entry',
+              input.includeMembers ? 'members' : 'no-members',
+              input.includeAuthorization ? 'authorization' : 'no-authorization'].join(':')
+          : kind === 'history-page' && typeof request === 'string' && /^[a-z-]{1,80}$/.test(request)
+            ? kind + ':' + request : kind;
+        taskCounts.set(label, (taskCounts.get(label) ?? 0) + 1);
+      }
+    }
+    return nativePost.call(this, message, ...args);
+  };
+  process.on('message', (message) => {
+    if (message?.channel === 'post-restart-burst-snapshot') {
+      process.send?.({ channel: 'post-restart-burst-tasks', pid: process.pid,
+        taskCounts: Object.fromEntries(taskCounts) });
+    }
+  });
   let before = performance.eventLoopUtilization();
   let at = performance.now();
   let cpu = process.threadCpuUsage();
@@ -171,6 +452,10 @@ type EluSample = {
   mainThreadCpuMs: number;
 };
 const eluSamples: EluSample[] = [];
+const transcriptSnapshot = Promise.withResolvers<Record<string, number>>();
+const sqliteQueueSnapshot = Promise.withResolvers<Record<string, unknown>>();
+let githubFixtureRequests = 0;
+let vapidPublicKey: string | undefined;
 let timeToSteadyMs: number | null = null;
 let consecutiveLowSamples = 0;
 const mock = createServer((req, res) => {
@@ -303,8 +588,25 @@ function launch(name: string) {
     throw new Error("Benchmark launch helper did not provide an explicit auth mode");
   }
   args[authIndex + 1] = "token";
+  if (reconnectWaves) {
+    args.push("--verbose", "--ws-log", "compact");
+  }
+  if (recovering) {
+    restartAt = performance.now();
+  }
+  const queueClock =
+    recovering && values["sqlite-queues"]
+      ? {
+          OPENCLAW_BENCH_QUEUE_START_NS: String(process.hrtime.bigint()),
+          OPENCLAW_BENCH_QUEUE_START_WALL_MS: String(Date.now()),
+        }
+      : {};
   const child = spawn(process.execPath, args, {
-    env,
+    env: {
+      ...env,
+      ...queueClock,
+      OPENCLAW_BENCH_CAPTURE_DEADLINE_MS: String(Date.now() + Math.min(durationMs, 120_000)),
+    },
     detached: true,
     stdio: ["ignore", "pipe", "pipe", "ipc"],
   });
@@ -330,6 +632,46 @@ function launch(name: string) {
   });
   child.on("message", (sample: unknown) => {
     if (
+      recovering &&
+      isRecord(sample) &&
+      sample.channel === "post-restart-burst-sqlite-queues" &&
+      sample.pid === child.pid &&
+      isRecord(sample.report)
+    ) {
+      writeFileSync(
+        path.join(output, "sqlite-queues.json"),
+        `${JSON.stringify(sample.report, null, 2)}\n`,
+      );
+      sqliteQueueSnapshot.resolve(sample.report);
+      return;
+    }
+    if (
+      recovering &&
+      isRecord(sample) &&
+      sample.channel === "post-restart-burst-tasks" &&
+      sample.pid === child.pid &&
+      isRecord(sample.taskCounts)
+    ) {
+      const counts: Record<string, number> = {};
+      for (const [kind, count] of Object.entries(sample.taskCounts)) {
+        if (typeof count !== "number") {
+          throw new Error("Invalid transcript task count");
+        }
+        counts[kind] = count;
+      }
+      transcriptSnapshot.resolve(counts);
+      return;
+    }
+    if (
+      recovering &&
+      isRecord(sample) &&
+      sample.channel === "post-restart-burst-github-fixture" &&
+      sample.pid === child.pid
+    ) {
+      githubFixtureRequests++;
+      return;
+    }
+    if (
       !recovering ||
       !isRecord(sample) ||
       sample.channel !== "post-restart-burst-elu" ||
@@ -348,6 +690,9 @@ function launch(name: string) {
       loopDelayMaxMs: sample.loopDelayMaxMs,
       mainThreadCpuMs: sample.mainThreadCpuMs,
     };
+    if (reconnectWaves && row.elapsedMs < row.intervalMs) {
+      return;
+    }
     eluSamples.push(row);
     consecutiveLowSamples =
       performance.now() - sample.intervalMs >= loadStartedAt && sample.elu < 0.8
@@ -387,12 +732,48 @@ async function rpc(
   client: ReturnType<typeof createGatewayWsClient>,
   method: string,
   params: unknown,
+  timeoutMs = 360_000,
 ) {
   assertAlive();
-  const reply = await client.request(method, params, 360_000);
+  const reply = await client.request(method, params, timeoutMs);
   assertAlive();
   if (!reply.ok) {
     throw new Error(`${method}: ${JSON.stringify(reply.error)}`);
+  }
+  if (values["cheap-handlers"] || values["transcript-reads"]) {
+    const payload = reply.payload;
+    if (method === "push.web.vapidPublicKey") {
+      if (
+        !isRecord(payload) ||
+        typeof payload.vapidPublicKey !== "string" ||
+        !payload.vapidPublicKey ||
+        (vapidPublicKey !== undefined && payload.vapidPublicKey !== vapidPublicKey)
+      ) {
+        throw new Error("VAPID public key missing or changed across restart");
+      }
+      vapidPublicKey = payload.vapidPublicKey;
+    }
+    if (
+      method === "workboard.cards.list" &&
+      (!isRecord(payload) || !Array.isArray(payload.cards) || payload.cards.length < clientCount)
+    ) {
+      throw new Error("Bundled workboard did not return the seeded cards");
+    }
+    if (
+      method === "chat.history" &&
+      (!isRecord(payload) || !Array.isArray(payload.messages) || !payload.messages.length)
+    ) {
+      throw new Error("Chat history did not return the interrupted synthetic user turn");
+    }
+    if (method === "tools.invoke" && (!isRecord(payload) || payload.ok !== true)) {
+      throw new Error("Synthetic memory search did not activate successfully");
+    }
+    if (
+      method === "github.preview" &&
+      (!isRecord(payload) || payload.title !== previewTitle || payload.url !== previewUrl)
+    ) {
+      throw new Error("Bundled GitHub preview did not return the synthetic transport response");
+    }
   }
   if (method === "sessions.catalog.list") {
     const payload = reply.payload;
@@ -429,7 +810,24 @@ function createSyntheticDevice() {
   };
 }
 const devices = new Map<number, ReturnType<typeof createSyntheticDevice>>();
-async function connect(index: number) {
+type ConnectAttempt = {
+  client: number;
+  wave: number;
+  startedAtMs: number;
+  startedMs: number;
+  elapsedMs: number;
+  openMs?: number;
+  challengeMs?: number;
+  connectMs?: number;
+  connId?: string;
+  presenceRows?: number;
+  extensions?: string;
+  error?: string;
+};
+async function connect(index: number, options?: { proxy?: boolean; attempt?: ConnectAttempt }) {
+  const startedAt = performance.now();
+  let connectStartedAt: number | undefined;
+  const attempt = options?.attempt;
   const challenge = Promise.withResolvers<{ nonce: string; ts: number }>();
   void challenge.promise.catch(() => {});
   const challengeTimer = setTimeout(
@@ -438,6 +836,15 @@ async function connect(index: number) {
   );
   const client = createGatewayWsClient({
     url: `ws://127.0.0.1:${port}`,
+    ...(options?.proxy
+      ? {
+          headers: {
+            "x-forwarded-for": "203.0.113.50",
+            "x-forwarded-proto": "https",
+            "x-forwarded-host": "gateway.example.test",
+          },
+        }
+      : {}),
     handshakeTimeoutMs: 30_000,
     openTimeoutMs: 30_000,
     onEvent: (event) => {
@@ -455,13 +862,23 @@ async function connect(index: number) {
   clients.add(client);
   try {
     await client.waitOpen();
+    if (attempt) {
+      attempt.openMs = performance.now() - startedAt;
+      attempt.extensions = client.ws.extensions;
+    }
+    if (options?.proxy && !client.ws.extensions.split(",").includes("permessage-deflate")) {
+      throw new Error("Synthetic proxy connection did not negotiate permessage-deflate");
+    }
     const { nonce, ts } = await challenge.promise;
+    if (attempt) {
+      attempt.challengeMs = performance.now() - startedAt;
+    }
     let device = devices.get(index);
     if (!device) {
       device = createSyntheticDevice();
       devices.set(index, device);
     }
-    const scopes = ["operator.read", "operator.admin"];
+    const scopes = ["operator.read", "operator.write", "operator.admin"];
     const identity = {
       id: "gateway-client",
       displayName: "synthetic-post-restart-burst",
@@ -481,22 +898,31 @@ async function connect(index: number) {
       token,
       nonce,
     });
-    const hello = await rpc(client, "connect", {
-      minProtocol: PROTOCOL_VERSION,
-      maxProtocol: PROTOCOL_VERSION,
-      client: identity,
-      role: "operator",
-      scopes,
-      auth: { token },
-      device: {
-        id: device.id,
-        publicKey: device.publicKey,
-        signedAt: ts,
-        nonce,
-        signature: signEd25519Payload(device.privateKey, payload),
+    connectStartedAt = performance.now();
+    const hello = await rpc(
+      client,
+      "connect",
+      {
+        minProtocol: PROTOCOL_VERSION,
+        maxProtocol: PROTOCOL_VERSION,
+        client: identity,
+        role: "operator",
+        scopes,
+        auth: { token },
+        device: {
+          id: device.id,
+          publicKey: device.publicKey,
+          signedAt: ts,
+          nonce,
+          signature: signEd25519Payload(device.privateKey, payload),
+        },
+        caps: [],
       },
-      caps: [],
-    });
+      options?.proxy ? 30_000 : undefined,
+    );
+    if (attempt) {
+      attempt.connectMs = performance.now() - connectStartedAt;
+    }
     if (
       !isRecord(hello) ||
       !isRecord(hello.auth) ||
@@ -509,26 +935,208 @@ async function connect(index: number) {
     if (scopes.some((scope) => !authorizedScopes.includes(scope))) {
       throw new Error("Benchmark device authentication did not retain requested operator scopes");
     }
-    const self = await rpc(client, "users.self", {});
-    if (
-      !isRecord(self) ||
-      !isRecord(self.profile) ||
-      typeof self.profile.id !== "string" ||
-      !self.profile.id
-    ) {
-      throw new Error("Benchmark client did not acquire the durable synthetic owner profile");
+    if (attempt) {
+      if (!isRecord(hello.server) || typeof hello.server.connId !== "string") {
+        throw new Error("Synthetic connect response did not identify its connection");
+      }
+      attempt.connId = hello.server.connId;
+      if (isRecord(hello.snapshot) && Array.isArray(hello.snapshot.presence)) {
+        attempt.presenceRows = hello.snapshot.presence.length;
+      }
     }
-    ownerProfileIds.add(self.profile.id);
+    // Reconnecting cheap handlers start immediately after auth, without warming a profile read.
+    if (
+      !options?.proxy &&
+      (!recovering || (!values["cheap-handlers"] && !values["transcript-reads"]))
+    ) {
+      const self = await rpc(client, "users.self", {});
+      if (
+        !isRecord(self) ||
+        !isRecord(self.profile) ||
+        typeof self.profile.id !== "string" ||
+        !self.profile.id
+      ) {
+        throw new Error("Benchmark client did not acquire the durable synthetic owner profile");
+      }
+      ownerProfileIds.add(self.profile.id);
+    }
     return client;
   } catch (error) {
+    if (attempt) {
+      attempt.error = String(error);
+      if (connectStartedAt !== undefined && attempt.connectMs === undefined) {
+        attempt.connectMs = performance.now() - connectStartedAt;
+      }
+    }
     client.close();
     clients.delete(client);
     throw error;
   } finally {
+    if (attempt) {
+      attempt.elapsedMs = performance.now() - startedAt;
+    }
     clearTimeout(challengeTimer);
   }
 }
-const shapes = [
+async function scrapeWriterMetrics(name: string) {
+  const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
+    headers: { authorization: `Bearer ${token}` },
+    signal: AbortSignal.timeout(10_000),
+  });
+  if (!response.ok) {
+    throw new Error(`Diagnostic metrics scrape failed: ${response.status}`);
+  }
+  const metrics = await response.text();
+  writeFileSync(path.join(output, `${name}.prom`), metrics);
+  const byClass: Record<string, { count: number; waitSeconds: number }> = {};
+  for (const line of metrics.split("\n")) {
+    const match = /^openclaw_worker_queue_wait_seconds_(sum|count)\{([^}]+)\} ([\d.e+-]+)$/.exec(
+      line,
+    );
+    const labels = match?.[2];
+    if (!match || !labels?.includes('kind="sqlite_writer"')) {
+      continue;
+    }
+    const requestClass = /request_class="([^"]+)"/.exec(labels)?.[1];
+    if (!requestClass) {
+      continue;
+    }
+    const entry = (byClass[requestClass] ??= { count: 0, waitSeconds: 0 });
+    entry[match[1] === "count" ? "count" : "waitSeconds"] = Number(match[3]);
+  }
+  return { elapsedMs: performance.now() - restartAt, byClass };
+}
+async function settleWorktreeOperations<T>(operations: Promise<T>[]): Promise<T[]> {
+  const results = await Promise.allSettled(operations);
+  return results.map((result) => {
+    if (result.status === "rejected") {
+      throw result.reason;
+    }
+    return result.value;
+  });
+}
+async function settleArchivedWorktreeCleanup(client: ReturnType<typeof createGatewayWsClient>) {
+  const deadline = performance.now() + 60_000;
+  let jobId: string | undefined;
+  for (let firstPoll = true; performance.now() < deadline; firstPoll = false) {
+    // Receipt polls consume the same 30-per-minute control-plane budget as GC requests.
+    if (!firstPoll) {
+      await delay(2_100);
+    }
+    if (performance.now() >= deadline) {
+      break;
+    }
+    let receipt: unknown;
+    try {
+      receipt = await rpc(
+        client,
+        "worktrees.gc",
+        jobId ? { jobId } : {},
+        Math.max(1, deadline - performance.now()),
+      );
+    } catch (error) {
+      // Archive notifications can queue a follow-up pass that replaces the latest receipt.
+      if (error instanceof Error && error.message.includes("only the latest job is retained")) {
+        jobId = undefined;
+        continue;
+      }
+      throw error;
+    }
+    if (performance.now() >= deadline) {
+      break;
+    }
+    if (!isRecord(receipt) || typeof receipt.jobId !== "string") {
+      throw new Error("worktrees.gc did not return a cleanup receipt");
+    }
+    if (receipt.state === "failed" || receipt.outcome === "partial") {
+      throw new Error(`Archive cleanup failed: ${JSON.stringify(receipt)}`);
+    }
+    if (receipt.state === "completed") {
+      return receipt;
+    }
+    jobId = receipt.jobId;
+  }
+  throw new Error("Archive cleanup did not settle within 60 seconds");
+}
+async function measureWorktreeChurn() {
+  await delay(Math.max(0, 120_000 - (performance.now() - restartAt)));
+  const firstTwoMinutes = await scrapeWriterMetrics("worktree-first-120s");
+  const client = await connect(clientCount);
+  try {
+    const before = await scrapeWriterMetrics("worktree-burst-before");
+    const sessions = await settleWorktreeOperations(
+      Array.from({ length: 12 }, async (_, index) => {
+        const key = `agent:main:worktree-burst-${cohort}-${index}`;
+        const created = await rpc(client, "sessions.create", {
+          key,
+          projectId: worktreeProjectId,
+          worktree: true,
+          worktreeBaseRef: "main",
+          worktreeName: `burst-${index}`,
+          visibility: "shared",
+          displayName: `Synthetic worktree ${index}`,
+        });
+        if (
+          !isRecord(created) ||
+          typeof created.sessionId !== "string" ||
+          !isRecord(created.worktree) ||
+          typeof created.worktree.id !== "string"
+        ) {
+          throw new Error("sessions.create did not return an owned worktree");
+        }
+        return { key, expectedSessionId: created.sessionId };
+      }),
+    );
+    const created = await scrapeWriterMetrics("worktree-burst-created");
+    await settleWorktreeOperations(
+      sessions.map((session) =>
+        rpc(client, "sessions.patch", {
+          ...session,
+          archived: true,
+        }),
+      ),
+    );
+    const archiveCleanup = await settleArchivedWorktreeCleanup(client);
+    const archived = await scrapeWriterMetrics("worktree-burst-archived");
+    await settleWorktreeOperations(
+      sessions.map(async (session) => {
+        const deleted = await rpc(client, "sessions.delete", {
+          ...session,
+          archivedOnly: true,
+          deleteTranscript: true,
+        });
+        if (!isRecord(deleted) || deleted.deleted !== true || deleted.worktreePreserved) {
+          throw new Error("sessions.delete did not finish synthetic worktree cleanup");
+        }
+      }),
+    );
+    const cleaned = await scrapeWriterMetrics("worktree-burst-cleaned");
+    if (
+      !Object.entries(cleaned.byClass).some(
+        ([requestClass, sample]) =>
+          requestClass.startsWith("worktrees.") &&
+          sample.count > (before.byClass[requestClass]?.count ?? 0),
+      )
+    ) {
+      throw new Error("Worktree burst produced no per-operation writer queue observations");
+    }
+    return {
+      count: sessions.length,
+      firstTwoMinutes,
+      before,
+      created,
+      archived,
+      archiveCleanup,
+      cleaned,
+      boundary:
+        "cumulative exporter counts; subtract adjacent snapshots for create/archive/cleanup; concurrent reconnect reads remain included",
+    };
+  } finally {
+    client.close();
+    clients.delete(client);
+  }
+}
+const shapes: Array<{ method: string; params: Record<string, unknown> }> = [
   {
     method: "sessions.list",
     params: {
@@ -549,20 +1157,33 @@ const shapes = [
   { method: "sessions.catalog.list", params: { catalogId, agentId: "main", limitPerHost: 100 } },
   { method: "projects.list", params: {} },
 ];
-const timings: Array<{ method: string; startedMs: number; elapsedMs: number; error?: string }> = [];
+const timings: Array<{
+  method: string;
+  startedMs: number;
+  elapsedMs: number;
+  error?: string;
+  client?: number;
+  wave?: number;
+}> = [];
 const connectionErrors: Array<{ client: number; elapsedMs: number; error: string }> = [];
 const connectedClients = new Set<number>();
 const ownerProfileIds = new Set<string>();
 const catalogRowCounts: number[] = [];
+const subscriptionParams = (index: number) => ({
+  endpoint: `https://push.example.test/post-restart/${cohort}/${index}`,
+  keys: { p256dh: "synthetic-browser-p256dh", auth: "synthetic-browser-auth" },
+});
 async function observeClient(index: number) {
   const deadline = restartAt + durationMs;
   let client: Awaited<ReturnType<typeof connect>> | undefined;
+  let firstBatch = true;
   while (performance.now() < deadline) {
     assertAlive();
     if (!client) {
       try {
         client = await connect(index);
         connectedClients.add(index);
+        firstBatch = true;
       } catch (error) {
         assertAlive();
         connectionErrors.push({
@@ -576,28 +1197,248 @@ async function observeClient(index: number) {
     }
     const activeClient = client;
     await Promise.all(
-      shapes.map(async ({ method, params }) => {
-        const startedMs = performance.now() - restartAt;
-        try {
-          await rpc(activeClient, method, params);
-          timings.push({ method, startedMs, elapsedMs: performance.now() - restartAt - startedMs });
-        } catch (error) {
-          assertAlive();
-          timings.push({
-            method,
-            startedMs,
-            elapsedMs: performance.now() - restartAt - startedMs,
-            error: String(error),
-          });
-        }
-      }),
+      shapes
+        .filter(({ method }) =>
+          method === "tools.invoke"
+            ? firstBatch && index === 0
+            : method !== "sessions.subscribe" || firstBatch,
+        )
+        .map(async ({ method, params }) => {
+          const startedMs = performance.now() - restartAt;
+          try {
+            await rpc(
+              activeClient,
+              method,
+              method === "push.web.subscribe" ? subscriptionParams(index) : params,
+            );
+            timings.push({
+              method,
+              startedMs,
+              elapsedMs: performance.now() - restartAt - startedMs,
+            });
+          } catch (error) {
+            assertAlive();
+            timings.push({
+              method,
+              startedMs,
+              elapsedMs: performance.now() - restartAt - startedMs,
+              error: String(error),
+            });
+          }
+        }),
     );
+    firstBatch = false;
     if (client.ws.readyState !== client.ws.OPEN) {
       client.close();
       clients.delete(client);
       client = undefined;
     }
     await delay(Math.max(0, Math.min(pollMs, deadline - performance.now())));
+  }
+}
+function summarize(rows: typeof timings) {
+  const successful = rows
+    .filter((row) => row.error === undefined)
+    .map((row) => row.elapsedMs)
+    .toSorted((a, b) => a - b);
+  const percentile = (fraction: number) =>
+    successful[Math.max(0, Math.ceil(successful.length * fraction) - 1)] ?? null;
+  return {
+    started: rows.length,
+    completed: successful.length,
+    errors: rows.length - successful.length,
+    p50Ms: percentile(0.5),
+    p95Ms: percentile(0.95),
+    p99Ms: percentile(0.99),
+    maxMs: successful.at(-1) ?? null,
+  };
+}
+async function closeMeasuredClient(client: ReturnType<typeof createGatewayWsClient>) {
+  if (client.ws.readyState !== client.ws.CLOSED) {
+    await new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        client.ws.terminate();
+        reject(new Error("Synthetic reconnect socket did not close"));
+      }, 10_000);
+      client.ws.once("close", () => {
+        clearTimeout(timer);
+        resolve();
+      });
+      client.close();
+    });
+  }
+  clients.delete(client);
+}
+async function measureReconnectWaves(initialClients: Awaited<ReturnType<typeof connect>>[]) {
+  const active = [...initialClients];
+  const clientIndices = Array.from({ length: clientCount }, (_, index) => index);
+  const attempts: ConnectAttempt[] = [];
+  async function replace(indices: number[], wave?: number) {
+    const closed = await Promise.allSettled(
+      indices.map((index) => closeMeasuredClient(active[index]!)),
+    );
+    const closeFailures = closed.filter((result) => result.status === "rejected");
+    if (closeFailures.length) {
+      throw new AggregateError(
+        closeFailures.map((result) => result.reason),
+        "Reconnect close failed",
+      );
+    }
+    const connected = await Promise.allSettled(
+      indices.map(async (index) => {
+        const attempt: ConnectAttempt | undefined =
+          wave === undefined
+            ? undefined
+            : {
+                client: index,
+                wave,
+                startedAtMs: Date.now(),
+                startedMs: performance.now() - restartAt,
+                elapsedMs: 0,
+              };
+        if (attempt) {
+          attempts.push(attempt);
+        }
+        active[index] = await connect(index, { proxy: true, attempt });
+      }),
+    );
+    const connectFailures = connected.filter((result) => result.status === "rejected");
+    if (connectFailures.length) {
+      throw new AggregateError(
+        connectFailures.map((result) => result.reason),
+        "Reconnect attempt failed",
+      );
+    }
+  }
+  async function listBatch(index: number, wave?: number) {
+    await Promise.all(
+      shapes.map(async ({ method, params }) => {
+        const startedMs = performance.now() - restartAt;
+        let error: string | undefined;
+        try {
+          await rpc(active[index]!, method, params, 30_000);
+        } catch (cause) {
+          error = String(cause);
+        }
+        if (wave !== undefined) {
+          timings.push({
+            method,
+            client: index,
+            wave,
+            startedMs,
+            elapsedMs: performance.now() - restartAt - startedMs,
+            ...(error ? { error } : {}),
+          });
+        } else if (error) {
+          throw new Error(error);
+        }
+      }),
+    );
+  }
+  // Pair locally once, then warm every device through the same attributed ingress as measurement.
+  for (let offset = 0; offset < clientCount; offset += 32) {
+    await replace(clientIndices.slice(offset, offset + 32));
+  }
+  await Promise.all(active.map((_client, index) => listBatch(index)));
+  console.log(
+    `PHASE reconnect-ready clients=${active.length} reconnecting=${reconnectCount} waves=${waveCount}`,
+  );
+  if (measurementStartAt !== undefined) {
+    if (Date.now() > measurementStartAt) {
+      throw new Error("Reconnect setup missed --start-at; choose a later paired start time");
+    }
+    await delay(measurementStartAt - Date.now());
+  }
+  recovering = true;
+  restartAt = performance.now();
+  loadStartedAt = restartAt;
+  const measuredStartedAtMs = Date.now();
+  let measurementError: string | undefined;
+  let completedWaves = 0;
+  for (let wave = 0; wave < waveCount; wave++) {
+    const waveStartedAt = performance.now();
+    const rotated = clientIndices.map((offset) => (wave * reconnectCount + offset) % clientCount);
+    const stop = Promise.withResolvers<void>();
+    let finished = false;
+    const polling = Promise.all(
+      rotated.slice(reconnectCount).map(async (index) => {
+        for (;;) {
+          await listBatch(index, wave);
+          await Promise.race([delay(pollMs, undefined, { ref: false }), stop.promise]);
+          if (finished) {
+            return;
+          }
+        }
+      }),
+    );
+    try {
+      await replace(rotated.slice(0, reconnectCount), wave);
+      await delay(Math.max(0, pollMs - (performance.now() - waveStartedAt)));
+      assertAlive();
+      completedWaves++;
+    } catch (error) {
+      measurementError = String(error);
+    } finally {
+      finished = true;
+      stop.resolve();
+      await polling;
+    }
+    if (measurementError) {
+      break;
+    }
+  }
+  const connectTimings = attempts.map((attempt) => ({
+    method: "connect",
+    startedMs: attempt.startedMs,
+    elapsedMs: attempt.connectMs ?? attempt.elapsedMs,
+    ...(attempt.error ? { error: attempt.error } : {}),
+  }));
+  const result = {
+    output,
+    fixture,
+    mode: "warm-reconnect-waves",
+    clientCount,
+    reconnectCount,
+    pollingClientCount: clientCount - reconnectCount,
+    waveCount,
+    expectedAttempts: waveCount * reconnectCount,
+    completedWaves,
+    pollMs,
+    measurementStartAt,
+    measuredStartedAtMs,
+    durationMs: performance.now() - restartAt,
+    transport:
+      "loopback trusted proxy attribution; signed paired devices; permessage-deflate negotiated; hello uncompressed",
+    phaseLog: path.join(output, "gateway-reconnect.log"),
+    connectionTiming:
+      "connectMs measures the connect RPC through hello, excluding users.self; elapsedMs includes socket open and challenge",
+    connect: summarize(connectTimings),
+    requests: Object.fromEntries(
+      shapes.map(({ method }) => [
+        method,
+        summarize(timings.filter((row) => row.method === method)),
+      ]),
+    ),
+    attempts,
+    timings,
+    eluSamples,
+    ...(measurementError ? { error: measurementError } : {}),
+  };
+  writeFileSync(path.join(output, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
+  console.log(
+    JSON.stringify(
+      { ...result, attempts: undefined, timings: undefined, eluSamples: undefined },
+      null,
+      2,
+    ),
+  );
+  if (
+    measurementError ||
+    completedWaves !== waveCount ||
+    attempts.some((row) => row.error) ||
+    timings.some((row) => row.error)
+  ) {
+    throw new Error(`incomplete reconnect measurement; inspect ${output}/result.json`);
   }
 }
 let cleanupPromise: Promise<void> | undefined;
@@ -668,16 +1509,40 @@ for (const [signal, exitCode] of [
 }
 try {
   await assertPortAvailable(port);
-  await assertPortAvailable(mockPort);
-  await new Promise<void>((resolve, reject) => {
-    mock.once("error", reject);
-    mock.listen(mockPort, "127.0.0.1", resolve);
-  });
-  const initial = launch("gateway-before-crash");
+  if (!reconnectWaves) {
+    await assertPortAvailable(mockPort);
+    await new Promise<void>((resolve, reject) => {
+      mock.once("error", reject);
+      mock.listen(mockPort, "127.0.0.1", resolve);
+    });
+  }
+  const initial = launch(reconnectWaves ? "gateway-reconnect" : "gateway-before-crash");
   await ready(initial);
-  const initialClients = await Promise.all(
-    Array.from({ length: clientCount }, (_, index) => connect(index)),
-  );
+  const initialClients: Awaited<ReturnType<typeof connect>>[] = [];
+  // Pair devices before the measured restart without exhausting the per-IP preauth budget.
+  for (let offset = 0; offset < clientCount; offset += 32) {
+    initialClients.push(
+      ...(await Promise.all(
+        Array.from({ length: Math.min(32, clientCount - offset) }, (_, index) =>
+          connect(offset + index),
+        ),
+      )),
+    );
+  }
+  if (reconnectWaves) {
+    await measureReconnectWaves(initialClients);
+  } else {
+    await measureRestartBurst(initial, initialClients);
+  }
+} finally {
+  if (!closing) {
+    await cleanup();
+  }
+}
+async function measureRestartBurst(
+  initial: ChildProcess,
+  initialClients: Awaited<ReturnType<typeof connect>>[],
+) {
   const sender = initialClients[0];
   if (!sender) {
     throw new Error("No synthetic sender connected");
@@ -692,6 +1557,56 @@ try {
       visibility: "shared",
       displayName: "Synthetic interrupted restart run",
     });
+  }
+  if (values["writer-reads"] || values["cheap-handlers"]) {
+    shapes.push({ method: "sessions.github.options", params: { sessionKey: keys[0] } });
+  }
+  if (values["writer-reads"]) {
+    shapes.push({ method: "agents.list", params: {} });
+  }
+  if (values["cheap-handlers"]) {
+    // The UI registers this observer before its reconnect roster bootstrap.
+    shapes.unshift({ method: "sessions.subscribe", params: {} });
+    await rpc(sender, "push.web.vapidPublicKey", {});
+    for (const [index, client] of initialClients.entries()) {
+      const params = subscriptionParams(index);
+      await rpc(client, "push.web.subscribe", params);
+      await rpc(client, "push.web.preferences.set", {
+        endpoint: params.endpoint,
+        scope: "device",
+        preferences: { enabled: false, label: "Synthetic restart browser" },
+      });
+      await rpc(sender, "workboard.cards.create", { title: `Synthetic restart card ${index}` });
+    }
+    shapes.push(
+      { method: "push.web.vapidPublicKey", params: {} },
+      { method: "push.web.subscribe", params: { endpoint: "one synthetic endpoint per device" } },
+      { method: "workboard.cards.list", params: {} },
+      { method: "github.preview", params: { url: previewUrl } },
+    );
+    // Prove both bundled plugins are usable before measuring their cold restart.
+    await rpc(sender, "workboard.cards.list", {});
+    await rpc(sender, "github.preview", { url: previewUrl });
+  }
+  if (values["transcript-reads"]) {
+    if (!values["cheap-handlers"]) {
+      shapes.unshift({ method: "sessions.subscribe", params: {} });
+      for (let index = 0; index < clientCount; index++) {
+        await rpc(sender, "workboard.cards.create", { title: `Synthetic restart card ${index}` });
+      }
+      shapes.push({ method: "workboard.cards.list", params: {} });
+    }
+    shapes.push(
+      { method: "chat.history", params: { sessionKey: keys[0], limit: 50 } },
+      {
+        method: "tools.invoke",
+        params: {
+          sessionKey: keys[0],
+          name: "memory_search",
+          args: { query: "synthetic fixture", maxResults: 1 },
+        },
+      },
+    );
   }
   const runIds = keys.map(() => randomUUID());
   await Promise.all(
@@ -762,31 +1677,78 @@ try {
   }
   // Initial held-response close callbacks have drained before allowing quick recovery answers.
   recovering = true;
+  if (values["transcript-reads"]) {
+    // Keep the corpus unindexed during setup so the measured restart owns cold catch-up.
+    cfg.memory.search = {
+      enabled: true,
+      provider: "none",
+      sources: ["sessions"],
+      experimental: { sessionMemory: true },
+    };
+    writeFileSync(configPath, JSON.stringify(cfg));
+  }
   await assertPortAvailable(port);
-  restartAt = performance.now();
   const restarted = launch("gateway-after-restart");
+  const sqliteQueueMetrics = values["sqlite-queues"]
+    ? Promise.race([
+        sqliteQueueSnapshot.promise,
+        delay(durationMs + 30_000, undefined, { ref: false }).then(() => {
+          throw new Error("SQLite queue snapshot timed out");
+        }),
+      ])
+    : Promise.resolve(undefined);
+  void sqliteQueueMetrics.catch((error: unknown) => {
+    failure ??= error instanceof Error ? error : new Error(String(error));
+  });
   await ready(restarted);
   const readyMs = performance.now() - restartAt;
   console.log(`PHASE restarted-ready ${readyMs.toFixed(1)}ms`);
   loadStartedAt = performance.now();
-  await Promise.all(Array.from({ length: clientCount }, (_, index) => observeClient(index)));
+  const transcriptMetrics = delay(
+    Math.max(0, Math.min(durationMs, 120_000) - (performance.now() - restartAt)),
+  ).then(async () => {
+    restarted.send({ channel: "post-restart-burst-snapshot" });
+    return await Promise.race([
+      transcriptSnapshot.promise,
+      delay(10_000, undefined, { ref: false }).then(() => {
+        throw new Error("Transcript task snapshot timed out");
+      }),
+    ]);
+  });
+  void transcriptMetrics.catch((error: unknown) => {
+    failure ??= error instanceof Error ? error : new Error(String(error));
+  });
+  const diagnosticMetrics =
+    values["writer-reads"] || values["cheap-handlers"] || values["transcript-reads"]
+      ? delay(
+          Math.max(0, Math.min(durationMs, 300_000) - (performance.now() - restartAt)),
+          undefined,
+          { ref: false },
+        ).then(async () => {
+          const response = await fetch(`http://127.0.0.1:${port}/api/diagnostics/prometheus`, {
+            headers: { authorization: `Bearer ${token}` },
+            signal: AbortSignal.timeout(10_000),
+          });
+          if (!response.ok) {
+            throw new Error(`Diagnostic metrics scrape failed: ${response.status}`);
+          }
+          const metrics = await response.text();
+          writeFileSync(path.join(output, "writer-metrics.prom"), metrics);
+          return metrics.split("\n");
+        })
+      : Promise.resolve(undefined);
+  // Observe a failed scrape immediately while the reconnect cohort is still running.
+  void diagnosticMetrics.catch((error: unknown) => {
+    failure ??= error instanceof Error ? error : new Error(String(error));
+  });
+  const [worktreeChurn] = await Promise.all([
+    values["worktree-churn"] ? measureWorktreeChurn() : Promise.resolve(undefined),
+    Promise.all(Array.from({ length: clientCount }, (_, index) => observeClient(index))),
+  ]);
   assertAlive();
-  const summarize = (rows: typeof timings) => {
-    const successful = rows
-      .filter((row) => row.error === undefined)
-      .map((row) => row.elapsedMs)
-      .toSorted((a, b) => a - b);
-    const percentile = (fraction: number) =>
-      successful[Math.max(0, Math.ceil(successful.length * fraction) - 1)] ?? null;
-    return {
-      started: rows.length,
-      completed: successful.length,
-      errors: rows.length - successful.length,
-      p50Ms: percentile(0.5),
-      p99Ms: percentile(0.99),
-      maxMs: successful.at(-1) ?? null,
-    };
-  };
+  const metrics = await diagnosticMetrics;
+  const transcriptTaskCounts = await transcriptMetrics;
+  const sqliteQueues = await sqliteQueueMetrics;
   const result = {
     output,
     fixture,
@@ -794,6 +1756,44 @@ try {
     runCount,
     durationMs,
     pollMs,
+    sqliteQueues,
+    worktreeChurn,
+    nativeTaskInputs: {
+      windowMs: Math.min(durationMs, 120_000),
+      counts: transcriptTaskCounts,
+      total: Object.values(transcriptTaskCounts).reduce((sum, count) => sum + count, 0),
+      boundary:
+        "main-isolate native task submissions across all workers; bounded input kind and history request kind only",
+      memory: values["transcript-reads"]
+        ? "cold sessions-only FTS index enabled at measured restart"
+        : "disabled",
+    },
+    transcriptQueueMetrics: metrics?.filter(
+      (line) =>
+        /^openclaw_worker_queue_wait_seconds_(sum|count)\{/.test(line) &&
+        line.includes('kind="sessionTranscript"'),
+    ),
+    writerQueueMetrics: metrics?.filter(
+      (line) =>
+        /^openclaw_worker_queue_wait_seconds_(sum|count)\{/.test(line) &&
+        line.includes('kind="sqlite_writer"'),
+    ),
+    rpcPhaseMetrics: metrics?.filter((line) =>
+      /^openclaw_gateway_rpc_(admission|handler|first_response|queue_wait)_seconds_/.test(line),
+    ),
+    cheapHandlerFixture: values["cheap-handlers"]
+      ? {
+          githubFixtureRequests,
+          github:
+            "bundled plugin and host dispatch; anonymous identity; fixed in-process HTTP transport; no external GitHub latency",
+          workboardCards: clientCount,
+          push: "persisted VAPID key and one disabled subscription per paired browser",
+          reconnectOrder:
+            "sessions.subscribe starts first on each socket, before parallel list and cheap-handler requests",
+          diagnostics:
+            "cumulative histograms since exporter start; requests before exporter subscription are not covered",
+        }
+      : undefined,
     readyMs,
     initialPrimaryArrivals: initialArrivals.size,
     activePrimaryHoldsAtCrash,
@@ -815,21 +1815,59 @@ try {
         },
       ]),
     ),
+    firstTwoMinutesMainElu: (() => {
+      const samples = eluSamples.filter(
+        (sample) => sample.elapsedMs <= Math.min(durationMs, 120_000),
+      );
+      const observedMs = samples.reduce((sum, sample) => sum + sample.intervalMs, 0);
+      return {
+        samples: samples.length,
+        observedMs,
+        weightedMean: observedMs
+          ? samples.reduce((sum, sample) => sum + sample.elu * sample.intervalMs, 0) / observedMs
+          : null,
+        max: samples.length ? Math.max(...samples.map((sample) => sample.elu)) : null,
+      };
+    })(),
+    firstTwoMinutes: Object.fromEntries(
+      shapes.map(({ method, params }) => [
+        method,
+        {
+          params,
+          ...summarize(timings.filter((row) => row.method === method && row.startedMs < 120_000)),
+        },
+      ]),
+    ),
     connectionErrors,
     timings,
     eluSamples,
   };
   writeFileSync(path.join(output, "result.json"), `${JSON.stringify(result, null, 2)}\n`);
-  console.log(JSON.stringify({ ...result, timings: undefined, eluSamples: undefined }, null, 2));
+  console.log(
+    JSON.stringify(
+      {
+        ...result,
+        timings: undefined,
+        eluSamples: undefined,
+        sqliteQueues: sqliteQueues
+          ? {
+              complete: sqliteQueues.complete,
+              events: sqliteQueues.events,
+              file: "sqlite-queues.json",
+            }
+          : undefined,
+      },
+      null,
+      2,
+    ),
+  );
   if (
     connectedClients.size < clientCount ||
     shapes.some(({ method }) => !timings.some((row) => row.method === method && !row.error)) ||
+    (values["cheap-handlers"] && githubFixtureRequests === 0) ||
+    (sqliteQueues && sqliteQueues.complete !== true) ||
     eluSamples.length === 0
   ) {
     throw new Error(`incomplete measurement; inspect ${output}/result.json`);
-  }
-} finally {
-  if (!closing) {
-    await cleanup();
   }
 }

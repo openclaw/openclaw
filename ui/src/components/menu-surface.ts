@@ -1,23 +1,26 @@
 import { occludeNativeBrowserSurface } from "../lib/native-overlay-occlusion.ts";
 
+const connectedSurfaces = new Set<HTMLElement>();
+
+/** A mounted menu host owns Escape even when its native popover is closed. */
+export function hasMenuSurface(document: Document): boolean {
+  for (const surface of connectedSurfaces) {
+    if (surface.ownerDocument === document) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /**
  * Promotes a connected element into the browser popover top layer so transient
  * menus paint above every in-page stacking context (e.g. the sidebar resizer
- * divider that sits above the nav's z-index 10 context). Falls back to
- * in-flow rendering when the Popover API is unavailable (older engines, jsdom).
+ * divider that sits above the nav's z-index 10 context).
  */
-export function promoteToPopoverTopLayer(element: HTMLElement) {
-  occludeNativeBrowserSurface(element);
+export function promoteToPopoverTopLayer(element: HTMLElement, surfaces: () => Iterable<Element>) {
+  occludeNativeBrowserSurface(element, surfaces);
   element.setAttribute("popover", "manual");
-  if (typeof element.showPopover === "function") {
-    try {
-      element.showPopover();
-      return;
-    } catch {
-      // Fall through to in-flow rendering when the top-layer API is unavailable.
-    }
-  }
-  element.removeAttribute("popover");
+  element.showPopover();
 }
 
 /**
@@ -27,7 +30,12 @@ export function promoteToPopoverTopLayer(element: HTMLElement) {
  */
 class MenuSurface extends HTMLElement {
   connectedCallback() {
-    promoteToPopoverTopLayer(this);
+    connectedSurfaces.add(this);
+    promoteToPopoverTopLayer(this, () => this.children);
+  }
+
+  disconnectedCallback() {
+    connectedSurfaces.delete(this);
   }
 }
 

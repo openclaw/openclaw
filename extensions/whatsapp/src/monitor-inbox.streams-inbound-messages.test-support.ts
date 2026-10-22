@@ -1,4 +1,3 @@
-// WhatsApp monitor inbox delivery and lifecycle behavior.
 import type { GroupMetadata, WAMessageKey } from "baileys";
 import { beforeEach, expect, vi } from "vitest";
 import {
@@ -22,10 +21,7 @@ import { DEFAULT_WHATSAPP_SOCKET_TIMING } from "./socket-timing.js";
 
 const { controllerContexts, imageOps, sleepWithAbortMock } = vi.hoisted(() => ({
   controllerContexts: new Map<string, unknown>(),
-  imageOps: {
-    getImageMetadata: vi.fn(),
-    resizeToJpeg: vi.fn(),
-  },
+  imageOps: { getImageMetadata: vi.fn(), resizeToJpeg: vi.fn() },
   sleepWithAbortMock: vi.fn(async (_ms: number, _signal?: AbortSignal) => undefined),
 }));
 
@@ -34,30 +30,21 @@ vi.mock("./connection-controller-runtime-context.js", () => ({
   getWhatsAppConnectionController: (accountId: string) => controllerContexts.get(accountId) ?? null,
 }));
 
-vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
-  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/media-runtime")>(
-    "openclaw/plugin-sdk/media-runtime",
-  );
-  return {
-    ...actual,
-    getImageMetadata: imageOps.getImageMetadata,
-    resizeToJpeg: imageOps.resizeToJpeg,
-  };
-});
+vi.mock(import("openclaw/plugin-sdk/media-runtime"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  getImageMetadata: imageOps.getImageMetadata,
+  resizeToJpeg: imageOps.resizeToJpeg,
+}));
 
-vi.mock("./reconnect.js", async () => {
-  const actual = await vi.importActual<typeof import("./reconnect.js")>("./reconnect.js");
-  return {
-    ...actual,
-    sleepWithAbort: (ms: number, signal?: AbortSignal) => sleepWithAbortMock(ms, signal),
-  };
-});
+vi.mock(import("./reconnect.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
+  sleepWithAbort: (ms: number, signal?: AbortSignal) => sleepWithAbortMock(ms, signal),
+}));
 
 let nextMessageSequence = 0;
 
 export function nextMessageId(label: string): string {
-  nextMessageSequence += 1;
-  return `${label}-${nextMessageSequence}`;
+  return `${label}-${++nextMessageSequence}`;
 }
 
 export function createSocketRef(): NonNullable<InboxMonitorOptions["socketRef"]> {
@@ -67,13 +54,7 @@ export function createSocketRef(): NonNullable<InboxMonitorOptions["socketRef"]>
 export function fastReconnectPolicy(
   maxAttempts: number,
 ): NonNullable<InboxMonitorOptions["disconnectRetryPolicy"]> {
-  return {
-    initialMs: 1,
-    maxMs: 1,
-    factor: 1,
-    jitter: 0,
-    maxAttempts,
-  };
+  return { initialMs: 1, maxMs: 1, factor: 1, jitter: 0, maxAttempts };
 }
 
 export function inboundMessage(onMessage: ReturnType<typeof vi.fn>, index = 0): WebInboundMessage {
@@ -174,9 +155,7 @@ export async function primeInboundReplyHandle(params: {
   );
   await waitForMessageCalls(params.onMessage, 1);
 
-  const inbound = inboundMessage(params.onMessage);
-
-  return { listener, sock, inbound };
+  return { listener, sock, inbound: inboundMessage(params.onMessage) };
 }
 
 export { controllerContexts, imageOps, sleepWithAbortMock };
@@ -186,11 +165,12 @@ export function installStreamsInboundMessageHooks() {
 
   beforeEach(() => {
     controllerContexts.clear();
-    imageOps.getImageMetadata.mockReset();
-    imageOps.getImageMetadata.mockResolvedValue(null);
-    imageOps.resizeToJpeg.mockReset();
-    imageOps.resizeToJpeg.mockRejectedValue(new Error("unexpected thumbnail generation"));
-    sleepWithAbortMock.mockReset();
-    sleepWithAbortMock.mockImplementation(async (_ms: number, _signal?: AbortSignal) => undefined);
+    imageOps.getImageMetadata.mockReset().mockResolvedValue(null);
+    imageOps.resizeToJpeg
+      .mockReset()
+      .mockRejectedValue(new Error("unexpected thumbnail generation"));
+    sleepWithAbortMock
+      .mockReset()
+      .mockImplementation(async (_ms: number, _signal?: AbortSignal) => undefined);
   });
 }

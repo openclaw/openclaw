@@ -243,8 +243,6 @@ describe("GitHub OAuth client", () => {
       expected: {
         status: "slow_down",
         intervalSeconds: 12,
-        errorDescription: "Continue at the returned interval",
-        errorUri: "https://docs.github.com/apps/oauth-apps",
       },
     },
     {

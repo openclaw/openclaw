@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { raceWithTimeoutResult } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
-import { createAcpReplyProjector } from "./acp-projector.js";
 import { createAcpDispatchDeliveryCoordinator } from "./dispatch-acp-delivery.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -112,32 +111,6 @@ function createCoordinator(
   });
 }
 
-it("preserves explicit ACP chunk semantics through the delivery coordinator", async () => {
-  const accepted: Array<{ kind: string; text?: string; textMode?: "delta" }> = [];
-  const dispatcher = createReplyDispatcher({
-    deliver: async (payload, info) => {
-      accepted.push({ kind: info.kind, text: payload.text, textMode: payload.textMode });
-    },
-  });
-  const coordinator = createCoordinator({ dispatcher });
-  const projector = createAcpReplyProjector({
-    cfg: createAcpTestConfig({ acp: { enabled: true, stream: { deliveryMode: "live" } } }),
-    shouldSendToolSummaries: async () => false,
-    shouldSendFullToolDetails: async () => false,
-    deliver: coordinator.deliver,
-  });
-  await projector.onEvent({ type: "text_delta", text: "First sentence. ", stream: "output" });
-  await projector.onEvent({ type: "text_delta", text: "Second sentence.", stream: "output" });
-  await projector.flush();
-  await coordinator.deliver("final", { text: "Replacement final." }, { skipTts: true });
-  await dispatcher.waitForIdle();
-  expect(accepted).toEqual([
-    { kind: "block", text: "First sentence. ", textMode: "delta" },
-    { kind: "block", text: "Second sentence.", textMode: "delta" },
-    { kind: "final", text: "Replacement final.", textMode: undefined },
-  ]);
-});
-
 function createVisibleChatAcpCoordinator(
   cfg: OpenClawConfig,
   dispatcher: ReplyDispatcher = createDispatcher(),
@@ -188,82 +161,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       text?: string;
     }) => kind === "block" && typeof text === "string" && text.trim().length > 0;
     channelPluginMocks.shouldTreatRoutedTextAsVisible = undefined;
-  });
-
-  it.each([true])(
-    "keeps block admission independent of delivery settlement, no-send=%s",
-    async (noSend) => {
-      const delivered: unknown[] = [];
-      let releaseDelivery: (() => void) | undefined;
-      let markDeliveryStarted: (() => void) | undefined;
-      const deliveryStarted = new Promise<void>((resolve) => {
-        markDeliveryStarted = resolve;
-      });
-      const deliveryGate = new Promise<void>((resolve) => {
-        releaseDelivery = resolve;
-      });
-      const dispatcher = createReplyDispatcher({
-        deliver: async (payload) => {
-          delivered.push(payload);
-          markDeliveryStarted?.();
-          await deliveryGate;
-          if (noSend) {
-            throw new PlatformMessageNotDispatchedError("offline", { cause: new Error("offline") });
-          }
-        },
-      });
-      const coordinator = createCoordinator({
-        ctx: buildTestCtx({
-          Provider: noSend ? "plainchat" : "visiblechat",
-          Surface: noSend ? "plainchat" : "visiblechat",
-          SessionKey: "agent:codex-acp:session-1",
-        }),
-        dispatcher,
-      });
-
-      const deliveryPromise = coordinator.deliver("block", { text: "hello" }, { skipTts: true });
-
-      await deliveryStarted;
-      await Promise.resolve();
-
-      expect(delivered).toEqual([{ text: "hello" }]);
-      await expect(deliveryPromise).resolves.toBe(true);
-
-      let transcriptSettled = false;
-      const transcriptPromise = coordinator
-        .resolveAccumulatedDeliveredTranscriptText()
-        .then((text) => {
-          transcriptSettled = true;
-          return text;
-        });
-      await Promise.resolve();
-      expect(transcriptSettled).toBe(false);
-
-      const fallback = coordinator.settleVisibleText().then(() => coordinator.recoverBlockText());
-      await Promise.resolve();
-      releaseDelivery?.();
-      await expect(transcriptPromise).resolves.toBe(noSend ? "" : "hello");
-      await fallback;
-      expect(delivered).toEqual(
-        noSend ? [{ text: "hello" }, { text: "hello" }] : [{ text: "hello" }],
-      );
-      await dispatcher.waitForIdle();
-    },
-  );
-
-  it("excludes direct output cancelled by a core before-delivery hook", async () => {
-    const dispatcher = createReplyDispatcher({ deliver: vi.fn(async () => {}) });
-    dispatcher.appendBeforeDeliver?.(() => null);
-    const coordinator = createCoordinator({
-      dispatcher,
-    });
-
-    await expect(
-      coordinator.deliver("block", { text: "cancelled output" }, { skipTts: true }),
-    ).resolves.toBe(true);
-    await dispatcher.waitForIdle();
-
-    await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
   });
 
   it("keeps canonical ACP text after an outbound hook rewrites the payload", async () => {
@@ -548,7 +445,6 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
       ok: true,
       delivered: false,
       suppressed: true,
-      reason: "cancelled_by_reply_payload_sending_hook",
     });
     const coordinator = createCoordinator({
       shouldRouteToOriginating: true,

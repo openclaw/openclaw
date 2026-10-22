@@ -2,9 +2,10 @@ import type { ProgressCardStep } from "@openclaw/gateway-protocol";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { dynamic, type JSX } from "@solidjs/web";
-import { For, Match, Show, Switch, createMemo } from "solid-js";
+import { For, Match, Show, Switch, createMemo, omit } from "solid-js";
 import { readNodePermissionRequest } from "../../../../../packages/gateway-protocol/src/node-permissions.js";
 import { stripShellPreamble } from "../../../../../src/agents/tool-display-exec-shell.js";
+import { browserTabKey } from "../../../components/browser/browser-target.ts";
 import { iconData } from "../../../components/icon-data.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import type { ToolCard, ToolCardOutcome } from "../../../lib/chat/chat-types.ts";
@@ -22,14 +23,14 @@ import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lit/solid-bridge.ts";
-import { LitContent, solidContent } from "../../../lit/solid-content.tsx";
-import { renderPluginSurface } from "../../../plugins/control-ui-view.ts";
+import { PluginSurface } from "../../../plugins/control-ui-view.solid.tsx";
 import { resolveSpawnedSubagent, type SpawnedSubagent } from "../chat-spawned-subagent.ts";
 import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
+import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
-import { DiffStatChips } from "./chat-diff-render.solid.tsx";
-import { renderChatPermissionCard } from "./chat-divider.ts";
+import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
+import { ChatPermissionCard } from "./chat-permission-card.tsx";
+import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 import { ExpandedToolCardContent } from "./chat-tool-content.solid.tsx";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import {
@@ -43,6 +44,20 @@ const TOOL_ROW_VERB_KEYS: Partial<Record<ToolCallView["kind"], string>> = {
   search: "chat.toolCards.verbs.searched",
   fetch: "chat.toolCards.verbs.fetched",
 };
+
+export function BrowserTabPreviews(props: { previews: readonly BrowserTabPreview[] | undefined }) {
+  return (
+    <For each={props.previews} keyed={(item) => browserTabKey(item.preview)}>
+      {(item) => (
+        <BrowserTabCardHost
+          preview={item().preview}
+          revision={item().revision}
+          latest={item().latest}
+        />
+      )}
+    </For>
+  );
+}
 
 const MUTATION_VERB_KEYS = {
   update: ["editing", "edited", "edit"],
@@ -91,12 +106,11 @@ function commandPreview(command: string): string {
   );
 }
 
-export function syncToolDisclosureOverflow(event: Event): void {
+export function syncToolDisclosureOverflow(event: Event, content: HTMLElement | undefined): void {
   const disclosure = event.currentTarget;
   if (!(disclosure instanceof HTMLElement)) {
     return;
   }
-  const content = disclosure.querySelector<HTMLElement>(".chat-tool-disclosure__content");
   disclosure.classList.toggle(
     "chat-tool-disclosure--overflowing",
     Boolean(content && content.scrollWidth > content.clientWidth),
@@ -331,7 +345,7 @@ function progressReceiptLabel(card: ToolCard, outcome: ToolCardOutcome) {
             : t("sessionProgressCard.receipt.cleared");
 }
 
-function ToolApprovalReviews(props: { card: ToolCard }) {
+export function ToolApprovalReviews(props: { card: ToolCard }) {
   const reviews = createMemo(() => readToolApprovalReviews(props.card.details));
   return (
     <Show when={reviews().length > 0}>
@@ -397,6 +411,8 @@ type ToolCardProps = {
 };
 
 function ToolCardView(props: ToolCardProps) {
+  let disclosureContent: HTMLSpanElement | undefined;
+  const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   const card = createMemo(() => resolveToolCardDisplay(props.card), { equals: false });
   const permission = () =>
     readNodePermissionRequest(asNullableRecord(card().details)?.permissionMissing);
@@ -442,7 +458,7 @@ function ToolCardView(props: ToolCardProps) {
           tool={{ toolName: display().name, pluginToolIcons: props.options.pluginToolIcons }}
         />
       </span>
-      <span class="chat-tool-disclosure__content">
+      <span ref={(element) => (disclosureContent = element)} class="chat-tool-disclosure__content">
         <Show
           when={subagent()}
           fallback={
@@ -495,9 +511,9 @@ function ToolCardView(props: ToolCardProps) {
                 ]}
                 type={linkedRow() ? undefined : "button"}
                 aria-expanded={linkedRow() ? undefined : props.options.expanded ? "true" : "false"}
-                onPointerEnter={syncToolDisclosureOverflow}
-                onFocus={linkedRow() ? undefined : syncToolDisclosureOverflow}
-                onFocusIn={linkedRow() ? syncToolDisclosureOverflow : undefined}
+                onPointerEnter={syncOverflow}
+                onFocus={linkedRow() ? undefined : syncOverflow}
+                onFocusIn={linkedRow() ? syncOverflow : undefined}
                 onClick={linkedRow() ? undefined : toggle}
               >
                 <Show when={linkedRow()}>
@@ -555,76 +571,42 @@ function ToolCardView(props: ToolCardProps) {
       }
     >
       {(request) => (
-        <LitContent value={renderChatPermissionCard(request(), props.options.onPermissionRetry)} />
+        <ChatPermissionCard request={request()} onRetry={props.options.onPermissionRetry} />
       )}
     </Show>
   );
 }
 
-const ToolCardHost = defineSolidBridge<{
-  card: ToolCard | null;
-  options: ToolCardOptions;
-  hasChildren: boolean;
-}>(
-  "openclaw-chat-tool-card",
-  (props) => (
-    <Show when={props.card}>
-      {(card) => (
-        <ToolCardView card={card()} options={props.options} hasChildren={props.hasChildren}>
-          {props.children}
-        </ToolCardView>
-      )}
-    </Show>
-  ),
-  {
-    properties: {
-      card: { default: null, attribute: false },
-      options: {
-        default: { messageKey: "", expanded: false, onToggleExpanded: () => {} },
-        attribute: false,
-      },
-      hasChildren: { default: false, attribute: false },
-    },
-  },
-);
-export const ChatToolIcon = defineSolidBridge<{
-  name: string;
-  tool?: { toolName: string; pluginToolIcons?: PluginToolIcons };
-}>("openclaw-chat-tool-icon", (props) => <ToolIcon name={props.name} tool={props.tool} />, {
-  properties: {
-    name: { default: "puzzle", attribute: false },
-    tool: { default: undefined, attribute: false },
-  },
-});
-export const ChatToolApprovalReviews = defineSolidBridge<{ card: ToolCard | null }>(
-  "openclaw-chat-tool-reviews",
-  (props) => <Show when={props.card}>{(card) => <ToolApprovalReviews card={card()} />}</Show>,
-  { properties: { card: { default: null, attribute: false } } },
-);
+export function ChatToolIcon(
+  props: {
+    name: string;
+    tool?: { toolName: string; pluginToolIcons?: PluginToolIcons };
+  } & JSX.HTMLAttributes<HTMLElement>,
+) {
+  const attributes = omit(props, "name", "tool", "children");
+  return (
+    <openclaw-chat-tool-icon {...attributes}>
+      <ToolIcon name={props.name} tool={props.tool} />
+    </openclaw-chat-tool-icon>
+  );
+}
 
 export function ChatToolCard(props: ToolCardProps) {
-  const fallback = solidContent(ToolCardHost, {
-    style: { display: "contents" },
-    get card() {
-      return props.card;
-    },
-    get options() {
-      return props.options;
-    },
-    get hasChildren() {
-      return props.hasChildren ?? Boolean(props.children);
-    },
-    get children() {
-      return props.children;
-    },
-  });
   return (
-    <LitContent
-      value={renderPluginSurface(
-        "tool-result",
-        toolResultSurfaceProps(props.card, props.options),
-        fallback,
-        props.options.presented ?? true,
+    <PluginSurface
+      surface="tool-result"
+      props={toolResultSurfaceProps(props.card, props.options)}
+      presented={props.options.presented ?? true}
+      renderDefault={() => (
+        <openclaw-chat-tool-card style={{ display: "contents" }}>
+          <ToolCardView
+            card={props.card}
+            options={props.options}
+            hasChildren={props.hasChildren ?? Boolean(props.children)}
+          >
+            {props.children}
+          </ToolCardView>
+        </openclaw-chat-tool-card>
       )}
     />
   );

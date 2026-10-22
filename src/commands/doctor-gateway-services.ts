@@ -20,7 +20,10 @@ import {
 import { execLaunchctl, isLaunchctlNotLoaded } from "../daemon/launchd-exec.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { renderSystemNodeWarning, resolveSystemNodeInfo } from "../daemon/runtime-paths.js";
-import { readDaemonRuntimePin } from "../daemon/runtime-pin-state.js";
+import {
+  readDaemonRuntimePin,
+  withDaemonRuntimePinMigration,
+} from "../daemon/runtime-pin-state.js";
 import {
   auditGatewayServiceConfig,
   needsNodeRuntimeMigration,
@@ -200,14 +203,13 @@ async function cleanupLegacyDarwinServices(
   const failed: string[] = [];
 
   for (const svc of services) {
-    const plistPath = svc.sourcePath;
-    if (!plistPath) {
+    if (!svc.sourcePath) {
       failed.push(`${svc.label} (missing plist path)`);
       continue;
     }
     const result = await cleanupLegacyLaunchdService({
       label: svc.label,
-      plistPath,
+      plistPath: svc.sourcePath,
     });
     if (result.status === "removed") {
       removed.push(result.destination ? `${svc.label} -> ${result.destination}` : svc.label);
@@ -276,12 +278,14 @@ export async function maybeRepairGatewayServiceConfig(
   const managedDefinition = resolveManagedGatewayServiceCommand(command) ?? command;
   note(
     formatGatewayHeapLimitReport(
-      inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS, {}, command.programArguments),
+      inspectGatewayHeapLimit(command.environment?.NODE_OPTIONS, command.programArguments),
     ),
     "Gateway heap",
   );
   const managedWrapperPath = managedDefinition.environment?.[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
-  const pinSnapshot = readDaemonRuntimePin({ kind: "gateway", env: process.env }, command);
+  const pinSnapshot = await withDaemonRuntimePinMigration(process.env, () =>
+    readDaemonRuntimePin({ kind: "gateway", env: process.env }, command),
+  );
   const serviceInstallEnv: NodeJS.ProcessEnv = {
     ...process.env,
     ...(managedWrapperPath && !Object.hasOwn(process.env, OPENCLAW_WRAPPER_ENV_KEY)
@@ -456,6 +460,7 @@ export async function maybeRepairGatewayServiceConfig(
     serviceLayout,
     definitionRepair,
   );
+  audit.issues = audit.issues.filter((issue) => issue.repair !== "host");
   if (audit.issues.length === 0 && !definitionRepair) {
     return cfg;
   }

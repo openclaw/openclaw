@@ -9,6 +9,7 @@ import { groupWorkboardCardsByStatus } from "../../lib/workboard/derived.ts";
 import "../../styles/workboard.css";
 import {
   dispatchWorkboard,
+  loadWorkboard,
   filterWorkboardCards,
   workboardCardMatchesHealthKey,
   workboardHasActiveWrites,
@@ -546,6 +547,21 @@ export function WorkboardView(props: WorkboardProps & { onRefresh: () => void })
             <ActiveFilters filters={view().activeFilters} requestUpdate={props.onRequestUpdate} />
           ) : null}
         </div>
+        {state().nextCursor ? (
+          <div class="workboard-pagination" role="status">
+            <span>{t("workboard.partialCards", { count: String(state().cards.length) })}</span>
+            <button
+              class="btn"
+              type="button"
+              disabled={state().loading}
+              onClick={() => {
+                void loadWorkboard({ ...workboardMutationContext(props), more: true });
+              }}
+            >
+              {t(state().loading ? "common.refreshing" : "workboard.loadMoreCards")}
+            </button>
+          </div>
+        ) : null}
         {(view().filtered.length === 0 && view().activeFiltering) ||
         view().visibleStatuses.length === 0 ? (
           <div class="workboard-empty-state" role="status">

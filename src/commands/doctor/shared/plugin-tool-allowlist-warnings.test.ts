@@ -1,8 +1,14 @@
 // Plugin tool allowlist warning tests cover doctor warnings for stale tool allowlists.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { PluginManifestRegistry } from "../../../plugins/manifest-registry.js";
+import * as fixture from "../../../plugins/plugin-metadata.test-support.js";
 import { collectPluginToolAllowlistWarnings } from "./plugin-tool-allowlist-warnings.js";
+
+vi.mock("../../../plugins/manifest-contract-eligibility.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../../plugins/manifest-contract-eligibility.js")>()),
+  loadManifestMetadataSnapshot: () => fixture.createPluginMetadataSnapshotFixture(manifestRegistry),
+}));
 
 const manifestRegistry: PluginManifestRegistry = {
   diagnostics: [],
@@ -44,7 +50,6 @@ function mcpWarnings(cfg: OpenClawConfig) {
       mcp: { servers: { outlook: { command: "node", args: ["outlook-server.js"] } } },
       ...cfg,
     },
-    manifestRegistry,
   });
 }
 
@@ -55,7 +60,6 @@ describe("collectPluginToolAllowlistWarnings", () => {
         plugins: { allow: ["telegram"] },
         tools: { allow: ["*"] },
       },
-      manifestRegistry,
     });
 
     expect(warnings).toEqual([
@@ -69,7 +73,6 @@ describe("collectPluginToolAllowlistWarnings", () => {
         plugins: { allow: ["telegram"] },
         tools: { allow: ["firecrawl_search"] },
       },
-      manifestRegistry,
     });
 
     expect(warnings).toEqual([
@@ -89,7 +92,6 @@ describe("collectPluginToolAllowlistWarnings", () => {
           },
         },
       },
-      manifestRegistry,
     });
 
     expect(warnings).toEqual([

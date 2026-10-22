@@ -12,6 +12,7 @@ import {
   satisfies as satisfiesSemver,
   validRange as validSemverRange,
 } from "semver";
+import { resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
@@ -86,7 +87,7 @@ function createNpmMetadataEnv(
     NPM_CONFIG_IGNORE_SCRIPTS: "true",
   };
   applyNpmFreshnessBypassEnv(env, new Date(), scope);
-  return env;
+  return resolveRuntimeScriptEnv(env);
 }
 
 export async function loadNpmPackageVersions({
@@ -245,18 +246,12 @@ export async function resolveNpmSpecMetadata(params: {
   }
 }
 
-export type NpmIntegrityDrift = {
-  expectedIntegrity: string;
-  actualIntegrity: string;
-};
-
 /** Runs a callback in a private temp directory and removes it afterward. */
 export async function withInstallWorkspace<T>(
   prefix: string,
   fn: (tmpDir: string) => Promise<T>,
-  options?: { rootDir?: string },
 ): Promise<T> {
-  const rootDir = options?.rootDir ?? resolvePreferredOpenClawTmpDir();
+  const rootDir = resolvePreferredOpenClawTmpDir();
   return await withTempWorkspace({ rootDir, prefix }, async (tmp) => fn(tmp.dir));
 }
 

@@ -112,6 +112,11 @@ describe("OpenAI image generation auth availability", () => {
       true,
     );
 
+    expect(ensureAuthProfileStoreAsyncMock).toHaveBeenCalledTimes(1);
+    expect(isProviderApiKeyConfiguredAsyncMock).toHaveBeenCalledWith(
+      expect.objectContaining({ store: authStore }),
+    );
+
     await expectConfigured(
       {
         agentDir: "/tmp/agent",
@@ -121,23 +126,6 @@ describe("OpenAI image generation auth availability", () => {
         }),
       },
       true,
-    );
-  });
-
-  it("reuses the worker-loaded profile store for custom-route readiness", async () => {
-    const store = createCodexOAuthAuthStore();
-    authStore = store;
-    authConfigured = true;
-
-    expect(
-      await provider.isConfiguredAsync?.({
-        agentDir: "/tmp/agent",
-        cfg: openAIImageConfig({ baseUrl: "https://chatgpt.com/backend-api/codex" }),
-      }),
-    ).toBe(true);
-    expect(ensureAuthProfileStoreAsyncMock).toHaveBeenCalledTimes(1);
-    expect(isProviderApiKeyConfiguredAsyncMock).toHaveBeenCalledWith(
-      expect.objectContaining({ store }),
     );
   });
 

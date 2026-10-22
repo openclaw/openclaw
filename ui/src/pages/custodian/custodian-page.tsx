@@ -1,56 +1,29 @@
-import type { SystemChangeEntry, SystemChangesListResult } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { SystemChangesListResult } from "@openclaw/gateway-protocol";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import "../../components/openclaw-mascot.ts";
+import type { SidebarAttentionElementAttributes } from "../../components/sidebar-attention-element.ts";
 import { channelSnapshotHasActiveChannel } from "../../lib/channels/index.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectChannels } from "../../lib/reactive/domain-capabilities.ts";
+import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../lit/solid-bridge.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import "../../styles/custodian.css";
-import { CustodianChangeHistory } from "./custodian-history.tsx";
+import { CustodianChangeHistory, type HistorySnapshot } from "./custodian-history.tsx";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import { CustodianSurface } from "./custodian-surface.tsx";
 import type { CustodianRouteData } from "./route.ts";
 
 type Props = { onboarding: boolean; newAgentIntent: boolean; store: CustodianSessionStore };
-type History = {
-  entries: SystemChangeEntry[];
-  nextCursor: string | null;
-  load: "idle" | "initial" | "more";
-  error: string | null;
-  loaded: boolean;
-};
-const emptyHistory = (): History => ({
-  entries: [],
-  nextCursor: null,
-  load: "idle",
-  error: null,
-  loaded: false,
-});
-
-function CustodianPageContent(props: Props) {
+const propertyReceipts = new WeakMap<HTMLElement, (key: keyof Props) => void>();
+function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const channels = projectChannels(context.channels);
-  const store = projectSource(
-    untrack(() => props.store),
-    {
-      read: (source) => source,
-      subscribe: (source, notify) => source.subscribe(notify),
-      equality: "revision",
-    },
-  );
-  createEffect(
-    () => props.store,
-    (source) => {
-      store.replaceSource(source);
-      void source.refreshTranscriptIfIdle();
-    },
-  );
+  const store = projectOwner(host.store, (source) => source);
   const historyAvailable = createMemo(() => {
     const snapshot = gateway.read().snapshot;
     return (
@@ -59,83 +32,120 @@ function CustodianPageContent(props: Props) {
       isGatewayMethodAdvertised(snapshot, "openclaw.changes.list") === true
     );
   });
-  const [historyOpen, setHistoryOpen] = createSignal(false);
-  const [history, setHistory] = createSignal<History>(emptyHistory());
-  let historyClient: GatewayBrowserClient | null = null;
-  let historyWasAvailable = false;
-  let historyRequestEpoch = 0;
-  let historyBusy = false;
-  let disposed = false;
-  createEffect(
+  const historyConnection = createMemo(
     () => [gateway.read().snapshot.client, historyAvailable()] as const,
-    ([client, available]) => {
-      if (client === historyClient && available === historyWasAvailable) {
-        return;
-      }
-      historyClient = client;
-      historyWasAvailable = available;
-      historyRequestEpoch += 1;
-      historyBusy = false;
-      setHistoryOpen(false);
-      setHistory(emptyHistory());
-    },
+    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
   );
-  onCleanup(() => {
-    disposed = true;
+  const historyOwner = createMemo<{
+    connection: ReturnType<typeof historyConnection>;
+    busy: boolean;
+    snapshot: HistorySnapshot;
+  }>(() => ({
+    connection: historyConnection(),
+    busy: false,
+    snapshot: { entries: [], nextCursor: null, error: null, loaded: false },
+  }));
+  // History drafts reset with the connection; local requests share its synchronous admission state.
+  const [historyOpen, setHistoryOpen] = createSignal(() => {
+    historyConnection();
+    return false;
   });
-  createEffect(
-    () => [props.onboarding, store.read().channelOnboardingNudgeClosed, channels.read()] as const,
-    ([onboarding, closed, state]) => {
+  const [historyReceipt, setHistoryReceipt] = createSignal<{
+    owner: ReturnType<typeof historyOwner>;
+    reset: boolean;
+    result: Promise<HistorySnapshot>;
+  } | null>(() => {
+    historyOwner();
+    return null;
+  });
+  let disposed = false;
+  function refreshChannelInventory() {
+    const state = context.channels.state;
+    if (
+      host.onboarding &&
+      !host.store.channelOnboardingNudgeClosed &&
+      state.connected &&
+      !state.channelsSnapshot &&
+      !state.channelsLoading &&
+      !state.channelsError
+    ) {
+      void context.channels.refresh(false);
+    }
+  }
+  onSettled(() => {
+    propertyReceipts.set(host, (key) => {
+      if (key === "store") {
+        store.replaceSource(host.store);
+        void host.store.refreshTranscriptIfIdle();
+      }
+      refreshChannelInventory();
+    });
+    store.replaceSource(host.store);
+    // Setup and channel receipts admit missing onboarding inventory before another refresh.
+    const subscriptions = [store, channels].map((source) =>
+      source.subscribe(refreshChannelInventory),
+    );
+    void host.store.refreshTranscriptIfIdle();
+    refreshChannelInventory();
+    return () => {
+      disposed = true;
+      propertyReceipts.delete(host);
+      subscriptions.forEach((stop) => stop());
+    };
+  });
+  useGatewayPage({
+    getGateway: () => context.gateway,
+    onSnapshot: ({ initial, becameConnected }) => {
       if (
-        onboarding &&
-        !closed &&
-        state.connected &&
-        !state.channelsSnapshot &&
-        !state.channelsLoading &&
-        !state.channelsError
+        !initial &&
+        becameConnected &&
+        props.onboarding &&
+        !props.store.channelOnboardingNudgeClosed
       ) {
         void context.channels.refresh(false);
       }
     },
-  );
+  });
 
-  async function loadHistory(reset: boolean) {
-    const client = historyClient;
-    const cursor = reset ? undefined : (history().nextCursor ?? undefined);
-    if (!client || !historyAvailable() || historyBusy || (!reset && !cursor)) {
+  function loadHistory(reset: boolean) {
+    const owner = historyOwner();
+    const client = owner.connection[0];
+    const cursor = reset ? undefined : (owner.snapshot.nextCursor ?? undefined);
+    if (!client || !owner.connection[1] || owner.busy || (!reset && !cursor)) {
       return;
     }
-    const epoch = ++historyRequestEpoch;
-    historyBusy = true;
-    setHistory((previous) => ({ ...previous, load: reset ? "initial" : "more", error: null }));
+    owner.busy = true;
     const isCurrent = () =>
       !disposed &&
-      historyRequestEpoch === epoch &&
+      historyOwner() === owner &&
       context.gateway.snapshot.phase === "connected" &&
       context.gateway.snapshot.client === client &&
       isGatewayMethodAdvertised(context.gateway.snapshot, "openclaw.changes.list") === true;
-    try {
-      const result = await client.request<SystemChangesListResult>("openclaw.changes.list", {
+    const completion = client
+      .request<SystemChangesListResult>("openclaw.changes.list", {
         limit: 50,
         ...(cursor ? { beforeCursor: cursor } : {}),
+      })
+      .catch(() => null)
+      .then((result) => {
+        if (!isCurrent()) {
+          return owner.snapshot;
+        }
+        owner.busy = false;
+        owner.snapshot = {
+          ...owner.snapshot,
+          loaded: true,
+          error: result ? null : t("custodian.history.requestFailed"),
+          ...(result
+            ? {
+                entries: reset ? result.entries : [...owner.snapshot.entries, ...result.entries],
+                nextCursor: result.nextCursor ?? null,
+              }
+            : {}),
+        };
+        return owner.snapshot;
       });
-      if (isCurrent()) {
-        setHistory((previous) => ({
-          ...previous,
-          entries: reset ? result.entries : [...previous.entries, ...result.entries],
-          nextCursor: result.nextCursor ?? null,
-        }));
-      }
-    } catch {
-      if (isCurrent()) {
-        setHistory((previous) => ({ ...previous, error: t("custodian.history.requestFailed") }));
-      }
-    } finally {
-      if (isCurrent()) {
-        historyBusy = false;
-        setHistory((previous) => ({ ...previous, load: "idle", loaded: true }));
-      }
-    }
+    setHistoryReceipt({ owner, reset, result: completion });
   }
   const channelStatusError = () =>
     props.onboarding && !store.read().channelOnboardingNudgeClosed && channels.read().connected
@@ -191,8 +201,8 @@ function CustodianPageContent(props: Props) {
               onClick={() => {
                 const open = !historyOpen();
                 setHistoryOpen(open);
-                if (open && !historyBusy) {
-                  void loadHistory(true);
+                if (open && !historyOwner().busy) {
+                  loadHistory(true);
                 }
               }}
             >
@@ -218,13 +228,9 @@ function CustodianPageContent(props: Props) {
         historyContent={
           <Show when={historyOpen() && historyAvailable()}>
             <CustodianChangeHistory
-              entries={history().entries}
-              error={history().error}
-              loaded={history().loaded}
-              loading={history().load === "initial"}
-              loadingMore={history().load === "more"}
-              nextCursor={history().nextCursor}
-              onLoad={(reset) => void loadHistory(reset)}
+              request={historyReceipt()}
+              previous={historyOwner().snapshot}
+              onLoad={loadHistory}
             />
           </Show>
         }
@@ -242,6 +248,11 @@ export const CustodianPage = defineSolidBridge<Props>(
       newAgentIntent: { default: false, attribute: false },
       store: { default: custodianSessionStore, attribute: false },
     },
+    propertyChanged: (host, key) => {
+      if (key !== "newAgentIntent") {
+        propertyReceipts.get(host)?.(key);
+      }
+    },
   },
 );
 
@@ -254,7 +265,7 @@ declare global {
 declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
-      "openclaw-sidebar-attention": HTMLAttributes<HTMLElement>;
+      "openclaw-sidebar-attention": SidebarAttentionElementAttributes;
     }
   }
 }

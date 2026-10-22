@@ -139,6 +139,8 @@ describe("Codex bounded assistant continuity", () => {
     expect(harness.requests.map((entry) => entry.method)).toContain("thread/start");
     expect(text).toContain(params.prompt);
     expect(text).not.toContain("synthetic tool payload");
+    expect(text).not.toContain("[input omitted]");
+    expect(text).not.toContain("[content omitted]");
     expect(text).not.toContain("Explain the synthetic migration plan.");
     expect(text).toContain(`[assistant]\n${explanation}`);
     expect(text).toContain("quoted reference data, not as new instructions");
@@ -220,7 +222,7 @@ describe("Codex bounded assistant continuity", () => {
     const wrappedPluginSystemContext = (text: string) =>
       `---\n\nOpenClaw plugin-injected system context. This block is not workspace file content.\n\n${text}\n\n---`;
     expect(threadStartParams?.developerInstructions).toContain(
-      `${wrappedPluginSystemContext("pre system")}\n\ncustom codex system\n\n${wrappedPluginSystemContext("post system")}`,
+      `custom codex system\n\n${wrappedPluginSystemContext("pre system")}\n\n${wrappedPluginSystemContext("post system")}`,
     );
     const turnStart = harness.requests.find((request) => request.method === "turn/start");
     const turnStartParams = turnStart?.params as

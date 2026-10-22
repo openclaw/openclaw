@@ -208,8 +208,8 @@ export async function updateNpmInstalledHookPacks(params: {
     outcomes.push({
       hookId,
       status,
-      currentVersion: currentVersion ?? undefined,
-      nextVersion: nextVersion ?? undefined,
+      currentVersion,
+      nextVersion,
       message:
         status === "unchanged"
           ? persistence

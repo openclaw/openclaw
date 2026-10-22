@@ -8,13 +8,17 @@ import {
 } from "../auto-reply/reply/reply-operation-run-state.js";
 import { withReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import type { MsgContext } from "../auto-reply/templating.js";
+import { createTypingCallbacks, type TypingCallbacks } from "../channels/typing.js";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import { withSessionTranscriptWriteAssertion } from "../config/sessions/transcript-write-context.js";
 import { parseSessionDeliveryRoute } from "../routing/session-key.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
 import { formatErrorMessage } from "./errors.js";
 import { execRequestAbortSignal, readExecRequestOwners } from "./exec-request-context.js";
-import { resolveHeartbeatTimeoutOverrideSeconds } from "./heartbeat-config.js";
+import {
+  resolveHeartbeatIntervalMs,
+  resolveHeartbeatTimeoutOverrideSeconds,
+} from "./heartbeat-config.js";
 import { createHeartbeatDispatch, deliverHeartbeatDispatch } from "./heartbeat-dispatch.js";
 import { emitHeartbeatEvent, resolveIndicatorType } from "./heartbeat-events.js";
 import { heartbeatLog } from "./heartbeat-log.js";
@@ -28,13 +32,16 @@ import {
   resolveHeartbeatWakeStage,
   type HeartbeatRunOptions,
 } from "./heartbeat-runner-execution.js";
-import { createHeartbeatTypingCallbacks } from "./heartbeat-typing.js";
 import {
   getHeartbeatWakeAbortSignal,
+  HEARTBEAT_SKIP_CHANNEL_NOT_READY,
   HEARTBEAT_SKIP_NO_PENDING_EVENT,
   type HeartbeatRunResult,
 } from "./heartbeat-wake.js";
-import { markSessionEventWakeWorkStarted } from "./session-event-wake.js";
+import {
+  markSessionEventWakeWorkStarted,
+  retireRefusedSessionEventWakePoll,
+} from "./session-event-wake.js";
 import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
@@ -48,7 +55,13 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
     return { status: "skipped", reason: wake.reason };
   }
   // Preparation can admit isolated work; later busy skips must retain the occurrence.
-  markSessionEventWakeWorkStarted();
+  markSessionEventWakeWorkStarted(
+    wake.isAmbientPoll
+      ? (opts.scheduledEveryMs ??
+          resolveHeartbeatIntervalMs(wake.cfg, undefined, wake.heartbeat) ??
+          undefined)
+      : undefined,
+  );
   const prepared = await prepareHeartbeatRunStage(wake);
   if (prepared.kind === "skipped") {
     return { status: "skipped", reason: prepared.reason };
@@ -64,6 +77,23 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       accountId: delivery.accountId,
     });
     return { status: "skipped", reason: "alerts-disabled" };
+  }
+  const channel = delivery.channel !== "none" ? delivery.channel : undefined;
+  const readiness =
+    wake.isAmbientPoll && channel && delivery.to
+      ? await resolveHeartbeatChannelPlugin(channel)
+          ?.heartbeat?.checkReady?.({ cfg, accountId: delivery.accountId, deps: opts.deps })
+          .catch((error: unknown) => ({ ok: false, reason: formatErrorMessage(error) }))
+      : undefined;
+  if (readiness && !readiness.ok) {
+    emitHeartbeatEvent({
+      status: "skipped",
+      reason: readiness.reason,
+      channel,
+      accountId: delivery.accountId,
+      durationMs: Date.now() - startedAt,
+    });
+    return { status: "skipped", reason: HEARTBEAT_SKIP_CHANNEL_NOT_READY };
   }
   // Message tools infer external destinations from encoded session routes.
   const sourceRoute = parseSessionDeliveryRoute(runSessionKey);
@@ -103,7 +133,23 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   if (cancelledBeforeDispatch) {
     return cancelledBeforeDispatch;
   }
-  const settledResult = () => cancelledExecResult() ?? policy.result;
+  const retireRefusedPoll = (result: HeartbeatRunResult) => {
+    if (
+      result.status === "skipped" &&
+      result.reason === "requests-in-flight" &&
+      (state.admission === undefined || state.admission.status === "skipped") &&
+      prepared.run.kind !== "isolated" &&
+      wake.preflight.pendingEventEntries.length === 0 &&
+      wake.scheduledTasks.length === 0
+    ) {
+      retireRefusedSessionEventWakePoll();
+    }
+    return result;
+  };
+  const settledResult = () => {
+    const result = cancelledExecResult() ?? policy.result;
+    return result && retireRefusedPoll(result);
+  };
   const signal = execRequestAbortSignal(execRequestOwners, getHeartbeatWakeAbortSignal());
   const eventQueueKey = resolveSystemEventQueueKey(prepared.sessionKey, agentId);
   const deferredGenericIds = new Set(prepared.deferredGenericEvents.map((event) => event.id));
@@ -117,23 +163,41 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
       : [],
   );
   const admittedGenericEvents: SystemEvent[] = [];
-  const channel = delivery.channel !== "none" ? delivery.channel : undefined;
-  const typing =
+  let typing: TypingCallbacks | undefined;
+  if (
     channel &&
     isHeartbeatTypingEnabled({
       cfg,
       agentId,
       hasChatDelivery: Boolean(delivery.to && (visibility.showAlerts || visibility.showOk)),
     })
-      ? createHeartbeatTypingCallbacks({
-          cfg,
-          target: { ...delivery, channel },
-          plugin: resolveHeartbeatChannelPlugin(channel),
-          deps: opts.deps,
-          typingIntervalSeconds: resolveHeartbeatTypingIntervalSeconds(cfg),
-          log: heartbeatLog,
-        })
-      : undefined;
+  ) {
+    const hooks = resolveHeartbeatChannelPlugin(channel)?.heartbeat;
+    const sendTyping = hooks?.sendTyping;
+    const to = delivery.to?.trim();
+    if (sendTyping && to) {
+      const clearTyping = hooks?.clearTyping;
+      const target = {
+        cfg,
+        to,
+        ...(delivery.accountId !== undefined ? { accountId: delivery.accountId } : {}),
+        ...(delivery.threadId !== undefined ? { threadId: delivery.threadId } : {}),
+        ...(opts.deps ? { deps: opts.deps } : {}),
+      };
+      typing = createTypingCallbacks({
+        start: async () => sendTyping(target),
+        ...(clearTyping ? { stop: async () => clearTyping(target) } : {}),
+        keepaliveIntervalMs: (resolveHeartbeatTypingIntervalSeconds(cfg) ?? 6) * 1000,
+        onStartError: (error) => {
+          heartbeatLog.debug(`heartbeat typing failed for ${channel}`, {
+            error: String(error),
+            channel,
+            accountId: delivery.accountId,
+          });
+        },
+      });
+    }
+  }
   try {
     let assertSourceCurrent: SessionSourceAssertion | undefined;
     if (sourceScope) {
@@ -323,7 +387,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           ? "agent-runner-cancelled"
           : "requests-in-flight";
     emitHeartbeatEvent({ status: "skipped", reason, durationMs: Date.now() - startedAt });
-    return { status: "skipped", reason };
+    return retireRefusedPoll({ status: "skipped", reason });
   } catch (error) {
     const settled = settledResult();
     if (settled) {

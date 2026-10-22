@@ -44,7 +44,7 @@ type LlamaServerPropsWire = Record<string, unknown> & {
 };
 
 export type LlamaServerDiscoveredModel = {
-  config: ModelDefinitionConfig;
+  config: ModelDefinitionConfig & { input: Array<"text" | "image"> };
   status: LlamaServerModelStatus;
   failed: boolean;
 };
@@ -101,7 +101,6 @@ function buildCompat(
   };
 }
 
-/** Maps one llama-server model row plus optional runtime properties into OpenClaw config. */
 export function mapLlamaServerModel(
   row: LlamaServerModelWire,
   props?: LlamaServerPropsWire,

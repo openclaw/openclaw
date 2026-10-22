@@ -1,4 +1,3 @@
-// Line plugin module owns durable webhook admission and core-drain wiring.
 import type { webhook } from "@line/bot-sdk";
 import { fanInChannelIngressLifecycles } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
@@ -239,17 +238,11 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions) {
       const boundLifecycle = bindIngressLifecycleToReplyOptions(
         fannedIn.lifecycle ?? lifecycle,
       ).turnAdoptionLifecycle;
-      let handedOff = false;
       const delivery = options.deliver(turnEvents, destination, {
         ...(missingParts === undefined ? {} : { missingParts }),
         turnAdoptionLifecycle: {
           ...boundLifecycle,
-          onAdopted: async () => {
-            handedOff = true;
-            await boundLifecycle.onAdopted();
-          },
           onDeferred: () => {
-            handedOff = true;
             if (!acceptsDeferredClaims) {
               void Promise.resolve()
                 .then(() => boundLifecycle.onAbandoned())
@@ -264,10 +257,6 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions) {
             }
             boundLifecycle.onDeferred();
           },
-          onAbandoned: async () => {
-            handedOff = true;
-            await boundLifecycle.onAbandoned();
-          },
         },
       });
       activeDeliveries.add(delivery);
@@ -278,23 +267,18 @@ export function createLineWebhookSpool(options: LineWebhookSpoolOptions) {
         // other parts already returned as deferred, so without fanning the
         // failure across them they stay held until recovery.
         await fannedIn.abandon(error);
-        handedOff = true;
         throw error;
       } finally {
         activeDeliveries.delete(delivery);
         releaseLane?.();
       }
-      if (!handedOff && !stopTask) {
-        // A gated or deliberately skipped turn still consumed every source claim.
-        await fannedIn.settle();
-        handedOff = true;
-      }
-      if (stopTask && !handedOff) {
+      if (stopTask) {
         // Hand every claim back, not just the one the drain is holding: the rest
         // of a set was deferred into this turn and would otherwise stay deferred
         // forever, with stop() waiting on claims nothing will ever finish.
         await fannedIn.abandon();
-        return undefined;
+      } else {
+        await fannedIn.settle();
       }
       return undefined;
     },

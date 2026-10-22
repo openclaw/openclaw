@@ -12,33 +12,29 @@ const CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT =
   "scripts/e2e/lib/codex-npm-plugin-live/assertions.mjs";
 const auditTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function nodeOptionsWithoutExperimentalWarnings(): string {
-  return [process.env.NODE_OPTIONS, "--disable-warning=ExperimentalWarning"]
-    .filter(Boolean)
-    .join(" ");
-}
-
 function writeJson(filePath: string, value: unknown) {
   mkdirSync(path.dirname(filePath), { recursive: true });
   writeFileSync(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
 }
 
-function runCodexNpmPluginLiveConfigure(root: string, auditIdentity = "0") {
-  return spawnSync(process.execPath, [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, "configure"], {
+function runAssertions(root: string, args: string[], env: NodeJS.ProcessEnv = {}) {
+  return spawnSync(process.execPath, [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, ...args], {
     encoding: "utf8",
     env: {
       ...process.env,
       HOME: path.join(root, "home"),
-      NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
-      OPENCLAW_CONFIG_PATH: path.join(root, "state", "openclaw.json"),
+      NODE_OPTIONS: [process.env.NODE_OPTIONS, "--disable-warning=ExperimentalWarning"]
+        .filter(Boolean)
+        .join(" "),
       OPENCLAW_STATE_DIR: path.join(root, "state"),
-      OPENCLAW_CODEX_NPM_PLUGIN_AUDIT_IDENTITY: auditIdentity,
+      ...env,
     },
   });
 }
 
 function codexAuditFixture() {
-  const domainRef = `hmac-sha256:v1:${"a".repeat(32)}:${"b".repeat(64)}`;
+  const hmac = (value: string) => `hmac-sha256:v1:${"a".repeat(32)}:${value.repeat(64)}`;
+  const domainRef = hmac("b");
   const selectors = [1, 2, 3].map((index) => ({
     runId: `codex-run-${index}`,
     executionId: `codex-execution-${index}`,
@@ -55,29 +51,17 @@ function codexAuditFixture() {
           schemaVersion: 1,
           ...selector,
           createdAt: 100,
-          trustDomain: {
-            kind: "gateway-cell",
-            domainRef,
-            state: "present",
-          },
+          trustDomain: { kind: "gateway-cell", domainRef, state: "present" },
           invoker: { state: "absent" },
           ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-          agentPrincipal: {
-            kind: "agent",
-            domainRef,
-            principalRef: "main",
-          },
+          agentPrincipal: { kind: "agent", domainRef, principalRef: "main" },
           agentDefinition: { definitionRef: "main", state: "present" },
-          runtimeInstance: {
-            kind: "plugin-harness",
-            runtimeRef: `hmac-sha256:v1:${"a".repeat(32)}:${"c".repeat(64)}`,
-            state: "present",
-          },
+          runtimeInstance: { kind: "plugin-harness", runtimeRef: hmac("c"), state: "present" },
           applicableGrants: [],
           assurance: [
             {
               kind: "runtime-binding",
-              evidenceRef: `hmac-sha256:v1:${"a".repeat(32)}:${"d".repeat(64)}`,
+              evidenceRef: hmac("d"),
               strength: "boundary-verified",
             },
           ],
@@ -198,16 +182,19 @@ describe("Codex package audit qualification", () => {
 describe("Codex audit package CLI boundary", () => {
   it("enables audit identity only in the opted-in package fixture and queries the public CLI", () => {
     const root = auditTempDirs.make("openclaw-codex-audit-");
-    const defaultConfig = runCodexNpmPluginLiveConfigure(root);
+    const configPath = path.join(root, "state", "openclaw.json");
+    const configure = (auditIdentity = "0") =>
+      runAssertions(root, ["configure"], {
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_CODEX_NPM_PLUGIN_AUDIT_IDENTITY: auditIdentity,
+      });
+    const readConfig = () => JSON.parse(readFileSync(configPath, "utf8"));
+    const defaultConfig = configure();
     expect(defaultConfig.status, defaultConfig.stderr).toBe(0);
-    expect(
-      JSON.parse(readFileSync(path.join(root, "state", "openclaw.json"), "utf8")),
-    ).not.toHaveProperty("logging.audit.executionIdentity");
-    const configured = runCodexNpmPluginLiveConfigure(root, "1");
+    expect(readConfig()).not.toHaveProperty("logging.audit.executionIdentity");
+    const configured = configure("1");
     expect(configured.status, configured.stderr).toBe(0);
-    expect(
-      JSON.parse(readFileSync(path.join(root, "state", "openclaw.json"), "utf8")),
-    ).toMatchObject({
+    expect(readConfig()).toMatchObject({
       logging: { audit: { enabled: true, executionIdentity: true } },
       gateway: { mode: "local", bind: "loopback", auth: { mode: "token" } },
     });
@@ -242,20 +229,9 @@ if (!reply) process.exit(3);
 fs.appendFileSync(path.join(__dirname, "queries.jsonl"), JSON.stringify(args) + "\\n");
 process.stdout.write(JSON.stringify(reply));\n`,
     );
-    const result = spawnSync(
-      process.execPath,
-      [CODEX_NPM_PLUGIN_LIVE_ASSERTIONS_SCRIPT, "assert-audit", "PRIVATE_REPLY_MARKER"],
-      {
-        encoding: "utf8",
-        env: {
-          ...process.env,
-          HOME: path.join(root, "home"),
-          OPENCLAW_STATE_DIR: path.join(root, "state"),
-          OPENCLAW_E2E_CLI_BIN: cliPath,
-          NODE_OPTIONS: nodeOptionsWithoutExperimentalWarnings(),
-        },
-      },
-    );
+    const result = runAssertions(root, ["assert-audit", "PRIVATE_REPLY_MARKER"], {
+      OPENCLAW_E2E_CLI_BIN: cliPath,
+    });
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain('codex_audit_identity: {"executionCount":3}');
     expect(

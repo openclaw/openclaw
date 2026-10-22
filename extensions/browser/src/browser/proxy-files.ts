@@ -67,9 +67,7 @@ function decodeBrowserProxyFileBase64(file: BrowserProxyFile, totalBytes: number
   if (canonicalBase64 === undefined) {
     throw new Error("browser proxy file contains malformed base64 data");
   }
-  const buffer = Buffer.from(canonicalBase64, "base64");
-  assertBrowserProxyFileBytesWithinLimits(buffer.byteLength, totalBytes + buffer.byteLength);
-  return buffer;
+  return Buffer.from(canonicalBase64, "base64");
 }
 
 /** Validate, persist, and rewrite every route-owned file in a node result. */

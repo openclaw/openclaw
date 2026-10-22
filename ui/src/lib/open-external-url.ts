@@ -49,10 +49,6 @@ export function resolveSafeExternalUrl(
   return parsed && ALLOWED_EXTERNAL_PROTOCOLS.has(parsed.protocol) ? parsed.toString() : null;
 }
 
-type OpenExternalUrlSafeOptions = ResolveSafeExternalUrlOptions & {
-  baseHref?: string;
-};
-
 export function reserveExternalWindowForDeferredNavigation(
   opts: { popup?: boolean } = {},
 ): WindowProxy | null {
@@ -67,10 +63,9 @@ export function reserveExternalWindowForDeferredNavigation(
 
 export function openExternalUrlSafe(
   rawUrl: string,
-  opts: OpenExternalUrlSafeOptions = {},
+  opts: ResolveSafeExternalUrlOptions = {},
 ): WindowProxy | null {
-  const baseHref = opts.baseHref ?? window.location.href;
-  const safeUrl = resolveSafeExternalUrl(rawUrl, baseHref, opts);
+  const safeUrl = resolveSafeExternalUrl(rawUrl, window.location.href, opts);
   if (!safeUrl) {
     return null;
   }

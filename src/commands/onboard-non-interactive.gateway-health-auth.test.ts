@@ -42,11 +42,15 @@ async function writeSecureFile(filePath: string, content: string): Promise<void>
   await fs.chmod(filePath, 0o600);
 }
 
-function expectAuthCall(mock: unknown, label: string, expected: OnboardGatewayHealthCall) {
+function expectAuthCall(mock: unknown, expected: OnboardGatewayHealthCall) {
   expect(mock).toHaveBeenCalledOnce();
-  const [call] = readOnboardFirstMockCall(mock, label) as [OnboardGatewayHealthCall];
-  expect(call.token).toBe(expected.token);
-  expect(call.password).toBe(expected.password);
+  const [call] = readOnboardFirstMockCall(mock, "health auth") as [OnboardGatewayHealthCall];
+  expect([call.token, call.password]).toEqual([expected.token, expected.password]);
+}
+
+function expectHealthAuth(expected: OnboardGatewayHealthCall) {
+  expectAuthCall(gatewayReachableState.mock, expected);
+  expectAuthCall(healthCommandMock, expected);
 }
 
 describe("onboard (non-interactive): gateway health auth", () => {
@@ -99,6 +103,23 @@ describe("onboard (non-interactive): gateway health auth", () => {
     return JSON.parse(readCapturedJson());
   }
 
+  async function runTokenSetup(
+    stateDir: string,
+    options: Partial<Parameters<typeof runNonInteractiveSetup>[0]>,
+  ) {
+    setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
+    setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
+    await runNonInteractiveSetup(
+      {
+        ...setupOptions,
+        workspace: path.join(stateDir, "openclaw"),
+        ...options,
+      },
+      runtime,
+    );
+    return readTestConfig();
+  }
+
   it("keeps real health authentication on the setup Gateway despite ambient endpoints", async ({
     signal,
   }) => {
@@ -123,238 +144,116 @@ describe("onboard (non-interactive): gateway health auth", () => {
     });
   }, 90_000);
 
-  it("resolves file SecretRefs for the local onboarding health probe without persisting plaintext", async () => {
-    await withStateDir("state-file-token-", async (stateDir) => {
-      const tokenPath = path.join(stateDir, "gateway-token.txt");
-      await writeSecureFile(tokenPath, "file-secret-token\n");
-      process.env.OPENCLAW_GATEWAY_TOKEN = "stale-env-token";
-      const tokenRef = { source: "file" as const, provider: "gateway-token-file", id: "value" };
-      const result = await runHealthSetup(stateDir, {
-        gateway: { auth: { mode: "token", token: tokenRef } },
-        secrets: {
-          providers: {
-            "gateway-token-file": { source: "file", path: tokenPath, mode: "singleValue" },
-          },
-        },
-      });
-
-      expectAuthCall(gatewayReachableState.mock, "reachability", { token: "file-secret-token" });
-      expectAuthCall(healthCommandMock, "health", { token: "file-secret-token" });
-      expect(readTestConfig().gateway?.auth?.token).toEqual(tokenRef);
-      expect(result).toMatchObject({ ok: true });
-    });
-  });
-
-  it("does not fall back to stale OPENCLAW_GATEWAY_TOKEN when a SecretRef is unresolved", async () => {
-    await withStateDir("state-missing-token-", async (stateDir) => {
-      process.env.OPENCLAW_GATEWAY_TOKEN = "stale-env-token";
-      const tokenRef = { source: "file" as const, provider: "gateway-token-file", id: "value" };
-      const result = await runHealthSetup(
-        stateDir,
-        {
-          gateway: { auth: { mode: "token", token: tokenRef } },
-          secrets: {
-            providers: {
-              "gateway-token-file": {
-                source: "file",
-                path: path.join(stateDir, "missing-token.txt"),
-                mode: "singleValue",
-              },
+  it.each([
+    ["file token", "token", "file", "value", "file-secret-token"],
+    ["unresolved file token", "token", "file", "value", undefined],
+    ["password SecretRef", "password", "env", "OPENCLAW_GATEWAY_PASSWORD", "resolved-password"],
+    [
+      "unresolved password SecretRef",
+      "password",
+      "env",
+      "MISSING_ONBOARD_GATEWAY_PASSWORD",
+      undefined,
+    ],
+    ["environment-only password", "password", undefined, undefined, "environment-password"],
+  ] as const)(
+    "resolves %s without persisting plaintext or falling back from unresolved refs",
+    async (_name, field, source, id, value) => {
+      await withStateDir("state-health-auth-", async (stateDir) => {
+        const provider = source === "file" ? "gateway-token-file" : "default";
+        const ref = source && id ? { source, provider, id } : undefined;
+        const tokenPath = path.join(stateDir, "gateway-token.txt");
+        if (source === "file" && value) {
+          await writeSecureFile(tokenPath, `${value}\n`);
+        }
+        if (field === "token" || id === "OPENCLAW_GATEWAY_PASSWORD") {
+          setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "stale-env-token");
+        }
+        if (field === "password") {
+          setTestEnvValue("OPENCLAW_GATEWAY_PASSWORD", value ?? "ambient-password");
+        }
+        const result = await runHealthSetup(
+          stateDir,
+          {
+            gateway: {
+              auth: { mode: field, [field]: ref },
+              ...(id === "OPENCLAW_GATEWAY_PASSWORD" ? { trustedProxies: ["10.0.0.5"] } : {}),
             },
+            ...(source === "file"
+              ? {
+                  secrets: {
+                    providers: { [provider]: { source, path: tokenPath, mode: "singleValue" } },
+                  },
+                }
+              : {}),
           },
-        },
-        false,
-      );
+          value !== undefined,
+        );
 
-      expectAuthCall(gatewayReachableState.mock, "reachability", {});
-      expect(healthCommandMock).not.toHaveBeenCalled();
-      expect(readTestConfig().gateway?.auth?.token).toEqual(tokenRef);
-      expect(result).toMatchObject({
-        ok: false,
-        phase: "gateway-health",
-        detail:
-          "unauthorized\ngateway.auth.token SecretRef is unresolved (file:gateway-token-file:value).",
+        expect(readTestConfig().gateway?.auth?.[field]).toEqual(ref);
+        if (value !== undefined) {
+          expectHealthAuth({ [field]: value });
+          expect(healthCommandMock).toHaveBeenCalledWith(
+            expect.objectContaining({ localPortOverride: SETUP_GATEWAY_PORT }),
+            expect.anything(),
+          );
+          expect(result).toMatchObject({ ok: true });
+        } else {
+          expectAuthCall(gatewayReachableState.mock, {});
+          expect(healthCommandMock).not.toHaveBeenCalled();
+          expect(result).toMatchObject({
+            ok: false,
+            phase: "gateway-health",
+            detail: `unauthorized\ngateway.auth.${field} SecretRef is unresolved (${source}:${provider}:${id}).`,
+          });
+        }
       });
-    });
-  });
-
-  it("resolves password auth for the local onboarding health probe", async () => {
-    await withStateDir("state-password-ref-", async (stateDir) => {
-      process.env.OPENCLAW_GATEWAY_TOKEN = "stale-env-token";
-      process.env.OPENCLAW_GATEWAY_PASSWORD = "resolved-password"; // pragma: allowlist secret
-      const passwordRef = {
-        source: "env" as const,
-        provider: "default",
-        id: "OPENCLAW_GATEWAY_PASSWORD",
-      };
-      const result = await runHealthSetup(stateDir, {
-        gateway: {
-          auth: {
-            mode: "password",
-            password: passwordRef,
-          },
-          trustedProxies: ["10.0.0.5"],
-        },
-      });
-
-      expectAuthCall(gatewayReachableState.mock, "reachability", {
-        password: "resolved-password",
-      });
-      expectAuthCall(healthCommandMock, "health", { password: "resolved-password" });
-      expect(healthCommandMock).toHaveBeenCalledWith(
-        expect.objectContaining({ localPortOverride: SETUP_GATEWAY_PORT }),
-        expect.anything(),
-      );
-      expect(readTestConfig().gateway?.auth?.password).toEqual(passwordRef);
-      expect(result).toMatchObject({ ok: true });
-    });
-  });
-
-  it("does not fall back to ambient password auth when its configured SecretRef is unresolved", async () => {
-    await withStateDir("state-missing-password-", async (stateDir) => {
-      process.env.OPENCLAW_GATEWAY_PASSWORD = "ambient-password"; // pragma: allowlist secret
-      const passwordRef = {
-        source: "env" as const,
-        provider: "default",
-        id: "MISSING_ONBOARD_GATEWAY_PASSWORD",
-      };
-      const result = await runHealthSetup(
-        stateDir,
-        { gateway: { auth: { mode: "password", password: passwordRef } } },
-        false,
-      );
-
-      expectAuthCall(gatewayReachableState.mock, "reachability", {});
-      expect(healthCommandMock).not.toHaveBeenCalled();
-      expect(readTestConfig().gateway?.auth?.password).toEqual(passwordRef);
-      expect(result).toMatchObject({
-        ok: false,
-        phase: "gateway-health",
-        detail:
-          "unauthorized\ngateway.auth.password SecretRef is unresolved (env:default:MISSING_ONBOARD_GATEWAY_PASSWORD).",
-      });
-    });
-  });
-
-  it("resolves environment-only password auth for the local onboarding health probe", async () => {
-    await withStateDir("state-env-password-", async (stateDir) => {
-      process.env.OPENCLAW_GATEWAY_PASSWORD = "environment-password"; // pragma: allowlist secret
-      const result = await runHealthSetup(stateDir, {
-        gateway: { auth: { mode: "password" } },
-      });
-
-      expectAuthCall(gatewayReachableState.mock, "reachability", {
-        password: "environment-password",
-      });
-      expectAuthCall(healthCommandMock, "health", { password: "environment-password" });
-      expect(readTestConfig().gateway?.auth?.password).toBeUndefined();
-      expect(result).toMatchObject({ ok: true });
-    });
-  });
-  it("auto-generates token auth when binding LAN and persists the token", async () => {
-    if (process.platform === "win32") {
-      // Windows runner occasionally drops the temp config write in this flow; skip to keep CI green.
-      return;
-    }
-    await withStateDir("state-lan-", async (stateDir) => {
-      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-      setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-
-      const port = getPseudoPort(40_000);
-      const workspace = path.join(stateDir, "openclaw");
-
-      await runNonInteractiveSetup(
-        {
-          ...setupOptions,
-          workspace,
+    },
+  );
+  it.each(["lan", "store-ref", "env-ref"] as const)(
+    "persists generated/ambient token auth (%s)",
+    async (mode) => {
+      if (process.platform === "win32") {
+        // Windows runner occasionally drops the temp config write in these flows.
+        return;
+      }
+      await withStateDir("state-token-", async (stateDir) => {
+        const port = getPseudoPort(
+          mode === "lan" ? 40_000 : mode === "store-ref" ? 41_000 : 42_000,
+        );
+        if (mode === "env-ref") {
+          setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "ambient-gateway-token");
+        }
+        const cfg = await runTokenSetup(stateDir, {
           gatewayPort: port,
-          gatewayBind: "lan",
-        },
-        runtime,
-      );
-
-      const cfg = readTestConfig();
-
-      expect(cfg.gateway?.bind).toBe("lan");
-      expect(cfg.gateway?.port).toBe(port);
-      expect(cfg.gateway?.auth?.mode).toBe("token");
-      expect(cfg.gateway?.auth?.token).toEqual(expect.stringMatching(/.{9}/));
-    });
-  }, 60_000);
-
-  it("keeps the generated gateway token out of config under --secret-input-mode ref", async () => {
-    if (process.platform === "win32") {
-      // Matches the LAN case above: the Windows runner drops this flow's temp config write.
-      return;
-    }
-    await withStateDir("state-token-ref-", async (stateDir) => {
-      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-      setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-
-      const port = getPseudoPort(41_000);
-
-      await runNonInteractiveSetup(
-        {
-          ...setupOptions,
-          workspace: path.join(stateDir, "openclaw"),
-          gatewayPort: port,
-          secretInputMode: "ref",
-        },
-        runtime,
-      );
-
-      const cfg = readTestConfig();
-      expect(cfg.gateway?.auth?.mode).toBe("token");
-      expect(cfg.gateway?.auth?.token).toEqual({
-        source: "store",
-        provider: "default",
-        id: "OPENCLAW_GATEWAY_TOKEN",
+          ...(mode === "lan" ? { gatewayBind: "lan" } : { secretInputMode: "ref" }),
+        });
+        if (mode === "lan") {
+          expect(cfg.gateway).toMatchObject({
+            bind: "lan",
+            port,
+            auth: { mode: "token", token: expect.stringMatching(/.{9}/) },
+          });
+          return;
+        }
+        expect(cfg.gateway?.auth?.mode).toBe("token");
+        expect(cfg.gateway?.auth?.token).toEqual({
+          source: mode === "store-ref" ? "store" : "env",
+          provider: "default",
+          id: "OPENCLAW_GATEWAY_TOKEN",
+        });
+        // Generated refs need a value; copying an env value would silently outlive its rotation.
+        const { readSecretStoreValue } = await import("../secrets/store/secret-store.js");
+        const stored = await readSecretStoreValue({
+          scope: { kind: "team" },
+          name: "OPENCLAW_GATEWAY_TOKEN",
+        });
+        expect(stored.ok).toBe(mode === "store-ref");
+        if (mode === "store-ref") {
+          expect(stored.ok && stored.value.length).toBeGreaterThan(8);
+        }
       });
-
-      // A ref persisted without its value would leave the gateway unauthenticatable.
-      const { readSecretStoreValue } = await import("../secrets/store/secret-store.js");
-      const stored = await readSecretStoreValue({
-        scope: { kind: "team" },
-        name: "OPENCLAW_GATEWAY_TOKEN",
-      });
-      expect(stored.ok).toBe(true);
-      expect(stored.ok && stored.value.length).toBeGreaterThan(8);
-    });
-  }, 60_000);
-
-  it("references an ambient gateway token by env instead of copying it into the store", async () => {
-    if (process.platform === "win32") {
-      // Matches the LAN case above: the Windows runner drops this flow's temp config write.
-      return;
-    }
-    await withStateDir("state-token-ref-env-", async (stateDir) => {
-      setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
-      setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-      setTestEnvValue("OPENCLAW_GATEWAY_TOKEN", "ambient-gateway-token");
-
-      await runNonInteractiveSetup(
-        {
-          ...setupOptions,
-          workspace: path.join(stateDir, "openclaw"),
-          gatewayPort: getPseudoPort(42_000),
-          secretInputMode: "ref",
-        },
-        runtime,
-      );
-
-      const cfg = readTestConfig();
-      expect(cfg.gateway?.auth?.token).toEqual({
-        source: "env",
-        provider: "default",
-        id: "OPENCLAW_GATEWAY_TOKEN",
-      });
-
-      // A store copy would silently outlive a later rotation of the env var.
-      const { readSecretStoreValue } = await import("../secrets/store/secret-store.js");
-      expect(
-        (await readSecretStoreValue({ scope: { kind: "team" }, name: "OPENCLAW_GATEWAY_TOKEN" }))
-          .ok,
-      ).toBe(false);
-    });
-  }, 60_000);
+    },
+    60_000,
+  );
 });

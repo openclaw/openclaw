@@ -14,12 +14,10 @@ export async function uploadTerminalFile(
   client: Pick<TerminalGatewayClient, "request">,
   sessionId: string,
   file: TerminalUploadFile,
-  signal?: AbortSignal,
+  signal: AbortSignal,
 ): Promise<TerminalUploadResult> {
   const params = { sessionId, ...file };
-  return await (signal
-    ? client.request<TerminalUploadResult>("terminal.upload", params, { signal })
-    : client.request<TerminalUploadResult>("terminal.upload", params));
+  return await client.request<TerminalUploadResult>("terminal.upload", params, { signal });
 }
 
 export async function encodeTerminalUpload(file: File): Promise<string> {

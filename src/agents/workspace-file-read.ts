@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import syncFs from "node:fs";
 import path from "node:path";
 import { sameFileIdentity, type FileIdentityStat } from "@openclaw/fs-safe/advanced";
@@ -20,7 +19,6 @@ const TRANSIENT_WORKSPACE_READ_MESSAGE = /Unknown system error -(?:11|4)\b/i;
 type WorkspaceFileSourceIdentity = readonly [
   canonicalPath: string,
   stat: FileIdentityStat | undefined,
-  exactIdentity: string,
   workspaceRelativePath?: string,
 ];
 // Loader-owned records retain the pinned-open identity through final session filtering.
@@ -59,13 +57,7 @@ export function createLoadedWorkspaceBootstrapFile(
 
 /** Remote source recorded by the successful read, unavailable on hook-created copies. */
 export function getWorkspaceFileSourceRelativePath(file: object): string | undefined {
-  return workspaceFileSourceIdentities.get(file)?.[3];
-}
-
-export function workspaceFileSourceIdentitiesMatch(left: object, right: object): boolean {
-  const leftIdentity = workspaceFileSourceIdentities.get(left);
-  const rightIdentity = workspaceFileSourceIdentities.get(right);
-  return leftIdentity?.[2] === rightIdentity?.[2];
+  return workspaceFileSourceIdentities.get(file)?.[2];
 }
 
 export function workspaceFilesShareSourceIdentity(left: object, right: object): boolean {
@@ -117,12 +109,7 @@ export async function readWorkspaceFileWithGuards(params: {
       return {
         ok: true,
         content: data.toString("utf-8"),
-        sourceIdentity: [
-          canonicalPath,
-          undefined,
-          `${canonicalPath}:${createHash("sha256").update(data).digest("hex")}:${JSON.stringify(workspaceRelativePath)}`,
-          workspaceRelativePath,
-        ],
+        sourceIdentity: [canonicalPath, undefined, workspaceRelativePath],
       };
     } catch (error) {
       assertCurrent();
@@ -158,7 +145,7 @@ export async function readWorkspaceFileWithGuards(params: {
         }
 
         const identity = workspaceFileIdentity(opened.stat, opened.exactIdentity, opened.path);
-        const sourceIdentity = [opened.path, opened.exactIdentity, identity] as const;
+        const sourceIdentity = [opened.path, opened.exactIdentity] as const;
         const cached =
           params.useCache === false ? undefined : readWorkspaceFileCache(opened.path, identity);
         try {

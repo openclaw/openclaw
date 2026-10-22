@@ -1,6 +1,7 @@
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { expressionBuilder, type Compilable, type SelectQueryBuilder } from "kysely";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
+import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import {
   createSqliteQueryCache,
   executeSqliteQuerySync,
@@ -9,9 +10,9 @@ import {
   prepareSqliteQueryTakeFirstSync,
 } from "../infra/kysely-sync.js";
 import { generateSecureUuid } from "../infra/secure-random.js";
-import type { EngineConnection } from "../infra/sql-connection.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { USER_PROFILE_AVATAR_MIME_TYPES } from "../shared/avatar-limits.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import { stageUserProfileEmailBindingChange } from "./user-profile-events.js";
@@ -68,6 +69,46 @@ export function toUserProfile(row: Omit<UserProfileMetadataRow, "avatar_sha256">
     ...(row.role ? { role: row.role } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
+  };
+}
+
+export function projectUserProfileSnapshot(
+  rows: ReadonlyMap<string, ProfileDisplayRow>,
+  bindings: UserProfileEmailBindingIndex,
+  githubAccountIds?: readonly number[],
+) {
+  const ordered = [...rows.values()].toSorted(
+    (left, right) =>
+      left.created_at - right.created_at ||
+      Buffer.compare(Buffer.from(left.id), Buffer.from(right.id)),
+  );
+  return {
+    profiles: ordered.map((row) => projectUserProfileListItem(row, bindings)),
+    ...(githubAccountIds
+      ? {
+          githubProfiles: ordered.flatMap((row) =>
+            (row.githubAccountIds ?? []).flatMap((accountId) =>
+              !row.merged_into && githubAccountIds.includes(accountId)
+                ? [{ accountId, profileId: row.id }]
+                : [],
+            ),
+          ),
+        }
+      : {}),
+  };
+}
+
+export function projectUserProfileListItem(
+  row: ProfileDisplayRow,
+  bindings: UserProfileEmailBindingIndex,
+) {
+  return {
+    ...toUserProfile(row),
+    emails: [...(bindings.emailsByProfile.get(row.id) ?? [])].toSorted((left, right) =>
+      Buffer.compare(Buffer.from(left), Buffer.from(right)),
+    ),
+    githubIdentity: row.githubIdentity ? { ...row.githubIdentity } : null,
+    hasAvatar: row.has_avatar === 1,
   };
 }
 
@@ -174,6 +215,7 @@ export function selectProfileDisplayEntries(db: EngineConnection, ids?: string[]
     .selectFrom("user_profiles")
     .select([
       ...userProfileDisplaySelection,
+      "created_at",
       ...(tableHasColumn(db, "user_profiles", "role") ? (["role"] as const) : []),
     ])
     .select((eb) =>
@@ -253,14 +295,16 @@ const metadataReader = createSqliteQueryCache((db: EngineConnection) =>
       .select((eb) => [
         "id",
         "display_name",
-        // Preserve native conversion errors for non-BLOB values in damaged profile rows.
-        eb
-          .case()
-          .when(eb.fn<string>("typeof", ["avatar"]), "=", "blob")
-          .then(null)
-          .else(eb.ref("avatar"))
-          .end()
-          .as("avatar"),
+        // PostgreSQL enforces bytea; SQLite must preserve conversion errors for damaged rows.
+        isPostgresSqlConnection(db)
+          ? eb.val(null).as("avatar")
+          : eb
+              .case()
+              .when(eb.fn<string>("typeof", ["avatar"]), "=", "blob")
+              .then(null)
+              .else(eb.ref("avatar"))
+              .end()
+              .as("avatar"),
         "avatar_mime",
         "avatar_sha256",
         "merged_into",
@@ -314,11 +358,13 @@ export function formatUserProfileAvatarEtag(sha256: string, mime: UserProfileAva
 }
 
 function selectProfileAvatarMetadata(db: EngineConnection, profileId: string) {
-  const schema = getAdmittedSqliteSchemaFacts(db);
+  const schema = isPostgresSqlConnection(db)
+    ? getPostgresPhysicalFacts(db)
+    : getAdmittedSqliteSchemaFacts(db);
   if (!schema) {
     throw new Error("Profile avatar reads require admitted schema facts");
   }
-  if (!schema.tableSql.get("user_profiles")) {
+  if (!tableExists(db, "user_profiles")) {
     return undefined;
   }
   return selectResolvedUserProfile(
@@ -340,7 +386,7 @@ export function inspectProfileAvatarInDatabase(
   db: EngineConnection,
   profileId: string,
 ): UserProfileAvatarInspection {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     const profile = selectProfileAvatarMetadata(db, profileId);
     const mime = normalizeUserProfileAvatarMime(profile?.avatar_mime ?? null);
     const avatar =
@@ -366,7 +412,7 @@ function readProfileAvatarInDatabase(
   profileId: string,
   expected: UserProfileAvatarRepresentation,
 ): UserProfileAvatar | undefined {
-  return runSqliteDeferredTransactionSync(db, () => {
+  return runSqliteReadSnapshotSync(db, () => {
     const profile = selectProfileAvatarMetadata(db, profileId);
     const mime = normalizeUserProfileAvatarMime(profile?.avatar_mime ?? null);
     if (
@@ -402,7 +448,7 @@ export function readUserProfileAvatarCommand(
 }
 
 export function projectUserProfileDisplay(
-  profile: Omit<ProfileDisplayRow, "role">,
+  profile: Omit<ProfileDisplayRow, "role" | "created_at">,
 ): UserProfileDisplay {
   const avatarMime = normalizeUserProfileAvatarMime(profile.avatar_mime);
   return {
@@ -458,6 +504,20 @@ export function projectCatalogUserProfileIdentity(
       ),
     }
   );
+}
+
+/** Verified GitHub identity facts of one catalog row; a row without them exposes neither field. */
+export function projectUserProfileGitHubFacts(
+  row: Pick<ProfileDisplayRow, "githubAccountIds" | "enterpriseGitHubAccounts"> | undefined,
+) {
+  return {
+    ...(row?.githubAccountIds ? { githubAccountIds: [...row.githubAccountIds] } : {}),
+    ...(row?.enterpriseGitHubAccounts
+      ? {
+          enterpriseGitHubAccounts: row.enterpriseGitHubAccounts.map((account) => ({ ...account })),
+        }
+      : {}),
+  };
 }
 
 /** Bind a canonical account and its original email lifetimes to the retained catalog owner. */
@@ -524,7 +584,6 @@ export function bindPreparedUserProfileIdentity(
     },
     readCurrentFacts(this: void, requiredEmailBindingIds) {
       const profile = readCurrentProfile(requiredEmailBindingIds);
-      const githubAccountIds = rows.get(profileId)?.githubAccountIds;
       const aliases = new Set([profileId]);
       for (const row of rows.values()) {
         if (row.merged_into === profileId) {
@@ -535,7 +594,7 @@ export function bindPreparedUserProfileIdentity(
         profile: {
           profileId: profile.profileId,
           emails: [...(bindings.emailsByProfile.get(profileId) ?? [])].toSorted(),
-          ...(githubAccountIds ? { githubAccountIds: [...githubAccountIds] } : {}),
+          ...projectUserProfileGitHubFacts(rows.get(profileId)),
           assignedRole: profile.assignedRole,
           githubLogin: profile.githubLogin,
         },

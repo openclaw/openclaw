@@ -76,4 +76,5 @@ export type WorkerEnvironmentReconcileCore = (
 export type WorkerEnvironmentReconcileGuard = (
   environmentId: string,
   reconcileCore: WorkerEnvironmentReconcileCore,
+  signal: AbortSignal,
 ) => Promise<void>;

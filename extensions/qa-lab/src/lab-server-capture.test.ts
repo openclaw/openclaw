@@ -1,17 +1,37 @@
 // Qa Lab tests cover lab server capture plugin behavior.
 import { createServer } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
+import net from "node:net";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mapCaptureEventForQa, readQaCaptureStartupStatus } from "./lab-server-capture.js";
 
 const cleanups: Array<() => Promise<void>> = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   while (cleanups.length > 0) {
     await cleanups.pop()?.();
   }
 });
 
 describe("qa-lab server capture helpers", () => {
+  it("reports timed-out probes as unavailable and closes their sockets", async () => {
+    const sockets: net.Socket[] = [];
+    vi.spyOn(net, "createConnection").mockImplementation(() => {
+      const socket = new net.Socket();
+      sockets.push(socket);
+      queueMicrotask(() => socket.emit("timeout"));
+      return socket;
+    });
+
+    const status = await readQaCaptureStartupStatus({
+      publicBaseUrl: "http://127.0.0.1:8080",
+    });
+
+    expect(status.proxy).toMatchObject({ ok: false, error: "timeout" });
+    expect(status.gateway).toMatchObject({ ok: false, error: "timeout" });
+    expect(sockets.every((socket) => socket.destroyed)).toBe(true);
+  });
+
   it("maps capture rows into QA-friendly fields", () => {
     const record = mapCaptureEventForQa({
       flowId: "flow-1",

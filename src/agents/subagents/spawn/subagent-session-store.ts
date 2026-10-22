@@ -19,6 +19,7 @@ import {
   parseAgentSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../../../routing/session-key.js";
+import { assertAgentSessionWriteAdmission } from "../../../sessions/session-agent-work-admission.js";
 import { onSessionIdentityMutation } from "../../../sessions/session-lifecycle-events.js";
 import { sessionChanges } from "../../../sessions/session-row-changes.js";
 import {
@@ -29,6 +30,8 @@ import {
 type PersistedSessionCapabilityEntry = Pick<
   SessionEntry,
   | "sessionId"
+  | "lifecycleRevision"
+  | "createdVia"
   | "spawnDepth"
   | "subagentRole"
   | "subagentControlScope"
@@ -165,15 +168,51 @@ export type SessionCapabilityRead = { storePath: string; agentId: string } & (
   | { sessionId: string; sessionKey?: never }
 );
 
+/** Data-only inputs consumed by a prepared requester policy, including absent rows. */
+export type SessionCapabilitySnapshot = {
+  query: SessionCapabilityRead;
+  facts: Array<{ field: keyof PersistedSessionCapabilityEntry; value: unknown }> | undefined;
+};
+
+const capabilityFields = [
+  "sessionId",
+  "lifecycleRevision",
+  "createdVia",
+  "spawnDepth",
+  "subagentRole",
+  "subagentControlScope",
+  "spawnedBy",
+  "completionOwnerSessionKey",
+  "inheritedToolPolicyVersion",
+  "inheritedToolPolicySource",
+  "inheritedToolAllow",
+  "inheritedToolDeny",
+  "delegatedToolPolicy",
+] as const;
+
+function recordCapabilityRead(
+  query: SessionCapabilityRead,
+  entry: SessionCapabilityEntry | undefined,
+) {
+  preparedReads.getStore()?.onRead?.({
+    query,
+    facts:
+      entry && capabilityFields.map((field) => ({ field, value: structuredClone(entry[field]) })),
+  });
+  return entry;
+}
+
 class SessionCapabilityReadRequired extends Error {
   constructor(readonly query: SessionCapabilityRead) {
     super("Session capability metadata requires worker preparation");
   }
 }
 
-const preparedReads = new AsyncLocalStorage<
-  Map<string, () => SessionCapabilityEntry | undefined>
->();
+const preparedReads = new AsyncLocalStorage<{
+  entries: Map<string, () => SessionCapabilityEntry | undefined>;
+  retain: boolean;
+  onRead?: (snapshot: SessionCapabilitySnapshot) => void;
+}>();
 const legacyReader = new AsyncLocalStorage<
   (query: SessionCapabilityRead) => SessionCapabilityEntry | undefined
 >();
@@ -190,9 +229,9 @@ export function withLegacySessionCapabilityReader<T>(
 /** Prepare only the metadata a synchronous capability policy actually consumes. */
 export async function withPreparedSessionCapabilityRead<T>(
   read: () => T,
-  options?: { retain?: boolean },
+  options?: { retain?: boolean; onRead?: (snapshot: SessionCapabilitySnapshot) => void },
 ): Promise<T> {
-  const prepared = await prepareCapabilityReads(read, options?.retain === true);
+  const prepared = await prepareCapabilityReads(read, options?.retain === true, options?.onRead);
   try {
     return await prepared.value;
   } finally {
@@ -206,8 +245,14 @@ export async function prepareSessionCapabilityRead<T>(read: () => T) {
   return { read: prepared.read, release: prepared.release };
 }
 
-async function prepareCapabilityReads<T>(read: () => T, retain: boolean) {
-  const entries = new Map(preparedReads.getStore());
+async function prepareCapabilityReads<T>(
+  read: () => T,
+  retain: boolean,
+  onRead?: (snapshot: SessionCapabilitySnapshot) => void,
+) {
+  const inherited = preparedReads.getStore();
+  const entries = new Map(!retain || inherited?.retain ? inherited?.entries : undefined);
+  const scope = { entries, retain, onRead: onRead ?? inherited?.onRead };
   const releases: Array<() => void> = [];
   let active = true;
   const release = () => {
@@ -220,12 +265,19 @@ async function prepareCapabilityReads<T>(read: () => T, retain: boolean) {
     if (!active) {
       throw new Error("Session capability read is no longer active");
     }
-    return preparedReads.run(entries, read);
+    try {
+      return preparedReads.run(scope, read);
+    } catch (error) {
+      if (error instanceof SessionCapabilityReadRequired) {
+        throw new Error("Session capability metadata changed; prepare it again", { cause: error });
+      }
+      throw error;
+    }
   };
   try {
     for (;;) {
       try {
-        return { value: replay(), read: replay, release };
+        return { value: preparedReads.run(scope, read), read: replay, release };
       } catch (error) {
         if (!(error instanceof SessionCapabilityReadRequired)) {
           throw error;
@@ -247,89 +299,81 @@ async function prepareCapabilityReads<T>(read: () => T, retain: boolean) {
             }),
           );
         }
-        try {
-          let capturedIdentity: string | undefined;
-          const reader = await withSessionEntriesFromStoreInWorker(
-            {
-              storePath: query.storePath,
-              agentId: query.agentId,
-              ...(query.sessionKey !== undefined
-                ? {
-                    projection: "full" as const,
-                    snapshotFields: [],
-                    sessionKeys: [query.sessionKey],
-                  }
-                : {
-                    projection: "sharing" as const,
-                    selection: { kind: "session-id", sessionId: query.sessionId } as const,
-                  }),
-            },
-            async ({ result }) => {
-              const selected = result.entries[0];
-              const entry = selected?.entry;
-              if (!retain) {
-                return () => entry;
-              }
-              const databaseIdentity = result.source?.databaseIdentity ?? capturedIdentity;
-              if (!databaseIdentity) {
-                return () => {
-                  if (!missingCurrent) {
-                    throw new Error("Session capability metadata changed", { cause: error });
-                  }
-                  return undefined;
-                };
-              }
-              const predicate = retainPreparedSessionEntryPredicate({
-                databaseIdentity: `file:${databaseIdentity}`,
-                sessionKey: selected?.sessionKey ?? query.sessionKey ?? "",
-                entry,
-                matches: (before, after) =>
-                  JSON.stringify(before && projectSessionEntryCapabilityFacts(before)) ===
-                  JSON.stringify(after && projectSessionEntryCapabilityFacts(after)),
-              });
-              releases.push(predicate.release);
-              let idCurrent = true;
-              if (query.sessionId !== undefined) {
-                releases.push(
-                  onSessionIdentityMutation((change) => {
-                    if (
-                      change.databaseIdentity === databaseIdentity &&
-                      [
-                        change.previous.sessionId,
-                        change.kind === "delete" ? undefined : change.current.sessionId,
-                      ].some((id) => id?.trim() === query.sessionId)
-                    ) {
-                      idCurrent = false;
-                    }
-                  }),
-                );
-              }
+        let capturedIdentity: string | undefined;
+        const reader = await withSessionEntriesFromStoreInWorker(
+          {
+            storePath: query.storePath,
+            agentId: query.agentId,
+            ...(query.sessionKey !== undefined
+              ? {
+                  projection: "full" as const,
+                  snapshotFields: [],
+                  sessionKeys: [query.sessionKey],
+                }
+              : {
+                  projection: "sharing" as const,
+                  selection: { kind: "session-id", sessionId: query.sessionId } as const,
+                }),
+          },
+          async ({ result, database }) => {
+            const selected = result.entries[0];
+            const entry = selected?.entry;
+            if (!retain) {
+              return () => entry;
+            }
+            const databaseIdentity = result.source?.databaseIdentity ?? capturedIdentity;
+            if (!databaseIdentity) {
               return () => {
-                if (!predicate.isCurrent() || !idCurrent) {
+                assertAgentSessionWriteAdmission(database, query.agentId);
+                if (!missingCurrent) {
                   throw new Error("Session capability metadata changed", { cause: error });
                 }
-                return entry;
+                return undefined;
               };
-            },
-            false,
-            retain
-              ? (_database, identity) => {
-                  capturedIdentity = identity.key.startsWith("file:")
-                    ? identity.key.slice(5)
-                    : undefined;
-                }
-              : undefined,
-          );
-          entries.set(readKey(query), reader);
-        } catch {
-          // Missing or unreadable stores retain the policy's key/depth fallback.
-          entries.set(readKey(query), () => {
-            if (retain && !missingCurrent) {
-              throw new Error("Session capability metadata changed", { cause: error });
             }
-            return undefined;
-          });
-        }
+            const predicate = retainPreparedSessionEntryPredicate({
+              databaseIdentity: `file:${databaseIdentity}`,
+              sessionKey: selected?.sessionKey ?? query.sessionKey ?? "",
+              entry,
+              matches: (before, after) =>
+                JSON.stringify(before && projectSessionEntryCapabilityFacts(before)) ===
+                JSON.stringify(after && projectSessionEntryCapabilityFacts(after)),
+            });
+            releases.push(predicate.release);
+            let idCurrent = true;
+            if (query.sessionId !== undefined) {
+              releases.push(
+                onSessionIdentityMutation((change) => {
+                  if (
+                    change.databaseIdentity === databaseIdentity &&
+                    [
+                      change.previous.sessionId,
+                      change.kind === "delete" ? undefined : change.current.sessionId,
+                    ].some((id) => id?.trim() === query.sessionId)
+                  ) {
+                    idCurrent = false;
+                  }
+                }),
+              );
+            }
+            return () => {
+              assertAgentSessionWriteAdmission(database, query.agentId);
+              if (!predicate.isCurrent() || !idCurrent) {
+                throw new Error("Session capability metadata changed", { cause: error });
+              }
+              return entry;
+            };
+          },
+          false,
+          retain
+            ? (_database, identity) => {
+                capturedIdentity = identity.key.startsWith("file:")
+                  ? identity.key.slice(5)
+                  : undefined;
+              }
+            : undefined,
+        );
+        entries.set(readKey(query), reader);
       }
     }
   } catch (error) {
@@ -381,17 +425,23 @@ export function createSubagentSessionStore(
       type: "session.entry.read" as const,
       input: { sessionKey, projection: "list" as const },
     };
-    return captured?.owner
+    const entry = captured?.owner
       ? captured.owner.readStorage(sessionKey, query, captured.authority)
       : captured?.binding?.agentId === captured?.agentId
         ? captured?.binding?.actor.storage?.readCurrent(query, captured.authority)
         : undefined;
+    return captured
+      ? recordCapabilityRead(
+          { storePath: captured.path, agentId: captured.agentId, sessionKey },
+          entry,
+        )
+      : entry;
   };
   const readActorEntryById = (sessionId: string) => {
     const captured = memoryOwner(
       isIncognitoSessionKey(sessionId) ? resolveAgentIdFromSessionKey(sessionId) : agentId,
     );
-    return captured?.owner
+    const matched = captured?.owner
       ? captured.owner.readSessionById(sessionId, captured.authority, { currentOnly: true })
       : captured?.binding?.agentId === captured?.agentId
         ? captured?.binding?.actor.storage?.readCurrent(
@@ -402,6 +452,13 @@ export function createSubagentSessionStore(
             captured.authority,
           )
         : undefined;
+    if (captured) {
+      recordCapabilityRead(
+        { storePath: captured.path, agentId: captured.agentId, sessionId },
+        matched?.entry,
+      );
+    }
+    return matched;
   };
   const entries = new Map<string, SessionCapabilityEntry | undefined>();
   if (prepared && !isInternalSessionEffectsKey(prepared.sessionKey)) {
@@ -409,9 +466,11 @@ export function createSubagentSessionStore(
   }
   let preparedEntries = preparedReads.getStore();
   const readDurable = (query: SessionCapabilityRead) => {
+    const preparedScope = preparedReads.getStore() ?? preparedEntries;
+    preparedEntries = preparedScope;
     const owner = getInProcessGatewayRequestContext()?.sessionRowProjectionOwner;
     const current =
-      owner instanceof SessionRowProjectionBinding
+      !preparedScope?.retain && owner instanceof SessionRowProjectionBinding
         ? owner.readCommittedEntry({
             agentId: query.agentId,
             storePath: query.storePath,
@@ -421,16 +480,15 @@ export function createSubagentSessionStore(
           })
         : undefined;
     if (current) {
-      return current.entry;
+      return recordCapabilityRead(query, current.entry);
     }
-    const currentPrepared = preparedReads.getStore() ?? preparedEntries;
-    preparedEntries = currentPrepared;
-    if (currentPrepared?.has(readKey(query))) {
-      return currentPrepared.get(readKey(query))!();
+    const preparedRead = preparedScope?.entries.get(readKey(query));
+    if (preparedRead) {
+      return recordCapabilityRead(query, preparedRead());
     }
     const legacy = legacyReader.getStore();
     if (legacy) {
-      return legacy(query);
+      return recordCapabilityRead(query, legacy(query));
     }
     throw new SessionCapabilityReadRequired(query);
   };
@@ -444,7 +502,7 @@ export function createSubagentSessionStore(
         return undefined;
       }
       return entries.has(sessionKey)
-        ? entries.get(sessionKey)
+        ? recordCapabilityRead({ ...readScope, sessionKey }, entries.get(sessionKey))
         : readDurable({ ...readScope, sessionKey });
     },
     getById: (requestedSessionId) => {

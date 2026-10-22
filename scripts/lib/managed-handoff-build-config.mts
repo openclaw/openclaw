@@ -2,6 +2,7 @@ import { fileURLToPath } from "node:url";
 import type { UserConfig } from "tsdown";
 import { packageActivationRuntimeEntrypoint } from "../../src/infra/package-update-activation-runtime-assets.ts";
 import { managedHandoffRuntimeEntrypoint } from "../../src/infra/update-managed-service-handoff-runtime-assets.ts";
+import { createFsSafeWindowsHelperAssetPlugin } from "./fs-safe-windows-helper-asset.mts";
 import { createStateSchemaInlinePlugin } from "./state-schema-inline-plugin.mts";
 
 /** The installed CLI and invocation compiler seal the same typed lease owner. */
@@ -35,6 +36,7 @@ function createSealedRecoveryBuildConfig(entry: typeof managedHandoffRuntimeEntr
     envPrefix: [],
     define: { SEALED_RUNTIME_BUILD: "true" },
     plugins: [
+      createFsSafeWindowsHelperAssetPlugin(),
       createStateSchemaInlinePlugin(),
       {
         name: "openclaw:managed-handoff-native-loader",

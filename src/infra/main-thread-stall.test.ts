@@ -17,6 +17,21 @@ function fixture() {
 }
 
 describe("main-thread stall attribution", () => {
+  it("reports callbacks at the 250 ms boundary, excluding shorter work and async waits", async () => {
+    const { monitor, elapse } = fixture();
+    runWithMainThreadTask("scheduler:short", () => elapse(249));
+    await runWithMainThreadTask("gateway:rpc:sessions.list", async () => {
+      elapse(250);
+      await Promise.resolve();
+      elapse(5_000);
+    });
+    expect(monitor.drain()).toEqual({
+      stalls: [{ elapsedMs: 250, task: "gateway:rpc:sessions.list", taskMs: 250 }],
+      dropped: 0,
+      delayMaxMs: 250,
+    });
+  });
+
   it("records one stall naming the blocking nested task, then consumes it once", () => {
     const { monitor, elapse } = fixture();
     runWithMainThreadTask("maintenance", () => {

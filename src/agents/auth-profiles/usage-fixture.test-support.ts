@@ -53,7 +53,7 @@ export function resetAuthProfileUsageMocks() {
     }
     return {
       store: fresh,
-      result: next ? { previous, next, now } : undefined,
+      result: next,
       publication: {
         credentialsChanged: false,
         profileSetChanged: false,

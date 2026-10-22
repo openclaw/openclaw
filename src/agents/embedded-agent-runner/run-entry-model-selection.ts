@@ -1,4 +1,7 @@
-import { withClaimingHookAdmission } from "../../plugins/hook-claim-admission.js";
+import {
+  readClaimingHookAdmission,
+  withClaimingHookAdmission,
+} from "../../plugins/hook-claim-admission.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import {
@@ -38,6 +41,7 @@ export async function resolveRunEntryModelSelection(
       cwd: input.cwd,
       sessionId: params.identity.sessionId,
     });
+    await readClaimingHookAdmission(input.context ?? {})?.prepare?.();
     params.assertCurrent();
     return resolveHookModelSelection({
       prompt: input.prompt,

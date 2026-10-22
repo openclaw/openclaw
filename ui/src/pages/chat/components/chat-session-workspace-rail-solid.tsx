@@ -1,19 +1,25 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Match, Show, Switch } from "solid-js";
 import { shortestFileLabels } from "../../../components/file-kind.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import "../../../components/tooltip.ts";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatByteSize } from "../../../lib/format.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { isSessionWorkspaceFileSelected } from "../../../lib/sessions/workspace.ts";
-import type {
-  SessionWorkspaceFilter,
-  SessionWorkspaceProps,
-} from "./chat-session-workspace-types.ts";
+import { nativeListener } from "../../../lib/solid-native-listener.ts";
+import { FileDownloadButton } from "./chat-file-download-button.tsx";
+import { DesktopWorkspaceContents } from "./chat-session-workspace-desktop.tsx";
+import { MobileWorkspaceContents } from "./chat-session-workspace-mobile-adapter.tsx";
+import type { SessionWorkspaceFilter } from "./chat-sidebar-content-types.ts";
+import type { SessionWorkspaceProps } from "./chat-sidebar-view-types.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 const SESSION_KIND_LABELS = {
   modified: "chat.workspaceFiles.changed",
@@ -45,6 +51,7 @@ function RailRow(props: {
   directory?: boolean;
   path?: string;
   hideActions?: boolean;
+  download?: JSX.Element;
 }) {
   return (
     <div
@@ -68,7 +75,13 @@ function RailRow(props: {
         </span>
         <span class="chat-workspace-rail__file-main">
           <openclaw-tooltip prop:content={props.tooltip ?? props.name}>
-            <span class="chat-workspace-rail__file-name">{props.name}</span>
+            <span
+              ref={createTextOverflow(() => props.name)}
+              class="chat-workspace-rail__file-name"
+              title={props.name}
+            >
+              {props.name}
+            </span>
           </openclaw-tooltip>
           <Show when={props.meta}>
             <span class="chat-workspace-rail__file-meta">{props.meta}</span>
@@ -96,22 +109,17 @@ function RailRow(props: {
               class="chat-workspace-rail__row-action"
               type="button"
               aria-label={t("chat.workspaceFiles.preview")}
-              ref={(button) =>
-                button.addEventListener("click", (event) => {
-                  event.stopPropagation();
-                  props.onOpen();
-                })
-              }
+              ref={nativeListener("click", (event) => {
+                event.stopPropagation();
+                props.onOpen();
+              })}
             >
               <Icon name="eye" />
             </button>
           </openclaw-tooltip>
+          {props.download}
           <Show when={props.path !== undefined}>
-            <span
-              ref={(element) =>
-                element.addEventListener("click", (event) => event.stopPropagation())
-              }
-            >
+            <span ref={nativeListener("click", (event) => event.stopPropagation())}>
               <CopyButton text={props.path ?? ""} idleLabel={t("chat.workspaceFiles.copyPath")} />
             </span>
           </Show>
@@ -245,6 +253,22 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
             badge={file().missing ? t("chat.workspaceFiles.missing") : undefined}
             onOpen={() => props.workspace.onOpenFile(file().path, "session")}
             path={file().path}
+            download={
+              <Show when={props.workspace.onDownloadFile}>
+                {(download) => (
+                  <FileDownloadButton
+                    scopeKey={[
+                      props.workspace.sessionKey,
+                      file().path,
+                      props.workspace.connectionEpoch,
+                    ].join("\0")}
+                    download={(signal) => download()(file().path, "session", signal)}
+                    disabled={file().missing}
+                    class="chat-workspace-rail__row-action"
+                  />
+                )}
+              </Show>
+            }
           />
         )}
       </For>
@@ -254,7 +278,14 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
     <aside class="chat-workspace-rail" aria-label={t("chat.workspaceFiles.label")}>
       <Show when={props.workspace.list?.root}>
         <openclaw-tooltip prop:content={props.workspace.list?.root}>
-          <div class="chat-workspace-rail__path">{props.workspace.list?.root}</div>
+          <div class="chat-workspace-rail__path">
+            <span
+              ref={createTextOverflow(() => props.workspace.list?.root)}
+              title={props.workspace.list?.root ?? undefined}
+            >
+              {props.workspace.list?.root}
+            </span>
+          </div>
         </openclaw-tooltip>
       </Show>
       <div class="chat-workspace-rail__toolbar">
@@ -298,7 +329,15 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
         when={!props.workspace.error}
         fallback={
           <div class="chat-workspace-rail__state chat-workspace-rail__state--error">
-            {props.workspace.error}
+            <div role="alert">{props.workspace.error}</div>
+            <button
+              type="button"
+              class="btn small"
+              disabled={props.workspace.loading}
+              onClick={() => props.workspace.onRetry()}
+            >
+              {t("common.retry")}
+            </button>
           </div>
         }
       >
@@ -309,25 +348,20 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
           }
         >
           <div class="chat-workspace-rail__scroll">
-            <Show when={visible("changed") && data().changed.length > 0}>
-              <WorkspaceGroup
-                title={t("chat.workspaceFiles.changed")}
-                count={data().changed.length}
-                defaultOpen
-                forcedOpen={data().forcedOpen}
-              >
-                <FileRows rows={data().changed} />
-              </WorkspaceGroup>
-            </Show>
-            <Show when={visible("read") && data().read.length > 0}>
-              <WorkspaceGroup
-                title={t("chat.workspaceFiles.read")}
-                count={data().read.length}
-                forcedOpen={data().forcedOpen}
-              >
-                <FileRows rows={data().read} />
-              </WorkspaceGroup>
-            </Show>
+            <For each={["changed", "read"] as const}>
+              {(kind) => (
+                <Show when={visible(kind) && data()[kind].length > 0}>
+                  <WorkspaceGroup
+                    title={t(`chat.workspaceFiles.${kind}`)}
+                    count={data()[kind].length}
+                    defaultOpen={kind === "changed"}
+                    forcedOpen={data().forcedOpen}
+                  >
+                    <FileRows rows={data()[kind]} />
+                  </WorkspaceGroup>
+                </Show>
+              )}
+            </For>
             <Show when={visible("artifacts") && data().artifacts.length > 0}>
               <WorkspaceGroup
                 title={t("chat.workspaceFiles.artifacts")}
@@ -418,6 +452,23 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
                           onOpen={onOpen}
                           path={entry().path}
                           hideActions={directory()}
+                          download={
+                            <Show when={!directory() && props.workspace.onDownloadFile}>
+                              {(download) => (
+                                <FileDownloadButton
+                                  scopeKey={[
+                                    props.workspace.sessionKey,
+                                    entry().path,
+                                    props.workspace.connectionEpoch,
+                                  ].join("\0")}
+                                  download={(signal) =>
+                                    download()(entry().path, "workspace", signal)
+                                  }
+                                  class="chat-workspace-rail__row-action"
+                                />
+                              )}
+                            </Show>
+                          }
                         />
                       );
                     }}
@@ -450,7 +501,16 @@ function WorkspaceContents(props: { workspace: SessionWorkspaceProps }) {
 export function SessionWorkspaceRail(props: { workspace?: SessionWorkspaceProps }) {
   return (
     <Show when={props.workspace}>
-      {(workspace) => <WorkspaceContents workspace={workspace()} />}
+      {(workspace) => (
+        <Switch fallback={<WorkspaceContents workspace={workspace()} />}>
+          <Match when={workspace().presentation === "desktop"}>
+            <DesktopWorkspaceContents workspace={workspace()} />
+          </Match>
+          <Match when={workspace().presentation === "mobile"}>
+            <MobileWorkspaceContents workspace={workspace()} />
+          </Match>
+        </Switch>
+      )}
     </Show>
   );
 }

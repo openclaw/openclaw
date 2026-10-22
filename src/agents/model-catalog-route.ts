@@ -200,6 +200,7 @@ export function projectModelCatalogEntryForRoute(params: {
         ? { contextWindow: donor.contextWindow, contextWindowSource: donor.contextWindowSource }
         : {}),
       ...(donor?.contextTokens !== undefined ? { contextTokens: donor.contextTokens } : {}),
+      ...(donor?.parameterCount !== undefined ? { parameterCount: donor.parameterCount } : {}),
       ...(donor?.contextCapacitySource
         ? { contextCapacitySource: donor.contextCapacitySource }
         : {}),

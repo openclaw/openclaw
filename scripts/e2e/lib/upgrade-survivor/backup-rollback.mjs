@@ -3,6 +3,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { createBuildSmokeEnv } from "../../../lib/build-smoke-env.mts";
 import { compareReleaseVersions } from "../../../lib/release-version.mjs";
 import {
   readSqliteTranscriptPayload,
@@ -426,10 +427,7 @@ function verify(resultFile, candidateSchemaFile) {
   // Neither restore nor preflight may select the migrated candidate's state.
   // The database under inspection is supplied explicitly to preflight-agent.
   const env = {
-    ...process.env,
-    HOME: selector,
-    USERPROFILE: selector,
-    OPENCLAW_HOME: selector,
+    ...createBuildSmokeEnv(selector, process.env),
     OPENCLAW_STATE_DIR: path.join(selector, "state"),
     OPENCLAW_CONFIG_PATH: path.join(selector, "state", "openclaw.json"),
   };

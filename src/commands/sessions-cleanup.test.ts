@@ -5,8 +5,8 @@ import { stripAnsi, visibleWidth } from "../../packages/terminal-core/src/ansi.j
 import { GatewayCredentialsRequiredError } from "../gateway/call.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { sessionsCleanupLargeLabelsEntrypoint } from "./sessions-cleanup-runtime.test-support.js";
+import { createCapturingTestRuntime as makeRuntime } from "./test-runtime-config-helpers.js";
 
 const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
@@ -46,20 +46,6 @@ vi.mock("../gateway/call.js", async (importOriginal) => ({
 
 import { sessionsCleanupCommand } from "./sessions-cleanup.js";
 
-function makeRuntime(): { runtime: RuntimeEnv; logs: string[]; errors: string[] } {
-  const logs: string[] = [];
-  const errors: string[] = [];
-  return {
-    runtime: {
-      log: (msg: unknown) => logs.push(String(msg)),
-      error: (msg: unknown) => errors.push(String(msg)),
-      exit: () => {},
-    },
-    logs,
-    errors,
-  };
-}
-
 function expectLogsToInclude(logs: readonly string[], text: string): void {
   const matches = logs.filter((line) => line.includes(text));
   expect(matches.length).toBeGreaterThan(0);
@@ -74,24 +60,23 @@ function gatewayTransportError(kind: "closed" | "timeout", code?: number): Gatew
   });
 }
 
-function gatewayCleanupResult(storePath: string) {
+function gatewayCleanupResult(
+  storePath: string,
+  overrides: Partial<CleanupPreview["summary"]> = {},
+) {
   return {
-    agentId: "main",
-    storePath,
-    mode: "enforce",
-    dryRun: false,
-    beforeCount: 3,
-    afterCount: 1,
-    missing: 0,
-    dmScopeRetired: 0,
-    modelRunPruned: 0,
-    pruned: 2,
-    capped: 0,
-    diskBudget: null,
-    wouldMutate: true,
+    ...cleanupPreview({
+      storePath,
+      mode: "enforce",
+      dryRun: false,
+      beforeCount: 3,
+      afterCount: 1,
+      pruned: 2,
+      ...overrides,
+    }).summary,
     applied: true,
     appliedCount: 1,
-  } as const;
+  };
 }
 
 type CleanupPreview = Awaited<
@@ -129,9 +114,19 @@ function cleanupPreview(
   };
 }
 
+function previewEntry(sessionId: string, updatedAt: number, label?: string) {
+  return { sessionId, updatedAt, model: "test:opus", ...(label === undefined ? {} : { label }) };
+}
+
 describe("sessionsCleanupCommand", () => {
+  let runtime: ReturnType<typeof makeRuntime>["runtime"];
+  let logs: string[];
+  const cleanup = (options: Parameters<typeof sessionsCleanupCommand>[0]) =>
+    sessionsCleanupCommand(options, runtime);
+
   beforeEach(() => {
     vi.clearAllMocks();
+    ({ runtime, logs } = makeRuntime());
     vi.stubEnv("OPENCLAW_GATEWAY_URL", undefined);
     process.exitCode = undefined;
     mocks.runLocalSessionsCleanup.mockImplementation((params) => mocks.runSessionsCleanup(params));
@@ -155,8 +150,7 @@ describe("sessionsCleanupCommand", () => {
     // Resolve a full result so a regression that delegates fails on the
     // gateway assertion below instead of throwing on the beforeEach null.
     mocks.callGateway.mockResolvedValue(gatewayCleanupResult("/gateway/sessions.json"));
-    const { runtime } = makeRuntime();
-    await sessionsCleanupCommand({ store: "", enforce: true }, runtime);
+    await cleanup({ store: "", enforce: true });
 
     expect(mocks.callGateway).not.toHaveBeenCalled();
     expect(mocks.runSessionsCleanup).toHaveBeenCalledOnce();
@@ -167,81 +161,41 @@ describe("sessionsCleanupCommand", () => {
 
   it("emits a single JSON object for non-dry runs and applies maintenance", async () => {
     mocks.callGateway.mockRejectedValue(gatewayTransportError("closed"));
+    const diskBudget = {
+      totalBytesBefore: 1200,
+      totalBytesAfter: 800,
+      removedFiles: 0,
+      removedEntries: 0,
+      freedBytes: 400,
+      maxBytes: 1000,
+      highWaterBytes: 800,
+      overBudget: true,
+    };
+    const applied = gatewayCleanupResult("/resolved/sessions.json", {
+      pruned: 0,
+      capped: 2,
+      diskBudget,
+    });
     mocks.runSessionsCleanup.mockResolvedValue({
       mode: "enforce",
       previewResults: [],
-      appliedSummaries: [
-        {
-          agentId: "main",
-          storePath: "/resolved/sessions.json",
-          mode: "enforce",
-          dryRun: false,
-          beforeCount: 3,
-          afterCount: 1,
-          missing: 0,
-          dmScopeRetired: 0,
-          modelRunPruned: 0,
-          pruned: 0,
-          capped: 2,
-          diskBudget: {
-            totalBytesBefore: 1200,
-            totalBytesAfter: 800,
-            removedFiles: 0,
-            removedEntries: 0,
-            freedBytes: 400,
-            maxBytes: 1000,
-            highWaterBytes: 800,
-            overBudget: true,
-          },
-          wouldMutate: true,
-          applied: true,
-          appliedCount: 1,
-        },
-      ],
+      appliedSummaries: [applied],
     });
-
-    const { runtime, logs } = makeRuntime();
-    await sessionsCleanupCommand(
-      {
-        json: true,
-        enforce: true,
-        activeKey: "agent:main:main",
-      },
-      runtime,
-    );
+    await cleanup({
+      json: true,
+      enforce: true,
+      activeKey: "agent:main:main",
+    });
 
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
-      agentId: "main",
+      ...applied,
       storePath: "/resolved/openclaw-agent.sqlite",
-      mode: "enforce",
-      dryRun: false,
-      beforeCount: 3,
-      afterCount: 1,
-      missing: 0,
-      dmScopeRetired: 0,
-      modelRunPruned: 0,
-      pruned: 0,
-      capped: 2,
-      diskBudget: {
-        totalBytesBefore: 1200,
-        totalBytesAfter: 800,
-        removedFiles: 0,
-        removedEntries: 0,
-        freedBytes: 400,
-        maxBytes: 1000,
-        highWaterBytes: 800,
-        overBudget: true,
-      },
-      wouldMutate: true,
-      applied: true,
-      appliedCount: 1,
     });
     expect(mocks.runSessionsCleanup).toHaveBeenCalledOnce();
     const cleanupCall = mocks.runSessionsCleanup.mock.calls[0]?.[0];
     expect(cleanupCall?.cfg).toEqual({ session: { store: "/cfg/sessions.json" } });
-    expect(cleanupCall?.opts.enforce).toBe(true);
-    expect(cleanupCall?.opts.activeKey).toBe("agent:main:main");
+    expect(cleanupCall?.opts).toMatchObject({ enforce: true, activeKey: "agent:main:main" });
     expect(cleanupCall?.targets).toEqual([
       { agentId: "main", storePath: "/resolved/sessions.json" },
     ]);
@@ -265,9 +219,7 @@ describe("sessionsCleanupCommand", () => {
     },
   ])("surfaces $label without replaying cleanup locally", async ({ error }) => {
     mocks.callGateway.mockRejectedValue(error);
-
-    const { runtime } = makeRuntime();
-    await expect(sessionsCleanupCommand({ enforce: true }, runtime)).rejects.toBe(error);
+    await expect(cleanup({ enforce: true })).rejects.toBe(error);
 
     expect(mocks.callGateway).toHaveBeenCalledOnce();
     expect(mocks.runSessionsCleanup).not.toHaveBeenCalled();
@@ -293,11 +245,7 @@ describe("sessionsCleanupCommand", () => {
         connectionDetails: { url, urlSource: source, message: "test tunnel" },
       });
       mocks.callGateway.mockRejectedValue(error);
-
-      const { runtime, logs } = makeRuntime();
-      await expect(
-        sessionsCleanupCommand({ enforce: true, fixMissing: true, json: true }, runtime),
-      ).rejects.toBe(error);
+      await expect(cleanup({ enforce: true, fixMissing: true, json: true })).rejects.toBe(error);
 
       expect(mocks.runLocalSessionsCleanup).not.toHaveBeenCalled();
       expect(mocks.runSessionsCleanup).not.toHaveBeenCalled();
@@ -312,26 +260,18 @@ describe("sessionsCleanupCommand", () => {
       dryRun: false,
       stores: [
         {
-          agentId: "main",
-          storePath: "/gateway/main/openclaw-agent.sqlite",
-          mode: "enforce",
-          dryRun: false,
-          beforeCount: 1,
-          afterCount: 0,
-          missing: 1,
-          dmScopeRetired: 0,
-          modelRunPruned: 0,
-          pruned: 0,
-          capped: 0,
-          unreferencedArtifacts: {
-            scannedFiles: 0,
-            removedFiles: 0,
-            freedBytes: 0,
-            olderThanMs: 0,
-          },
-          diskBudget: null,
-          wouldMutate: true,
-          applied: true,
+          ...gatewayCleanupResult("/gateway/main/openclaw-agent.sqlite", {
+            beforeCount: 1,
+            afterCount: 0,
+            missing: 1,
+            pruned: 0,
+            unreferencedArtifacts: {
+              scannedFiles: 0,
+              removedFiles: 0,
+              freedBytes: 0,
+              olderThanMs: 0,
+            },
+          }),
           appliedCount: 0,
         },
       ],
@@ -343,9 +283,7 @@ describe("sessionsCleanupCommand", () => {
       },
     };
     mocks.callGateway.mockRejectedValue(Object.assign(new Error("request failed"), { details }));
-
-    const { runtime, logs } = makeRuntime();
-    await sessionsCleanupCommand({ allAgents: true, enforce: true, json: true }, runtime);
+    await cleanup({ allAgents: true, enforce: true, json: true });
 
     expect(JSON.parse(logs[0] ?? "{}")).toEqual(details);
     expect(process.exitCode).toBe(1);
@@ -355,9 +293,7 @@ describe("sessionsCleanupCommand", () => {
   it("preserves a Gateway-owned store path in human output", async () => {
     const remoteStorePath = "C:\\Users\\gateway\\.openclaw\\openclaw-agent.sqlite";
     mocks.callGateway.mockResolvedValue(gatewayCleanupResult(remoteStorePath));
-
-    const { runtime, logs } = makeRuntime();
-    await sessionsCleanupCommand({ enforce: true }, runtime);
+    await cleanup({ enforce: true });
 
     expectLogsToInclude(logs, `Session store: ${remoteStorePath}`);
   });
@@ -383,10 +319,10 @@ describe("sessionsCleanupCommand", () => {
           },
           {
             beforeStore: {
-              ageArchived: { sessionId: "age-archived", updatedAt: 0, model: "test:opus" },
-              stale: { sessionId: "stale", updatedAt: 1, model: "test:opus" },
-              fresh: { sessionId: "fresh", updatedAt: 2, model: "test:opus" },
-              capArchived: { sessionId: "cap-archived", updatedAt: 0, model: "test:opus" },
+              ageArchived: previewEntry("age-archived", 0),
+              stale: previewEntry("stale", 1),
+              fresh: previewEntry("fresh", 2),
+              capArchived: previewEntry("cap-archived", 0),
             },
             staleKeys: new Set(["stale"]),
             ageArchivedKeys: new Set(["ageArchived"]),
@@ -396,14 +332,7 @@ describe("sessionsCleanupCommand", () => {
       ],
       appliedSummaries: [],
     });
-
-    const { runtime, logs } = makeRuntime();
-    await sessionsCleanupCommand(
-      {
-        dryRun: true,
-      },
-      runtime,
-    );
+    await cleanup({ dryRun: true });
 
     expectLogsToInclude(logs, "Session store: /resolved/openclaw-agent.sqlite");
     expectLogsToInclude(logs, "Planned session actions:");
@@ -471,46 +400,17 @@ describe("sessionsCleanupCommand", () => {
           },
           {
             beforeStore: {
-              cronKept: {
-                sessionId: "cron-kept",
-                updatedAt: 4,
-                model: "test:opus",
-                label: "Cron: 🔥修复",
-              },
-              cronPruned: {
-                sessionId: "cron-pruned",
-                updatedAt: 3,
-                model: "test:opus",
-                label: "Cron: 🔥修复",
-              },
-              directKept: {
-                sessionId: "direct-kept",
-                updatedAt: 2,
-                model: "test:opus",
-              },
-              directCapped: {
-                sessionId: "direct-capped",
-                updatedAt: 1,
-                model: "test:opus",
-              },
-              literalUnlabeled: {
-                sessionId: "literal-unlabeled",
-                updatedAt: 1,
-                model: "test:opus",
-                label: "Unlabeled",
-              },
-              unsafePruned: {
-                sessionId: "unsafe-pruned",
-                updatedAt: 1,
-                model: "test:opus",
-                label: "\u001b[31mAlert\nInjected",
-              },
-              malformedLabelPruned: {
-                sessionId: "malformed-label-pruned",
-                updatedAt: 1,
-                model: "test:opus",
-                label: {} as unknown as string,
-              },
+              cronKept: previewEntry("cron-kept", 4, "Cron: 🔥修复"),
+              cronPruned: previewEntry("cron-pruned", 3, "Cron: 🔥修复"),
+              directKept: previewEntry("direct-kept", 2),
+              directCapped: previewEntry("direct-capped", 1),
+              literalUnlabeled: previewEntry("literal-unlabeled", 1, "Unlabeled"),
+              unsafePruned: previewEntry("unsafe-pruned", 1, "\u001b[31mAlert\nInjected"),
+              malformedLabelPruned: previewEntry(
+                "malformed-label-pruned",
+                1,
+                {} as unknown as string,
+              ),
             },
             staleKeys: new Set(["cronPruned", "unsafePruned", "malformedLabelPruned"]),
             cappedKeys: new Set(["directCapped"]),
@@ -519,14 +419,7 @@ describe("sessionsCleanupCommand", () => {
       ],
       appliedSummaries: [],
     });
-
-    const { runtime, logs } = makeRuntime();
-    await sessionsCleanupCommand(
-      {
-        dryRun: true,
-      },
-      runtime,
-    );
+    await cleanup({ dryRun: true });
 
     expectLogsToInclude(logs, "Summary by Label:");
     const summaryLogs = logs.slice(logs.indexOf("Summary by Label:") + 1);
@@ -574,16 +467,11 @@ describe("sessionsCleanupCommand", () => {
       ],
       appliedSummaries: [],
     });
-
-    const { runtime, logs } = makeRuntime();
-    await sessionsCleanupCommand(
-      {
-        json: true,
-        dryRun: true,
-        allAgents: true,
-      },
-      runtime,
-    );
+    await cleanup({
+      json: true,
+      dryRun: true,
+      allAgents: true,
+    });
 
     expect(logs).toHaveLength(1);
     expect(JSON.parse(logs[0] ?? "{}")).toEqual({
@@ -591,35 +479,11 @@ describe("sessionsCleanupCommand", () => {
       mode: "warn",
       dryRun: true,
       stores: [
+        { ...cleanupPreview({ pruned: 1 }).summary, storePath: "/resolved/main-sessions.sqlite" },
         {
-          agentId: "main",
-          storePath: "/resolved/main-sessions.sqlite",
-          mode: "warn",
-          dryRun: true,
-          beforeCount: 1,
-          afterCount: 0,
-          missing: 0,
-          dmScopeRetired: 0,
-          modelRunPruned: 0,
-          pruned: 1,
-          capped: 0,
-          diskBudget: null,
-          wouldMutate: true,
-        },
-        {
+          ...cleanupPreview({ pruned: 1 }).summary,
           agentId: "work",
           storePath: "/resolved/work-sessions.work.sqlite",
-          mode: "warn",
-          dryRun: true,
-          beforeCount: 1,
-          afterCount: 0,
-          missing: 0,
-          dmScopeRetired: 0,
-          modelRunPruned: 0,
-          pruned: 1,
-          capped: 0,
-          diskBudget: null,
-          wouldMutate: true,
         },
       ],
     });

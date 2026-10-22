@@ -1,5 +1,6 @@
 import { Buffer } from "node:buffer";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -35,7 +36,7 @@ import {
   isUnknownGatewayAgentError,
   resolveAgentIdForRequest,
 } from "./http-utils.js";
-import { resolveOpenAiCompatError } from "./openai-compat-errors.js";
+import { type OpenAiCompatError, resolveOpenAiCompatError } from "./openai-compat-errors.js";
 
 type OpenAiEmbeddingsHttpOptions = GatewayHttpRequestAuthOptions & {
   maxBodyBytes?: number;
@@ -57,6 +58,30 @@ type MemorySearchEmbeddingConfig = Pick<
   NonNullable<ReturnType<typeof resolveMemorySearchConfig>>,
   "local" | "remote" | "inputType" | "queryInputType" | "documentInputType"
 >;
+
+// Built only from the two sizes so provider URLs and response text stay in the Gateway log.
+function resolveEmbeddingDimensionsError(err: unknown): OpenAiCompatError | undefined {
+  const record = asOptionalRecord(err);
+  const expected = record?.expectedDimensions;
+  const actual = record?.actualDimensions;
+  if (
+    record?.code !== "INVALID_EMBEDDING_RESPONSE" ||
+    typeof expected !== "number" ||
+    typeof actual !== "number" ||
+    !Number.isSafeInteger(expected) ||
+    !Number.isSafeInteger(actual)
+  ) {
+    return undefined;
+  }
+  return {
+    status: 400,
+    error: {
+      message: `The embedding provider returned ${actual} dimensions, but ${expected} were requested. Omit \`dimensions\` and \`memory.search.outputDimensionality\`, or use a model and server that support them.`,
+      type: "invalid_request_error",
+      code: "embedding_dimensions_mismatch",
+    },
+  };
+}
 
 function encodeEmbeddingBase64(embedding: number[]): string {
   // OpenAI-compatible base64 embeddings are raw float32 bytes, not JSON.
@@ -304,7 +329,7 @@ export async function handleOpenAiEmbeddingsHttpRequest(
   } catch (err) {
     if (!abortController.signal.aborted && !res.writableEnded && !res.destroyed) {
       logWarn(`openai-compat: embeddings request failed: ${formatErrorMessage(err)}`);
-      const mapped = resolveOpenAiCompatError(err);
+      const mapped = resolveEmbeddingDimensionsError(err) ?? resolveOpenAiCompatError(err);
       sendJson(res, mapped?.status ?? 500, {
         error: mapped?.error ?? { message: "internal error", type: "api_error" },
       });

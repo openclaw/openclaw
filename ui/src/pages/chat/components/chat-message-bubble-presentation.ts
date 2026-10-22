@@ -16,7 +16,7 @@ import {
 } from "../../../lib/chat/tool-cards.ts";
 import { resolveToolDisplay } from "../../../lib/chat/tool-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { emptyLegacyContent as litNothing } from "../../../lit/solid-content.tsx";
+import { isProviderVoiceTranscript } from "../chat-assistant-reply.ts";
 import { isPendingSendMessage } from "../chat-thread-items.ts";
 import { workspaceResultConflictFromTranscript } from "../workspace-conflict.ts";
 import { readAsyncQuestions } from "./chat-async-question.ts";
@@ -30,7 +30,7 @@ import { type AttachmentItem, projectMessageMedia } from "./chat-message-media.t
 import { isSentPastedTextAttachment } from "./chat-pasted-text.ts";
 import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
-import { resolveCollapsedToolDetail } from "./chat-tool-cards.ts";
+import { resolveCollapsedToolDetail } from "./chat-tool-cards.solid.tsx";
 
 function messageVideoSlots(
   projection: Pick<
@@ -57,54 +57,34 @@ function imageMessageIdentity(message: unknown, sessionKey: string | undefined) 
     : { canonicalMessageKey: JSON.stringify([sessionKey, identity.id, identity.sequence]) };
 }
 
-export function prepareGroupedMessage(
-  preparation: ChatMessageRenderPreparation,
+export type MessageMediaOptions = Pick<
+  GroupedMessageOptions,
+  | "sessionKey"
+  | "agentId"
+  | "mediaPolicyKey"
+  | "connectionEpoch"
+  | "resourceBasePath"
+  | "assistantAttachmentAuthToken"
+  | "mediaOwner"
+  | "onRequestOpenImage"
+  | "onOpenImage"
+  | "resolveArtifactDownload"
+  | "getTurnVideoMessages"
+>;
+
+/** Shared by transcript bubbles and read-only attachment catalogs. */
+export function createMessageMediaOptions(
+  message: unknown,
   messageKey: string,
-  opts: GroupedMessageOptions,
-  onOpenSidebar?: (content: SidebarContent) => void,
+  opts: MessageMediaOptions,
+  projection: Pick<
+    ReturnType<typeof projectMessageMedia>,
+    "images" | "orderedContent" | "supplementalAttachments"
+  >,
 ) {
-  const disclosure = opts.assistantMessageDisclosure;
-  const { message, normalizedMessage, displayMarkdown, humanMentions } =
-    disclosure?.expanded && disclosure.message
-      ? prepareChatMessageRender(disclosure.message)
-      : preparation;
-  // SAFETY: The group render boundary supplies transcript message records; fields remain unknown.
-  const m = message as Record<string, unknown>;
-  const role = typeof m.role === "string" ? m.role : "unknown";
-  const sourceRole = normalizeRoleForGrouping(role);
-  const asyncQuestions = opts.asyncQuestions?.submit ? readAsyncQuestions(message) : null;
-  const normalizedRole = normalizeRoleForGrouping(normalizedMessage.role);
-  const workspaceConflict = workspaceResultConflictFromTranscript(message);
-
-  const isToolShell = normalizedRole === "tool";
-  const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
-
-  const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message) : [];
-  // Nested cards moved under their parent must not leave empty message shells.
-  const hasToolCards = toolCards.some((card) => opts.toolCardOverrides?.get(card) !== litNothing);
-  const {
-    images,
-    attachments: visibleAttachments,
-    expiredPairingQrCount,
-    nextPairingQrExpiresAt,
-    orderedContent,
-    supplementalImages,
-    supplementalAttachments,
-  } = projectMessageMedia(message, normalizedMessage.content);
-  const hasImages = images.length > 0;
-  const videoPreviews =
-    normalizedRole === "user"
-      ? visibleAttachments.filter(
-          (item): item is AttachmentItem =>
-            item.type === "attachment" && item.attachment.kind === "video",
-        )
-      : [];
-  const cardAttachments = visibleAttachments.filter(
-    (item) => item.type !== "attachment" || !videoPreviews.includes(item),
-  );
-  const hasUserFiles = normalizedRole === "user" && hasUserFileAttachments(cardAttachments);
+  const { images, orderedContent, supplementalAttachments } = projection;
   const messageId = readSessionMessageIdentity(message)?.id ?? undefined;
-  const imageRenderOptions = {
+  return {
     galleryImages: images,
     galleryVideos: (selected: AttachmentItem) => {
       const local = messageVideoSlots({ orderedContent, supplementalAttachments });
@@ -141,15 +121,69 @@ export function prepareGroupedMessage(
     messageId,
     agentId: opts.agentId,
     policyKey: opts.mediaPolicyKey,
-    ...(hasImages ? imageMessageIdentity(message, opts.sessionKey) : {}),
+    ...(images.length ? imageMessageIdentity(message, opts.sessionKey) : {}),
     connectionEpoch: opts.connectionEpoch,
     resourceBasePath: opts.resourceBasePath,
     authToken: opts.assistantAttachmentAuthToken,
-    onRequestUpdate: opts.onRequestUpdate,
+    mediaOwner: opts.mediaOwner,
     onRequestOpenImage: opts.onRequestOpenImage,
     onOpenImage: opts.onOpenImage,
     resolveArtifactDownload: opts.resolveArtifactDownload,
   };
+}
+
+export function prepareGroupedMessage(
+  preparation: ChatMessageRenderPreparation,
+  messageKey: string,
+  opts: GroupedMessageOptions,
+  onOpenSidebar?: (content: SidebarContent) => void,
+) {
+  const disclosure = opts.assistantMessageDisclosure;
+  const { message, normalizedMessage, displayMarkdown, humanMentions } =
+    disclosure?.expanded && disclosure.message
+      ? prepareChatMessageRender(disclosure.message)
+      : preparation;
+  // SAFETY: The group render boundary supplies transcript message records; fields remain unknown.
+  const m = message as Record<string, unknown>;
+  const role = typeof m.role === "string" ? m.role : "unknown";
+  const sourceRole = normalizeRoleForGrouping(role);
+  const asyncQuestions = opts.asyncQuestions?.submit ? readAsyncQuestions(message) : null;
+  const normalizedRole = normalizeRoleForGrouping(normalizedMessage.role);
+  const workspaceConflict = workspaceResultConflictFromTranscript(message);
+
+  const voiceTranscript = isProviderVoiceTranscript(message);
+  const isToolShell = normalizedRole === "tool";
+  const isStandaloneToolMessage = isStandaloneToolMessageForDisplay(message);
+
+  const toolCards = (opts.showToolCalls ?? true) ? extractToolCardsCached(message) : [];
+  // Nested cards moved under their parent must not leave empty message shells.
+  const hasToolCards = toolCards.some((card) => opts.toolCardOverrides?.get(card) !== null);
+  const {
+    images,
+    attachments: visibleAttachments,
+    expiredPairingQrCount,
+    nextPairingQrExpiresAt,
+    orderedContent,
+    supplementalImages,
+    supplementalAttachments,
+  } = projectMessageMedia(message, normalizedMessage.content);
+  const hasImages = images.length > 0;
+  const videoPreviews =
+    normalizedRole === "user"
+      ? visibleAttachments.filter(
+          (item): item is AttachmentItem =>
+            item.type === "attachment" && item.attachment.kind === "video",
+        )
+      : [];
+  const cardAttachments = visibleAttachments.filter(
+    (item) => item.type !== "attachment" || !videoPreviews.includes(item),
+  );
+  const hasUserFiles = normalizedRole === "user" && hasUserFileAttachments(cardAttachments);
+  const imageRenderOptions = createMessageMediaOptions(message, messageKey, opts, {
+    images,
+    orderedContent,
+    supplementalAttachments,
+  });
   const actionText = opts.messageActions?.markdown ?? displayMarkdown;
   const omittedMedia = normalizedMessage.content.filter((item) => item.type === "omitted_media");
   const assistantViewBlocks = normalizedMessage.content.filter((item) => item.type === "canvas");
@@ -182,7 +216,17 @@ export function prepareGroupedMessage(
   // Classify completed bare JSON before Markdown can interpret its literal values.
   const jsonResult = markdown && !opts.isStreaming ? parseMarkdownJson(markdown) : null;
 
+  const inlineComments =
+    normalizedRole === "user" &&
+    !markdown &&
+    !normalizedMessage.replyTarget &&
+    !hasImagesOrNotices &&
+    !hasToolCards &&
+    !asyncQuestions &&
+    visibleAttachments.length > 0 &&
+    visibleAttachments.every(isSentCommentAttachment);
   const onlyPreviewChips =
+    !inlineComments &&
     normalizedRole === "user" &&
     !markdown &&
     !normalizedMessage.replyTarget &&
@@ -197,11 +241,12 @@ export function prepareGroupedMessage(
     videoPreviews.length > 0 ||
     hasUserFiles ||
     (normalizedRole === "user" &&
+      !inlineComments &&
       cardAttachments.some(
         (item) => isSentCommentAttachment(item) || isSentPastedTextAttachment(item),
       ));
   const bubbleClasses = [
-    "chat-bubble",
+    voiceTranscript ? "chat-voice-transcript" : "chat-bubble",
     opts.firstBubbleKey === messageKey ? "chat-bubble--first" : "",
     transparentShell ? "chat-bubble--with-images" : "",
     onlyPreviewChips ? "chat-bubble--preview-chips-only" : "",
@@ -265,7 +310,8 @@ export function prepareGroupedMessage(
     : toolNames.length <= 3
       ? toolNames.join(", ")
       : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
-  const toolPreview = markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
+  const toolPreview =
+    isStandaloneToolMessage && markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw =
     singleToolDisplay && !markdown && !hasImages
       ? singleToolDisplay.label
@@ -300,6 +346,7 @@ export function prepareGroupedMessage(
     asyncQuestions,
     normalizedRole,
     workspaceConflict,
+    voiceTranscript,
     isStandaloneToolMessage,
     toolCards,
     hasToolCards,
@@ -311,6 +358,7 @@ export function prepareGroupedMessage(
     supplementalAttachments,
     videoPreviews,
     cardAttachments,
+    inlineComments,
     imageRenderOptions,
     actionText,
     omittedMedia,

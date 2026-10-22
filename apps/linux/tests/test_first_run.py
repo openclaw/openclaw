@@ -80,28 +80,32 @@ class OnboardingResourcesTests(unittest.TestCase):
                 self.assertFalse((staged.parent / "install-cli.sh").exists())
 
     def test_fixture_package_replaces_core_but_preserves_the_pinned_runtime(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            runtime = Path(temporary) / "desktop-runtime"
-            runtime.mkdir()
-            copied = runtime.parent / "debug/desktop-runtime"
-            copied.mkdir(parents=True)
-            (copied / "stale.js").touch()
-            package = runtime / "package"
-            package.mkdir()
-            (package / "old.js").write_text("old core")
-            (runtime / "manifest.json").write_text(json.dumps({
-                "revision": "pinned", "files": {"bin/bun": "runtime-hash", "package/old.js": "old-hash"},
-            }))
-            stage_onboarding_runtime(runtime)
-            manifest = json.loads((runtime / "manifest.json").read_text())
-            entry = "package/node_modules/openclaw/openclaw.mjs"
-            content = (Path(__file__).parent / "fixtures/onboarding-cli.mjs").read_bytes()
-            self.assertEqual(manifest, {"revision": "pinned", "files": {
-                "bin/bun": "runtime-hash", entry: hashlib.sha256(content).hexdigest(),
-            }})
-            self.assertEqual((runtime / entry).read_bytes(), b"OPENCLAW-BUN-RUNTIME-V1\n" + content)
-            self.assertFalse((package / "old.js").exists())
-            self.assertFalse(copied.exists())
+        for with_package in (False, True):
+            with self.subTest(with_package=with_package), tempfile.TemporaryDirectory() as temporary:
+                runtime = Path(temporary) / "desktop-runtime"
+                runtime.mkdir()
+                copied = runtime.parent / "debug/desktop-runtime"
+                copied.mkdir(parents=True)
+                (copied / "stale.js").touch()
+                package = runtime / "package"
+                files = {"bin/bun": "runtime-hash"}
+                if with_package:
+                    package.mkdir()
+                    (package / "old.js").write_text("old core")
+                    files["package/old.js"] = "old-hash"
+                (runtime / "manifest.json").write_text(json.dumps({
+                    "revision": "pinned", "files": files,
+                }))
+                stage_onboarding_runtime(runtime)
+                manifest = json.loads((runtime / "manifest.json").read_text())
+                entry = "package/node_modules/openclaw/openclaw.mjs"
+                content = (Path(__file__).parent / "fixtures/onboarding-cli.mjs").read_bytes()
+                self.assertEqual(manifest, {"revision": "pinned", "files": {
+                    "bin/bun": "runtime-hash", entry: hashlib.sha256(content).hexdigest(),
+                }})
+                self.assertEqual((runtime / entry).read_bytes(), b"OPENCLAW-BUN-RUNTIME-V1\n" + content)
+                self.assertFalse((package / "old.js").exists())
+                self.assertFalse(copied.exists())
 
     def test_missing_runtime_resources_fail_before_launch(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -3,7 +3,6 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveBoundAgentIdForSession } from "../agents/session-agent-binding.js";
 import { resolveCommandConversationResolution } from "../channels/conversation-resolution.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { ADMIN_SCOPE, isOperatorScope } from "../gateway/operator-scopes.js";
 import { logVerbose } from "../globals.js";
 import { withPluginCommandExecution } from "./command-execution-lock.js";
@@ -44,38 +43,6 @@ function sanitizeArgs(args: string | undefined): string | undefined {
     }
   }
   return sanitized;
-}
-
-function resolveBindingConversation(params: {
-  registry: PluginRegistry;
-  config: OpenClawConfig;
-  channel: string;
-  senderId?: string;
-  from?: string;
-  to?: string;
-  originatingTo?: string;
-  accountId?: string;
-  messageThreadId?: string | number;
-  threadParentId?: string;
-}) {
-  const channelPlugin = params.registry.channels.find(
-    (entry) => entry.plugin.id === params.channel,
-  )?.plugin;
-  if (!channelPlugin?.bindings?.resolveCommandConversation) {
-    return null;
-  }
-  return resolveCommandConversationResolution({
-    cfg: params.config,
-    plugin: channelPlugin,
-    channel: params.channel,
-    accountId: params.accountId,
-    threadId: params.messageThreadId,
-    threadParentId: params.threadParentId,
-    senderId: params.senderId,
-    originatingTo: params.originatingTo ?? params.from,
-    commandTo: params.to,
-    fallbackTo: params.to ?? params.from,
-  });
 }
 
 function buildRuntimeContext(
@@ -173,18 +140,21 @@ export async function executeRegisteredPluginCommand(
     }
   }
 
-  const bindingConversation = resolveBindingConversation({
-    registry,
-    config,
-    channel,
-    senderId,
-    from: params.from,
-    to: params.to,
-    originatingTo: params.originatingTo,
-    accountId: params.accountId,
-    messageThreadId: params.messageThreadId,
-    threadParentId: params.threadParentId,
-  });
+  const channelPlugin = registry.channels.find((entry) => entry.plugin.id === channel)?.plugin;
+  const bindingConversation = channelPlugin?.bindings?.resolveCommandConversation
+    ? resolveCommandConversationResolution({
+        cfg: config,
+        plugin: channelPlugin,
+        channel,
+        accountId: params.accountId,
+        threadId: params.messageThreadId,
+        threadParentId: params.threadParentId,
+        senderId,
+        originatingTo: params.originatingTo ?? params.from,
+        commandTo: params.to,
+        fallbackTo: params.to ?? params.from,
+      })
+    : null;
   const trustedReservedOwner =
     isTrustedReservedCommandOwner(command) &&
     command.ownership === "reserved" &&
@@ -280,16 +250,12 @@ export async function executeRegisteredPluginCommand(
       };
     }
     const result = execution.value;
-    logVerbose(
-      `Plugin command /${command.name} executed successfully for ${senderId || "unknown"}`,
-    );
     if (!result || typeof result !== "object") {
-      logVerbose(`Plugin command /${command.name} returned no reply payload`);
       return {};
     }
     return result;
-  } catch (error) {
-    logVerbose(`Plugin command /${command.name} error: ${(error as Error).message}`);
+  } catch {
+    logVerbose(`Plugin command /${command.name} execution failed (plugin=${command.pluginId})`);
     return { text: "⚠️ Command failed. Please try again later." };
   } finally {
     commandInvocationAbort.abort("command invocation closed");

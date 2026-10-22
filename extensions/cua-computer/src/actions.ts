@@ -1,5 +1,13 @@
 import type { CuaLastFrame } from "./frame.js";
 
+export const CLICK_ACTIONS = {
+  left_click: { button: "left", count: 1 },
+  right_click: { button: "right", count: 1 },
+  middle_click: { button: "middle", count: 1 },
+  double_click: { button: "left", count: 2 },
+  triple_click: { button: "left", count: 3 },
+} as const;
+
 const MODIFIER_ALIASES = new Map<string, string>([
   ["ctrl", "ctrl"],
   ["control", "ctrl"],

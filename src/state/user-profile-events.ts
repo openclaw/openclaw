@@ -1,16 +1,18 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { stageSqliteTransactionState } from "../infra/sqlite-post-commit.js";
-import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
+import { getAdmittedSqlSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { isStateSchemaVersionAtLeast } from "./openclaw-state-db-admission.js";
 import type { OpenClawStateDatabaseReadAdmission } from "./openclaw-state-db-async-lifecycle.js";
 import {
   captureOpenClawStateDatabaseReadAdmission,
   registerOpenClawStateDatabaseLifecycleListener,
   registerOpenClawStateDatabaseAsyncResource,
 } from "./openclaw-state-db-cache.js";
+import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import { readProfileAuthority, type ProfileAuthorityDescriptor } from "./user-profile-authority.js";
 import type { UserProfileMutationChanges } from "./user-profile-mutation.js";
 import type { UserProfileEmailBinding, UserProfilesDatabase } from "./user-profiles.types.js";
@@ -211,11 +213,11 @@ export function publishUserProfileAuthorityChange(
   ...profileIds: string[]
 ): void {
   // Native and worker mutations retire recovery custody in their original transaction.
-  const schema = profileIds.length ? getAdmittedSqliteSchemaFacts(db) : undefined;
+  const schema = profileIds.length ? getAdmittedSqlSchemaFacts(db) : undefined;
   if (profileIds.length && !schema) {
     throw new Error("Profile authority mutation requires admitted schema facts");
   }
-  if (schema && schema.userVersion >= 19 && schema.tables.has("user_profile_identities")) {
+  if (schema && isStateSchemaVersionAtLeast(db, 19) && tableExists(db, "user_profile_identities")) {
     executeSqliteQuerySync(
       db,
       getNodeSqliteKysely<UserProfilesDatabase>(db)
@@ -388,7 +390,6 @@ function publishAuthorityStoreChange(
   };
   if (
     !stageSqliteTransactionState(db, {
-      stage: () => {},
       // Native callbacks keep their committed facts until the physical COMMIT attempt.
       prepareCommit: () => {
         fence ??= fenceAuthorityEntries(store, entries, false);
@@ -540,8 +541,6 @@ export function stageUserProfileEmailBindingChange(
   binding: UserProfileEmailBinding | null,
 ): void {
   stageSqliteTransactionState(db, {
-    stage: () => {},
-    rollback: () => {},
     commit: () => {
       changes.bindingRevision += 1;
       for (const listener of changes.bindingListeners) {

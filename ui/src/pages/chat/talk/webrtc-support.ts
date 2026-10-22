@@ -41,7 +41,6 @@ export type RealtimeServerEvent = {
 };
 
 export type RealtimeTalkCompletedToolCall = {
-  itemId?: string;
   name: string;
   callId: string;
   args: string;
@@ -62,12 +61,11 @@ export function* realtimeTalkCompletedToolCalls(
     ) {
       continue;
     }
-    const itemId = typeof output.id === "string" ? output.id.trim() || undefined : undefined;
     const callId = typeof output.call_id === "string" ? output.call_id.trim() : "";
     const name = typeof output.name === "string" ? output.name.trim() : "";
     const args = typeof output.arguments === "string" ? output.arguments : "";
     if (callId && name && args.trim()) {
-      yield { itemId, callId, name, args };
+      yield { callId, name, args };
     }
   }
 }

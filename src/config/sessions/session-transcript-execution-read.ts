@@ -93,19 +93,11 @@ export function runLockedSessionTranscriptRead<T>(
 
 /** Ordinary reads use WAL snapshots; an active transcript lock lends its ordered connection. */
 export function createPreparedSessionTranscriptReads(params: {
-  claim: AgentDatabaseGenerationClaim;
   expectedIdentity: DatabasePathIdentity;
   assertCurrent: () => void;
   reader: PreparedSessionTranscriptReads;
 }): PreparedSessionTranscriptReads {
-  const { claim, expectedIdentity } = params;
-  const assertCurrent = () => {
-    params.assertCurrent();
-    claim.assertCurrent();
-    if (`file:${claim.identity}` !== expectedIdentity.key) {
-      throw new Error("Transcript reader belongs to another prepared database generation");
-    }
-  };
+  const { expectedIdentity } = params;
   const read = async <T>(
     operation: (
       worker: AgentDatabaseExecutionScope,
@@ -114,24 +106,20 @@ export function createPreparedSessionTranscriptReads(params: {
     signal?: AbortSignal,
   ): Promise<T> => {
     signal?.throwIfAborted();
-    assertCurrent();
+    params.assertCurrent();
     const locked = findLockedTranscriptReads(expectedIdentity);
     if (locked) {
       return locked.queue(async () => {
         signal?.throwIfAborted();
-        assertCurrent();
+        params.assertCurrent();
         locked.assertCurrent();
         locked.claim.assertCurrent();
-        if (
-          locked.claim.identity !== claim.identity ||
-          locked.claim.incarnation !== claim.incarnation
-        ) {
+        if (`file:${locked.claim.identity}` !== expectedIdentity.key) {
           throw new Error("Transcript reader belongs to another locked database generation");
         }
         const result = await operation(locked.worker);
         signal?.throwIfAborted();
         locked.assertCurrent();
-        assertCurrent();
         if (!result.ok) {
           throw decodeSessionTranscriptWorkerReadError(result.error);
         }
@@ -140,7 +128,6 @@ export function createPreparedSessionTranscriptReads(params: {
     }
     const result = await snapshot();
     signal?.throwIfAborted();
-    assertCurrent();
     return result;
   };
   const reader =

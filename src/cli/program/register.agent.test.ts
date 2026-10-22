@@ -94,18 +94,29 @@ describe("agent command registration", () => {
     );
   });
 
-  it.each([{ args: "agent --timeout 30 exec fix --timeout 120".split(" "), timeout: "120" }])(
-    "resolves parent and leaf exec options for $args",
-    async ({ args, timeout }) => {
-      await runCli(args);
-      expect(agentExecCommandMock).toHaveBeenCalledWith(
-        "fix",
-        expect.objectContaining({ timeout }),
-        runtime,
-      );
-      expect(agentCliCommandMock).not.toHaveBeenCalled();
+  it.each([
+    {
+      args: [
+        ..."agent --timeout 30 exec fix --timeout 120".split(" "),
+        "--config-override",
+        '{"tools":{"deny":["exec"]}}',
+        "--config-override",
+        '{"tools":{"deny":[]}}',
+      ],
+      timeout: "120",
     },
-  );
+  ])("resolves parent and leaf exec options for $args", async ({ args, timeout }) => {
+    await runCli(args);
+    expect(agentExecCommandMock).toHaveBeenCalledWith(
+      "fix",
+      expect.objectContaining({
+        timeout,
+        configOverride: ['{"tools":{"deny":["exec"]}}', '{"tools":{"deny":[]}}'],
+      }),
+      runtime,
+    );
+    expect(agentCliCommandMock).not.toHaveBeenCalled();
+  });
 
   it.each([
     {
@@ -127,7 +138,6 @@ describe("agent command registration", () => {
       await runCli(["agents", "add", ...args]);
       expect(mocks.agentsAddCommandMock).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining(options),
-        runtime,
         { hasAutomationFlags },
       );
       expect(mocks.agentsAddCommandMock.mock.calls[0]?.[0].workspace).toBe(workspace);
@@ -186,11 +196,7 @@ describe("agent command registration", () => {
     "dispatches agents %s",
     async (args, command, options, operation?: "bind" | "unbind") => {
       await runCli(["agents", ...(args ? args.split(" ") : [])]);
-      expect(command).toHaveBeenCalledExactlyOnceWith(
-        ...(operation ? [operation] : []),
-        options,
-        runtime,
-      );
+      expect(command).toHaveBeenCalledExactlyOnceWith(...(operation ? [operation] : []), options);
     },
   );
 

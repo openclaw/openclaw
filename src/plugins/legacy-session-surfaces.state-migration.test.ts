@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { autoMigrateLegacyState } from "../infra/state-migrations.doctor.js";
-import { resetAutoMigrateLegacyStateDirForTest } from "../infra/state-migrations.state-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { prepareLegacySessionSurfaces } from "./legacy-session-surfaces.js";
@@ -19,7 +18,6 @@ afterEach(() => {
   vi.unstubAllEnvs();
   clearPluginRegistryLoadCache();
   clearPluginMetadataLifecycleCaches();
-  resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(tempDirs);
 });

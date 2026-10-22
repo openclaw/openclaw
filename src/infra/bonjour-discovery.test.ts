@@ -1,6 +1,6 @@
 // Covers Bonjour gateway beacon parsing and endpoint resolution.
-import { describe, expect, it, vi } from "vitest";
-import type { runCommandWithTimeout } from "../process/exec.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as processExec from "../process/exec.js";
 import {
   discoverGatewayBeacons,
   type GatewayBonjourBeacon,
@@ -9,7 +9,9 @@ import {
 
 const WIDE_AREA_DOMAIN = "openclaw.internal.";
 
-function commandResult(stdout: string): Awaited<ReturnType<typeof runCommandWithTimeout>> {
+function commandResult(
+  stdout: string,
+): Awaited<ReturnType<typeof processExec.runCommandWithTimeout>> {
   return { stdout, stderr: "", code: 0, signal: null, killed: false, termination: "exit" };
 }
 
@@ -34,12 +36,22 @@ function getOnlyBeacon(beacons: readonly GatewayBonjourBeacon[]): GatewayBonjour
 }
 
 describe("bonjour-discovery", () => {
+  beforeEach(() => {
+    vi.stubEnv("OPENCLAW_WIDE_AREA_DOMAIN", "");
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllEnvs();
+  });
+
   it("discovers beacons on darwin across local + wide-area domains", async () => {
-    const calls: Array<{ argv: string[]; timeoutMs: number }> = [];
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const calls: Array<{ argv: string[]; timeoutMs?: number }> = [];
     const studioInstance = "Peter’s Mac Studio Gateway";
 
-    const run = vi.fn(async (argv: string[], options: { timeoutMs: number }) => {
-      calls.push({ argv, timeoutMs: options.timeoutMs });
+    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+      calls.push({ argv, timeoutMs: typeof options === "number" ? options : options.timeoutMs });
       const domain = argv[3] ?? "";
 
       if (argv[0] === "dns-sd" && argv[1] === "-B") {
@@ -94,10 +106,8 @@ describe("bonjour-discovery", () => {
     });
 
     const beacons = await discoverGatewayBeacons({
-      platform: "darwin",
       timeoutMs: 1234,
       wideAreaDomain: WIDE_AREA_DOMAIN,
-      run: run as unknown as typeof runCommandWithTimeout,
     });
 
     expect(beacons).toHaveLength(3);
@@ -113,57 +123,80 @@ describe("bonjour-discovery", () => {
     expect([...new Set(browseCalls.map((c) => c.timeoutMs))]).toEqual([1234]);
   });
 
+  it("shares the caller deadline across DNS-SD resolutions and fallback discovery", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    let now = 0;
+    vi.spyOn(performance, "now").mockImplementation(() => now);
+    const budgets: number[] = [];
+    const run = vi
+      .spyOn(processExec, "runCommandWithTimeout")
+      .mockImplementation(async (argv, options) => {
+        const timeoutMs = typeof options === "number" ? options : options.timeoutMs;
+        if (argv[1] === "-B") {
+          if (argv[3] !== "local.") {
+            return commandResult("");
+          }
+          now = 100;
+          return commandResult(
+            ["First", "Second", "Third"]
+              .map((name) => `Add 2 3 local. _openclaw-gw._tcp. ${name}`)
+              .join("\n"),
+          );
+        }
+        if (argv[1] === "-L") {
+          budgets.push(timeoutMs ?? 0);
+          now += 200;
+          return commandResult(`${argv[2]} can be reached at gateway.local:18789`);
+        }
+        throw new Error(`unexpected command: ${argv.join(" ")}`);
+      });
+
+    const beacons = await discoverGatewayBeacons({
+      timeoutMs: 500,
+      deadlineMs: 500,
+      wideAreaDomain: WIDE_AREA_DOMAIN,
+    });
+
+    expect(beacons.map((beacon) => beacon.instanceName)).toEqual(["First", "Second"]);
+    expect(budgets).toEqual([400, 200]);
+    expect(run.mock.calls.every(([argv]) => argv[0] === "dns-sd")).toBe(true);
+  });
+
   it.each(["darwin", "linux"] as const)(
     "rejects invalid advertised ports on %s",
     async (platform) => {
-      const run = vi.fn(async (argv: string[]) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv) => {
         const domain = argv[3] ?? "";
         const txt =
           "txtvers=1 displayName=Broken gatewayPort=70000 sshPort=22x gatewayTls=yes gatewayTlsSha256=synthetic role=gateway transport=gateway";
         if (argv[0] === "avahi-browse") {
-          return {
-            stdout: `= eth0 IPv4 Broken Gateway _openclaw-gw._tcp local.\n hostname = [broken.local]\n port = [70000]\n txt = [${txt
+          return commandResult(
+            `= eth0 IPv4 Broken Gateway _openclaw-gw._tcp local.\n hostname = [broken.local]\n port = [70000]\n txt = [${txt
               .split(" ")
               .map((token) => `"${token}"`)
               .join(" ")}]`,
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-          };
+          );
         }
         if (argv[0] === "dns-sd" && argv[1] === "-B" && domain === "local.") {
-          return {
-            stdout: ["Add 2 3 local. _openclaw-gw._tcp. Broken Gateway", ""].join("\n"),
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-          };
+          return commandResult(["Add 2 3 local. _openclaw-gw._tcp. Broken Gateway", ""].join("\n"));
         }
 
         if (argv[0] === "dns-sd" && argv[1] === "-L") {
-          return {
-            stdout: [
+          return commandResult(
+            [
               "Broken Gateway._openclaw-gw._tcp. can be reached at broken.local:18789abc",
               txt,
               "",
             ].join("\n"),
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-          };
+          );
         }
 
         throw new Error(`unexpected argv: ${argv.join(" ")}`);
       });
 
       const beacons = await discoverGatewayBeacons({
-        platform,
         timeoutMs: 800,
-        domains: ["local."],
-        run: run as unknown as typeof runCommandWithTimeout,
       });
 
       const beacon = getOnlyBeacon(beacons);
@@ -182,13 +215,14 @@ describe("bonjour-discovery", () => {
   );
 
   it("falls back to tailnet DNS probing for wide-area when split DNS is not configured", async () => {
-    const calls: Array<{ argv: string[]; timeoutMs: number }> = [];
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    const calls: Array<{ argv: string[]; timeoutMs?: number }> = [];
     const zone = WIDE_AREA_DOMAIN.replace(/\.$/, "");
     const serviceBase = `_openclaw-gw._tcp.${zone}`;
     const studioService = `studio-gateway.${serviceBase}`;
 
-    const run = vi.fn(async (argv: string[], options: { timeoutMs: number }) => {
-      calls.push({ argv, timeoutMs: options.timeoutMs });
+    vi.spyOn(processExec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+      calls.push({ argv, timeoutMs: typeof options === "number" ? options : options.timeoutMs });
       const cmd = argv[0];
 
       if (cmd === "dns-sd" && argv[1] === "-B") {
@@ -239,11 +273,8 @@ describe("bonjour-discovery", () => {
     });
 
     const beacons = await discoverGatewayBeacons({
-      platform: "darwin",
       timeoutMs: 1200,
-      domains: [WIDE_AREA_DOMAIN],
       wideAreaDomain: WIDE_AREA_DOMAIN,
-      run: run as unknown as typeof runCommandWithTimeout,
     });
 
     const beacon = getOnlyBeacon(beacons);
@@ -259,35 +290,5 @@ describe("bonjour-discovery", () => {
 
     expect(calls.map((c) => c.argv.slice(0, 2).join(" "))).toContain("tailscale status");
     expect(calls.map((c) => c.argv[0])).toContain("dig");
-  });
-
-  it("normalizes domains and respects domains override", async () => {
-    const calls: string[][] = [];
-    const run = vi.fn(async (argv: string[]) => {
-      calls.push(argv);
-      return commandResult("");
-    });
-
-    await discoverGatewayBeacons({
-      platform: "darwin",
-      timeoutMs: 1,
-      domains: ["local", "openclaw.internal"],
-      run: run as unknown as typeof runCommandWithTimeout,
-    });
-
-    const browseDomains = calls.filter((c) => c[1] === "-B").map((c) => c[3]);
-    expect(browseDomains).toContain("local.");
-    expect(browseDomains).toContain("openclaw.internal.");
-
-    calls.length = 0;
-    await discoverGatewayBeacons({
-      platform: "darwin",
-      timeoutMs: 1,
-      domains: ["local."],
-      run: run as unknown as typeof runCommandWithTimeout,
-    });
-
-    expect(calls.reduce((count, c) => count + (c[1] === "-B" ? 1 : 0), 0)).toBe(1);
-    expect(calls.find((c) => c[1] === "-B")?.[3]).toBe("local.");
   });
 });

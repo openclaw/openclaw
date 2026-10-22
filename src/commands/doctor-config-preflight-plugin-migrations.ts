@@ -52,6 +52,7 @@ export function createDoctorPluginMigrationPreparation(params: {
   measure: ConfigSnapshotReadMeasure;
   runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner;
   doctorOnlyStateMigrations: boolean;
+  integrityCheck?: "quick" | "full";
   log?: MigrationLogger;
 }) {
   const shouldDeferInstallation = () =>
@@ -231,6 +232,7 @@ export function createDoctorPluginMigrationPreparation(params: {
               config,
               env: params.env(),
               log: params.log,
+              integrityCheck: params.integrityCheck,
               ...(params.doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
             }),
           ),

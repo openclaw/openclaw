@@ -285,7 +285,7 @@ describe("AppSidebar session indicators", () => {
   });
 
   it.each(["running"] as const)(
-    "presents main-session %s activity once in the agent header with draft and outbox badges",
+    "presents main-session %s activity once around the agent avatar",
     async (status) => {
       const mainKey = "agent:main:main";
       const workingKey = "agent:main:working";
@@ -319,19 +319,21 @@ describe("AppSidebar session indicators", () => {
       await settleRoster(sidebar);
 
       const home = sidebar.querySelector('[data-agent-group="main"] .sidebar-agent-roster__header');
-      const homeRing = home?.querySelector(".session-glyph--running .session-glyph__ring");
+      const homeRing = home?.querySelector(
+        ".sidebar-agent-roster__avatar .session-glyph--running .session-glyph__ring",
+      );
       expect(home?.querySelector(".sidebar-agent-roster__avatar")).not.toBeNull();
       expect(homeRing).not.toBeNull();
       expect(home?.querySelectorAll(".session-run-spinner")).toHaveLength(0);
-      expect(home?.querySelectorAll('[aria-label="Unread"]')).toHaveLength(1);
+      expect(home?.querySelectorAll('[aria-label="Unread"]')).toHaveLength(0);
       const activityLabel = "Active run";
       expect(homeRing?.getAttribute("aria-label")).toBe(activityLabel);
       expect(homeRing?.classList.contains("session-glyph__ring--queued")).toBe(false);
       expect(
         home?.querySelectorAll(`.session-glyph__ring[aria-label="${activityLabel}"]`),
       ).toHaveLength(1);
-      expect(home?.querySelector(".session-row-badge--attention")?.textContent).toContain("2");
-      expect(home?.querySelector(".session-row-badge--draft")).not.toBeNull();
+      expect(home?.querySelector(".session-row-badge--attention")).toBeNull();
+      expect(home?.querySelector(".session-row-badge--draft")).toBeNull();
     },
   );
 
@@ -455,7 +457,7 @@ describe("AppSidebar session indicators", () => {
       numbers: [2],
       state: "merged",
     });
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await sidebar.updateComplete;
 
     await waitForFast(() => {

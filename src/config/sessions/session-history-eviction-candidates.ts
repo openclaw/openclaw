@@ -1,3 +1,4 @@
+import { engineTextHexSql } from "../../infra/database-engine/text-bytes.js";
 import {
   executeSqliteQuerySync,
   iterateSqliteQuerySync,
@@ -107,7 +108,10 @@ export function collectSessionAdmissionReferences(params: {
     params.database.db,
     db
       .selectFrom("session_nodes")
-      .select(["session_key", db.fn<string>("hex", ["session_key"]).as("key_bytes")]),
+      .select((eb) => [
+        "session_key",
+        engineTextHexSql(params.database.db, eb.ref("session_key")).as("key_bytes"),
+      ]),
   )) {
     if (normalizedAdmissionKeys.has(normalizeStoreSessionKey(row.session_key))) {
       admittedKeyBytes.push(row.key_bytes);
@@ -127,10 +131,12 @@ export function collectSessionAdmissionReferences(params: {
             db
               .selectFrom("session_nodes")
               .select("session_key")
-              .where(
-                db.fn<string>("hex", ["session_key"]),
-                "in",
-                sqliteStringSet(admittedKeyBytes),
+              .where((eb) =>
+                eb(
+                  engineTextHexSql(params.database.db, eb.ref("session_key")),
+                  "in",
+                  sqliteStringSet(admittedKeyBytes),
+                ),
               ),
           ),
       )

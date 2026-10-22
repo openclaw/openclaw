@@ -1,5 +1,3 @@
-// Workspace skills bridge tests cover read-only skill mounts across local and
-// remote sandbox filesystem bridges.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -15,6 +13,38 @@ import { createLocalRemoteShellScriptRunner } from "./remote-fs-bridge.test-help
 // without an SSH server.
 const runRemoteShellScript: RemoteShellSandboxHandle["runRemoteShellScript"] =
   createLocalRemoteShellScriptRunner({ shellArg0: "openclaw-test" });
+
+async function createBridge(
+  workspaceDir: string,
+  remoteWorkspaceDir = workspaceDir,
+  skillsWorkspaceDir?: string,
+) {
+  const localRoot = await fs.realpath(workspaceDir);
+  const remoteRoot = await fs.realpath(remoteWorkspaceDir);
+  const bridge = createRemoteShellSandboxFsBridge({
+    sandbox: createSandbox({
+      workspaceDir: localRoot,
+      agentWorkspaceDir: localRoot,
+      skillsWorkspaceDir: skillsWorkspaceDir && (await fs.realpath(skillsWorkspaceDir)),
+    }),
+    runtime: {
+      remoteWorkspaceDir: remoteRoot,
+      remoteAgentWorkspaceDir: remoteRoot,
+      runRemoteShellScript,
+    },
+  });
+  return { bridge, remoteRoot };
+}
+
+async function expectWriteRejected(
+  bridge: ReturnType<typeof createRemoteShellSandboxFsBridge>,
+  cwd: string,
+  filePath: string,
+  targetPath = filePath,
+) {
+  await expect(bridge.writeFile({ filePath, cwd, data: "# Demo\n" })).rejects.toThrow(/read-only/);
+  await expect(fs.stat(path.join(cwd, targetPath))).rejects.toMatchObject({ code: "ENOENT" });
+}
 
 describe("workspace skills bridge mount policy", () => {
   it("resolves workspace skill roots as read-only", async () => {
@@ -64,53 +94,17 @@ describe("workspace skills bridge mount policy", () => {
         await fs.mkdir(workspaceDir, { recursive: true });
         await fs.mkdir(path.join(remoteWorkspaceDir, "skills", "demo"), { recursive: true });
         await fs.mkdir(path.join(skillsWorkspaceDir, "skills", "demo"), { recursive: true });
-        const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
-        const canonicalSkillsWorkspaceDir = await fs.realpath(skillsWorkspaceDir);
-        const canonicalRemoteWorkspaceDir = await fs.realpath(remoteWorkspaceDir);
-
-        const bridge = createRemoteShellSandboxFsBridge({
-          sandbox: createSandbox({
-            workspaceDir: canonicalWorkspaceDir,
-            agentWorkspaceDir: canonicalWorkspaceDir,
-            skillsWorkspaceDir: canonicalSkillsWorkspaceDir,
-          }),
-          runtime: {
-            remoteWorkspaceDir: canonicalRemoteWorkspaceDir,
-            remoteAgentWorkspaceDir: canonicalRemoteWorkspaceDir,
-            runRemoteShellScript,
-          },
-        });
-
-        await expect(
-          bridge.writeFile({
-            filePath: "skills/demo/SKILL.md",
-            cwd: canonicalRemoteWorkspaceDir,
-            data: "# Demo\n",
-          }),
-        ).rejects.toThrow(/read-only/);
-        await expect(
-          fs.stat(path.join(canonicalRemoteWorkspaceDir, "skills", "demo", "SKILL.md")),
-        ).rejects.toMatchObject({ code: "ENOENT" });
-
-        await expect(
-          bridge.writeFile({
-            filePath: ".openclaw/sandbox-skills/skills/demo/SKILL.md",
-            cwd: canonicalRemoteWorkspaceDir,
-            data: "# Demo\n",
-          }),
-        ).rejects.toThrow(/read-only/);
-        await expect(
-          fs.stat(
-            path.join(
-              canonicalRemoteWorkspaceDir,
-              ".openclaw",
-              "sandbox-skills",
-              "skills",
-              "demo",
-              "SKILL.md",
-            ),
-          ),
-        ).rejects.toMatchObject({ code: "ENOENT" });
+        const { bridge, remoteRoot } = await createBridge(
+          workspaceDir,
+          remoteWorkspaceDir,
+          skillsWorkspaceDir,
+        );
+        await expectWriteRejected(bridge, remoteRoot, "skills/demo/SKILL.md");
+        await expectWriteRejected(
+          bridge,
+          remoteRoot,
+          ".openclaw/sandbox-skills/skills/demo/SKILL.md",
+        );
       });
     },
   );
@@ -123,26 +117,13 @@ describe("workspace skills bridge mount policy", () => {
         const remoteWorkspaceDir = path.join(stateDir, "remote-workspace");
         await fs.mkdir(path.join(workspaceDir, "skills", "demo"), { recursive: true });
         await fs.mkdir(path.join(remoteWorkspaceDir, "skills", "demo"), { recursive: true });
-        const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
-        const canonicalRemoteWorkspaceDir = await fs.realpath(remoteWorkspaceDir);
-
-        const bridge = createRemoteShellSandboxFsBridge({
-          sandbox: createSandbox({
-            workspaceDir: canonicalWorkspaceDir,
-            agentWorkspaceDir: canonicalWorkspaceDir,
-          }),
-          runtime: {
-            remoteWorkspaceDir: canonicalRemoteWorkspaceDir,
-            remoteAgentWorkspaceDir: canonicalRemoteWorkspaceDir,
-            runRemoteShellScript,
-          },
-        });
+        const { bridge, remoteRoot } = await createBridge(workspaceDir, remoteWorkspaceDir);
 
         await expect(
-          bridge.mkdirp({ filePath: "skills/demo/generated", cwd: canonicalRemoteWorkspaceDir }),
+          bridge.mkdirp({ filePath: "skills/demo/generated", cwd: remoteRoot }),
         ).rejects.toThrow(/read-only/);
         await expect(
-          fs.stat(path.join(canonicalRemoteWorkspaceDir, "skills", "demo", "generated")),
+          fs.stat(path.join(remoteRoot, "skills", "demo", "generated")),
         ).rejects.toMatchObject({ code: "ENOENT" });
       });
     },
@@ -155,24 +136,12 @@ describe.runIf(process.platform === "linux")("workspace skills bridge (GNU shell
     await withTempDir("openclaw-skills-remote-absent-", async (stateDir) => {
       const workspaceDir = path.join(stateDir, "workspace");
       await fs.mkdir(workspaceDir, { recursive: true });
-      const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
-
-      const bridge = createRemoteShellSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir: canonicalWorkspaceDir,
-          agentWorkspaceDir: canonicalWorkspaceDir,
-        }),
-        runtime: {
-          remoteWorkspaceDir: canonicalWorkspaceDir,
-          remoteAgentWorkspaceDir: canonicalWorkspaceDir,
-          runRemoteShellScript,
-        },
-      });
+      const { bridge, remoteRoot } = await createBridge(workspaceDir);
 
       await bridge.writeFile({ filePath: "skills/new.txt", data: "created" });
-      await expect(
-        fs.readFile(path.join(canonicalWorkspaceDir, "skills", "new.txt"), "utf8"),
-      ).resolves.toBe("created");
+      await expect(fs.readFile(path.join(remoteRoot, "skills", "new.txt"), "utf8")).resolves.toBe(
+        "created",
+      );
     });
   });
 
@@ -185,31 +154,8 @@ describe.runIf(process.platform === "linux")("workspace skills bridge (GNU shell
       await fs.mkdir(workspaceDir, { recursive: true });
       await fs.mkdir(path.join(remoteWorkspaceDir, "skills", "demo"), { recursive: true });
       await fs.symlink("skills", path.join(remoteWorkspaceDir, "link"), "dir");
-      const canonicalWorkspaceDir = await fs.realpath(workspaceDir);
-      const canonicalRemoteWorkspaceDir = await fs.realpath(remoteWorkspaceDir);
-
-      const bridge = createRemoteShellSandboxFsBridge({
-        sandbox: createSandbox({
-          workspaceDir: canonicalWorkspaceDir,
-          agentWorkspaceDir: canonicalWorkspaceDir,
-        }),
-        runtime: {
-          remoteWorkspaceDir: canonicalRemoteWorkspaceDir,
-          remoteAgentWorkspaceDir: canonicalRemoteWorkspaceDir,
-          runRemoteShellScript,
-        },
-      });
-
-      await expect(
-        bridge.writeFile({
-          filePath: "link/demo/SKILL.md",
-          cwd: canonicalRemoteWorkspaceDir,
-          data: "# Demo\n",
-        }),
-      ).rejects.toThrow(/read-only/);
-      await expect(
-        fs.stat(path.join(canonicalRemoteWorkspaceDir, "skills", "demo", "SKILL.md")),
-      ).rejects.toMatchObject({ code: "ENOENT" });
+      const { bridge, remoteRoot } = await createBridge(workspaceDir, remoteWorkspaceDir);
+      await expectWriteRejected(bridge, remoteRoot, "link/demo/SKILL.md", "skills/demo/SKILL.md");
     });
   });
 });

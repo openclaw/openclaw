@@ -3,10 +3,20 @@ import {
   extractAssistantTextForPhase,
   resolveAssistantMessagePhase,
 } from "../../../../src/shared/chat-message-content.js";
+import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 import { extractMessageMediaText } from "./components/chat-message-media.ts";
 import { readLiveTerminalDisposition } from "./terminal-message-identity.ts";
+
+/** Host-stamped provider speech is a call transcript, not a backing-agent answer. */
+export function isProviderVoiceTranscript(message: unknown): boolean {
+  const record = asRecord(message);
+  return (
+    record?.role === "assistant" &&
+    asRecord(record["__openclaw"])?.voiceTranscript === "provider-owned"
+  );
+}
 
 export function assistantMessageIsInterrupted(message: unknown): boolean {
   const record = asRecord(message);
@@ -55,6 +65,7 @@ export function assistantMessageCanOwnTurnActions(message: unknown, explicitOnly
   if (
     !(extractTextCached(message)?.trim() || extractMessageMediaText(message)) ||
     assistantMessageIsInterrupted(message) ||
+    isProviderVoiceTranscript(message) ||
     phase === "commentary" ||
     stopReason === "toolUse" ||
     stopReason === "error" ||
@@ -63,4 +74,21 @@ export function assistantMessageCanOwnTurnActions(message: unknown, explicitOnly
     return false;
   }
   return !explicitOnly || phase === "final_answer" || stopReason === "stop";
+}
+
+export function assistantMessageKind(
+  message: unknown,
+  visibleContent: MessageGroup["visibleContent"],
+) {
+  if (isProviderVoiceTranscript(message)) {
+    return "voice-transcript";
+  }
+  return (
+    resolveAssistantReplyPhase(message) ??
+    (asRecord(message)?.stopReason === "toolUse"
+      ? "commentary"
+      : visibleContent === "none"
+        ? "activity"
+        : "reply")
+  );
 }

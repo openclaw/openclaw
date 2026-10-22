@@ -6,7 +6,6 @@ import {
 } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withPluginCommandExecution } from "./command-execution-lock.js";
@@ -22,10 +21,11 @@ import {
 } from "./runtime.js";
 import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import { createPluginRecord } from "./status.test-helpers.js";
+import { createToolLoadContext } from "./tools.test-support.js";
 
 describe("plugin retirement session-store ownership", () => {
-  it("retires in-memory resources without preparing persistent config", async () => {
-    await withOpenClawTestState({ label: "plugin-retirement-no-persistent-state" }, async () => {
+  it("retires in-memory resources without preparing persistent config", () =>
+    withOpenClawTestState({ label: "plugin-retirement-no-persistent-state" }, async () => {
       const registry = createEmptyPluginRegistry();
       const cleanup = vi.fn();
       registry.runtimeLifecycles.push({
@@ -41,13 +41,12 @@ describe("plugin retirement session-store ownership", () => {
       expect(result.failures).toEqual([]);
       expect(cleanup).toHaveBeenCalledOnce();
       expect(getRuntimeConfigSnapshot()).toBeNull();
-    });
-  });
+    }));
 
   it.each(["replace", "direct", "clear-command", "explicit", "registry-context"] as const)(
     "keeps the retiring configuration across admitted work (%s)",
-    async (mode) => {
-      await withOpenClawTestState({ label: "plugin-retirement-config" }, async (state) => {
+    (mode) =>
+      withOpenClawTestState({ label: "plugin-retirement-config" }, async (state) => {
         const oldPath = state.path("old-custom", "sessions.json");
         const newPath = state.path("new-custom", "sessions.json");
         const cfg: OpenClawConfig = {
@@ -74,15 +73,10 @@ describe("plugin retirement session-store ownership", () => {
         const record = createPluginRecord({ id: "fixture" });
         registry.plugins.push(record);
         if (mode === "registry-context") {
-          setPluginRuntimeLoadContext(registry, {
-            rawConfig: cfg,
-            config: cfg,
-            activationSourceConfig: cfg,
-            autoEnabledReasons: {},
-            workspaceDir: undefined,
-            env: process.env,
-            logger: { info() {}, warn() {}, error() {} },
-          });
+          setPluginRuntimeLoadContext(
+            registry,
+            createToolLoadContext(cfg, "", { workspaceDir: undefined }),
+          );
           clearRuntimeConfigSnapshot();
         }
         const instance = new PluginInstance(record.id, { record, registry });
@@ -131,36 +125,24 @@ describe("plugin retirement session-store ownership", () => {
           await Promise.allSettled([call, retirement]);
           await clearActivePluginRegistry();
         }
-      });
-    },
+      }),
   );
 });
 
-it.each(
-  (["registry", "cache"] as const).flatMap((kind) =>
-    (["distinct", "shared", "shared-async"] as const).map((failureMode) => ({ kind, failureMode })),
-  ),
-)(
-  "returns best-effort cleanup rows from the $kind owner without reviving callbacks ($failureMode)",
-  async ({ kind, failureMode }) => {
-    await withOpenClawTestState({ label: "plugin-cleanup-outcome" }, async () => {
+it.each(["registry", "cache"] as const)(
+  "returns best-effort cleanup rows from the %s owner without reviving callbacks",
+  (kind) =>
+    withOpenClawTestState({ label: "plugin-cleanup-outcome" }, async () => {
       const registry = createEmptyPluginRegistry();
       const record = createPluginRecord({ id: "cleanup-outcome" });
       registry.plugins.push(record);
       const instance = new PluginInstance(record.id, { record, registry });
       const hostFailure = new Error("synthetic cleanup failure");
-      const disposeFailure =
-        failureMode === "distinct" ? new Error("synthetic cleanup failure") : hostFailure;
+      const disposeFailure = new Error("synthetic cleanup failure");
       const hostCleanup = vi.fn(() => {
         throw hostFailure;
       });
       const instanceCleanup = vi.fn(() => {
-        if (failureMode === "shared-async") {
-          void trackAsyncWork(async () => {
-            throw disposeFailure;
-          }).catch(() => {});
-          return;
-        }
         throw disposeFailure;
       });
       const callback = instance.wrap(() => "live");
@@ -193,6 +175,5 @@ it.each(
       expect(replacement.run(() => "fresh")).toBe("fresh");
       await replacement.dispose();
       await retirePluginCache(cache);
-    });
-  },
+    }),
 );

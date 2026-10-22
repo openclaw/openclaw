@@ -1,4 +1,3 @@
-// Gateway question manager.
 // Tracks transient operator questions and short-lived terminal records in memory.
 import { randomUUID } from "node:crypto";
 import {

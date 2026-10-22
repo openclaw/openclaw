@@ -1,4 +1,3 @@
-/** Runtime SDK subpath for Gateway-backed ask_user question controls. */
 import { readAskUserQuestionId } from "../auto-reply/reply-payload.js";
 import { registerQuestionChannelDelivery } from "../infra/question-channel-runtime.js";
 // The pre-release named resolver exports were replaced wholesale by this

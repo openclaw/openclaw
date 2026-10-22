@@ -127,7 +127,7 @@ jobs:
           fetch-depth: 0
 
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
@@ -422,7 +422,7 @@ jobs:
       - name: Upload Mantis status reaction artifacts
         id: upload_artifact
         if: ${{ always() && steps.run_mantis.outputs.output_dir != '' }}
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: mantis-discord-status-reactions-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ steps.run_mantis.outputs.output_dir }}
@@ -432,7 +432,7 @@ jobs:
       - name: Create Mantis GitHub App token
         id: mantis_app_token
         if: ${{ always() && needs.resolve_request.outputs.pr_number != '' }}
-        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3
         with:
           app-id: ${{ secrets.MANTIS_GITHUB_APP_ID }}
           private-key: ${{ secrets.MANTIS_GITHUB_APP_PRIVATE_KEY }}

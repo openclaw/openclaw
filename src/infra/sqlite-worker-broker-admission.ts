@@ -70,6 +70,19 @@ export function reserveSqliteWorkerClient(
   return reserved;
 }
 
+export function findReusableSqliteWorkerClient(
+  stores: Iterable<StoreClient>,
+  databasePath: string,
+): StoreClient | undefined {
+  // A published client proves physical identity admission finished; initialized alone does not.
+  for (const client of stores) {
+    if (!client.sealed && client.isAvailable() && client.actor.pathReferences.has(databasePath)) {
+      return client;
+    }
+  }
+  return undefined;
+}
+
 export async function reclaimSqliteWorkerClient(
   options: PreparedSqliteWorkerOpen,
   stores: Iterable<StoreClient>,
@@ -128,7 +141,9 @@ export function captureSqliteWorkerOpen(
   return {
     ...native,
     retireIdle: retireIdle ? () => inCaller(retireIdle) : undefined,
-    maintenanceScope: custody.maintenanceScope ?? getOpenClawDatabaseMaintenanceScope(),
+    maintenanceScope: custody.cleanupAccess
+      ? undefined
+      : (custody.maintenanceScope ?? getOpenClawDatabaseMaintenanceScope()),
     ...(preparation !== undefined ? { preparation: serialize(preparation) } : {}),
     runtimeGeneration: options.runtimeGeneration,
     carrierUrl,
@@ -329,24 +344,44 @@ export function assertSqliteWorkerActorReusable(
   inputHash: string,
   stateContext: SqliteWorkerStateContext | undefined,
 ): void {
-  if (actor.slot.failed) {
-    throw actor.slot.failed;
-  }
   if (actor.moduleUrl !== moduleUrl || actor.inputHash !== inputHash) {
     throw new Error("SQLite database already belongs to another worker backend");
   }
   assertSqliteWorkerActorStateContext(actor, stateContext);
 }
 
-export function prepareSqliteWorkerActorContext(actor: Actor | undefined, job: Job): void {
+export function prepareSqliteWorkerActorContext(
+  actor: Actor | undefined,
+  job: Job,
+): SqliteWorkerStateContext | undefined {
   const { request } = job;
   const stateContext = request.stateContext ?? actor?.stateContext;
   if (actor && stateContext) {
     assertSqliteWorkerActorStateContext(actor, stateContext);
     request.stateDatabasePath = actor.stateDatabasePath ?? actor.databasePath;
-    request.stateContext = {
+    const delivered = {
       ...stateContext,
-      scheduledMaintenanceSuspension: actor.stateContext?.scheduledMaintenanceSuspension,
+      ...(actor.stateContext?.scheduledMaintenanceSuspension
+        ? { scheduledMaintenanceSuspension: actor.stateContext.scheduledMaintenanceSuspension }
+        : {}),
     };
+    if (request.type !== "open") {
+      const previous = actor.deliveredStateContext;
+      request.stateContext = {
+        ...delivered,
+        ...(delivered.scheduledMaintenanceSuspension &&
+        delivered.scheduledMaintenanceSuspension === previous?.scheduledMaintenanceSuspension
+          ? { scheduledMaintenanceSuspension: undefined }
+          : {}),
+        ...(Object.hasOwn(delivered, "stateIntegrity") &&
+        delivered.stateIntegrity === previous?.stateIntegrity
+          ? { stateIntegrity: undefined }
+          : {}),
+      };
+    } else {
+      request.stateContext = delivered;
+    }
+    return delivered;
   }
+  return undefined;
 }

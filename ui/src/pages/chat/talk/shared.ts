@@ -14,10 +14,10 @@ import type {
   RealtimeVoiceBrowserSession,
   RealtimeVoiceCloseOptions,
 } from "../../../../../src/talk/provider-types.js";
-import type { TalkEvent, TalkEventInput } from "../../../../../src/talk/talk-events.js";
+import type { TalkEvent } from "../../../../../src/talk/talk-events.js";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../../api/gateway.ts";
 import { formatUiError } from "../../../lib/format-error.ts";
-import type { RealtimeTalkInputController } from "./input.ts";
+import type { RealtimeTalkInputOwner } from "./input.ts";
 
 export type RealtimeTalkStatus = "idle" | "connecting" | "listening" | "thinking" | "error";
 export type RealtimeTalkEvent = TalkEvent;
@@ -50,15 +50,10 @@ export type RealtimeTalkCallbacks = {
   onTranscript?: (entry: RealtimeTalkTranscript) => void;
   onTranscriptOrder?: (items: ReadonlyArray<{ itemId: string; order: number }>) => void;
   onTranscriptItem?: (item: RealtimeTalkTranscriptItem) => void;
-  onTalkEvent?: (event: RealtimeTalkEvent) => void;
+  onTalkEvent?: (event: { type: "session.ready" | "session.closed" }) => void;
   onVideoStream?: (stream: MediaStream | null) => void;
   onVideoError?: (error: unknown) => void;
 };
-
-export type RealtimeTalkEventInput<TPayload = unknown> = Omit<
-  TalkEventInput<TPayload>,
-  "payload" | "timestamp"
-> & { payload?: TPayload };
 
 export type RealtimeTalkSessionResult = RealtimeVoiceBrowserSession & {
   voiceSessionId?: string;
@@ -95,92 +90,14 @@ export type RealtimeTalkTransportContext = {
   voiceSessionId?: string;
   flushTranscriptWrites?: () => Promise<void>;
   callbacks: RealtimeTalkCallbacks;
-  input: Pick<RealtimeTalkInputController, "stream" | "adopt" | "stop">;
+  input: Pick<RealtimeTalkInputOwner, "stream" | "adopt" | "stop">;
   videoDeviceId?: string;
 };
 
-export function createRealtimeTalkEventEmitter(
-  ctx: RealtimeTalkTransportContext,
-  session: RealtimeTalkSessionResult,
-): (input: RealtimeTalkEventInput) => void {
-  let seq = 0;
-  let turnSeq = 0;
-  let activeTurnId: string | undefined;
-  const sessionId = resolveRealtimeTalkEventSessionId(ctx, session);
-  return (input) => {
-    if (!ctx.callbacks.onTalkEvent) {
-      return;
-    }
-    const turnId = resolveRealtimeTalkTurnId(input);
-    seq += 1;
-    ctx.callbacks.onTalkEvent({
-      id: `${sessionId}:${seq}`,
-      type: input.type,
-      sessionId,
-      turnId,
-      captureId: input.captureId,
-      seq,
-      timestamp: new Date().toISOString(),
-      mode: "realtime",
-      transport: session.transport,
-      brain: "agent-consult",
-      provider: session.provider,
-      final: input.final,
-      callId: input.callId,
-      itemId: input.itemId,
-      parentId: input.parentId,
-      payload: input.payload ?? null,
-    });
-    if (
-      input.type === "turn.ended" ||
-      input.type === "turn.cancelled" ||
-      input.type === "session.replaced" ||
-      input.type === "session.closed"
-    ) {
-      activeTurnId = undefined;
-    }
-  };
-
-  function resolveRealtimeTalkTurnId(input: RealtimeTalkEventInput): string | undefined {
-    if (input.type !== "turn.started" && !isTurnScopedTalkEvent(input.type)) {
-      return input.turnId;
-    }
-    activeTurnId = input.turnId ?? activeTurnId ?? `turn-${++turnSeq}`;
-    return activeTurnId;
-  }
-}
-
-function isTurnScopedTalkEvent(type: RealtimeTalkEvent["type"]): boolean {
-  return (
-    type === "turn.ended" ||
-    type === "turn.cancelled" ||
-    type.startsWith("input.audio.") ||
-    type.startsWith("transcript.") ||
-    type.startsWith("output.") ||
-    type.startsWith("tool.")
-  );
-}
-
-function resolveRealtimeTalkEventSessionId(
-  ctx: RealtimeTalkTransportContext,
-  session: RealtimeTalkSessionResult,
-): string {
-  const explicitSessionId = (session as { sessionId?: unknown }).sessionId;
-  if (typeof explicitSessionId === "string" && explicitSessionId.trim()) {
-    return explicitSessionId.trim();
-  }
-  if ("relaySessionId" in session && session.relaySessionId.trim()) {
-    return session.relaySessionId;
-  }
-  return `${ctx.sessionKey}:${session.provider}:${session.transport}`;
-}
-
 type ChatPayload = {
   runId?: string;
-  stream?: string;
   state?: string;
   errorMessage?: string;
-  data?: unknown;
   message?: unknown;
 };
 
@@ -240,12 +157,12 @@ function getTerminalAgentWaitError(result: AgentWaitResult | undefined): Error |
     : undefined;
 }
 
+// Settlement releases this wait's Gateway subscription, abort listener, and timers together.
 export function waitForChatResult(params: {
   client: GatewayBrowserClient;
   runId: string;
   timeoutMs: number;
   timeoutMessage?: string;
-  emitTalkEvent?: (input: RealtimeTalkEventInput) => void;
   signal?: AbortSignal;
 }): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -319,7 +236,6 @@ export function waitForChatResult(params: {
       if (!payload || payload.runId !== params.runId) {
         return;
       }
-      emitRealtimeTalkAgentProgress(params.emitTalkEvent, payload);
       if (payload.state === "final") {
         const finalText = extractTextFromMessage(payload.message);
         if (finalText) {
@@ -335,28 +251,6 @@ export function waitForChatResult(params: {
         settle(new Error(payload.errorMessage ?? "OpenClaw tool call failed"));
       }
     });
-  });
-}
-
-function emitRealtimeTalkAgentProgress(
-  emitTalkEvent: ((input: RealtimeTalkEventInput) => void) | undefined,
-  payload: ChatPayload,
-): void {
-  if (!emitTalkEvent || payload.stream !== "tool") {
-    return;
-  }
-  const record = asOptionalObjectRecord(payload.data) ?? {};
-  const phase = typeof record.phase === "string" ? record.phase : undefined;
-  const name = typeof record.name === "string" ? record.name : undefined;
-  const toolCallId = typeof record.toolCallId === "string" ? record.toolCallId : undefined;
-  emitTalkEvent({
-    type: "tool.progress",
-    callId: toolCallId,
-    payload: {
-      runId: payload.runId,
-      ...(name ? { name } : {}),
-      ...(phase ? { phase } : {}),
-    },
   });
 }
 
@@ -376,17 +270,6 @@ function requestRealtimeTalkSteer(
     : ctx.client.request("talk.client.steer", request);
 }
 
-function realtimeTalkControlProgress(result: unknown): RealtimeTalkEventInput {
-  return {
-    type: "tool.progress",
-    payload: { name: REALTIME_VOICE_AGENT_CONTROL_TOOL_NAME, result },
-    final:
-      result && typeof result === "object" && "mode" in result
-        ? result.mode === "status" || result.mode === "cancel"
-        : undefined,
-  };
-}
-
 export function shouldInterruptRealtimeTalkControlResponse(result: unknown): boolean {
   const record = asOptionalObjectRecord(result);
   return (
@@ -398,33 +281,29 @@ export function shouldInterruptRealtimeTalkControlResponse(result: unknown): boo
 export async function steerRealtimeTalkActiveConsult(params: {
   ctx: RealtimeTalkTransportContext;
   text: string;
-  mode?: RealtimeVoiceAgentControlMode;
-  sessionId?: string;
-  emitTalkEvent?: (input: RealtimeTalkEventInput) => void;
   onControlResult?: (result: unknown) => void;
   speakControlResult?: (message: string) => void;
-  suppressSpeechForModes?: readonly RealtimeVoiceAgentControlMode[];
 }): Promise<void> {
   const text = params.text.trim();
   if (!text) {
     return;
   }
-  const request = requestRealtimeTalkSteer(params.ctx, params.sessionId, text, params.mode);
+  const request = requestRealtimeTalkSteer(params.ctx, undefined, text);
   try {
     const result = await request;
     params.onControlResult?.(result);
-    maybeSpeakRealtimeTalkControlResult(
-      result,
-      params.speakControlResult,
-      params.suppressSpeechForModes,
-    );
-    params.emitTalkEvent?.(realtimeTalkControlProgress(result));
-  } catch (error) {
-    params.emitTalkEvent?.({
-      type: "tool.error",
-      payload: { message: formatUiError(error) },
-      final: true,
-    });
+    const record = asOptionalObjectRecord(result);
+    if (params.speakControlResult && record && record.mode !== "cancel") {
+      const message = typeof record.message === "string" ? record.message.trim() : "";
+      const shouldSpeak =
+        (record.speak === true && record.suppress !== true) ||
+        (record.ok === true && record.mode === "steer" && record.suppress === true);
+      if (shouldSpeak && message) {
+        params.speakControlResult(buildRealtimeVoiceAgentControlSpeechMessage(message));
+      }
+    }
+  } catch {
+    // Steering failure must not reject the transport's fire-and-forget callback.
   }
 }
 
@@ -434,74 +313,35 @@ export async function submitRealtimeTalkAgentControl(params: {
   submit: (callId: string, result: unknown) => void | Promise<void>;
   callId: string;
   sessionId?: string;
-  emitTalkEvent?: (input: RealtimeTalkEventInput) => void;
   signal?: AbortSignal;
 }): Promise<void> {
   if (params.signal?.aborted) {
     return;
   }
   let result: unknown;
-  let talkEvent: RealtimeTalkEventInput;
   try {
     const parsed = parseRealtimeVoiceAgentControlToolArgs(params.args);
     result = await requestRealtimeTalkSteer(params.ctx, params.sessionId, parsed.text, parsed.mode);
     if (params.signal?.aborted) {
       return;
     }
-    talkEvent = {
-      ...realtimeTalkControlProgress(result),
-      callId: params.callId,
-    };
   } catch (error) {
     const message = formatUiError(error);
-    talkEvent = {
-      type: "tool.error",
-      callId: params.callId,
-      payload: { message },
-      final: true,
-    };
     result = { error: message };
     if (params.signal?.aborted || isAbortError(error)) {
       return;
     }
   }
   await params.submit(params.callId, result);
-  if (params.signal?.aborted) {
-    return;
-  }
-  params.emitTalkEvent?.(talkEvent);
 }
 
-function maybeSpeakRealtimeTalkControlResult(
-  result: unknown,
-  speakControlResult: ((message: string) => void) | undefined,
-  suppressSpeechForModes: readonly RealtimeVoiceAgentControlMode[] | undefined,
-): void {
-  const record = asOptionalObjectRecord(result);
-  if (!speakControlResult || !record) {
-    return;
-  }
-  const mode =
-    typeof record.mode === "string" ? (record.mode as RealtimeVoiceAgentControlMode) : undefined;
-  if (mode && suppressSpeechForModes?.includes(mode)) {
-    return;
-  }
-  const message = typeof record.message === "string" ? record.message.trim() : "";
-  const shouldSpeak =
-    (record.speak === true && record.suppress !== true) ||
-    (record.ok === true && mode === "steer" && record.suppress === true);
-  if (shouldSpeak && message) {
-    speakControlResult(buildRealtimeVoiceAgentControlSpeechMessage(message));
-  }
-}
-
+// Owns the consult's abort listener until its acknowledged run and result settle.
 export async function submitRealtimeTalkConsult(params: {
   ctx: RealtimeTalkTransportContext;
   args: unknown;
   submit: (callId: string, result: unknown) => void | Promise<void>;
   callId: string;
   relaySessionId?: string;
-  emitTalkEvent?: (input: RealtimeTalkEventInput) => void;
   submitAbortResult?: boolean;
   signal?: AbortSignal;
 }): Promise<void> {
@@ -528,11 +368,13 @@ export async function submitRealtimeTalkConsult(params: {
     aborted = true;
     // Relay lifetimes belong to the Gateway; aborting this browser wait must not cancel them.
     if (run && !params.relaySessionId) {
-      void ctx.client.request("chat.abort", {
-        sessionKey: run.agentSessionKey,
-        agentId: run.agentId,
-        runId: run.runId,
-      });
+      void ctx.client
+        .request("chat.abort", {
+          sessionKey: run.agentSessionKey,
+          agentId: run.agentId,
+          runId: run.runId,
+        })
+        .catch(() => undefined);
     }
   };
   if (params.signal?.aborted) {
@@ -567,7 +409,6 @@ export async function submitRealtimeTalkConsult(params: {
       client: ctx.client,
       runId: run.runId,
       timeoutMs: 120_000,
-      emitTalkEvent: params.emitTalkEvent,
       signal: params.signal,
     });
     await submitOnce({ result });

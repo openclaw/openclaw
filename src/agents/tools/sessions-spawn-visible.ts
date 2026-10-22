@@ -9,6 +9,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { resolveControlUiSessionUrl } from "../../config/control-ui-link-base.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
+import { attributeDelegatedSessionCreator } from "../../config/sessions/session-entry-provenance.js";
 import { composeSessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import { buildDashboardSessionTitleSource } from "../../gateway/dashboard-session-title.js";
 import { ADMIN_SCOPE } from "../../gateway/method-scopes.js";
@@ -17,10 +18,7 @@ import { resolveGatewaySessionStoreTargetInWorker } from "../../gateway/session-
 import { resolveWorkerPlacementDestination } from "../../gateway/worker-environments/placement-destination.js";
 import { readExecRequestOwners, withExecRequestOwners } from "../../infra/exec-request-context.js";
 import { isPathInside } from "../../infra/path-guards.js";
-import {
-  getCanonicalGatewayContextResolver,
-  getPluginRuntimeGatewayRequestScope,
-} from "../../plugins/runtime/gateway-request-scope.js";
+import { getCanonicalGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { isValidAgentId, normalizeAgentId } from "../../routing/session-key.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import { resolveUserPath } from "../../utils.js";
@@ -42,6 +40,7 @@ import { getSubagentDepthFromSessionStoreInWorker } from "../subagents/spawn/sub
 import { terminateAcceptedCollectorRun } from "../subagents/spawn/subagent-spawn-cleanup.js";
 import {
   callNativeSubagentGateway,
+  captureSubagentSpawnGatewayContext,
   resolveSubagentAgentGatewayTimeoutMs,
 } from "../subagents/spawn/subagent-spawn-gateway.js";
 import { resolveSubagentSpawnOwnership } from "../subagents/spawn/subagent-spawn-ownership.js";
@@ -189,9 +188,11 @@ export async function maybeSpawnVisibleSession(params: {
     );
   }
 
-  const resolveGatewayContext =
-    getGatewayToolCallerIdentity()?.gatewayContextResolver ??
-    getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext;
+  const {
+    gatewayContextResolver: resolveGatewayContext,
+    requester,
+    creatorProfileId,
+  } = captureSubagentSpawnGatewayContext();
   const cloudGateway = placement ? resolveGatewayContext?.() : undefined;
   if (placement && (!cloudGateway || cloudGateway.localEmbedded === true)) {
     return {
@@ -406,10 +407,14 @@ export async function maybeSpawnVisibleSession(params: {
           requestParams,
           {
             via: "spawn",
-            actor: { type: "agent", id: requesterAgentId },
+            actor: attributeDelegatedSessionCreator(
+              { type: "agent", id: requesterAgentId },
+              creatorProfileId,
+            ),
             requesterSessionKey: requesterKey,
             ...(childSessionPublication ? { childSessionPublication } : {}),
             requesterSenderIsOwner: params.options?.senderIsOwner === true,
+            gitContributorProfileId: params.options?.gitContributorProfileId,
             completionOwnerSessionKey: ownership.completionRequesterSessionKey,
             ...(params.options?.sessionPermissionPolicy
               ? { inheritedPermissionMode: params.options.sessionPermissionPolicy.mode }
@@ -551,8 +556,7 @@ export async function maybeSpawnVisibleSession(params: {
                     assertDispatchCurrent,
                     timeoutMs: resolveSubagentAgentGatewayTimeoutMs(runTimeoutSeconds),
                   },
-                  undefined,
-                  resolveGatewayContext,
+                  { gatewayContextResolver: resolveGatewayContext, requester },
                 ),
               )
             ).response;

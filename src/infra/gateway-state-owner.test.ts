@@ -10,7 +10,16 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { withTempDir } from "../test-utils/temp-dir.js";
+import {
+  GatewayLockNamespaceError,
+  readGatewayLockProcessNamespace,
+} from "./gateway-lock-payload.js";
 import { acquireGatewayLock } from "./gateway-lock.js";
+import {
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseMaintenanceScopeError,
+  StateDatabaseOfflineMaintenanceError,
+} from "./gateway-state-owner-record.js";
 import {
   acquireGatewayStateOwner,
   acquireStateDatabaseSchemaLease,
@@ -86,6 +95,7 @@ describe("Gateway state ownership", () => {
           configPath: path.join(root, "openclaw.json"),
           role: "sqlite-maintenance",
           stateOwnerKind: "schema",
+          processNamespace: readGatewayLockProcessNamespace(),
         };
         const publishMarker = () => fs.writeFileSync(marker, JSON.stringify(payload));
         const publishing = arrival !== "after native open";
@@ -168,6 +178,7 @@ describe("Gateway state ownership", () => {
               configPath: path.join(root, "openclaw.json"),
               role: "sqlite-maintenance",
               stateOwnerKind: "schema",
+              processNamespace: readGatewayLockProcessNamespace(),
             }),
           );
         let now = 0;
@@ -197,7 +208,7 @@ describe("Gateway state ownership", () => {
           publish(process.pid);
           expect(() =>
             withStateDatabaseColdAdmission({ databasePath, busyTimeoutMs: 25 }, open),
-          ).toThrow("offline maintenance");
+          ).toThrow(StateDatabaseMaintenanceScopeError);
           expect(wait).not.toHaveBeenCalled();
           expect(open).not.toHaveBeenCalled();
         } finally {
@@ -216,6 +227,7 @@ describe("Gateway state ownership", () => {
         databasePath,
         payload: {
           pid: process.pid,
+          processNamespace: readGatewayLockProcessNamespace(),
           createdAt: new Date().toISOString(),
           configPath: path.join(root, "openclaw.json"),
           role: "gateway",
@@ -360,6 +372,7 @@ describe("Gateway state ownership", () => {
         databasePath,
         payload: {
           pid: process.pid,
+          processNamespace: readGatewayLockProcessNamespace(),
           createdAt: new Date().toISOString(),
           configPath: path.join(root, "openclaw.json"),
           role: "gateway",
@@ -428,7 +441,9 @@ describe("Gateway state ownership", () => {
         ).toMatchObject({
           role: "agent-embedded",
         });
-        expect(() => openOpenClawStateDatabase(options)).toThrow("offline maintenance");
+        expect(() => openOpenClawStateDatabase(options)).toThrow(
+          StateDatabaseMaintenanceScopeError,
+        );
         schema.run(() => {
           expect(
             openOpenClawStateDatabase(options)
@@ -603,6 +618,64 @@ describe("Gateway state ownership", () => {
     },
   );
 
+  it.each(["missing", "null", "foreign"] as const)(
+    "defers unverifiable maintenance without reclaiming its owner: %s namespace",
+    async (kind) => {
+      await withTempDir("openclaw-unverifiable-state-access-", async (root) => {
+        const databasePath = path.join(root, "state", "openclaw.sqlite");
+        const seed = acquireGatewayStateOwner({ databasePath });
+        const pathname = seed.path;
+        seed.release();
+        const record = {
+          // A foreign PID can collide with ours without lending local authority.
+          pid: process.pid,
+          createdAt: new Date().toISOString(),
+          configPath: path.join(root, "openclaw.json"),
+          ...(kind === "missing"
+            ? {}
+            : {
+                processNamespace:
+                  kind === "null"
+                    ? null
+                    : {
+                        platform: "linux",
+                        identity: "11111111-1111-1111-1111-111111111111",
+                        host: "foreign-host",
+                        pidNsInode: "1",
+                      },
+              }),
+        };
+        try {
+          for (const role of ["gateway", "agent-embedded", "sqlite-maintenance"] as const) {
+            const raw = JSON.stringify({ ...record, role });
+            fs.writeFileSync(pathname, raw);
+            if (role === "sqlite-maintenance") {
+              expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
+                StateDatabaseOfflineMaintenanceError,
+              );
+              fs.writeFileSync(
+                pathname,
+                JSON.stringify({ ...record, role, stateOwnerKind: "schema" }),
+              );
+              expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
+                StateDatabaseAdmissionPendingError,
+              );
+              fs.writeFileSync(pathname, raw);
+            } else {
+              expect(() => assertStateDatabaseAccessAllowed(databasePath)).not.toThrow();
+            }
+            expect(() => acquireGatewayStateOwner({ databasePath })).toThrow(
+              GatewayLockNamespaceError,
+            );
+            expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
+          }
+        } finally {
+          fs.rmSync(pathname, { force: true });
+        }
+      });
+    },
+  );
+
   it.each(["foreign", "matching PID", "dead PID"] as const)(
     "checks %s persisted ownership without borrowing its authority",
     async (kind) => {
@@ -617,6 +690,7 @@ describe("Gateway state ownership", () => {
           pid: kind === "dead PID" ? deadPid : process.ppid,
           createdAt: new Date().toISOString(),
           configPath: path.join(root, "openclaw.json"),
+          processNamespace: readGatewayLockProcessNamespace(),
         };
         const kill = process.kill.bind(process);
         const probe =
@@ -632,7 +706,7 @@ describe("Gateway state ownership", () => {
           if (kind === "matching PID") {
             fs.writeFileSync(pathname, original);
             expect(() => assertStateDatabaseAccessAllowed(databasePath)).toThrow(
-              "offline maintenance",
+              StateDatabaseMaintenanceScopeError,
             );
             expect(() => acquireStateDatabaseSchemaLease(databasePath)).toThrow(
               GatewayStateOwnerContentionError,
@@ -642,6 +716,8 @@ describe("Gateway state ownership", () => {
             fs.writeFileSync(pathname, raw);
             expect(() => assertStateDatabaseAccessAllowed(databasePath)).not.toThrow();
             expect(fs.readFileSync(pathname, "utf8")).toBe(raw);
+            const recovered = acquireGatewayStateOwner({ databasePath });
+            recovered.release();
           } else {
             for (const role of [undefined, "gateway", "agent-embedded"] as const) {
               fs.writeFileSync(pathname, JSON.stringify({ ...record, role }));

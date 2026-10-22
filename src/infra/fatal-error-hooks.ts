@@ -6,28 +6,19 @@ type FatalErrorHookContext = {
 /** Hook that can return one extra diagnostic line for fatal error output. */
 type FatalErrorHook = (context: FatalErrorHookContext) => string | undefined | void;
 
-const hooks = new Set<FatalErrorHook>();
+let fatalHook: FatalErrorHook | undefined;
 
-export function registerFatalErrorHook(hook: FatalErrorHook): () => void {
-  hooks.add(hook);
-  return () => {
-    hooks.delete(hook);
-  };
+export function setFatalErrorHook(hook: FatalErrorHook | undefined): void {
+  fatalHook = hook;
 }
 
 export function runFatalErrorHooks(context: FatalErrorHookContext): string[] {
-  const messages: string[] = [];
-  for (const hook of hooks) {
-    try {
-      const message = hook(context);
-      if (typeof message === "string" && message.trim()) {
-        messages.push(message);
-      }
-    } catch (err) {
-      // Fatal output must keep progressing even if a diagnostic hook itself throws.
-      const name = err instanceof Error && err.name ? err.name : "unknown";
-      messages.push(`fatal-error hook failed: ${name}`);
-    }
+  try {
+    const message = fatalHook?.(context);
+    return typeof message === "string" && message.trim() ? [message] : [];
+  } catch (err) {
+    // Fatal output must keep progressing even if the diagnostic hook itself throws.
+    const name = err instanceof Error && err.name ? err.name : "unknown";
+    return [`fatal-error hook failed: ${name}`];
   }
-  return messages;
 }

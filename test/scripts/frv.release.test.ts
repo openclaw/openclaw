@@ -233,19 +233,34 @@ if (${endpoint.includes("/jobs?")}) {
         "--input-type=module",
         "-e",
         `
-      import {createClient} from ${JSON.stringify(moduleUrl)};
-      import {existsSync} from "node:fs";
+      import childProcess from "node:child_process";
+      import {syncBuiltinESMExports} from "node:module";
+      import {promisify} from "node:util";
       import {releaseGhRateLimitRetryAt, classifyReleaseGhTransportError} from ${JSON.stringify(pathToFileURL(join(process.cwd(), "scripts/full-release-validation-policy.mjs")).href)};
       const throttled = ["403", "429"].includes(${JSON.stringify(failure)});
       if (throttled) Date.now = () => 10_000;
       if (${JSON.stringify(failure)} === "transient-deadline") {
-        Date.now = () => existsSync("calls.jsonl") ? 20_000 : 10_000;
+        let transportCompleted = false;
+        const execFileAsync = promisify(childProcess.execFile);
+        childProcess.execFile = Object.assign(childProcess.execFile.bind(childProcess), {
+          [promisify.custom]: async (...args) => {
+            try {
+              return await execFileAsync(...args);
+            } finally {
+              transportCompleted = true;
+            }
+          },
+        });
+        syncBuiltinESMExports();
+        // Expire after transport settles; the child can write before Bun arms its initial timer.
+        Date.now = () => transportCompleted ? 20_000 : 10_000;
         const nativeSetTimeout = globalThis.setTimeout;
         globalThis.setTimeout = (...args) => {
           if (Date.now() >= 15_000) throw new Error("transport scheduled work after its deadline");
           return nativeSetTimeout(...args);
         };
       }
+      const {createClient} = await import(${JSON.stringify(moduleUrl)});
       try {
         console.log(JSON.stringify(await createClient(${JSON.stringify(REPOSITORY)}, { cachedReads: ${cachedReads} })[${JSON.stringify(method)}](...${JSON.stringify(args)})));
       } catch (error) {

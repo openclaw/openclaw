@@ -1,7 +1,5 @@
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { UpdateScheduleState } from "../api/types.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -15,7 +13,6 @@ suite.define(() => {
   it.each([1280, 420])(
     "shows the Git revision range before updating at width %s",
     async (width) => {
-      const proofDir = createControlUiE2eArtifactDir("update-git-revisions");
       await suite.withPage(
         {
           colorScheme: "dark",
@@ -71,21 +68,10 @@ suite.define(() => {
           await page.locator(".settings-status", { hasText: "5 commits behind" }).waitFor();
           const statusLink = page.locator(".updates-status-control .update-git-revisions a");
           const compareUrl = `https://github.com/example/openclaw/compare/${refreshedGit.currentSha}...${refreshedGit.upstreamSha}`;
-          try {
-            await expect.poll(() => statusLink.getAttribute("href")).toBe(compareUrl);
-          } finally {
-            await page.screenshot({
-              animations: "disabled",
-              path: path.join(proofDir, `refreshed-status-${width}.png`),
-            });
-          }
+          await expect.poll(() => statusLink.getAttribute("href")).toBe(compareUrl);
           await page.getByRole("button", { name: "Update now", exact: true }).click();
           await page.getByRole("dialog", { name: "Update Gateway", exact: true }).waitFor();
           const modal = page.locator("openclaw-modal-dialog");
-          await page.screenshot({
-            animations: "disabled",
-            path: path.join(proofDir, `confirmation-${width}.png`),
-          });
           const summary = modal.locator(".exec-approval-command > div").first();
           const range = modal.locator(".update-git-revisions__range");
           expect(await summary.textContent()).toBe("Installed v2026.9.5 · 5 commits behind");

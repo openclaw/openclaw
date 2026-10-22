@@ -38,9 +38,12 @@ async function resize(file: File, maxBytes: number): Promise<File> {
   }
 }
 
-globalThis.addEventListener("message", ({ data }: MessageEvent<ChatAttachmentImageRequest>) => {
+function onMessage({ data }: MessageEvent<ChatAttachmentImageRequest>) {
+  globalThis.removeEventListener("message", onMessage);
   void resize(data.file, data.maxBytes).then(
     (file) => globalThis.postMessage(file, { transfer: [] }),
     () => globalThis.postMessage(null, { transfer: [] }),
   );
-});
+}
+
+globalThis.addEventListener("message", onMessage);

@@ -6,13 +6,22 @@ import {
   normalizeCatalogProjectGrouping,
 } from "./catalog-project-grouping.ts";
 
-describe("normalizeCatalogProjectGrouping", () => {
-  it.each([
-    ["person", "person"],
-    [undefined, "project"],
-  ] as const)("normalizes %s to %s", (raw, expected) => {
-    expect(normalizeCatalogProjectGrouping(raw)).toBe(expected);
-  });
+type Actor = NonNullable<SessionCatalogSession["createdActor"]>;
+function attributed(
+  threadId: string,
+  id: string,
+  identity: Actor["identity"],
+  label: string,
+  type: Actor["type"] = "human",
+) {
+  return { ...session(threadId), createdActor: { type, id, identity, label } };
+}
+
+it.each([
+  ["person", "person"],
+  [undefined, "project"],
+] as const)("normalizes %s to %s", (raw, expected) => {
+  expect(normalizeCatalogProjectGrouping(raw)).toBe(expected);
 });
 
 describe("groupCatalogSessionsByProject", () => {
@@ -38,29 +47,20 @@ describe("groupCatalogSessionsByProject", () => {
     ]);
   });
 
-  it.each([["C:\\Users\\dev\\openclaw\\.claude\\worktrees\\fix-1", "C:\\Users\\dev\\openclaw"]])(
-    "folds worktree cwd %s into %s",
-    (worktreeCwd, expectedProject) => {
-      const result = groupCatalogSessionsByProject([
-        session("direct", expectedProject),
-        session("worktree", worktreeCwd),
-      ]);
+  it("folds Windows worktree checkouts into the project", () => {
+    const expectedProject = "C:\\Users\\dev\\openclaw";
+    const result = groupCatalogSessionsByProject([
+      session("direct", expectedProject),
+      session("worktree", `${expectedProject}\\.claude\\worktrees\\fix-1`),
+    ]);
 
-      expect(result.groups).toHaveLength(1);
-      expect(result.groups[0]?.key).toBe(`project:${expectedProject}`);
-      expect(result.groups[0]?.sessions.map((item) => item.threadId)).toEqual([
-        "direct",
-        "worktree",
-      ]);
-    },
-  );
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]?.key).toBe(`project:${expectedProject}`);
+    expect(result.groups[0]?.sessions.map((item) => item.threadId)).toEqual(["direct", "worktree"]);
+  });
 
   it("leaves missing and blank cwd values ungrouped", () => {
-    const result = groupCatalogSessionsByProject([
-      session("missing"),
-      session("blank", "  "),
-      session("grouped", "/work/project"),
-    ]);
+    const result = groupCatalogSessionsByProject([session("missing"), session("blank", "  ")]);
 
     expect(result.ungrouped.map((item) => item.threadId)).toEqual(["missing", "blank"]);
   });
@@ -69,42 +69,15 @@ describe("groupCatalogSessionsByProject", () => {
 describe("groupCatalogSessionsByPerson", () => {
   it("keeps creator namespaces separate and combines canonical profile aliases", () => {
     const result = groupCatalogSessionsByPerson([
-      {
-        ...session("channel"),
-        createdActor: {
-          type: "human",
-          id: "current",
-          label: "Channel",
-          identity: { type: "legacy", actorType: "human", source: null, id: "current" },
-        },
-      },
-      {
-        ...session("agent"),
-        createdActor: {
-          type: "agent",
-          id: "current",
-          label: "Agent",
-          identity: { type: "agent", id: "current" },
-        },
-      },
-      {
-        ...session("old-profile"),
-        createdActor: {
-          type: "human",
-          id: "former",
-          label: "Person",
-          identity: { type: "profile", id: "current" },
-        },
-      },
-      {
-        ...session("profile"),
-        createdActor: {
-          type: "human",
-          id: "current",
-          label: "Person",
-          identity: { type: "profile", id: "current" },
-        },
-      },
+      attributed(
+        "channel",
+        "current",
+        { type: "legacy", actorType: "human", source: null, id: "current" },
+        "Channel",
+      ),
+      attributed("agent", "current", { type: "agent", id: "current" }, "Agent", "agent"),
+      attributed("old-profile", "former", { type: "profile", id: "current" }, "Person"),
+      attributed("profile", "current", { type: "profile", id: "current" }, "Person"),
     ]);
     expect(result.groups.map((group) => group.sessions.map((item) => item.threadId))).toEqual([
       ["agent"],
@@ -117,17 +90,7 @@ describe("groupCatalogSessionsByPerson", () => {
     ["profile", "gateway-owner", "Shared owner"],
     ["agent", "gateway-owner", "gateway-owner"],
   ] as const)("labels a blank %s actor %s", (type, id, expected) => {
-    const result = groupCatalogSessionsByPerson([
-      {
-        ...session("one"),
-        createdActor: {
-          type: "human",
-          id,
-          identity: { type, id },
-          label: "  ",
-        },
-      },
-    ]);
+    const result = groupCatalogSessionsByPerson([attributed("one", id, { type, id }, "  ")]);
 
     expect(result.groups[0]).toMatchObject({
       key: `person:${type}:${id}`,
@@ -139,15 +102,7 @@ describe("groupCatalogSessionsByPerson", () => {
   it("leaves unattributed sessions in the flat ungrouped tail", () => {
     const result = groupCatalogSessionsByPerson([
       session("native"),
-      {
-        ...session("adopted"),
-        createdActor: {
-          type: "human",
-          id: "profile-ada",
-          identity: { type: "profile", id: "profile-ada" },
-          label: "Ada",
-        },
-      },
+      attributed("adopted", "profile-ada", { type: "profile", id: "profile-ada" }, "Ada"),
     ]);
 
     expect(result.groups).toHaveLength(1);

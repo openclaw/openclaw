@@ -1,8 +1,4 @@
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  OllamaVisibleContentSanitizer,
-  OllamaVisibleContentStreamResolution,
-} from "./visible-content-contract.js";
 
 const INLINE_REASONING_MIN_PREFIX_CHARS = 80;
 const INLINE_REASONING_MAX_PENDING_CHARS = 512;
@@ -48,27 +44,21 @@ function resolveInlineReasoningVisibleText(params: {
   return params.final ? { kind: "visible", text: params.text } : { kind: "pending" };
 }
 
-export function createKimiInlineReasoningSanitizer(): OllamaVisibleContentSanitizer {
+export function createKimiInlineReasoningSanitizer() {
   let bypassInlineReasoning = false;
 
-  return {
-    resolveStreamText(params): OllamaVisibleContentStreamResolution {
-      if (bypassInlineReasoning) {
-        return { kind: "visible", text: params.text };
-      }
+  return (params: { text: string; final: boolean }): string | undefined => {
+    if (bypassInlineReasoning) {
+      return params.text;
+    }
 
-      const resolution = resolveInlineReasoningVisibleText(params);
-      if (resolution.kind === "pending") {
-        return resolution;
-      }
-      if (resolution.bypassInlineReasoning) {
-        bypassInlineReasoning = true;
-      }
-      return { kind: "visible", text: resolution.text };
-    },
-    sanitizeFinalText(text) {
-      const resolution = resolveInlineReasoningVisibleText({ text, final: true });
-      return resolution.kind === "visible" ? resolution.text : text;
-    },
+    const resolution = resolveInlineReasoningVisibleText(params);
+    if (resolution.kind === "pending") {
+      return undefined;
+    }
+    if (resolution.bypassInlineReasoning) {
+      bypassInlineReasoning = true;
+    }
+    return resolution.text;
   };
 }

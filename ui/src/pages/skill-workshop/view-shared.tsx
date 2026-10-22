@@ -18,12 +18,14 @@ export type WorkshopView = () => SkillWorkshopViewProps;
 export function WorkshopChangeText(props: { change: SkillWorkshopChange; prefix: string }) {
   return (
     <>
-      <span class={`${props.prefix}who`}>
+      <span class={[`${props.prefix}who`]}>
         {t(`skillWorkshop.changes.actors.${props.change.actor}`)}{" "}
         {t(`skillWorkshop.changes.actions.${props.change.action}`)}
       </span>
-      {props.change.summary && <span class={`${props.prefix}why`}>{props.change.summary}</span>}
-      <span class={`${props.prefix}when`}>{formatRelativeTimestamp(props.change.createdAtMs)}</span>
+      {props.change.summary && <span class={[`${props.prefix}why`]}>{props.change.summary}</span>}
+      <span class={[`${props.prefix}when`]}>
+        {formatRelativeTimestamp(props.change.createdAtMs)}
+      </span>
     </>
   );
 }
@@ -47,9 +49,7 @@ export function MutationButton(props: {
         class={
           props.variant === "link"
             ? "sw-link-button"
-            : props.variant === "danger"
-              ? "btn btn--sm danger"
-              : "btn btn--sm oc-action"
+            : ["btn btn--sm", props.variant === "danger" ? "danger" : "oc-action"]
         }
         title={props.title}
         disabled={props.view().pendingAction !== null}

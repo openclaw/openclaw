@@ -141,28 +141,6 @@ private enum RealtimeAudioSendOutcome {
     case sent, inactive, saturated, failed(String)
 }
 
-private struct RealtimeAudioLogWindow {
-    private var frames = 0
-    private var bytes = 0
-    private var maxRms: Float = 0
-    private var lastLoggedAtMs: Double = 0
-
-    mutating func record(byteCount: Int, rms: Float, timestampMs: Double)
-        -> (frames: Int, bytes: Int, maxRms: String)?
-    {
-        self.frames += 1
-        self.bytes += byteCount
-        self.maxRms = max(self.maxRms, rms)
-        guard timestampMs - self.lastLoggedAtMs >= 1000 else { return nil }
-        self.lastLoggedAtMs = timestampMs
-        let stats = (self.frames, self.bytes, String(format: "%.4f", Double(self.maxRms)))
-        self.frames = 0
-        self.bytes = 0
-        self.maxRms = 0
-        return stats
-    }
-}
-
 private actor RealtimeAudioSender {
     private let request: @Sendable (String, [String: AnyCodable]?, Double) async throws -> Data
     private var relaySessionId: String?
@@ -317,8 +295,6 @@ public final class RealtimeTalkRelaySession {
     private var outputCancellationGeneration: UInt64 = 0
     private var outputCancellationTask: Task<Void, Never>?
     private var lastBargeInAtMs: Double = 0
-    private var microphoneLog = RealtimeAudioLogWindow()
-    private var suppressedEchoLog = RealtimeAudioLogWindow()
 
     public var voiceSessionId: String? {
         self.relaySessionId
@@ -899,9 +875,6 @@ extension RealtimeTalkRelaySession {
         let isFinal = payload["final"]?.boolValue == true
         let role = payload["role"]?.stringValue ?? ""
         let text = payload["text"]?.stringValue ?? ""
-        let charCount = text.count
-        self.logger.debug(
-            "talk realtime transcript: role=\(role.isEmpty ? "unknown" : role) final=\(isFinal) chars=\(charCount)")
         self.onTranscript(RealtimeTalkTranscript(role: role, text: text, isFinal: isFinal))
         guard isFinal else { return }
         if role == "user" {
@@ -1285,22 +1258,9 @@ extension RealtimeTalkRelaySession {
               let audioSender
         else { return nil }
         self.onInputLevel(TalkAudioLevel.normalized(rms: Double(rms)))
-        if let stats = self.microphoneLog.record(byteCount: encoded.count, rms: rms, timestampMs: timestampMs) {
-            self.logger.debug(
-                "talk realtime mic: buffers=\(stats.frames) bytes=\(stats.bytes) maxRms=\(stats.maxRms)")
-        }
         // Continuous providers own interruptions and need input throughout playback.
         if self.output.withLock({ $0.isOutputPlaying }), self.supportsBargeIn == true {
             if self.audioCapture.suppressesInputDuringOutput {
-                if let stats = self.suppressedEchoLog.record(
-                    byteCount: encoded.count,
-                    rms: rms,
-                    timestampMs: timestampMs)
-                {
-                    let (frames, bytes, maxRms) = stats
-                    self.logger.debug(
-                        "talk realtime mic suppressed during output: buffers=\(frames) bytes=\(bytes) maxRms=\(maxRms)")
-                }
                 return nil
             }
             self.handleInputLevelDuringOutput(rms, timestampMs: timestampMs)

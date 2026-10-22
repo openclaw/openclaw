@@ -1,9 +1,9 @@
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
+import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
 import { isToolAllowedByPolicies } from "../tool-policy-match.js";
 import { preparePluginHarnessToolPolicies } from "./execution-environment.js";
 
@@ -16,7 +16,7 @@ const codex = await loadBundledPluginFacade<{
     options: { nativeCodeModeEnabled: boolean; hostSystemAgentActive: boolean },
   ) => Record<string, unknown>;
 }>({ pluginId: "codex", artifactBasename: "test-api.js" });
-const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const tempDirs = useSessionStoreTempDirs(afterAll, "codex-child-policy-");
 
 describe("Codex subagent native tool policy", () => {
   it("preserves native tools for OpenClaw admin/status-only denial", async () => {
@@ -74,7 +74,7 @@ describe("Codex subagent native tool policy", () => {
     restricted: boolean;
   }>)("preserves the effective policy for $name", async (testCase) => {
     const sessionKey = `agent:main:${testCase.key ?? "subagent"}:policy-child`;
-    const store = path.join(tempDirs.make("codex-child-policy-"), "sessions.json");
+    const store = path.join(tempDirs.make(), "sessions.json");
     await replaceSessionEntry(
       { sessionKey, storePath: store },
       {

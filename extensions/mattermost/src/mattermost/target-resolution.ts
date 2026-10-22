@@ -1,4 +1,4 @@
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -26,39 +26,14 @@ export type MattermostTarget =
   | { kind: "channel-name"; name: string }
   | { kind: "user"; id?: string; username?: string };
 
-const MATTERMOST_OPAQUE_TARGET_CACHE_MAX_ENTRIES = 1024;
-const MATTERMOST_OPAQUE_TARGET_CACHE_TTL_MS = 5 * 60 * 1000;
-type MattermostOpaqueTargetCacheEntry = {
-  kind: MattermostOpaqueTargetResolution["kind"];
-  expiresAt: number;
-};
-const mattermostOpaqueTargetCache = new Map<string, MattermostOpaqueTargetCacheEntry>();
-
-function cacheMattermostOpaqueTarget(
-  key: string,
-  kind: MattermostOpaqueTargetResolution["kind"],
-): void {
-  mattermostOpaqueTargetCache.set(key, {
-    kind,
-    expiresAt: Date.now() + MATTERMOST_OPAQUE_TARGET_CACHE_TTL_MS,
-  });
-  // Keep the newest authoritative classifications while bounding retention.
-  pruneMapToMaxSize(mattermostOpaqueTargetCache, MATTERMOST_OPAQUE_TARGET_CACHE_MAX_ENTRIES);
-}
-
-function getCachedMattermostOpaqueTargetKind(
-  key: string,
-): MattermostOpaqueTargetResolution["kind"] | undefined {
-  const cached = mattermostOpaqueTargetCache.get(key);
-  if (!cached) {
-    return undefined;
-  }
-  if (cached.expiresAt <= Date.now()) {
-    mattermostOpaqueTargetCache.delete(key);
-    return undefined;
-  }
-  return cached.kind;
-}
+const mattermostOpaqueTargetCache = createStaleWhileRevalidateCache<
+  MattermostOpaqueTargetResolution["kind"] | undefined
+>({
+  maxEntries: 1024,
+  maxPending: Number.POSITIVE_INFINITY,
+  ttlMs: 5 * 60 * 1000,
+  cacheable: (kind) => kind !== undefined,
+});
 
 function cacheKey(baseUrl: string, token: string, id: string): string {
   return `${baseUrl}::${token}::${id}`;
@@ -151,35 +126,29 @@ export async function resolveMattermostOpaqueTarget(
   }
 
   const key = cacheKey(client.baseUrl, client.token, input);
-  const cachedKind = getCachedMattermostOpaqueTargetKind(key);
-  if (cachedKind) {
-    const to = cachedKind === "user" ? `user:${input}` : `channel:${input}`;
-    return { kind: cachedKind, id: input, to };
-  }
-
-  try {
-    await fetchMattermostUser(client, input);
-    cacheMattermostOpaqueTarget(key, "user");
-    return { kind: "user", id: input, to: `user:${input}` };
-  } catch (err) {
-    if (parseMattermostApiStatus(err) !== 404) {
-      // Unknown lookup error: stay best-effort and do not cache the result.
-      return { kind: "channel", id: input, to: `channel:${input}` };
-    }
-  }
-
-  // A user 404 means this ID may be a channel. Only a successful channel lookup
-  // is authoritative enough to cache: caching a fallback after a transient error
-  // can permanently fork a private channel's `group:<id>` session as `channel:<id>`.
-  try {
-    const channel = await fetchMattermostChannel(client, input);
-    const channelKind =
-      resolveMattermostTrustedChatKind({ channelType: channel.type }) === "group"
-        ? "group"
-        : "channel";
-    cacheMattermostOpaqueTarget(key, channelKind);
-    return { kind: channelKind, id: input, to: `channel:${input}` };
-  } catch {
-    return { kind: "channel", id: input, to: `channel:${input}` };
-  }
+  const { value } = await mattermostOpaqueTargetCache.read(
+    key,
+    async () => {
+      try {
+        await fetchMattermostUser(client, input);
+        return "user";
+      } catch (err) {
+        if (parseMattermostApiStatus(err) !== 404) {
+          return undefined;
+        }
+      }
+      // Cache only authoritative lookups: transient fallbacks must not fork private sessions.
+      try {
+        const channel = await fetchMattermostChannel(client, input);
+        return resolveMattermostTrustedChatKind({ channelType: channel.type }) === "group"
+          ? "group"
+          : "channel";
+      } catch {
+        return undefined;
+      }
+    },
+    { allowStale: false },
+  );
+  const kind = value ?? "channel";
+  return { kind, id: input, to: `${kind === "user" ? "user" : "channel"}:${input}` };
 }

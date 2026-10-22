@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
+  appendTranscriptEvent,
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
@@ -52,12 +53,14 @@ async function withPersistedOrphanBoundary(
   options: {
     parent: boolean;
     metadata: boolean;
+    orphanProvenance?: Record<string, unknown>;
     detachLeaf?: boolean;
     restartRecovery?: boolean;
     suppressNextUserMessagePersistence?: boolean;
     idempotencyKey?: string;
     excludeFromContext?: boolean;
     selectedOwner?: boolean;
+    recoveryNotice?: "tail" | "before-metadata";
   },
   run: (fixture: {
     input: Parameters<typeof prepareEmbeddedAttemptSessionBoundary>[0];
@@ -84,15 +87,34 @@ async function withPersistedOrphanBoundary(
       role: "user",
       content: "orphan wake",
       timestamp: 1,
+      ...(options.orphanProvenance ? { provenance: options.orphanProvenance } : {}),
       ...(options.idempotencyKey ? { idempotencyKey: options.idempotencyKey } : {}),
       ...(options.excludeFromContext ? { excludeFromContext: true } : {}),
       ...(options.detachLeaf
         ? { provenance: { kind: "inter_session", sourceTool: "subagent_announce" } }
         : {}),
     });
+    const appendRecoveryNotice = () =>
+      appendTranscriptEvent(target, {
+        type: "custom_message",
+        id: "recovery-notice",
+        parentId: seed.getAppendParentId(),
+        timestamp: new Date(2).toISOString(),
+        customType: "session-send-recovery-blocked",
+        content: "Saved input could not be delivered because its endpoint was replaced.",
+        display: true,
+        excludeFromContext: true,
+      });
+    if (options.recoveryNotice === "before-metadata") {
+      await appendRecoveryNotice();
+      await seed.reloadPersistedTranscriptAsync();
+    }
     if (options.metadata) {
       await seed.appendThinkingLevelChange("low");
       await seed.appendModelChange("openai", "gpt-5.5");
+    }
+    if (options.recoveryNotice === "tail") {
+      await appendRecoveryNotice();
     }
     const manager = guardSessionManager(
       SessionManager.openBounded(target, {
@@ -166,6 +188,106 @@ async function withPersistedOrphanBoundary(
 }
 
 describe("prepareEmbeddedAttemptSessionBoundary orphan recovery", () => {
+  it.each(["tail", "before-metadata", "before-later-orphan"] as const)(
+    "keeps an excluded recovery notice visible through later turns: %s",
+    async (recoveryNotice) => {
+      await withPersistedOrphanBoundary(
+        {
+          parent: true,
+          metadata: true,
+          recoveryNotice: recoveryNotice === "before-later-orphan" ? "tail" : recoveryNotice,
+        },
+        async ({ input, manager, orphanId, target }) => {
+          const previousInputs = ["orphan wake"];
+          if (recoveryNotice === "before-later-orphan") {
+            previousInputs.push("later orphan wake");
+            await manager.appendMessageAsync({
+              role: "user",
+              content: "later orphan wake",
+              timestamp: 3,
+            });
+            input.activeSession.agent.state.messages = manager.buildSessionContext().messages;
+          }
+          const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
+          expect(boundary.orphanRepair).toBeUndefined();
+          expect(input.activeSession.agent.state.messages).toMatchObject(
+            previousInputs.map((content) => ({ role: "user", content })),
+          );
+          await manager.appendMessageAsync({ role: "user", content: "new request", timestamp: 3 });
+          await manager.appendMessageAsync(
+            makeAssistantMessageFixture({
+              content: [{ type: "text", text: "new reply" }],
+              timestamp: 4,
+            }),
+          );
+          const reopened = await SessionManager.openAsync(target);
+          expect(reopened.getBranch().map((entry) => entry.id)).toEqual(
+            expect.arrayContaining([orphanId, "recovery-notice"]),
+          );
+          expect(reopened.buildSessionContext().messages).toMatchObject([
+            ...previousInputs.map((content) => ({ role: "user", content })),
+            { role: "user", content: "new request" },
+            { role: "assistant", content: [{ type: "text", text: "new reply" }] },
+          ]);
+        },
+      );
+    },
+  );
+
+  it.each([
+    { parent: false, metadata: false, prompt: "orphan wake" },
+    { parent: true, metadata: true, prompt: "new consult" },
+  ])("retains finalized Talk user speech through consult startup: $parent", async (options) => {
+    await withPersistedOrphanBoundary(
+      { ...options, orphanProvenance: { kind: "realtime_voice", sourceChannel: "talk" } },
+      async ({ input, manager, orphanId, target }) => {
+        input.attempt.prompt = options.prompt;
+        const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
+        expect(boundary.orphanRepair?.removeLeaf).toBe(false);
+        expect(boundary.orphanRepair?.contextEnginePrompt.match(/orphan wake/g)).toHaveLength(1);
+        expect(input.activeSession.agent.state.messages).toEqual([]);
+        const consult: PersistedUserTurnMessage = {
+          role: "user",
+          content: boundary.orphanRepair?.contextEnginePrompt ?? options.prompt,
+          excludeFromContext: true,
+          display: false,
+          timestamp: 3,
+        };
+        await manager.appendMessageAsync(consult);
+        await manager.appendMessageAsync(
+          makeAssistantMessageFixture({
+            content: [{ type: "text", text: "consult reply" }],
+            timestamp: 4,
+          }),
+        );
+        const reopened = await SessionManager.openAsync(target);
+        expect(reopened.getBranch().map((entry) => entry.id)).toContain(orphanId);
+        expect(reopened.buildSessionContext().messages).toMatchObject([
+          { role: "user", content: "orphan wake" },
+          { role: "assistant", content: [{ type: "text", text: "consult reply" }] },
+        ]);
+        expect(loadTranscriptEventsSync(target)).not.toEqual(
+          expect.arrayContaining([expect.objectContaining({ type: "leaf" })]),
+        );
+      },
+    );
+  });
+
+  it.each([
+    { kind: "realtime_voice", sourceChannel: "discord" },
+    { kind: "realtime_voice" },
+    { kind: "internal_system", sourceChannel: "talk" },
+  ] as const)("keeps ordinary orphan repair for $kind / $sourceChannel", async (provenance) => {
+    await withPersistedOrphanBoundary(
+      { parent: false, metadata: false, orphanProvenance: provenance },
+      async ({ input, manager, orphanId }) => {
+        const boundary = await prepareEmbeddedAttemptSessionBoundary(input);
+        expect(boundary.orphanRepair?.removeLeaf).toBe(true);
+        expect(manager.getBranch().map((entry) => entry.id)).not.toContain(orphanId);
+      },
+    );
+  });
+
   it.each(["orphan", "current", "excluded"] as const)(
     "preserves speech finalized while orphan repair waits for write admission: %s",
     async (kind) => {

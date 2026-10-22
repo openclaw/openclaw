@@ -15,7 +15,6 @@ import { getSafeLocalStorage } from "../../local-storage.ts";
 import { base64ToBytes, bytesToBase64 } from "../bytes-base64.ts";
 
 export type {
-  DevicePairingList,
   DeviceTokenSummary,
   PairedDevice,
   PendingDevice,

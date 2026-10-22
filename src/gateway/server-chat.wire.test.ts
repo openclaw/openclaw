@@ -9,6 +9,7 @@ import { createCliToolTracking } from "../agents/cli-runner/execute-tool-trackin
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.sqlite-entry.js";
 import { type AgentEventRuntimePayload, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { captureSessionTarget } from "../sessions/session-controller.target.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
@@ -16,6 +17,7 @@ import { createAssistantTextStream } from "./agent-event-assistant-text.js";
 import { abortChatRunById, registerChatAbortController } from "./chat-abort.js";
 import { projectInFlightRunSnapshot } from "./chat-inflight-snapshot.js";
 import { capLiveAssistantText } from "./live-chat-projector.js";
+import type { SerializedGatewayFrame } from "./serialized-json.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   emitAgentEvent,
@@ -116,7 +118,7 @@ function connect(
     readyState: 1,
     bufferedAmount: 0,
     send: (
-      wire: string | Buffer,
+      wire: string | Buffer | SerializedGatewayFrame,
       options?: { binary: false } | (() => void),
       callback?: () => void,
     ) => {
@@ -164,6 +166,67 @@ function expectCapturedTail(actual: string, tail: string, prefix: string) {
 }
 
 afterEach(() => vi.useRealTimers());
+
+it("uses display deltas independently of cumulative raw assistant snapshots", async () => {
+  await using harness = createHarness();
+  const { frames } = connect(harness.clients, "viewer");
+  const runId = "display-deltas";
+  harness.registerRun(runId, "agent:main:display-deltas");
+  for (const [index, delta] of ["Hello", " world"].entries()) {
+    const event: AgentEventRuntimePayload = {
+      runId,
+      seq: index + 1,
+      ts: Date.now(),
+      stream: "assistant",
+      data: { itemId: "raw", text: "raw transcript text", delta },
+      assistantProjection: { itemId: "display", delta, replace: false },
+    };
+    await harness.handler(event);
+  }
+  vi.advanceTimersByTime(75);
+  expect(chatDeltaText(frames)).toBe("Hello world");
+  expect(payloads(frames, "agent")[0]?.data?.text).toBe("raw transcript text");
+});
+
+it("retains display deltas while a hidden run has no session subscribers", async () => {
+  await using harness = createHarness();
+  const { frames } = connect(harness.clients, "viewer");
+  const runId = "hidden-display-deltas";
+  const sessionKey = "agent:main:hidden-display-deltas";
+  harness.registerRun(runId, sessionKey);
+  const emit = (seq: number, delta: string) => {
+    const event: AgentEventRuntimePayload = {
+      runId,
+      sessionKey,
+      seq,
+      ts: Date.now(),
+      stream: "assistant",
+      controlUiVisible: false,
+      projectSessionLifecycle: false,
+      data: { itemId: "raw", text: "raw transcript text", delta },
+      assistantProjection: { itemId: "display", delta, replace: false },
+    };
+    return harness.handler(event);
+  };
+
+  await emit(1, "Hello");
+  expect(frames).toEqual([]);
+  harness.sessionMessageSubscribers.subscribe("viewer", sessionKey);
+  await emit(2, " world");
+  harness.chatRunState.flushPendingText(runId);
+  expect(chatDeltaText(frames)).toBe("Hello world");
+
+  harness.sessionMessageSubscribers.unsubscribe("viewer", sessionKey);
+  const delivered = frames.length;
+  await emit(3, " hidden");
+  expect(frames).toHaveLength(delivered);
+  harness.sessionMessageSubscribers.subscribe("viewer", sessionKey);
+  await emit(4, " again");
+  harness.chatRunState.flushPendingText(runId);
+  expect(chatDeltaText(frames)).toBe("Hello world hidden again");
+  expect(harness.broadcast).not.toHaveBeenCalled();
+  expect(harness.nodeSendToSession).not.toHaveBeenCalled();
+});
 
 it("replaces the wire baseline when a cumulative snapshot restores capped context", () => {
   const state = createChatRunState();
@@ -907,26 +970,33 @@ it.each(["native", "dispatch", "abort", "retry", "clearRun", "clear"] as const)(
       });
       chatRunState.clearRun(runId);
     } else {
-      const chatAbortControllers = new Map();
-      registerChatAbortController({
-        chatAbortControllers,
+      const registration = registerChatAbortController({
+        target: captureSessionTarget({
+          storeScope: "/synthetic/chat-wire/" + runId,
+          sessionKey,
+          incarnation: runId,
+        }),
         runId,
         sessionId: runId,
         sessionKey,
         timeoutMs: 60_000,
       });
-      expect(
-        abortChatRunById(
-          {
-            ...harness,
-            ...broadcaster,
-            chatAbortControllers,
-            removeChatRun: (sourceRunId, clientRunId, key) =>
-              chatRunState.registry.remove(sourceRunId, clientRunId, key),
-          },
-          { runId, sessionKey },
-        ).aborted,
-      ).toBe(true);
+      try {
+        expect(registration.registered).toBe(true);
+        expect(
+          abortChatRunById(
+            {
+              ...harness,
+              ...broadcaster,
+              removeChatRun: (sourceRunId, clientRunId, key) =>
+                chatRunState.registry.remove(sourceRunId, clientRunId, key),
+            },
+            { runId, sessionKey },
+          ).aborted,
+        ).toBe(true);
+      } finally {
+        registration.cleanup();
+      }
     }
     const beforeDrain = frames.length;
     while (callbacks.length) {

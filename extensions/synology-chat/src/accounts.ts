@@ -35,7 +35,7 @@ const { listAccountIds, resolveAccountConfig: resolveMergedSynologyChatAccountCo
 
 export { listAccountIds };
 
-function getRawAccountConfig(
+export function getRawAccountConfig(
   channelCfg: SynologyChatChannelConfig,
   accountId: string,
 ): SynologyChatChannelConfig {
@@ -86,8 +86,7 @@ export function resolveAccount(
 ): ResolvedSynologyChatAccount {
   const channelCfg = getChannelConfig(cfg) ?? {};
   const id = accountId || DEFAULT_ACCOUNT_ID;
-  const accountOverrides =
-    id === DEFAULT_ACCOUNT_ID ? undefined : (channelCfg.accounts?.[id] ?? undefined);
+  const accountOverrides = id === DEFAULT_ACCOUNT_ID ? undefined : channelCfg.accounts?.[id];
   const rawAccount = getRawAccountConfig(channelCfg, id);
   const merged = resolveMergedSynologyChatAccountConfig(cfg, id);
 

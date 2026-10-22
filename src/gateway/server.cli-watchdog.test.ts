@@ -1,120 +1,96 @@
-import { spawn } from "node:child_process";
+import { fork } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import path from "node:path";
+import { text } from "node:stream/consumers";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+  withTestTimeout,
+} from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { testing } from "../agents/cli-backends.test-support.js";
 import * as cliLiveSessions from "../agents/cli-runner/cli-live-session-registry.js";
-import { executeDeps } from "../agents/cli-runner/execute-deps.js";
 import { cliBackendLog } from "../agents/cli-runner/log.js";
 import type {
+  CliBackendExecute,
   CliBackendExecuteContext,
   CliBackendPrepareExecutionContext,
 } from "../plugins/cli-backend.types.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { observeGatewayRunExecution } from "./agent-command.test-helpers.js";
 import * as agentJobs from "./agent-turn/agent-job.js";
-import type { GatewayClient } from "./client.js";
-import {
-  createWatchdogClock,
-  createWatchdogFixture,
-  type WatchdogFixture,
-} from "./server.cli-watchdog.test-support.js";
+import * as watchdogFixture from "./server.cli-watchdog.test-support.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
 
-type WatchdogCase = {
-  name: string;
-  behavior: "complete" | "stall" | "quiet" | "overall" | "cancel" | "ordered";
-  overallSeconds: number;
-  quietMs: number;
-  freezeMs: number;
-  outputFirst: boolean;
-  resume: boolean;
-};
+const watchdogClockForTest = vi.hoisted(
+  (): { current?: ReturnType<typeof watchdogFixture.createWatchdogClock> } => ({}),
+);
+
+vi.mock("../agents/cli-runner/execute-plugin-watchdog.js", async (importOriginal) => {
+  const actual =
+    await importOriginal<typeof import("../agents/cli-runner/execute-plugin-watchdog.js")>();
+  return {
+    ...actual,
+    createCliPluginWatchdog(params: Parameters<typeof actual.createCliPluginWatchdog>[0]) {
+      const clock = watchdogClockForTest.current;
+      if (!clock) {
+        return actual.createCliPluginWatchdog(params);
+      }
+      const watchdog = clock.run(() =>
+        actual.createCliPluginWatchdog({
+          ...params,
+          onNoOutputTimeout: (error) => clock.native(() => params.onNoOutputTimeout(error)),
+          onOverallTimeout: () => clock.native(() => params.onOverallTimeout()),
+        }),
+      );
+      // Only synchronous watchdog work uses manual time; the live Gateway stays on native timers.
+      return {
+        reset: () => clock.run(watchdog.reset),
+        noteOutput: () => clock.run(watchdog.noteOutput),
+        dispose: () => clock.run(watchdog.dispose),
+      };
+    },
+  };
+});
+
+type WatchdogCase = [
+  name: string,
+  behavior: "complete" | "stall" | "quiet" | "overall" | "cancel" | "ordered",
+  overallSeconds?: number,
+  quietMs?: number,
+  freezeMs?: number,
+];
 
 type WatchdogCompletion = { status: string; endedAt: number; error?: string };
 
 const cases: WatchdogCase[] = [
-  {
-    name: "preserves a fresh CLI reply across a process freeze",
-    behavior: "complete",
-    overallSeconds: 300,
-    quietMs: 40_000,
-    freezeMs: 60_000,
-    outputFirst: false,
-    resume: false,
-  },
-  {
-    name: "ends a resumed CLI stall at the normal quiet deadline after thaw",
-    behavior: "stall",
-    overallSeconds: 0,
-    quietMs: 40_000,
-    freezeMs: 60_000,
-    outputFirst: true,
-    resume: true,
-  },
-  {
-    name: "counts a short process pause against the quiet budget",
-    behavior: "quiet",
-    overallSeconds: 0,
-    quietMs: 40_000,
-    freezeMs: 20_000,
-    outputFirst: false,
-    resume: false,
-  },
-  {
-    name: "preserves the total active budget without hiding its later expiry",
-    behavior: "overall",
-    overallSeconds: 40,
-    quietMs: 120_000,
-    freezeMs: 60_000,
-    outputFirst: false,
-    resume: false,
-  },
-  {
-    name: "keeps the quiet deadline when output precedes an overdue timer",
-    behavior: "ordered",
-    overallSeconds: 300,
-    quietMs: 40_000,
-    freezeMs: 0,
-    outputFirst: false,
-    resume: false,
-  },
-  {
-    name: "still allows chat.abort to cancel the actual CLI turn",
-    behavior: "cancel",
-    overallSeconds: 300,
-    quietMs: 40_000,
-    freezeMs: 0,
-    outputFirst: false,
-    resume: false,
-  },
+  ["preserves a fresh CLI reply across a process freeze", "complete"],
+  ["ends a resumed CLI stall at the normal quiet deadline after thaw", "stall", 0],
+  ["counts a short process pause against the quiet budget", "quiet", 0, 40_000, 20_000],
+  ["preserves the total active budget without hiding its later expiry", "overall", 40, 120_000],
+  ["keeps the quiet deadline when output precedes an overdue timer", "ordered"],
+  ["still allows chat.abort to cancel the actual CLI turn", "cancel"],
 ];
 
 describe.skipIf(process.platform === "win32")(
   "CLI watchdog through registered Gateway methods",
   () => {
-    let fixture: WatchdogFixture | undefined;
-    let startup: Promise<WatchdogFixture> | undefined;
-    beforeAll(async () => {
-      startup = createWatchdogFixture();
-      fixture = await startup;
+    let startup: Promise<watchdogFixture.WatchdogFixture>;
+    beforeAll(() => {
+      startup = watchdogFixture.createWatchdogFixture();
+      return startup;
     }, 180_000);
-    afterAll(async () => {
-      const owned = await startup?.catch(() => undefined);
-      await owned?.cleanup();
-    });
+    afterAll(async () => (await startup.catch(() => undefined))?.cleanup());
     it.for(cases)(
-      "registered chat.send $name",
+      "registered chat.send %s",
       { timeout: 180_000 },
-      (testCase, { signal, onTestFinished }) => {
-        if (!fixture) {
-          throw new Error("The shared watchdog Gateway did not start.");
-        }
-        const work = runWatchdogCase(fixture, testCase, signal);
+      async (testCase, { signal, onTestFinished }) => {
+        const work = runWatchdogCase(await startup, testCase, signal);
         onTestFinished(() => work);
         return work;
       },
@@ -123,34 +99,39 @@ describe.skipIf(process.platform === "win32")(
 );
 
 async function runWatchdogCase(
-  fixture: WatchdogFixture,
+  fixture: watchdogFixture.WatchdogFixture,
   testCase: WatchdogCase,
   signal: AbortSignal,
 ) {
   const { state, gateway, backends, token, controllerScript } = fixture;
+  const [, behavior, overallSeconds = 300, quietMs = 40_000, freezeMs = 60_000] = testCase;
+  const resume = behavior === "stall";
   const requestExecution = await observeGatewayRunExecution();
-  const proof = state.path("proof", testCase.behavior);
-  const nativeRoot = state.path("receipts", testCase.behavior);
+  const proof = state.path("proof", behavior);
+  const nativeRoot = state.path("receipts", behavior);
   const sessionKey = `agent:main:freeze-${randomUUID()}`;
-  const clock = createWatchdogClock();
-  const realClock = executeDeps.watchdogClock;
+  const clock = watchdogFixture.createWatchdogClock();
+  const watchdog = { minMs: quietMs, maxMs: quietMs };
+  const readJson = async <T>(file: string): Promise<T> =>
+    JSON.parse(await fs.readFile(file, "utf8"));
+  const freezeReceipt = path.join(proof, "freeze-receipt.json");
   let orderedOutputAt: number | undefined;
   let abortedAt: number | undefined;
   let thawedAt: number | undefined;
   let outputs = 0;
   let outputChanged = createDeferred();
+  const wait = async <T>(promise: Promise<T>, message: string, timeoutMs = 5_000) => {
+    const result = await withTestTimeout(withinTest(promise, signal), timeoutMs, message);
+    signal.throwIfAborted();
+    return result;
+  };
   const waitForOutputs = async (expected: number) => {
-    await withTestTimeout(
+    await wait(
       (async () => {
-        let observed = outputs;
-        while (observed < expected) {
-          signal.throwIfAborted();
-          await outputChanged.promise;
-          observed = outputs;
+        for (let observed = outputs; observed < expected; observed = outputs) {
+          await withinTest(outputChanged.promise, signal);
         }
-        signal.throwIfAborted();
       })(),
-      5_000,
       `CLI did not publish ${expected} outputs`,
     );
     expect(outputs).toBe(expected);
@@ -159,7 +140,7 @@ async function runWatchdogCase(
   const completionObserved = createDeferred();
   const originalWait = agentJobs.waitForAgentJob;
   const waitForAgentJob =
-    testCase.behavior === "cancel"
+    behavior === "cancel"
       ? vi.spyOn(agentJobs, "waitForAgentJob").mockImplementation((params) => {
           if (params.runId === completionRunId && params.source === "chat") {
             completionObserved.resolve();
@@ -169,9 +150,7 @@ async function runWatchdogCase(
       : undefined;
   const log = vi.spyOn(cliBackendLog, "info");
 
-  const preparedContexts = new Set<
-    Parameters<typeof cliLiveSessions.createCliLiveSessionCapability>[0]["context"]
-  >();
+  const preparedContexts = new Set<Parameters<typeof cliLiveSessions.closeCliLiveSession>[0]>();
   const createCapability = cliLiveSessions.createCliLiveSessionCapability;
   const capability = vi
     .spyOn(cliLiveSessions, "createCliLiveSessionCapability")
@@ -180,7 +159,7 @@ async function runWatchdogCase(
       return createCapability(params);
     });
   let pendingCompletion: Promise<WatchdogCompletion> | undefined;
-  let controller: ReturnType<typeof spawn> | undefined;
+  let controller: ReturnType<typeof fork> | undefined;
   let controllerExit: Promise<void> | undefined;
   let receipts: Awaited<ReturnType<typeof reserveTestPortListener>> | undefined;
   const receiptSockets = new Set<Socket>();
@@ -193,19 +172,38 @@ async function runWatchdogCase(
     readyReceipt.reject(error);
     resumedReceipt.reject(error);
   };
-  const abortWaits = () => {
-    rejectReceipts(signal.reason);
-    outputChanged.resolve();
-    completionObserved.resolve();
+  const recordAbort = () => {
+    abortedAt = clock.now();
   };
-  signal.addEventListener("abort", abortWaits, { once: true });
+  async function* observeOutput(execute: CliBackendExecute, execution: CliBackendExecuteContext) {
+    execution.abortSignal?.addEventListener("abort", recordAbort, { once: true });
+    try {
+      for await (const event of execute(execution)) {
+        const assistant = event.type === "assistant";
+        if (assistant && behavior === "ordered" && orderedOutputAt === undefined) {
+          orderedOutputAt = clock.now();
+          clock.jump(60_000);
+        }
+        yield event;
+        // The consumer has called noteOutput before requesting the next event.
+        if (assistant) {
+          outputs++;
+          const observed = outputChanged;
+          outputChanged = createDeferred();
+          observed.resolve();
+        }
+      }
+    } catch (error) {
+      rejectReceipts(error);
+      throw error;
+    }
+  }
   return await runQaGatewayFixture(
     async () => {
-      executeDeps.watchdogClock = clock;
-      await Promise.all([
-        fs.mkdir(proof, { recursive: true }),
-        fs.mkdir(nativeRoot, { recursive: true }),
-      ]);
+      watchdogClockForTest.current = clock;
+      await Promise.all(
+        [proof, nativeRoot].map((directory) => fs.mkdir(directory, { recursive: true })),
+      );
       receipts = await reserveTestPortListener({
         offsets: [0],
         signal,
@@ -216,22 +214,19 @@ async function runWatchdogCase(
               return;
             }
             receiptSockets.add(socket);
-            let receipt = "";
-            socket.setEncoding("utf8");
-            socket.on("data", (chunk: string) => {
-              receipt += chunk;
-            });
-            socket.on("error", rejectReceipts);
             socket.once("close", () => receiptSockets.delete(socket));
-            socket.once("end", () => {
-              if (receipt === "ready.json") {
-                readyReceipt.resolve();
-              } else if (receipt === "resumed.json") {
-                resumedReceipt.resolve();
-              } else {
-                rejectReceipts(new Error(`Unexpected CLI receipt: ${receipt}`));
-              }
-            });
+            void text(socket)
+              .then((receipt) => {
+                const notification = new Map([
+                  ["ready.json", readyReceipt],
+                  ["resumed.json", resumedReceipt],
+                ]).get(receipt);
+                if (!notification) {
+                  throw new Error(`Unexpected CLI receipt: ${receipt}`);
+                }
+                notification.resolve();
+              })
+              .catch(rejectReceipts);
           }),
       });
       receipts.listener.on("error", rejectReceipts);
@@ -251,194 +246,117 @@ async function runWatchdogCase(
                   ...prepared,
                   env: {
                     ...prepared.env,
-                    OPENCLAW_TEST_CLI_BEHAVIOR: testCase.behavior,
+                    OPENCLAW_TEST_CLI_BEHAVIOR: behavior,
                     OPENCLAW_TEST_CLI_RECEIPTS: nativeRoot,
                     OPENCLAW_TEST_CLI_RECEIPT_PORT: String(receiptPort),
                   },
-                  async *execute(execution: CliBackendExecuteContext) {
-                    execution.abortSignal?.addEventListener(
-                      "abort",
-                      () => {
-                        abortedAt = clock.now();
-                      },
-                      { once: true },
-                    );
-                    try {
-                      for await (const event of execute(execution)) {
-                        if (
-                          event.type === "assistant" &&
-                          testCase.behavior === "ordered" &&
-                          orderedOutputAt === undefined
-                        ) {
-                          orderedOutputAt = clock.now();
-                          clock.jump(60_000);
-                        }
-                        yield event;
-                        // The consumer has called noteOutput before requesting the next event.
-                        if (event.type === "assistant") {
-                          outputs++;
-                          const observed = outputChanged;
-                          outputChanged = createDeferred();
-                          observed.resolve();
-                        }
-                      }
-                    } catch (error) {
-                      rejectReceipts(error);
-                      throw error;
-                    }
-                  },
+                  execute: (execution: CliBackendExecuteContext) =>
+                    observeOutput(execute, execution),
                 };
               },
               config: {
                 ...backend.config,
-                reliability: {
-                  watchdog: {
-                    fresh: { minMs: testCase.quietMs, maxMs: testCase.quietMs },
-                    resume: { minMs: testCase.quietMs, maxMs: testCase.quietMs },
-                  },
-                },
+                reliability: { watchdog: { fresh: watchdog, resume: watchdog } },
               },
             }),
           ),
       });
-      if (testCase.resume) {
-        const warm = await gateway.client.request<{ runId: string }>("chat.send", {
+      const send = (message: string) =>
+        gateway.client.request<{ runId: string; status: string }>("chat.send", {
           sessionKey,
-          message: "Warm up this session",
-          timeoutMs: testCase.overallSeconds * 1000,
+          message,
+          timeoutMs: overallSeconds * 1000,
           deliver: false,
           idempotencyKey: randomUUID(),
         });
-        const warmResult = await gateway.client.request<{ status: string }>("agent.wait", {
-          runId: warm.runId,
-          timeoutMs: 15_000,
-        });
+      const waitForCompletion = (runId: string, timeoutMs: number, transportTimeoutMs?: number) =>
+        gateway.client.request<WatchdogCompletion>(
+          "agent.wait",
+          { runId, timeoutMs },
+          transportTimeoutMs === undefined ? undefined : { timeoutMs: transportTimeoutMs },
+        );
+      if (resume) {
+        const warm = await send("Warm up this session");
+        const warmResult = await waitForCompletion(warm.runId, 15_000);
         expect(warmResult.status).toBe("ok");
       }
       outputs = 0;
       abortedAt = undefined;
       const acceptedAt = Date.now();
-      const accepted = await gateway.client.request<{ runId: string; status: string }>(
-        "chat.send",
-        {
-          sessionKey,
-          message: "Reply after resume.",
-          timeoutMs: testCase.overallSeconds * 1000,
-          deliver: false,
-          idempotencyKey: randomUUID(),
-        },
-      );
+      const accepted = await send("Reply after resume.");
       expect(accepted.status).toBe("started");
-      await withTestTimeout(
-        readyReceipt.promise,
-        30_000,
-        "CLI readiness receipt was not published",
-      );
-      signal.throwIfAborted();
-      const ready: { pid: number; time: number; turns: number } = JSON.parse(
-        await fs.readFile(path.join(nativeRoot, "ready.json"), "utf8"),
+      await wait(readyReceipt.promise, "CLI readiness receipt was not published", 30_000);
+      const ready = await readJson<{ pid: number; turns: number }>(
+        path.join(nativeRoot, "ready.json"),
       );
       expect(preparedContexts.size).toBeGreaterThan(0);
-      expect(ready.turns).toBe(testCase.resume ? 2 : 1);
+      expect(ready.turns).toBe(resume ? 2 : 1);
       await waitForOutputs(1);
       const pulse = async () => {
         const expected = outputs + 1;
         process.kill(ready.pid, "SIGUSR1");
         await waitForOutputs(expected);
       };
-      const waitForCompletion = (client: GatewayClient) =>
-        client.request<WatchdogCompletion>(
-          "agent.wait",
-          {
-            runId: accepted.runId,
-            timeoutMs: 50_000,
-          },
-          { timeoutMs: 55_000 },
-        );
-      if (testCase.behavior === "cancel") {
+      if (behavior === "cancel") {
         completionRunId = accepted.runId;
-        pendingCompletion = waitForCompletion(gateway.client);
+        pendingCompletion = waitForCompletion(accepted.runId, 50_000, 55_000);
         void pendingCompletion.catch(() => {});
-        await withTestTimeout(completionObserved.promise, 5_000, "agent.wait was not registered");
-        signal.throwIfAborted();
-        expect(
-          waitForAgentJob?.mock.calls.some(
-            ([params]) => params.runId === accepted.runId && params.source === "chat",
-          ),
-        ).toBe(true);
+        await wait(completionObserved.promise, "agent.wait was not registered");
         const cancelled = await gateway.client.request("chat.abort", {
           sessionKey,
           runId: accepted.runId,
         });
         expect(cancelled).toMatchObject({ aborted: true, runIds: [accepted.runId] });
-      } else if (testCase.behavior === "ordered") {
+      } else if (behavior === "ordered") {
         clock.advance(0);
-        expect(
-          log.mock.calls.some(([message]) => message.includes("cli watchdog credited timer gap")),
-        ).toBe(true);
-        thawedAt = clock.now();
       } else {
-        controller = spawn(
-          process.execPath,
-          [
-            controllerScript,
-            String(process.pid),
-            path.join(proof, "freeze-receipt.json"),
-            String(ready.pid),
-          ],
+        controller = fork(
+          controllerScript,
+          [String(process.pid), freezeReceipt, String(ready.pid)],
           {
             detached: true,
             signal,
             stdio: ["ignore", "ignore", "inherit", "ipc"],
             env: { PATH: "/usr/bin:/bin" },
+            execArgv: [],
           },
         );
         const ownedController = controller;
-        controllerExit = new Promise<void>((resolve, reject) => {
-          ownedController.once("error", reject);
-          ownedController.once("exit", (code) =>
-            code === 0 ? resolve() : reject(new Error(`controller ${code}`)),
-          );
+        controllerExit = once(ownedController, "exit").then(([code]) => {
+          if (code !== 0) {
+            throw new Error(`controller ${code}`);
+          }
         });
         void controllerExit.catch(() => {});
-        const stopped = await Promise.race([
-          new Promise<unknown>((resolve) => {
-            ownedController.once("message", resolve);
-          }),
-          controllerExit.then(() => {
-            throw new Error("Controller exited before stopping the tree");
-          }),
-        ]);
+        const [stopped] = await awaitGateBeforeSettlement(
+          once(ownedController, "message"),
+          controllerExit,
+          "Controller exited before stopping the tree",
+        );
         expect(stopped).toBe("stopped");
         signal.throwIfAborted();
-        clock.jump(testCase.freezeMs);
+        clock.jump(freezeMs);
         thawedAt = clock.now();
-        if (!testCase.outputFirst) {
+        if (!resume) {
           clock.advance(0);
         }
-        expect(abortedAt).toBeUndefined();
         ownedController.send("resume");
         await controllerExit;
         controller = undefined;
-        if (testCase.behavior === "complete" || testCase.behavior === "quiet") {
-          await withTestTimeout(
-            resumedReceipt.promise,
-            5_000,
-            "CLI resume receipt was not published",
-          );
-          await fs.access(path.join(nativeRoot, "resumed.json"));
+        if (behavior === "complete" || behavior === "quiet") {
+          await wait(resumedReceipt.promise, "CLI resume receipt was not published");
         } else {
           await waitForOutputs(2);
         }
-        if (testCase.outputFirst) {
+        if (resume) {
           clock.advance(0);
         }
-        if (testCase.behavior === "complete") {
+        if (behavior === "complete") {
           clock.advance(250);
           await pulse();
         }
       }
-      if (testCase.behavior !== "cancel") {
+      if (behavior !== "cancel") {
         await gatewayFixture.disconnectGatewayClient(gateway.client);
         gateway.client = await gatewayFixture.connectGatewayClient({
           url: `ws://127.0.0.1:${gateway.port}`,
@@ -446,130 +364,97 @@ async function runWatchdogCase(
           scopes: ["operator.admin", "operator.read", "operator.write"],
         });
       }
-      if (!["complete", "cancel"].includes(testCase.behavior)) {
+      if (!["complete", "cancel"].includes(behavior)) {
         // The overdue one-second tick is active time; only its lateness is credited.
-        const remaining =
-          testCase.behavior === "quiet"
-            ? 20_000
-            : testCase.behavior === "overall"
-              ? 39_000
-              : 40_000;
+        const remaining = behavior === "quiet" ? 20_000 : behavior === "overall" ? 39_000 : 40_000;
         for (let elapsed = 0; elapsed < remaining - 1;) {
           const step = Math.min(5_000, remaining - 1 - elapsed);
           clock.advance(step);
           elapsed += step;
           expect(abortedAt).toBeUndefined();
-          if (testCase.behavior === "overall" && step === 5_000) {
+          if (behavior === "overall" && step === 5_000) {
             await pulse();
           }
         }
         clock.advance(1);
         expect(abortedAt).toBe(clock.now());
       }
-      const completed = await (pendingCompletion ?? waitForCompletion(gateway.client));
+      const completed = await (pendingCompletion ??
+        waitForCompletion(accepted.runId, 50_000, 55_000));
       expect(completed.endedAt).toBeGreaterThanOrEqual(acceptedAt);
       expect(clock.pending()).toBe(0);
       const history = await gateway.client.request("chat.history", { sessionKey });
-      await fs.writeFile(
-        path.join(proof, "gateway-result.json"),
-        JSON.stringify({ accepted, completed, history }, null, 2),
-      );
       const timerMessages = log.mock.calls
         .map(([message]) => message)
         .filter((message) => message.includes("cli watchdog credited timer gap"));
-      await fs.writeFile(path.join(proof, "timer-events.json"), JSON.stringify(timerMessages));
-      if (testCase.behavior === "ordered") {
-        expect(timerMessages).toHaveLength(1);
-        expect(timerMessages[0]).toContain("creditedMs=0");
+      if (behavior === "ordered") {
+        expect(timerMessages).toEqual([expect.stringContaining("creditedMs=0")]);
       }
-      if (testCase.behavior === "complete") {
+      if (behavior === "complete") {
         expect(completed.status).toBe("ok");
         expect(JSON.stringify(history)).toContain("Preserved reply.");
-      } else if (testCase.behavior === "cancel") {
+      } else if (behavior === "cancel") {
         expect(completed.status).not.toBe("timeout");
         expect(JSON.stringify(history)).not.toContain("Preserved reply.");
       } else {
         expect(completed.status).toBe("timeout");
-        let elapsedAfterThaw: number;
-        if (testCase.behavior === "ordered") {
-          if (orderedOutputAt === undefined) {
-            throw new Error("Registered CLI transport did not deliver its ordered output.");
-          }
-          elapsedAfterThaw = (abortedAt ?? Number.NaN) - 60_000 - orderedOutputAt;
-        } else {
-          const freeze: { stoppedAt: number; resumedAt: number } = JSON.parse(
-            await fs.readFile(path.join(proof, "freeze-receipt.json"), "utf8"),
-          );
+        if (behavior !== "ordered") {
+          const freeze = await readJson<{ stoppedAt: number; resumedAt: number }>(freezeReceipt);
           expect(freeze.resumedAt).toBeGreaterThanOrEqual(freeze.stoppedAt);
-          elapsedAfterThaw = (abortedAt ?? Number.NaN) - (thawedAt ?? Number.NaN);
         }
-        const expectedRemaining = testCase.behavior === "quiet" ? 20_000 : 40_000;
+        const elapsedAfterThaw =
+          (abortedAt ?? Number.NaN) -
+          (behavior === "ordered"
+            ? 60_000 + (orderedOutputAt ?? Number.NaN)
+            : (thawedAt ?? Number.NaN));
+        const expectedRemaining = behavior === "quiet" ? 20_000 : 40_000;
         expect(elapsedAfterThaw).toBeGreaterThan(expectedRemaining - 5_000);
         expect(elapsedAfterThaw).toBeLessThan(expectedRemaining + 2_000);
         expect(completed.error).toContain(
-          testCase.behavior === "overall" ? "exceeded timeout" : "no output for 40s",
+          behavior === "overall" ? "exceeded timeout" : "no output for 40s",
         );
       }
     },
     async () => {
-      try {
-        await runQaGatewayFixture(
-          async () => {
-            controller?.kill("SIGTERM");
-            await controllerExit?.catch(() => {});
-          },
-          async () => {
-            // agent.wait can observe a terminal attempt while detached chat work settles.
-            await gateway.client.request("chat.abort", { sessionKey });
-          },
-          async () => {
-            const results = await Promise.allSettled(
-              [...preparedContexts].map((context) =>
-                cliLiveSessions.closeCliLiveSession(context, "restart"),
-              ),
-            );
-            const failures = results.filter((result) => result.status === "rejected");
-            if (failures.length > 0) {
-              throw new AggregateError(
-                failures.map((failure) => failure.reason),
-                "CLI session cleanup failed",
-              );
-            }
-          },
-          async () => {
-            await pendingCompletion?.catch(() => {});
-            await requestExecution.waitForCompletion();
-          },
-          async () => {
-            await gateway.client.request("sessions.delete", { key: sessionKey });
-          },
-          async () => {
-            closingReceipts = true;
-            const closed = receipts?.releaseListener();
-            for (const socket of receiptSockets) {
-              socket.destroy();
-            }
-            await closed;
-          },
-          () => receipts?.claim.release(),
-        );
-      } finally {
-        // Restore observation hooks after every owner has had its cleanup attempt.
-        signal.removeEventListener("abort", abortWaits);
-        executeDeps.watchdogClock = realClock;
-        testing.resetDepsForTest();
-        capability.mockRestore();
-        log.mockRestore();
-        waitForAgentJob?.mockRestore();
-        await requestExecution.restore();
+      controller?.kill("SIGTERM");
+      await controllerExit?.catch(() => {});
+    },
+    // agent.wait can observe a terminal attempt while detached chat work settles.
+    () => gateway.client.request("chat.abort", { sessionKey }),
+    async () => {
+      const results = await Promise.allSettled(
+        [...preparedContexts].map((context) =>
+          cliLiveSessions.closeCliLiveSession(context, "restart"),
+        ),
+      );
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
+      );
+      if (failures.length > 0) {
+        throw new AggregateError(failures, "CLI session cleanup failed");
       }
     },
     async () => {
-      const evidenceRoot = process.env.OPENCLAW_CLI_WATCHDOG_PROOF_DIR;
-      if (evidenceRoot) {
-        await fs.mkdir(evidenceRoot, { recursive: true });
-        await fs.cp(proof, path.join(evidenceRoot, testCase.behavior), { recursive: true });
+      await pendingCompletion?.catch(() => {});
+      await requestExecution.waitForCompletion();
+    },
+    () => gateway.client.request("sessions.delete", { key: sessionKey }),
+    async () => {
+      closingReceipts = true;
+      const closed = receipts?.releaseListener();
+      for (const socket of receiptSockets) {
+        socket.destroy();
       }
+      await closed;
+    },
+    () => receipts?.claim.release(),
+    async () => {
+      watchdogClockForTest.current = undefined;
+      testing.resetDepsForTest();
+      for (const spy of [capability, log, waitForAgentJob]) {
+        spy?.mockRestore();
+      }
+      await requestExecution.restore();
     },
   );
 }

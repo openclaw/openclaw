@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as defaults from "../../media-understanding/defaults.js";
 import type {
@@ -19,7 +19,6 @@ import type {
   MediaUnderstandingProvider,
 } from "../../plugin-sdk/media-understanding.js";
 import * as capabilities from "../../plugins/capability-provider-runtime.js";
-import type { AuthProfileStore } from "../auth-profiles/types.js";
 import * as models from "../embedded-agent-runner/model.js";
 import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js";
 import {
@@ -28,8 +27,67 @@ import {
   hasImageReasoningOnlyResponse,
   type ImageModelConfig,
 } from "./image-tool.helpers.js";
+import { createImageTool } from "./image-tool.js";
 import * as execution from "./image-tool.model-execution.js";
-import "./image-tool.js";
+
+export type ToolTextResult = {
+  content?: Array<{
+    type?: string;
+    text?: string;
+    image_url?: { url?: string };
+  }>;
+  details?: Record<string, unknown>;
+};
+
+export function expectToolText(result: unknown, text: string): void {
+  const content = (result as ToolTextResult).content ?? [];
+  expect(content.some((block) => block.type === "text" && block.text === text)).toBe(true);
+}
+
+function requireImageTool<T>(tool: T | null | undefined): T {
+  expect(typeof (tool as { execute?: unknown } | null | undefined)?.execute).toBe("function");
+  if (!tool) {
+    throw new Error("expected image tool");
+  }
+  return tool;
+}
+
+export function createRequiredImageTool(args: Parameters<typeof createImageTool>[0]) {
+  return requireImageTool(createImageTool(args));
+}
+
+export async function executeImplicitImageTool(
+  options: Parameters<typeof createImageTool>[0],
+  failures = 0,
+) {
+  const requests: string[] = [];
+  const describe = vi
+    .spyOn(descriptions, "describeImageWithModel")
+    .mockImplementation(async (request) => {
+      requests.push(`${request.provider}/${request.model}`);
+      if (requests.length <= failures) {
+        throw new Error("fixture image model unavailable");
+      }
+      return { text: "inspected", model: request.model };
+    });
+  const provider = vi.spyOn(registry, "getMediaUnderstandingProvider").mockReturnValue(undefined);
+  // Routing keeps image bytes real; independent compression cases own metadata.
+  const compression = vi
+    .spyOn(execution, "prepareImageCompressionPolicy")
+    .mockImplementation(async ({ imageCount }) => ({ imageCount }));
+  onTestFinished(() => {
+    compression.mockRestore();
+    provider.mockRestore();
+    describe.mockRestore();
+  });
+  const tool = createRequiredImageTool(options);
+  const result = await tool.execute("implicit-image", {
+    prompt: "Inspect this image.",
+    path: `data:image/png;base64,${ONE_PIXEL_PNG_B64}`,
+  });
+  expectToolText(result, "inspected");
+  return { result, requests };
+}
 
 type ResolveModelAsync = (typeof import("../embedded-agent-runner/model.js"))["resolveModelAsync"];
 
@@ -69,24 +127,6 @@ type ImageToolProviderDeps = {
   resolveImageCompressionPolicy: ResolveImageCompressionPolicy;
   loadImageWebMediaRuntime: () => Promise<ImageWebMediaRuntime>;
 };
-
-type ImageToolTestApi = {
-  resolveImageModelConfigForTool(params: {
-    cfg?: OpenClawConfig;
-    agentDir: string;
-    workspaceDir?: string;
-    authStore?: AuthProfileStore;
-    preparedModelRuntime?: PreparedModelRuntimeSnapshot;
-  }): ImageModelConfig | null;
-};
-
-function getTestApi(): ImageToolTestApi {
-  const api = (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageToolTestApi")];
-  if (!api) {
-    throw new Error("image tool test API is unavailable");
-  }
-  return api as ImageToolTestApi;
-}
 
 const restoreSpies: Array<() => void> = [];
 
@@ -186,10 +226,6 @@ export const testing = {
   ) => execution.prepareImageCompressionPolicy(params),
   setProviderDepsForTest,
 };
-export const resolveImageModelConfigForTool: ImageToolTestApi["resolveImageModelConfigForTool"] = (
-  params,
-) => getTestApi().resolveImageModelConfigForTool(params);
-
 export const ONE_PIXEL_PNG_B64 =
   "iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAIAAAAlC+aJAAAAIGNIUk0AAHomAACAhAAA+gAAAIDoAAB1MAAA6mAAADqYAAAXcJy6UTwAAAAGYktHRAD/AP8A/6C9p5MAAAAHdElNRQfqBBsGAQr00ED3AAAAJXRFWHRkYXRlOmNyZWF0ZQAyMDI2LTA0LTI3VDA2OjAxOjEwKzAwOjAwPU3tXwAAACV0RVh0ZGF0ZTptb2RpZnkAMjAyNi0wNC0yN1QwNjowMToxMCswMDowMEwQVeMAAAAodEVYdGRhdGU6dGltZXN0YW1wADIwMjYtMDQtMjdUMDY6MDE6MTArMDA6MDAbBXQ8AAAAeElEQVRo3u3awQnDQBAEwT2Q8w/YAikIP5rF1RFMca+FO8/s7rrnqjcA1BsA6g0A9QaAesOfA77zqTf8Blj/AgAAAAAAAJsDqAOoA6gDqAOoc9TXAdQB1AHUAdQB1AHUAdQB1AHU7Qc46gEAAAAANrcecGZ2f8B/ASYSQPlKoEJ/AAAAAElFTkSuQmCC";
 

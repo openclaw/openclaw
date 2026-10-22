@@ -45,12 +45,12 @@ export async function probeTwitch(
               return;
             }
             settled = true;
-            connectListener.unbind();
+            authSuccessListener.unbind();
             disconnectListener.unbind();
             authFailListener.unbind();
           };
 
-          const connectListener = probeClient.onConnect(() => {
+          const authSuccessListener = probeClient.onAuthenticationSuccess(() => {
             cleanup();
             resolve();
           });

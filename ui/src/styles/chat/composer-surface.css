@@ -25,6 +25,11 @@
   min-width: 0;
 }
 
+.agent-chat__composer-notices > .agent-chat__cancellation-notice {
+  max-width: 100%;
+  white-space: normal;
+}
+
 .agent-chat__composer-notices:not(
   :has(
     > :not(openclaw-chat-child-attention, .chat-composer-lit-content),
@@ -208,7 +213,9 @@
      the surface's own floor is taller than the editor plus these insets. */
   --chat-composer-editor-inset-inline: 14px;
   --chat-composer-editor-inset-block: 6px;
-  --chat-attachment-hit-slop: calc(var(--chat-composer-editor-inset-block) * 2);
+  /* Attachment controls keep their clearance when the compact editor loses its inset. */
+  --chat-attachment-inset-block: 6px;
+  --chat-attachment-hit-slop: calc(var(--chat-attachment-inset-block) * 2);
   /* The editor is a reading and writing surface, not a compact form field, so it
      owns a 16px base instead of the shared control token, whose 14px base only
      reaches 16px through an iOS zoom floor — text that size by accident does not
@@ -880,6 +887,10 @@
   height: 18px;
 }
 
+.chat-send-btn--stop rect {
+  rx: 3px;
+}
+
 .chat-send-btn--stop:hover:not(:disabled) {
   background: color-mix(in srgb, var(--danger) 18%, transparent);
   color: color-mix(in srgb, var(--danger) 82%, var(--text-strong));
@@ -1010,7 +1021,6 @@
      it must not collapse the normal bottom breathing room. */
   .agent-chat__composer-shell {
     grid-template-columns: minmax(0, 1fr);
-    gap: 0;
   }
 }
 
@@ -1043,17 +1053,6 @@
     max-height: 56px;
     overflow-y: auto;
   }
-}
-
-.agent-chat__input [data-chat-pointer-restored-focus]:focus-visible {
-  outline: none;
-  box-shadow: none;
-}
-
-.agent-chat__input
-  wa-dropdown[data-chat-pointer-opened-picker]
-  wa-dropdown-item:is(:focus, :focus-visible) {
-  outline: none;
 }
 
 .chat-thread-inner {
@@ -1195,7 +1194,7 @@
     --chat-composer-send-size: var(--chat-mobile-row-plus-target-size);
   }
 
-  .agent-chat__input--mobile-toolbar svg {
+  :where(.agent-chat__input--mobile-toolbar) svg {
     width: var(--chat-mobile-row-icon-size);
     height: var(--chat-mobile-row-icon-size);
     stroke-width: var(--chat-mobile-row-icon-stroke);

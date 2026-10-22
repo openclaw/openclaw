@@ -1,5 +1,4 @@
 import type { AssistantMessageEvent } from "../../../llm/types.js";
-import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 
@@ -98,14 +97,4 @@ export function wrapStreamObjectEvents(
   stream[Symbol.asyncIterator] = iterator;
   eventTransforms.set(stream, { iterator, transforms });
   return stream;
-}
-
-/** Preserve synchronous streams while adapting promise-returning provider implementations. */
-export function mapAssistantMessageStream(
-  stream: ReturnType<StreamFn>,
-  wrap: (resolved: Awaited<ReturnType<StreamFn>>) => Awaited<ReturnType<StreamFn>>,
-): ReturnType<StreamFn> {
-  return stream && typeof stream === "object" && "then" in stream
-    ? Promise.resolve(stream).then(wrap)
-    : wrap(stream);
 }

@@ -27,7 +27,8 @@ optional tools. Set `tools.toolSearch: false` to restore direct schemas. Engaged
 This automatic default does not rewrite the configuration file.
 
 Embedded runs with a local model on the native Ollama transport keep
-policy-approved `web_search` and `web_fetch` schemas directly visible by default.
+policy-approved `web_search`, `web_fetch`, `memory_search`, and `memory_get`
+schemas directly visible by default.
 Other optional tools still use Tool Search. Any explicit `tools.toolSearch` value
 keeps its configured behavior, including `true`, an object, or `false`. Known
 hosted Ollama routes and the OpenAI-compatible transport keep the general default.
@@ -41,8 +42,12 @@ surface. Direct-only tools remain visible alongside the controls.
 The directory scales with the active model's context window. When space is tight,
 descriptions shorten before tool names are omitted; every authorized catalog
 entry remains searchable and callable. Invalid arguments for OpenClaw-owned
-tools include a bounded expected input signature when one can be rendered, so
-the model can correct the call without another schema lookup.
+tools include a bounded expected input signature when one can be rendered,
+plus the received type at the rejected field. Short scalar previews can show
+serialization mistakes such as `"10"` instead of `10`. Sensitive fields and
+registered secrets are redacted; arbitrary text and container contents are
+withheld. Diagnostics are bounded, and invalid arguments still fail before
+the target tool executes.
 If a call mistakes an admitted skill name for a tool ID, the error points back
 to the skill’s complete instructions instead of sending the model through tool search.
 

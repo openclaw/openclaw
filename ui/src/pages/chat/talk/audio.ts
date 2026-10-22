@@ -35,12 +35,7 @@ export function floatToG711Ulaw(samples: Float32Array): Uint8Array {
   return bytes;
 }
 
-export type RealtimeTalkAudioFrame = {
-  peak: number;
-  rms: number;
-};
-
-export function measureRealtimeTalkAudioFrame(samples: Float32Array): RealtimeTalkAudioFrame {
+export function measureRealtimeTalkAudioFrame(samples: Float32Array) {
   let peak = 0;
   let sumSquares = 0;
   for (const rawSample of samples) {
@@ -177,7 +172,7 @@ export class RealtimeTalkMediaStreamMeter {
   }
 }
 
-export function estimateBase64DecodedByteLength(value: string): number {
+function estimateBase64DecodedByteLength(value: string): number {
   const padding = value.endsWith("==") ? 2 : value.endsWith("=") ? 1 : 0;
   return Math.max(0, Math.floor((value.length * 3) / 4) - padding);
 }
@@ -187,23 +182,38 @@ const REALTIME_TALK_PCM_OUTPUT_MAX_SOURCES = 4_096;
 
 type RealtimeTalkPcmOutputQueuePlayResult = "queued" | "ignored" | "overflow";
 
+// Owns Web Audio sources and their completion callbacks; stop retires sources before ending them.
 export class RealtimeTalkPcmOutputQueue {
+  private context: AudioContext | null = null;
+  private sampleRateHz = 0;
   private playhead = 0;
   private readonly sources = new Set<AudioBufferSourceNode>();
+  private sourceListeners: AbortController | null = null;
 
-  get queuedUntil(): number {
-    return this.playhead;
+  open(sampleRateHz: number): void {
+    this.context = new AudioContext({ sampleRate: sampleRateHz });
+    this.sampleRateHz = sampleRateHz;
+  }
+
+  close(): void {
+    this.stop();
+    void this.context?.close();
+    this.context = null;
   }
 
   get isPlaying(): boolean {
     return this.sources.size > 0;
   }
 
-  play(
-    base64: string,
-    outputContext: AudioContext | null,
-    outputSampleRateHz: number,
-  ): RealtimeTalkPcmOutputQueuePlayResult {
+  get playbackDelayMs(): number {
+    return this.context
+      ? Math.max(0, Math.ceil((this.playhead - this.context.currentTime) * 1000))
+      : 0;
+  }
+
+  play(base64: string): RealtimeTalkPcmOutputQueuePlayResult {
+    const outputContext = this.context;
+    const outputSampleRateHz = this.sampleRateHz;
     if (!outputContext) {
       return "ignored";
     }
@@ -244,7 +254,11 @@ export class RealtimeTalkPcmOutputQueue {
     buffer.getChannelData(0).set(samples);
     const source = outputContext.createBufferSource();
     this.sources.add(source);
-    source.addEventListener("ended", () => this.sources.delete(source));
+    this.sourceListeners ??= new AbortController();
+    source.addEventListener("ended", () => this.sources.delete(source), {
+      once: true,
+      signal: this.sourceListeners.signal,
+    });
     source.buffer = buffer;
     source.connect(outputContext.destination);
     source.start(startAt);
@@ -252,12 +266,14 @@ export class RealtimeTalkPcmOutputQueue {
     return "queued";
   }
 
-  stop(outputContext: AudioContext | null): void {
+  stop(): void {
     // Release ownership first so synchronous or late `ended` events from stopped
     // sources cannot affect audio queued by a replacement playback turn.
     const sources = [...this.sources];
+    this.sourceListeners?.abort();
+    this.sourceListeners = null;
     this.sources.clear();
-    this.playhead = outputContext?.currentTime ?? 0;
+    this.playhead = this.context?.currentTime ?? 0;
     for (const source of sources) {
       try {
         source.stop();

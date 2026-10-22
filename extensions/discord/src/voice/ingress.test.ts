@@ -93,31 +93,28 @@ describe("Discord voice ingress execution correlation", () => {
   it.each([
     { owner: true, fail: false },
     { owner: false, fail: true },
-  ])(
-    "binds an admitted voice command for its lifetime (owner=$owner, failure=$fail)",
-    async ({ owner, fail }) => {
-      const release = vi.fn();
-      const bindRun = vi.fn(() => release);
-      const { run } = fixture(owner);
-      mocks.agentCommandFromIngress.mockImplementationOnce(async (input) => {
-        expect(bindRun).toHaveBeenCalledWith(expect.objectContaining({ runId: input.runId }));
-        expect(input.runId).toEqual(expect.any(String));
-        expect(input.senderIsOwner).toBe(owner);
-        expect(release).not.toHaveBeenCalled();
-        if (fail) {
-          throw new Error("Agent turn failed");
-        }
-        return { payloads: [{ text: "Voice changed." }] };
-      });
-      const turn = run({ voiceSelection: { bindRun, unregister: vi.fn() } });
+  ])("binds until turn ends ($owner/$fail)", async ({ owner, fail }) => {
+    const release = vi.fn();
+    const bindRun = vi.fn(() => release);
+    const { run } = fixture(owner);
+    mocks.agentCommandFromIngress.mockImplementationOnce(async (input) => {
+      expect(bindRun).toHaveBeenCalledWith(expect.objectContaining({ runId: input.runId }));
+      expect(input.runId).toEqual(expect.any(String));
+      expect(input.senderIsOwner).toBe(owner);
+      expect(release).not.toHaveBeenCalled();
       if (fail) {
-        await expect(turn).rejects.toThrow("Agent turn failed");
-      } else {
-        await expect(turn).resolves.toBe("Voice changed.");
+        throw new Error("Agent turn failed");
       }
-      expect(release).toHaveBeenCalledOnce();
-    },
-  );
+      return { payloads: [{ text: "Voice changed." }] };
+    });
+    const turn = run({ voiceSelection: { bindRun, unregister: vi.fn() } });
+    if (fail) {
+      await expect(turn).rejects.toThrow("Agent turn failed");
+    } else {
+      await expect(turn).resolves.toBe("Voice changed.");
+    }
+    expect(release).toHaveBeenCalledOnce();
+  });
 
   it.each(["policy", "call", "abort"] as const)(
     "revokes a non-owner voice binding when %s authority ends during the turn",
@@ -157,14 +154,14 @@ describe("Discord voice ingress execution correlation", () => {
     await run({ message: "first turn" });
     await run({ message: "second turn" });
 
-    expect(mocks.agentCommandFromIngress).toHaveBeenCalledTimes(2);
     const inputs = mocks.agentCommandFromIngress.mock.calls.map(([input]) => input);
-    expect(inputs.map((input) => input.message)).toEqual(["first turn", "second turn"]);
-    expect(inputs.map((input) => input.sessionKey)).toEqual([
-      "agent:main:discord:channel:channel-1",
-      "agent:main:discord:channel:channel-1",
-    ]);
-    expect(inputs.map((input) => input.accountId)).toEqual(["work", "work"]);
+    expect(inputs).toMatchObject(
+      ["first turn", "second turn"].map((message) => ({
+        message,
+        sessionKey: "agent:main:discord:channel:channel-1",
+        accountId: "work",
+      })),
+    );
     for (const input of inputs) {
       expect(input).not.toHaveProperty("runId");
     }
@@ -173,14 +170,11 @@ describe("Discord voice ingress execution correlation", () => {
   it.each([
     { state: "stopped", captureOnly: false },
     { state: "active", captureOnly: true },
-  ] as const)(
-    "rejects nonconversational ingress (state=$state, captureOnly=$captureOnly)",
-    async ({ state, captureOnly }) => {
-      const { entry, run } = fixture();
-      entry.captureOnly = captureOnly;
-      entry.sessionLifecycle.status = state;
-      await expect(run()).resolves.toBeNull();
-      expect(mocks.agentCommandFromIngress).not.toHaveBeenCalled();
-    },
-  );
+  ] as const)("rejects $state/$captureOnly ingress", async ({ state, captureOnly }) => {
+    const { entry, run } = fixture();
+    entry.captureOnly = captureOnly;
+    entry.sessionLifecycle.status = state;
+    await expect(run()).resolves.toBeNull();
+    expect(mocks.agentCommandFromIngress).not.toHaveBeenCalled();
+  });
 });

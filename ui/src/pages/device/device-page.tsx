@@ -6,6 +6,7 @@ import type {
   NativeDeviceSettingsSnapshot,
   SettingKey,
 } from "../../app/native-device-settings.ts";
+import { NativeChromeSetup } from "../../components/native-chrome-setup.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -24,17 +25,7 @@ import { projectNativeDeviceSettings } from "../../lib/reactive/application-nati
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
-import "../../components/native-chrome-setup.ts";
 import "./device.css";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-native-chrome-setup": HTMLAttributes<HTMLElement>;
-    }
-  }
-}
 
 registerEnglishCatalog(registerAppsEnglish);
 registerEnglishCatalog(registerSettingsEnglish);
@@ -71,7 +62,7 @@ function settleCookieSyncEdit(
   }
 }
 
-function DevicePageContent() {
+export function DevicePage() {
   const capability = useApplication().nativeDeviceSettings;
   const projection = capability ? projectNativeDeviceSettings(capability) : null;
   const snapshot = () => projection?.read();
@@ -81,7 +72,6 @@ function DevicePageContent() {
     pending: boolean;
     error?: Error;
   } | null>(null);
-  let gatewayHostingRequest = 0;
   let targetProfileTimer: ReturnType<typeof setTimeout> | null = null;
 
   const pendingEdits = () => {
@@ -192,13 +182,13 @@ function DevicePageContent() {
             onChange={(event) => capability?.set(props.setting, event.currentTarget.value)}
           >
             <For each={props.options} keyed={(option) => option.id}>
-              {(_option, index) => (
+              {(option) => (
                 <option
-                  value={props.options[index()]!.id}
-                  selected={props.options[index()]!.id === props.value}
-                  disabled={props.options[index()]!.disabled}
+                  value={option().id}
+                  selected={option().id === props.value}
+                  disabled={option().disabled}
                 >
-                  {props.options[index()]!.name}
+                  {option().name}
                 </option>
               )}
             </For>
@@ -234,10 +224,9 @@ function DevicePageContent() {
             if (!capability) {
               return;
             }
-            const request = ++gatewayHostingRequest;
             setGatewayHostingEdit({ pending: true });
             capability.set("app.keepGatewayRunning", value, (error) => {
-              if (!disposed && gatewayHostingRequest === request) {
+              if (!disposed) {
                 setGatewayHostingEdit({ pending: false, error });
               }
             });
@@ -259,7 +248,7 @@ function DevicePageContent() {
             stacked
             control={
               <div class="device-extension-setup">
-                <openclaw-native-chrome-setup />
+                <NativeChromeSetup />
                 <div class="device-extension-setup__actions">
                   <a
                     href="https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig"
@@ -660,7 +649,7 @@ function DevicePageContent() {
     );
   }
   return (
-    <>
+    <openclaw-device-page>
       <SettingsPageHeader
         title={t(deviceSettingsGroupLabelKey(snapshot()))}
         subtitle={
@@ -691,10 +680,6 @@ function DevicePageContent() {
           </Show>
         </SettingsPage>
       </SettingsWorkspace>
-    </>
+    </openclaw-device-page>
   );
 }
-
-export const DevicePage = defineSolidBridge("openclaw-device-page", DevicePageContent, {
-  properties: {},
-});

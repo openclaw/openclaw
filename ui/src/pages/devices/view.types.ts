@@ -1,24 +1,20 @@
 import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
 import type { PresenceEntry } from "../../api/types.ts";
-import type { DevicePairingList } from "../../lib/nodes/index.ts";
 import type {
-  ExecApprovalsFile,
-  ExecApprovalsSnapshot,
+  DevicesPageDataState,
   InventoryRemovalRequest,
 } from "../../lib/nodes/page-operations.ts";
 
-export type DevicesProps = {
+export type DevicesProps = Omit<
+  DevicesPageDataState,
+  "client" | "requestGeneration" | "nodesLoading" | "nodesQueuedRefresh" | "devicesQueuedRefresh"
+> & {
   loading: boolean;
-  nodes: Array<Record<string, unknown>>;
   presence: PresenceEntry[];
   gatewayVersion: string | null;
   basePath: string;
   gatewaySystemInfo?: SystemInfoResult | null;
   desktopEnvironments?: EnvironmentSummary[];
-  lastError: string | null;
-  devicesLoading: boolean;
-  devicesError: string | null;
-  devicesList: DevicePairingList | null;
   canPairDevice: boolean;
   canManagePairing: boolean;
   canAdmin: boolean;
@@ -27,12 +23,6 @@ export type DevicesProps = {
   configSaving: boolean;
   configDirty: boolean;
   configFormMode: "form" | "raw";
-  execApprovalsLoading: boolean;
-  execApprovalsSaving: boolean;
-  execApprovalsDirty: boolean;
-  execApprovalsSnapshot: ExecApprovalsSnapshot | null;
-  execApprovalsForm: ExecApprovalsFile | null;
-  execApprovalsSelectedAgent: string | null;
   execApprovalsTarget: "gateway" | "node";
   execApprovalsTargetNodeId: string | null;
   onDevicePairSetupOpen: () => void;

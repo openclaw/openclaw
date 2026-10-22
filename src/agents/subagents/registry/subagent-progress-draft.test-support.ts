@@ -21,7 +21,11 @@ export function useSubagentProgressCohort(fixture: { readonly stateDir: string }
   });
 
   /** The requester turn spawns announcing children, then yields them to its settle wake. */
-  return async function yieldCohort(requesterTurnRunId: string, ids: readonly string[]) {
+  return async function yieldCohort(
+    requesterTurnRunId: string,
+    ids: readonly string[],
+    requesterOrigin?: { channel: string; to: string; accountId: string },
+  ) {
     for (const id of ids) {
       await writeSubagentSessionEntry({
         stateDir: fixture.stateDir,
@@ -39,6 +43,7 @@ export function useSubagentProgressCohort(fixture: { readonly stateDir: string }
         requesterSessionKey: requesterKey,
         requesterAgentId: "main",
         requesterDisplayKey: requesterKey,
+        requesterOrigin,
         requesterTurnRunId,
         task: `Delegated ${id}`,
         cleanup: "keep",

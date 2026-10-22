@@ -343,7 +343,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
       preparedReply,
     );
     if (deliveryKey && deliveredKeys.has(deliveryKey)) {
-      logVerbose("slack: suppressed duplicate normal delivery within the same turn");
       return { visibleReplySent: false };
     }
     const sent = await deliverPreparedReply(preparedReply, deliveryReplyThreadTs);
@@ -424,7 +423,6 @@ export function createSlackStreamingDeliveryRuntime(setup: SlackDispatchSetup) {
     const text = params.streamText ?? hookContent;
     const deliveryKey = buildSlackEventDeliveryKey({ ...params, threadTs, textOverride: text });
     if (deliveryKey && deliveredKeys.has(deliveryKey)) {
-      logVerbose("slack-stream: suppressed duplicate reply payload");
       return { visibleReplySent: false };
     }
     let messageId: string | undefined;

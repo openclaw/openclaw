@@ -131,27 +131,17 @@ export function collectSlackActionValues(blocks?: unknown[]) {
 
 export function recordSlackObservedMessage(params: {
   channelId: string;
-  matchedScenario: boolean;
   message: SlackMessage;
   observedMessages: SlackObservedMessage[];
-  scenarioId: string;
-  scenarioTitle: string;
 }) {
   if (!params.message.ts) {
     return;
   }
   params.observedMessages.push({
-    actionValues: collectSlackActionValues(params.message.blocks),
     blockText: collectSlackBlockText(params.message.blocks),
-    botId: params.message.bot_id,
     channelId: params.channelId,
-    matchedScenario: params.matchedScenario,
-    scenarioId: params.scenarioId,
-    scenarioTitle: params.scenarioTitle,
     text: params.message.text ?? "",
-    threadTs: params.message.thread_ts,
     ts: params.message.ts,
-    userId: params.message.user,
   });
 }
 

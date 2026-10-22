@@ -40,7 +40,7 @@ type AnthropicCompactionReplayPlan = {
   compaction?: AnthropicCompactionBlock;
 };
 
-type ReplayOpts = { authProfileId?: string; sessionId?: string };
+type ReplayOpts = NonNullable<Parameters<typeof buildProviderReplayContext>[1]>;
 type ReplayOut = Pick<AssistantMessage, "providerReplay">;
 
 export function createCompactionCapture(output: ReplayOut, model: Model, options?: ReplayOpts) {

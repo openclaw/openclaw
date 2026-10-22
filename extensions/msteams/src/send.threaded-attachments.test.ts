@@ -1,12 +1,11 @@
 import { once } from "node:events";
-import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises";
+import { readFile, realpath, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Client as TeamsApiClient } from "@microsoft/teams.api";
+import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
 import { teamsQuotedRawTable } from "./format.test-fixtures.js";
 import {
   editMessageMSTeams,
@@ -67,27 +66,51 @@ vi.mock("./graph-upload.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./graph-chat.js", () => ({
-  buildTeamsFileInfoCard: mockState.buildTeamsFileInfoCard,
+// mock-isolation: fixture file cards must not call the Graph transport.
+vi.mock("./graph-chat.js", () => ({ buildTeamsFileInfoCard: mockState.buildTeamsFileInfoCard }));
+
+vi.mock("./messenger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./messenger.js")>()),
+  sendMSTeamsMessages: mockState.sendMSTeamsMessages,
 }));
 
-vi.mock("./messenger.js", () => ({
-  sendMSTeamsMessages: mockState.sendMSTeamsMessages,
-  buildConversationReference: (ref: {
-    serviceUrl?: string;
+function mockSendContext(
+  api: TeamsApiClient,
+  params: {
+    conversationType: "channel" | "groupChat" | "personal";
+    conversationId?: string;
+    replyStyle: "thread" | "top-level";
+    threadId?: string;
     activityId?: string;
-    conversation?: Record<string, unknown>;
-    agent?: Record<string, unknown>;
-    user?: Record<string, unknown>;
-  }) => ({
-    serviceUrl: ref.serviceUrl,
-    activityId: ref.activityId,
-    conversation: ref.conversation,
-    agent: ref.agent,
-    user: ref.user,
-    channelId: "msteams",
-  }),
-}));
+    threadActivityId?: string;
+    sharePointSiteId?: string;
+    getAccessToken?: ReturnType<typeof vi.fn>;
+  },
+) {
+  const { conversationType, replyStyle, threadId, activityId, threadActivityId, sharePointSiteId } =
+    params;
+  const resolvedConversationId = params.conversationId ?? conversationId;
+  mockState.resolveMSTeamsSendContext.mockResolvedValue({
+    app: { api },
+    appId: "app-id",
+    conversationId: resolvedConversationId,
+    ref: {
+      serviceUrl,
+      agent: { id: "28:bot", name: "OpenClaw", role: "bot" },
+      user: { id: "29:user" },
+      conversation: { id: resolvedConversationId, conversationType },
+      ...(threadId ? { threadId } : {}),
+      ...(activityId ? { activityId } : {}),
+    },
+    conversationType,
+    replyStyle,
+    ...(threadActivityId ? { threadActivityId } : {}),
+    sdkCloudOptions: { cloud: "Public" },
+    tokenProvider: { getAccessToken: params.getAccessToken ?? vi.fn(async () => "token") },
+    ...(sharePointSiteId ? { sharePointSiteId } : {}),
+    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+  });
+}
 
 type CapturedRequest = {
   method: string;
@@ -149,9 +172,9 @@ async function withRealTeamsSdkHttp<T>(
       server.close((error) => {
         if (error) {
           reject(error);
-          return;
+        } else {
+          resolve();
         }
-        resolve();
       });
     });
   }
@@ -166,9 +189,7 @@ function mockSharePointFileUpload(): void {
   });
   mockState.uploadAndShareSharePoint.mockResolvedValue({
     itemId: "item-1",
-    webUrl: "https://sharepoint.example.com/report.pdf",
     shareUrl: "https://sharepoint.example.com/shared/report.pdf",
-    name: "report.pdf",
   });
   mockState.getDriveItemProperties.mockResolvedValue({
     eTag: '"file-guid,1"',
@@ -177,187 +198,119 @@ function mockSharePointFileUpload(): void {
   });
   mockState.buildTeamsFileInfoCard.mockReturnValue({
     contentType: "application/vnd.microsoft.teams.card.file.info",
-    contentUrl: "https://sharepoint.example.com/dav/report.pdf",
     name: "report.pdf",
-    content: { uniqueId: "file-guid", fileType: "pdf" },
   });
 }
 
-type AttachmentRoutingCase = {
-  label: string;
-  conversationType: "channel" | "groupChat";
-  replyStyle: "thread" | "top-level";
-  threadId?: string;
-  activityId?: string;
-  expectedConversationId: string;
-};
+const threadRoot = "thread-root-1";
+const activityRoot = "incoming-activity-1";
+const threadedId = `${conversationId};messageid=thread-root-1`;
+const attachmentRoutingCases = [
+  ["channel thread", "channel", "thread", threadRoot, activityRoot, threadedId],
+  [
+    "channel activity fallback",
+    "channel",
+    "thread",
+    undefined,
+    activityRoot,
+    `${conversationId};messageid=incoming-activity-1`,
+  ],
+  ["top-level channel", "channel", "top-level", threadRoot, undefined, conversationId],
+  ["group chat", "groupChat", "thread", threadRoot, undefined, "19:group-id@thread.v2"],
+] as const;
 
-type StructuredRoutingCase = {
-  label: string;
-  conversationType: "channel" | "groupChat" | "personal";
-  replyStyle: "thread" | "top-level";
-  threadActivityId?: string;
-  storedThreadId?: string;
-  expectedConversationId: string;
-};
+beforeEach(() => {
+  vi.clearAllMocks();
+  mockState.requiresFileConsent.mockReturnValue(false);
+  mockState.sendMSTeamsMessages.mockResolvedValue(["text-message-1"]);
+  mockSharePointFileUpload();
+});
 
-const attachmentRoutingCases: AttachmentRoutingCase[] = [
-  {
-    label: "channel attachment in its stored thread root",
-    conversationType: "channel",
-    replyStyle: "thread",
-    threadId: "thread-root-1",
-    activityId: "incoming-activity-1",
-    expectedConversationId: `${conversationId};messageid=thread-root-1`,
-  },
-  {
-    label: "channel attachment using the stored activity root",
-    conversationType: "channel",
-    replyStyle: "thread",
-    activityId: "incoming-activity-1",
-    expectedConversationId: `${conversationId};messageid=incoming-activity-1`,
-  },
-  {
-    label: "explicit top-level channel attachment",
-    conversationType: "channel",
-    replyStyle: "top-level",
-    threadId: "thread-root-1",
-    expectedConversationId: conversationId,
-  },
-  {
-    label: "group chat attachment without channel threading",
-    conversationType: "groupChat",
-    replyStyle: "thread",
-    threadId: "thread-root-1",
-    expectedConversationId: conversationId,
-  },
-];
-
-const structuredRoutingCases: StructuredRoutingCase[] = [
-  {
-    label: "threaded channel",
-    conversationType: "channel",
-    replyStyle: "thread",
-    threadActivityId: "thread-root-1",
-    storedThreadId: "thread-root-1",
-    expectedConversationId: `${conversationId};messageid=thread-root-1`,
-  },
-  {
-    label: "top-level channel",
-    conversationType: "channel",
-    replyStyle: "top-level",
-    storedThreadId: "thread-root-1",
-    expectedConversationId: conversationId,
-  },
-];
-
-type StructuredSender = {
-  label: string;
-  send: (cfg: OpenClawConfig) => Promise<unknown>;
-};
-
-const structuredSenders: StructuredSender[] = [
-  {
-    label: "presentation card",
-    send: async (cfg) =>
-      await sendAdaptiveCardMSTeams({
-        cfg,
-        to: conversationId,
-        card: {
-          type: "AdaptiveCard",
-          version: "1.4",
-          body: [{ type: "TextBlock", text: "Deploy finished" }],
-        },
-      }),
-  },
-  {
-    label: "poll",
-    send: async (cfg) =>
-      await sendPollMSTeams({
-        cfg,
-        to: conversationId,
-        question: "Ship it?",
-        options: ["Yes", "No"],
-      }),
-  },
-];
-
-describe("Microsoft Teams SharePoint attachment thread routing", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockState.requiresFileConsent.mockReturnValue(false);
-    mockState.sendMSTeamsMessages.mockResolvedValue(["text-message-1"]);
-    mockSharePointFileUpload();
-  });
-
-  it.each(attachmentRoutingCases)(
-    "sends $label through the real Teams SDK and Bot Framework HTTP endpoint",
-    async ({ conversationType, replyStyle, threadId, activityId, expectedConversationId }) => {
+describe.each(["file", "card", "poll"] as const)("Microsoft Teams %s thread routing", (kind) => {
+  it.each(
+    attachmentRoutingCases.filter((_, index) => kind === "file" || index === 0 || index === 2),
+  )(
+    "routes %s through the real Teams SDK",
+    async (_label, conversationType, replyStyle, threadId, activityId, expectedConversationId) => {
       await withRealTeamsSdkHttp(async ({ api, requests }) => {
-        mockState.resolveMSTeamsSendContext.mockResolvedValue({
-          app: { api },
-          appId: "app-id",
-          conversationId,
-          ref: {
-            serviceUrl,
-            agent: { id: "28:bot", name: "OpenClaw", role: "bot" },
-            user: { id: "29:user" },
-            conversation: { id: conversationId, conversationType },
-            ...(threadId ? { threadId } : {}),
-            ...(activityId ? { activityId } : {}),
-          },
+        const resolvedConversationId =
+          conversationType === "groupChat" ? expectedConversationId : conversationId;
+        mockSendContext(api, {
+          conversationId: resolvedConversationId,
           conversationType,
           replyStyle,
-          ...(replyStyle === "thread" && conversationType === "channel"
-            ? { threadActivityId: threadId ?? activityId }
-            : {}),
-          sdkCloudOptions: { cloud: "Public" },
-          tokenProvider: { getAccessToken: vi.fn(async () => "token") },
-          sharePointSiteId: "sharepoint-site-1",
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          threadId,
+          activityId: kind === "file" ? activityId : "incoming-activity-1",
+          threadActivityId:
+            replyStyle === "thread" && conversationType === "channel"
+              ? (threadId ?? activityId)
+              : undefined,
+          ...(kind === "file" ? { sharePointSiteId: "sharepoint-site-1" } : {}),
         });
-
-        const result = await sendMessageMSTeams({
-          cfg: {} as OpenClawConfig,
-          to: conversationId,
-          text: "Here is the report",
-          mediaUrl: "https://media.example.com/report.pdf",
-        });
-
+        const target = { cfg: {}, to: resolvedConversationId };
+        const result =
+          kind === "file"
+            ? await sendMessageMSTeams({
+                ...target,
+                text: "Here is the report",
+                mediaUrl: "https://media.example.com/report.pdf",
+              })
+            : kind === "card"
+              ? await sendAdaptiveCardMSTeams({
+                  ...target,
+                  card: {
+                    type: "AdaptiveCard",
+                    version: "1.4",
+                    body: [{ type: "TextBlock", text: "Deploy finished" }],
+                  },
+                })
+              : await sendPollMSTeams({ ...target, question: "Ship it?", options: ["Yes", "No"] });
+        if (kind === "file") {
+          expect(mockState.uploadAndShareSharePoint).toHaveBeenCalledExactlyOnceWith(
+            expect.objectContaining({
+              chatId: resolvedConversationId,
+              siteId: "sharepoint-site-1",
+            }),
+          );
+        }
         expect(requests).toHaveLength(1);
         expect(requests[0]).toMatchObject({
           path: `${new URL(serviceUrl).pathname}/v3/conversations/${expectedConversationId}/activities`,
           body: {
             type: "message",
-            text: "Here is the report",
             conversation: { id: expectedConversationId, conversationType },
-            attachments: [
-              {
-                contentType: "application/vnd.microsoft.teams.card.file.info",
-                name: "report.pdf",
-              },
-            ],
+            ...(kind === "file"
+              ? {
+                  text: "Here is the report",
+                  attachments: [
+                    {
+                      contentType: "application/vnd.microsoft.teams.card.file.info",
+                      name: "report.pdf",
+                    },
+                  ],
+                }
+              : { attachments: [{ contentType: "application/vnd.microsoft.card.adaptive" }] }),
           },
         });
         expect(result).toMatchObject({
           messageId: "sdk-http-message-1",
-          conversationId,
+          conversationId: resolvedConversationId,
         });
       });
     },
   );
+});
 
+describe("Microsoft Teams attachments", () => {
   it("delivers a workspace-relative attachment through the real Teams SDK and Bot Framework", async () => {
-    const workspaceDir = await realpath(
-      await mkdtemp(join(tmpdir(), "openclaw-msteams-sdk-media-")),
-    );
-    const filePath = join(workspaceDir, "report.pdf");
-    const fileContents = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
-    const approvedReader = vi.fn(async (candidate: string) => await readFile(candidate));
-    const conflictingReader = vi.fn(async () => Buffer.from("forged Teams attachment"));
-    const mediaAccess = { localRoots: [workspaceDir], workspaceDir, readFile: approvedReader };
+    await withTempDir("openclaw-msteams-sdk-media-", async (dir) => {
+      const workspaceDir = await realpath(dir);
+      const filePath = join(workspaceDir, "report.pdf");
+      const fileContents = Buffer.from("%PDF-1.4\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
+      const approvedReader = vi.fn(async (candidate: string) => await readFile(candidate));
+      const conflictingReader = vi.fn(async () => Buffer.from("forged Teams attachment"));
+      const mediaAccess = { localRoots: [workspaceDir], workspaceDir, readFile: approvedReader };
 
-    try {
       await writeFile(filePath, fileContents);
       const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/outbound-media")>(
         "openclaw/plugin-sdk/outbound-media",
@@ -365,28 +318,16 @@ describe("Microsoft Teams SharePoint attachment thread routing", () => {
       mockState.loadOutboundMediaFromUrl.mockImplementation(actual.loadOutboundMediaFromUrl);
 
       await withRealTeamsSdkHttp(async ({ api, requests }) => {
-        mockState.resolveMSTeamsSendContext.mockResolvedValue({
-          app: { api },
-          appId: "app-id",
-          conversationId,
-          ref: {
-            serviceUrl,
-            agent: { id: "28:bot", name: "OpenClaw", role: "bot" },
-            user: { id: "29:user" },
-            conversation: { id: conversationId, conversationType: "channel" },
-            threadId: "workspace-thread-root",
-          },
+        mockSendContext(api, {
           conversationType: "channel",
           replyStyle: "thread",
+          threadId: "workspace-thread-root",
           threadActivityId: "workspace-thread-root",
-          sdkCloudOptions: { cloud: "Public" },
-          tokenProvider: { getAccessToken: vi.fn(async () => "token") },
           sharePointSiteId: "sharepoint-site-1",
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
         });
 
         await sendMessageMSTeams({
-          cfg: {} as OpenClawConfig,
+          cfg: {},
           to: conversationId,
           text: "Workspace report",
           mediaUrl: "report.pdf",
@@ -414,9 +355,7 @@ describe("Microsoft Teams SharePoint attachment thread routing", () => {
           },
         });
       });
-    } finally {
-      await rm(workspaceDir, { recursive: true, force: true });
-    }
+    });
   });
 
   it("keeps personal image delivery on the existing non-SharePoint path", async () => {
@@ -427,32 +366,24 @@ describe("Microsoft Teams SharePoint attachment thread routing", () => {
         fileName: "image.png",
         kind: "image",
       });
-      mockState.resolveMSTeamsSendContext.mockResolvedValue({
-        app: { api },
-        appId: "app-id",
-        conversationId,
-        ref: {
-          serviceUrl,
-          agent: { id: "28:bot", name: "OpenClaw", role: "bot" },
-          user: { id: "29:user" },
-          conversation: { id: conversationId, conversationType: "personal" },
-        },
+      mockSendContext(api, {
         conversationType: "personal",
         replyStyle: "thread",
-        sdkCloudOptions: { cloud: "Public" },
-        tokenProvider: { getAccessToken: vi.fn(async () => "token") },
         sharePointSiteId: "sharepoint-site-1",
-        log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
       });
 
       const result = await sendMessageMSTeams({
-        cfg: {} as OpenClawConfig,
+        cfg: {},
         to: conversationId,
         text: "Here is the image",
         mediaUrl: "https://media.example.com/image.png",
       });
 
       expect(mockState.sendMSTeamsMessages).toHaveBeenCalledOnce();
+      expect(mockState.sendMSTeamsMessages.mock.calls[0]?.[0].messages).toEqual([
+        { text: "Here is the image" },
+        { mediaUrl: `data:image/png;base64,${Buffer.from("image-content").toString("base64")}` },
+      ]);
       expect(mockState.uploadAndShareSharePoint).not.toHaveBeenCalled();
       expect(requests).toEqual([]);
       expect(result.messageId).toBe("text-message-1");
@@ -460,64 +391,9 @@ describe("Microsoft Teams SharePoint attachment thread routing", () => {
   });
 });
 
-describe.each(structuredSenders)("Microsoft Teams $label thread routing", ({ send }) => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
-
-  it.each(structuredRoutingCases)(
-    "sends to the resolved $label identity through the real Teams SDK",
-    async ({
-      conversationType,
-      replyStyle,
-      threadActivityId,
-      storedThreadId,
-      expectedConversationId,
-    }) => {
-      await withRealTeamsSdkHttp(async ({ api, requests }) => {
-        mockState.resolveMSTeamsSendContext.mockResolvedValue({
-          app: { api },
-          appId: "app-id",
-          conversationId,
-          ref: {
-            serviceUrl,
-            agent: { id: "28:bot", name: "OpenClaw", role: "bot" },
-            user: { id: "29:user" },
-            conversation: { id: conversationId, conversationType },
-            activityId: "incoming-activity-1",
-            ...(storedThreadId ? { threadId: storedThreadId } : {}),
-          },
-          conversationType,
-          replyStyle,
-          ...(threadActivityId ? { threadActivityId } : {}),
-          sdkCloudOptions: { cloud: "Public" },
-          tokenProvider: { getAccessToken: vi.fn(async () => "token") },
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
-        });
-
-        await send({} as OpenClawConfig);
-
-        expect(requests).toHaveLength(1);
-        expect(requests[0]).toMatchObject({
-          path: `${new URL(serviceUrl).pathname}/v3/conversations/${expectedConversationId}/activities`,
-          body: {
-            type: "message",
-            conversation: { id: expectedConversationId, conversationType },
-            attachments: [{ contentType: "application/vnd.microsoft.card.adaptive" }],
-          },
-        });
-      });
-    },
-  );
-});
-
-describe.each([
-  {
-    label: "escaped brackets",
-    sourceName: String.raw`Alice \[Ops\]`,
-    displayName: "Alice [Ops]",
-  },
-])("Teams text preparation at the SDK HTTP boundary ($label)", ({ sourceName, displayName }) => {
+describe("Teams text preparation at the SDK HTTP boundary", () => {
+  const sourceName = String.raw`Alice \[Ops\]`;
+  const displayName = "Alice [Ops]";
   const source = `# Deployment status\n\n${teamsQuotedRawTable}\n\n@[${sourceName}](11111111-2222-3333-4444-555555555555)`;
   const expectedText = `**Deployment status**\n\n${teamsQuotedRawTable}\n\n<at>${displayName}</at>`;
   const expectedMention = {
@@ -533,38 +409,28 @@ describe.each([
     additionalType: ["AIGeneratedContent"],
   };
 
+  function expectPrepared(body: Record<string, unknown> | undefined) {
+    expect.soft(body).toMatchObject({
+      text: expectedText,
+      entities: expect.arrayContaining([expectedMention, expectedAiEntity]),
+    });
+  }
+
   it.each(["edit", "file-caption"] as const)(
     "preserves normal-send text and mention semantics for %s",
     async (surface) => {
-      vi.clearAllMocks();
-      mockState.requiresFileConsent.mockReturnValue(false);
-      mockSharePointFileUpload();
       const actualMessenger =
         await vi.importActual<typeof import("./messenger.js")>("./messenger.js");
       mockState.sendMSTeamsMessages.mockImplementation(actualMessenger.sendMSTeamsMessages);
       await withRealTeamsSdkHttp(async ({ api, requests }) => {
-        mockState.resolveMSTeamsSendContext.mockResolvedValue({
-          app: { api },
-          appId: "app-id",
-          conversationId,
-          ref: {
-            serviceUrl,
-            agent: { id: "28:bot", name: "OpenClaw", role: "bot" },
-            user: { id: "29:user" },
-            conversation: { id: conversationId, conversationType: "channel" },
-          },
+        mockSendContext(api, {
           conversationType: "channel",
           replyStyle: "top-level",
-          sdkCloudOptions: { cloud: "Public" },
-          tokenProvider: { getAccessToken: vi.fn() },
           sharePointSiteId: "sharepoint-site-1",
-          log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+          getAccessToken: vi.fn(),
         });
         await sendMessageMSTeams({ cfg: {}, to: conversationId, text: source });
-        expect.soft(requests[0]?.body.text).toBe(expectedText);
-        expect
-          .soft(requests[0]?.body.entities)
-          .toEqual(expect.arrayContaining([expectedMention, expectedAiEntity]));
+        expectPrepared(requests[0]?.body);
 
         if (surface === "edit") {
           await editMessageMSTeams({
@@ -583,10 +449,7 @@ describe.each([
         }
         expect(requests).toHaveLength(2);
         expect(requests[1]?.method).toBe(surface === "edit" ? "PUT" : "POST");
-        expect.soft(requests[1]?.body.text).toBe(expectedText);
-        expect
-          .soft(requests[1]?.body.entities)
-          .toEqual(expect.arrayContaining([expectedMention, expectedAiEntity]));
+        expectPrepared(requests[1]?.body);
       });
     },
   );

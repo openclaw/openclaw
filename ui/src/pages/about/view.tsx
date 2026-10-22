@@ -13,9 +13,9 @@ import {
 } from "../../components/solid/icon.tsx";
 import { SettingsPage, SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import "../../components/tooltip.ts";
-import "../../components/theme-brand-icon.ts";
+import { ThemeBrandIcon } from "../../components/theme-brand-icon.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
-import { COMMUNITY_DISCORD_URL } from "../../lib/product-links.ts";
+import { COMMUNITY_DISCORD_URL, OFFICIAL_SUPPORT_URL } from "../../lib/product-links.ts";
 import {
   formatDateMs,
   formatDateTimeMs,
@@ -37,12 +37,18 @@ type AboutProps = {
 };
 
 const SHORT_COMMIT_LENGTH = 12;
-// Docs-first where a docs page exists; GitHub/Discord match the native About screens.
+// Keep official support distinct from self-service docs and social links.
 type AboutLink = { href: string; labelKey: string } & (
   | { kind: "icon"; name: IconName }
   | { kind: "brand"; name: BrandIconName }
 );
 const ABOUT_LINKS: readonly AboutLink[] = [
+  {
+    href: OFFICIAL_SUPPORT_URL,
+    kind: "icon",
+    name: "messageSquare",
+    labelKey: "aboutPage.linkSupport",
+  },
   { href: "https://openclaw.ai", kind: "icon", name: "globe", labelKey: "aboutPage.linkWebsite" },
   { href: "https://docs.openclaw.ai", kind: "icon", name: "book", labelKey: "aboutPage.linkDocs" },
   {
@@ -89,7 +95,7 @@ function CommitAge(props: { commitAt: string | null }) {
 }
 
 function Commit(props: AboutProps) {
-  const label = createMemo(() =>
+  const label = () =>
     t(
       {
         idle: "aboutPage.copyCommit",
@@ -97,8 +103,7 @@ function Commit(props: AboutProps) {
         copied: "aboutPage.copiedCommit",
         error: "aboutPage.copyCommitFailed",
       }[props.copyState],
-    ),
-  );
+    );
   return (
     <Show when={props.buildInfo.commit} fallback={<Unavailable />}>
       {(commit) => (
@@ -152,7 +157,7 @@ export function AboutView(props: AboutProps) {
       <section class="about-hero">
         {branding.read().brandIcon !== "claw" ? (
           <span class="about-hero__mark--neutral" aria-hidden="true">
-            <openclaw-theme-brand-icon prop:branding={branding.read()} aria-hidden="true" />
+            <ThemeBrandIcon branding={branding.read()} aria-hidden="true" />
           </span>
         ) : (
           <button

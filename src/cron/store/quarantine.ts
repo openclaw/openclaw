@@ -15,9 +15,6 @@ export async function loadCronQuarantinedJobs(
     { env },
     { type: "cron.quarantine", storeKey: cronStoreKey(storePath) },
   );
-  if (reply && (!reply.ok || reply.type !== "cron.quarantine")) {
-    throw new Error("Unexpected cron quarantine observation result");
-  }
   return reply?.entries ?? [];
 }
 

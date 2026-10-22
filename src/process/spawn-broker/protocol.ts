@@ -36,6 +36,8 @@ export type BrokerError = {
   spawnargs?: string[];
 };
 export type BrokerResponse =
+  // Initialization failed before any native resource server or child launch was admitted.
+  | { type: "startup-failed"; error: BrokerError }
   | { type: "file-read-chunk"; id: number; bytes: Buffer }
   | { type: "file-read-result"; id: number; error?: Error; code?: string }
   | { type: "prepared"; id: number }

@@ -83,9 +83,12 @@ export function EmojiSearchPanel(props: EmojiSearchPanelProps) {
               return;
             }
             props.onInputKeyDown?.(event);
+            if (event.defaultPrevented || event.key !== "Enter") {
+              return;
+            }
             // Read the field itself: the query signal may not have flushed since the last input.
             const first = resultsFor(event.currentTarget.value)[0];
-            if (!event.defaultPrevented && event.key === "Enter" && first) {
+            if (first) {
               event.preventDefault();
               event.stopPropagation();
               props.onSelect(first.emoji);

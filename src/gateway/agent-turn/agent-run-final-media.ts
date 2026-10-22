@@ -27,7 +27,10 @@ import {
   publishAssistantTranscriptRewrite,
 } from "../server-methods/chat-transcript-persistence.js";
 import { withGatewaySessionEntry } from "../session-utils-store.js";
-import { prepareSessionPlacementRead } from "../worker-environments/placement-turn-authority.js";
+import {
+  capturePlacementReplicaRead,
+  prepareSessionPlacementRead,
+} from "../worker-environments/placement-turn-authority.js";
 
 /** Materialize one visible agent final before its Gateway run releases custody. */
 export async function finalizeAgentRunMedia(
@@ -75,10 +78,12 @@ export async function finalizeAgentRunMedia(
       state.admission.databasePath,
       reply.sessionId,
       async () => {
+        const publish = capturePlacementReplicaRead(state.admission.identity);
         const records = await executeOpenClawStateWorker(state, {
           type: "workerPlacements.read",
           input: { sessionIds: [reply.sessionId] },
         });
+        publish(records, [reply.sessionId]);
         return records[0];
       },
     );

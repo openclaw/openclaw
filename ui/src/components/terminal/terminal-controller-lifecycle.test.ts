@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 
-import type { GhosttyTerminalController } from "@openclaw/libterminal/browser";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  CreateGhosttyTerminalOptions,
+  GhosttyTerminalController,
+} from "@openclaw/libterminal/browser";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import {
   disposeTerminalController,
@@ -34,16 +37,15 @@ class MeasurementAddon {
   dispose = runtimeMocks.disposeMeasurement;
 }
 
-function terminalController(
-  dispose: () => void = vi.fn(),
-): GhosttyTerminalController & ReturnType<typeof createTerminalController> {
+function terminalController(dispose: () => void = vi.fn()) {
   return createTerminalController(dispose) as unknown as GhosttyTerminalController &
     ReturnType<typeof createTerminalController>;
 }
 
 function terminalRoot() {
-  const shell = document.body.appendChild(document.createElement("div"));
-  const root = shell.attachShadow({ mode: "open" });
+  const root = document.body
+    .appendChild(document.createElement("div"))
+    .attachShadow({ mode: "open" });
   const external = root.appendChild(document.createElement("input"));
   const previousHost = root.appendChild(document.createElement("div"));
   previousHost.tabIndex = 0;
@@ -51,240 +53,258 @@ function terminalRoot() {
 }
 
 const originalFonts = Object.getOwnPropertyDescriptor(document, "fonts");
+let underlying: ReturnType<typeof terminalController>;
+let parent: HTMLDivElement;
 
-describe("terminal controller lifecycle", () => {
-  beforeEach(() => {
-    runtimeMocks.load.mockResolvedValue({ FitAddon: MeasurementAddon });
-    runtimeMocks.fontReady.mockReturnValue(new Promise(() => {}));
-    Object.defineProperty(document, "fonts", {
-      configurable: true,
-      value: Object.assign(new EventTarget(), { add: vi.fn() }),
-    });
-    vi.stubGlobal(
-      "FontFace",
-      class {
-        load() {
-          return runtimeMocks.fontReady();
-        }
-      },
-    );
-    vi.stubGlobal(
-      "ResizeObserver",
-      class implements ResizeObserver {
-        constructor(callback: ResizeObserverCallback) {
-          runtimeMocks.notifyResize = () => callback([], this);
-        }
-        observe = runtimeMocks.observe;
-        disconnect = runtimeMocks.disconnect;
-        unobserve() {}
-      },
-    );
+beforeEach(() => {
+  underlying = terminalController();
+  parent = document.body.appendChild(document.createElement("div"));
+  runtimeMocks.create.mockResolvedValue(underlying);
+  runtimeMocks.load.mockResolvedValue({ FitAddon: MeasurementAddon });
+  runtimeMocks.fontReady.mockReturnValue(new Promise(() => {}));
+  Object.defineProperty(document, "fonts", {
+    configurable: true,
+    value: Object.assign(new EventTarget(), { add: vi.fn() }),
   });
-
-  afterEach(() => {
-    document.body.replaceChildren();
-    if (originalFonts) {
-      Object.defineProperty(document, "fonts", originalFonts);
-    } else {
-      Reflect.deleteProperty(document, "fonts");
-    }
-    runtimeMocks.create.mockReset();
-    runtimeMocks.load.mockReset();
-    runtimeMocks.proposeDimensions.mockReset();
-    vi.clearAllMocks();
-    vi.unstubAllGlobals();
-  });
-
-  it("owns pinned Ghostty listener cleanup before idempotent generic disposal", async () => {
-    const underlyingDispose = vi.fn(() => {
-      throw new Error("dispose failed");
-    });
-    const underlying = terminalController(underlyingDispose);
-    const handleMouseUp = vi.fn();
-    (underlying.terminal as unknown as { handleMouseUp: EventListener }).handleMouseUp =
-      handleMouseUp;
-    const runtime = { isolated: true, FitAddon: MeasurementAddon };
-    runtimeMocks.load.mockResolvedValue(runtime);
-    runtimeMocks.create.mockResolvedValue(underlying);
-    const removeEventListener = vi.spyOn(document, "removeEventListener");
-    const host = document.body.appendChild(document.createElement("div"));
-
-    const controller = await createIsolatedGhosttyTerminal({ parent: host });
-    expect(() => disposeTerminalController(controller, host)).not.toThrow();
-    expect(() => disposeTerminalController(controller, host)).not.toThrow();
-
-    expect(runtimeMocks.create).toHaveBeenCalledWith(
-      expect.objectContaining({ parent: host, runtime }),
-    );
-    expect(removeEventListener).toHaveBeenCalledTimes(1);
-    expect(removeEventListener).toHaveBeenCalledWith("mouseup", handleMouseUp);
-    expect(removeEventListener.mock.invocationCallOrder[0]).toBeLessThan(
-      underlyingDispose.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-    );
-    expect(underlyingDispose).toHaveBeenCalledOnce();
-    expect(runtimeMocks.disconnect).toHaveBeenCalledOnce();
-    expect(runtimeMocks.disposeMeasurement).toHaveBeenCalledOnce();
-    expect(host.isConnected).toBe(false);
-  });
-
-  it("applies the final terminal dimensions through rapid fit and resize notifications", async () => {
-    const underlying = terminalController();
-    underlying.resize.mockImplementation(({ columns, rows }: { columns: number; rows: number }) => {
-      underlying.terminal.cols = columns;
-      underlying.terminal.rows = rows;
-    });
-    runtimeMocks.create.mockResolvedValue(underlying);
-    runtimeMocks.proposeDimensions.mockReturnValue({ cols: 95, rows: 57 });
-    const parent = document.body.appendChild(document.createElement("div"));
-    const controller = await createIsolatedGhosttyTerminal({ parent });
-
-    runtimeMocks.proposeDimensions.mockReturnValue({ cols: 2, rows: 57 });
-    controller.fit();
-    runtimeMocks.proposeDimensions.mockReturnValue({ cols: 51, rows: 25 });
-    runtimeMocks.notifyResize();
-    runtimeMocks.notifyResize();
-
-    expect(underlying.resize.mock.calls).toEqual([
-      [{ columns: 95, rows: 57 }],
-      [{ columns: 2, rows: 57 }],
-      [{ columns: 51, rows: 25 }],
-    ]);
-    expect(runtimeMocks.create).toHaveBeenCalledWith(expect.objectContaining({ autoFit: false }));
-    expect(runtimeMocks.observe).toHaveBeenCalledOnce();
-    expect(runtimeMocks.observe).toHaveBeenCalledWith(parent);
-    controller.dispose();
-    runtimeMocks.proposeDimensions.mockReturnValue({ cols: 100, rows: 30 });
-    runtimeMocks.notifyResize();
-    expect(underlying.resize).toHaveBeenCalledTimes(3);
-  });
-
-  it.each([false, true])(
-    "remeasures loaded fonts only while the controller is live (disposed=%s)",
-    async (disposed) => {
-      const ready = createDeferred();
-      runtimeMocks.fontReady.mockReturnValue(ready.promise);
-      const underlying = terminalController();
-      runtimeMocks.create.mockResolvedValue(underlying);
-      const parent = document.body.appendChild(document.createElement("div"));
-      const controller = await createIsolatedGhosttyTerminal({ parent, autoFit: false });
-      if (disposed) {
-        controller.dispose();
+  vi.stubGlobal(
+    "FontFace",
+    class {
+      load = runtimeMocks.fontReady;
+    },
+  );
+  vi.stubGlobal(
+    "ResizeObserver",
+    class implements ResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        runtimeMocks.notifyResize = () => callback([], this);
       }
-      ready.resolve();
-      await ready.promise;
-      document.fonts.dispatchEvent(new Event("loadingdone"));
-      expect(underlying.terminal.renderer.remeasureFont).toHaveBeenCalledTimes(disposed ? 0 : 2);
-      expect(runtimeMocks.proposeDimensions).not.toHaveBeenCalled();
-      controller.dispose();
-      document.fonts.dispatchEvent(new Event("loadingdone"));
-      expect(underlying.terminal.renderer.remeasureFont).toHaveBeenCalledTimes(disposed ? 0 : 2);
+      observe = runtimeMocks.observe;
+      disconnect = runtimeMocks.disconnect;
+      unobserve() {}
     },
   );
+});
 
-  it("does not start observing a terminal aborted during creation", async () => {
-    const dispose = vi.fn();
-    const underlying = terminalController(dispose);
-    const created = createDeferred<GhosttyTerminalController>();
-    runtimeMocks.create.mockReturnValue(created.promise);
-    const abort = new AbortController();
-    const parent = document.body.appendChild(document.createElement("div"));
-    const pending = createIsolatedGhosttyTerminal({ parent, signal: abort.signal });
-    await vi.waitFor(() => expect(runtimeMocks.create).toHaveBeenCalledOnce());
-    abort.abort();
-    created.resolve(underlying);
+afterEach(() => {
+  document.body.replaceChildren();
+  if (originalFonts) {
+    Object.defineProperty(document, "fonts", originalFonts);
+  } else {
+    Reflect.deleteProperty(document, "fonts");
+  }
+  runtimeMocks.create.mockReset();
+  runtimeMocks.load.mockReset();
+  runtimeMocks.proposeDimensions.mockReset();
+  vi.clearAllMocks();
+  vi.unstubAllGlobals();
+  vi.useRealTimers();
+});
 
-    await pending;
-    expect(runtimeMocks.observe).not.toHaveBeenCalled();
-    expect(runtimeMocks.proposeDimensions).not.toHaveBeenCalled();
-    expect(runtimeMocks.disposeMeasurement).toHaveBeenCalledOnce();
-    expect(dispose).toHaveBeenCalledOnce();
+it("cleans up pinned listeners before idempotent disposal", async () => {
+  const underlyingDispose = vi.fn(() => {
+    throw new Error("dispose failed");
   });
+  underlying = terminalController(underlyingDispose);
+  const handleMouseUp = vi.fn();
+  (underlying.terminal as unknown as { handleMouseUp: EventListener }).handleMouseUp =
+    handleMouseUp;
+  const runtime = { isolated: true, FitAddon: MeasurementAddon };
+  runtimeMocks.load.mockResolvedValue(runtime);
+  runtimeMocks.create.mockResolvedValue(underlying);
+  const removeEventListener = vi.spyOn(document, "removeEventListener");
+  const controller = await createIsolatedGhosttyTerminal({ parent });
+  expect(() => disposeTerminalController(controller, parent)).not.toThrow();
+  expect(() => disposeTerminalController(controller, parent)).not.toThrow();
 
-  it.each([
-    { focusBefore: "terminal", focusAfter: "replacement" },
-    { focusBefore: "external", focusAfter: "external" },
-    { focusBefore: "external", focusAfter: "newer" },
-  ] as const)(
-    "publishes a measurable writable replacement without losing $focusAfter focus",
-    async ({ focusBefore, focusAfter }) => {
-      const { external, previousHost, root } = terminalRoot();
-      const newer = root.appendChild(document.createElement("input"));
-      const previous = terminalController();
-      const replacement = terminalController();
-      const target = { controller: previous, host: previousHost };
-      previousHost.style.display = "none";
-      previousHost.style.visibility = "visible";
-      (focusBefore === "terminal" ? previousHost : external).focus();
-
-      const replaced = await replaceTerminalController(
-        target,
-        async (host, options) => {
-          expect(options).toEqual({ readOnly: true });
-          expect(host.style.display).toBe("block");
-          expect(host.style.visibility).toBe("hidden");
-          expect(host.inert).toBe(true);
-          host.tabIndex = 0;
-          host.focus();
-          setTimeout(() => host.focus(), 0);
-          if (focusAfter === "newer") {
-            setTimeout(() => newer.focus(), 0);
-          }
-          return replacement;
-        },
-        "authoritative replay",
-        new AbortController().signal,
-      );
-
-      expect(replaced).toBe(true);
-      expect(target.controller).toBe(replacement);
-      expect(target.host).not.toBe(previousHost);
-      expect(target.host.isConnected).toBe(true);
-      expect(new TextDecoder().decode(replacement.write.mock.calls[0]?.[0])).toBe(
-        "authoritative replay",
-      );
-      expect(replacement.setReadOnly).toHaveBeenCalledWith(false);
-      expect(target.host.style.display).toBe("none");
-      expect(target.host.style.visibility).toBe("visible");
-      expect(target.host.inert).toBe(false);
-      expect(previous.dispose).toHaveBeenCalledOnce();
-      expect(root.activeElement).toBe(
-        focusAfter === "replacement" ? target.host : focusAfter === "external" ? external : newer,
-      );
-    },
+  expect(runtimeMocks.create).toHaveBeenCalledWith(expect.objectContaining({ parent, runtime }));
+  expect(removeEventListener).toHaveBeenCalledExactlyOnceWith("mouseup", handleMouseUp);
+  expect(removeEventListener.mock.invocationCallOrder[0]).toBeLessThan(
+    underlyingDispose.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
   );
+  expect(underlyingDispose).toHaveBeenCalledOnce();
+  expect(runtimeMocks.disconnect).toHaveBeenCalledOnce();
+  expect(runtimeMocks.disposeMeasurement).toHaveBeenCalledOnce();
+  expect(parent.isConnected).toBe(false);
+});
 
-  it("disposes an aborted unpublished replacement and restores focus it stole", async () => {
+it.each([true, false])("gates opening focus, not explicit focus (allowed=%s)", async (allowed) => {
+  vi.useFakeTimers();
+  const focus = vi.fn();
+  // Match the pinned renderer's immediate focus and zero-delay repeat without real sleeps.
+  class FakeTerminal {
+    open(_parent: HTMLElement) {
+      this.focus();
+    }
+    focus() {
+      focus();
+      setTimeout(focus, 0);
+    }
+  }
+  const opened: Array<Pick<GhosttyTerminalController["terminal"], "focus">> = [];
+  runtimeMocks.load.mockResolvedValue({ Terminal: FakeTerminal, FitAddon: MeasurementAddon });
+  runtimeMocks.create.mockImplementation(async (options: CreateGhosttyTerminalOptions) => {
+    if (!options.runtime) {
+      throw new Error("isolated runtime missing");
+    }
+    const terminal = new options.runtime.Terminal();
+    terminal.open(options.parent);
+    opened.push(terminal);
+    return underlying;
+  });
+  const controller = await createIsolatedGhosttyTerminal({ parent }, () => allowed);
+  expect(focus).toHaveBeenCalledTimes(allowed ? 1 : 0);
+  vi.runOnlyPendingTimers();
+  expect(focus).toHaveBeenCalledTimes(allowed ? 2 : 0);
+  focus.mockClear();
+  expect(opened).toHaveLength(1);
+  opened[0]?.focus();
+  expect(focus).toHaveBeenCalledOnce();
+  vi.runOnlyPendingTimers();
+  expect(focus).toHaveBeenCalledTimes(2);
+  controller.dispose();
+});
+
+it("applies rapid fit/resize updates and ignores them after disposal", async () => {
+  underlying.resize.mockImplementation(({ columns, rows }: { columns: number; rows: number }) => {
+    underlying.terminal.cols = columns;
+    underlying.terminal.rows = rows;
+  });
+  runtimeMocks.proposeDimensions.mockReturnValue({ cols: 95, rows: 57 });
+  const controller = await createIsolatedGhosttyTerminal({ parent });
+
+  runtimeMocks.proposeDimensions.mockReturnValue({ cols: 2, rows: 57 });
+  controller.fit();
+  runtimeMocks.proposeDimensions.mockReturnValue({ cols: 51, rows: 25 });
+  runtimeMocks.notifyResize();
+  runtimeMocks.notifyResize();
+
+  expect(underlying.resize.mock.calls).toEqual([
+    [{ columns: 95, rows: 57 }],
+    [{ columns: 2, rows: 57 }],
+    [{ columns: 51, rows: 25 }],
+  ]);
+  expect(runtimeMocks.create).toHaveBeenCalledWith(expect.objectContaining({ autoFit: false }));
+  expect(runtimeMocks.observe).toHaveBeenCalledExactlyOnceWith(parent);
+  controller.dispose();
+  runtimeMocks.proposeDimensions.mockReturnValue({ cols: 100, rows: 30 });
+  runtimeMocks.notifyResize();
+  expect(underlying.resize).toHaveBeenCalledTimes(3);
+});
+
+it.each([false, true])("remeasures fonts only while live (disposed=%s)", async (disposed) => {
+  const ready = createDeferred();
+  runtimeMocks.fontReady.mockReturnValue(ready.promise);
+  const controller = await createIsolatedGhosttyTerminal({ parent, autoFit: false });
+  if (disposed) {
+    controller.dispose();
+  }
+  ready.resolve();
+  await ready.promise;
+  document.fonts.dispatchEvent(new Event("loadingdone"));
+  expect(underlying.terminal.renderer.remeasureFont).toHaveBeenCalledTimes(disposed ? 0 : 2);
+  expect(runtimeMocks.proposeDimensions).not.toHaveBeenCalled();
+  controller.dispose();
+  document.fonts.dispatchEvent(new Event("loadingdone"));
+  expect(underlying.terminal.renderer.remeasureFont).toHaveBeenCalledTimes(disposed ? 0 : 2);
+});
+
+it("does not observe a terminal aborted during creation", async () => {
+  const dispose = vi.fn();
+  underlying = terminalController(dispose);
+  const created = createDeferred<GhosttyTerminalController>();
+  runtimeMocks.create.mockReturnValue(created.promise);
+  const abort = new AbortController();
+  const pending = createIsolatedGhosttyTerminal({ parent, signal: abort.signal });
+  await vi.waitFor(() => expect(runtimeMocks.create).toHaveBeenCalledOnce());
+  abort.abort();
+  created.resolve(underlying);
+
+  await pending;
+  expect(runtimeMocks.observe).not.toHaveBeenCalled();
+  expect(runtimeMocks.proposeDimensions).not.toHaveBeenCalled();
+  expect(runtimeMocks.disposeMeasurement).toHaveBeenCalledOnce();
+  expect(dispose).toHaveBeenCalledOnce();
+});
+
+it.each(["replacement", "external", "newer"] as const)(
+  "publishes a measurable writable replacement, preserving %s focus",
+  async (focusAfter) => {
     const { external, previousHost, root } = terminalRoot();
-    const previous = terminalController();
+    const newer = root.appendChild(document.createElement("input"));
+    const previous = underlying;
     const replacement = terminalController();
     const target = { controller: previous, host: previousHost };
-    const created = createDeferred<GhosttyTerminalController>();
-    const abort = new AbortController();
-    let stagedHost: HTMLElement | undefined;
-    external.focus();
+    previousHost.style.display = "none";
+    previousHost.style.visibility = "visible";
+    (focusAfter === "replacement" ? previousHost : external).focus();
 
-    const replacing = replaceTerminalController(
+    const replaced = await replaceTerminalController(
       target,
-      async (host) => {
-        stagedHost = host;
+      async (host, options) => {
+        expect(options).toEqual({ readOnly: true });
+        expect(host).toMatchObject({
+          style: { display: "block", visibility: "hidden" },
+          inert: true,
+        });
         host.tabIndex = 0;
         host.focus();
-        previousHost.remove();
-        return created.promise;
+        setTimeout(() => host.focus(), 0);
+        if (focusAfter === "newer") {
+          setTimeout(() => newer.focus(), 0);
+        }
+        return replacement;
       },
-      "must not publish",
-      abort.signal,
+      "authoritative replay",
+      new AbortController().signal,
     );
-    await vi.waitFor(() => expect(stagedHost).toBeDefined());
-    abort.abort();
-    created.resolve(replacement);
 
-    await expect(replacing).resolves.toBe(false);
-    expect(target).toEqual({ controller: previous, host: previousHost });
-    expect(previous.dispose).not.toHaveBeenCalled();
-    expect(replacement.write).not.toHaveBeenCalled();
-    expect(replacement.dispose).toHaveBeenCalledOnce();
-    expect(stagedHost?.isConnected).toBe(false);
-    expect(root.activeElement).toBe(external);
-  });
+    expect(replaced).toBe(true);
+    expect(target.controller).toBe(replacement);
+    expect(target.host).not.toBe(previousHost);
+    expect(new TextDecoder().decode(replacement.write.mock.calls[0]?.[0])).toBe(
+      "authoritative replay",
+    );
+    expect(replacement.setReadOnly).toHaveBeenCalledWith(false);
+    expect(target.host).toMatchObject({ isConnected: true, inert: false });
+    expect(target.host.style).toMatchObject({ display: "none", visibility: "visible" });
+    expect(previous.dispose).toHaveBeenCalledOnce();
+    expect(root.activeElement).toBe(
+      focusAfter === "replacement" ? target.host : focusAfter === "external" ? external : newer,
+    );
+  },
+);
+
+it("disposes an aborted replacement and restores stolen focus", async () => {
+  const { external, previousHost, root } = terminalRoot();
+  const previous = underlying;
+  const replacement = terminalController();
+  const target = { controller: previous, host: previousHost };
+  const created = createDeferred<GhosttyTerminalController>();
+  const abort = new AbortController();
+  let stagedHost: HTMLElement | undefined;
+  external.focus();
+
+  const replacing = replaceTerminalController(
+    target,
+    async (host) => {
+      stagedHost = host;
+      host.tabIndex = 0;
+      host.focus();
+      previousHost.remove();
+      return created.promise;
+    },
+    "must not publish",
+    abort.signal,
+  );
+  await vi.waitFor(() => expect(stagedHost).toBeDefined());
+  abort.abort();
+  created.resolve(replacement);
+
+  await expect(replacing).resolves.toBe(false);
+  expect(target).toEqual({ controller: previous, host: previousHost });
+  expect(previous.dispose).not.toHaveBeenCalled();
+  expect(replacement.write).not.toHaveBeenCalled();
+  expect(replacement.dispose).toHaveBeenCalledOnce();
+  expect(stagedHost?.isConnected).toBe(false);
+  expect(root.activeElement).toBe(external);
 });

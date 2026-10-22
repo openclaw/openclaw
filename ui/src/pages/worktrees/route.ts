@@ -7,11 +7,9 @@ export const page = definePage({
   ...routePageSpec("worktrees"),
   component: () =>
     import("./worktrees-page.tsx").then((module) => ({
-      header: true,
       renderSolid: () =>
         createComponent(ShellLayoutBoundary, {
           traits: {
-            toolbarHeader: true,
             settingsPage: true,
             settingsWide: true,
             settingsWorkspace: true,

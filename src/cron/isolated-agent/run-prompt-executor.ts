@@ -24,6 +24,7 @@ import {
   modelSupportsInput,
   prepareModelRunCapabilities,
 } from "../../agents/model-catalog-lookup.js";
+import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { resolveConfiguredThinkingDefault } from "../../agents/model-thinking-default.js";
 import {
   resolveScheduledToolCallerContext,
@@ -42,14 +43,19 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { acquireCronInferenceAuthorization } from "../inference-binding.runtime.js";
 import { prepareCronRunAdmission } from "../run-admission.js";
+import { prepareCronRunInference } from "../run-inference.js";
 import { resolveCronScheduledToolPolicy } from "../scheduled-tool-policy.js";
 import { resolveCronAuthenticatedChannelRequester } from "../tools-allow-provenance.js";
 import type { CronAgentExecutionPhaseUpdate } from "../types.js";
 import { isCommandStyleCronMessage } from "./command-style-prompt.js";
 import { resolveIsolatedCronPromptCacheKey } from "./prompt-cache-key.js";
-import { assertCronRuntimeAuthorityCandidate } from "./run-admission.js";
+import {
+  assertCronCandidateSandboxPlacement,
+  assertCronRuntimeAuthorityCandidate,
+  resolveCronSandboxPlacement,
+  type CronSandboxPlacement,
+} from "./run-admission.js";
 import { createCronCandidateExecutionResolver } from "./run-candidate-runtime.js";
 import { finalizeCronPromptForResolvedTools } from "./run-delivery-trace.js";
 import {
@@ -163,19 +169,20 @@ export function createCronPromptExecutor(
     hasNewGeneratedMediaTaskForSessionKey(params.runSessionKey, attemptMediaTaskIds);
 
   const resolveCandidateExecution = createCronCandidateExecutionResolver(params);
+  // Resolved once per isolated run from the prepared session entry; every
+  // candidate (initial, fallback, override) reuses the same placement facts.
+  let sandboxPlacement: CronSandboxPlacement | undefined;
 
   return async (promptText: string, runStartedAt: number): Promise<CronCompletedPromptRun> => {
     using inferenceLease = new DisposableStack();
     const binding = params.job.inferenceBinding;
-    const inferenceAuthorization = binding
-      ? await acquireCronInferenceAuthorization({
-          binding,
-          cfg: params.cfgWithAgentDefaults,
-          agentDir: params.agentDir,
-        })
-      : undefined;
-    if (inferenceAuthorization) {
-      inferenceLease.defer(() => inferenceAuthorization.dispose());
+    const inference = await prepareCronRunInference({
+      binding,
+      cfg: params.cfgWithAgentDefaults,
+      agentDir: params.agentDir,
+    });
+    if (inference) {
+      inferenceLease.defer(inference.dispose);
     }
     let canReusePreparedSession = preparedSessionAvailable;
     preparedSessionAvailable = false;
@@ -203,6 +210,7 @@ export function createCronPromptExecutor(
           });
     pendingUserTurn = { promptText, recorder: userTurnTranscriptRecorder };
     const cronAdmission = prepareCronRunAdmission({
+      operatorAuthority: params.operatorAuthority,
       admissionSource: params.admissionSource,
       deliveryAttemptFence: params.deliveryAttemptFence,
       cfg: params.cfgWithAgentDefaults,
@@ -366,16 +374,27 @@ export function createCronPromptExecutor(
           catalog: thinkingCatalog,
           agentRuntime: candidateRuntime,
         });
-        if (binding && (providerOverride !== binding.provider || cliExecution)) {
-          throw new Error(
-            "Automation candidate is incompatible with its recorded inference account and route.",
-          );
-        }
-        inferenceAuthorization?.assertCurrent();
+        inference?.assertCandidate(providerOverride, cliExecution);
         assertCronRuntimeAuthorityCandidate({
           authority: params.job.runtimeAuthority,
           candidateRuntime,
           cliExecution,
+        });
+        // CLI backends execute on the gateway host; a session whose configured
+        // sandbox claims containment must fail closed instead of dispatching
+        // there. Covers every candidate: initial selection, fallbacks, and
+        // harness/runtime overrides. Unowned preflight errors are terminal for
+        // the whole fallback chain, so this cannot silently switch models.
+        sandboxPlacement ??= resolveCronSandboxPlacement({
+          cfg: params.cfgWithAgentDefaults,
+          agentId: params.agentId,
+          sessionKey: params.runSessionKey,
+          preparedSessionEntry: params.cronSession.sessionEntry,
+        });
+        assertCronCandidateSandboxPlacement({
+          ...sandboxPlacement,
+          cliExecution,
+          executionProvider,
         });
         // The validated candidate that admits detached work owns its continuation
         // even if the provider throws before returning result metadata.
@@ -430,6 +449,7 @@ export function createCronPromptExecutor(
             model: modelOverride,
             thinkLevel: candidateThinkLevel,
             thinkingExplicit: candidateConfiguredThinkLevel !== undefined,
+            reasoningLevel: params.agentPayload?.includeReasoning ? "on" : undefined,
             timeoutMs: params.timeoutMs,
             runId,
             lane: resolveCronAgentLane(params.lane),
@@ -441,6 +461,7 @@ export function createCronPromptExecutor(
             extraSystemPrompt: params.deliverySystemPrompt,
             sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
             requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
+            messageToolFinalByDefault: sourceDelivery.messageTool.finalByDefault,
             scheduledToolPolicy,
             onExecutionStarted: notifyExecutionStarted,
             onExecutionPhase: notifyExecutionPhase,
@@ -506,9 +527,12 @@ export function createCronPromptExecutor(
                     })
                   : undefined;
                 if (trigger === "cron" && !binding && authProfileId) {
-                  throw new Error(
+                  const refusal = new Error(
                     "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
                   );
+                  // Another model would only bypass the operator's account choice.
+                  recordModelFallbackStop(refusal);
+                  throw refusal;
                 }
                 const guardedCliSessionBinding =
                   cliSessionBinding && hasCliSessionReuseMetadata(cliSessionBinding)
@@ -534,11 +558,7 @@ export function createCronPromptExecutor(
                   nativeAuthOnly: trigger === "cron" && !binding ? true : undefined,
                   cliSessionId: cliSessionBinding?.sessionId,
                   cliSessionBinding: guardedCliSessionBinding,
-                  cliSessionBindingFacts: {
-                    extraSystemPromptStatic: params.deliverySystemPrompt,
-                    sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
-                    requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
-                  },
+                  cliSessionBindingFacts: params.cliSessionBindingFacts,
                   toolsAllow: resolveCliRuntimeToolsAllow(params.agentPayload?.toolsAllow),
                   abortSignal: cliAbortSignal,
                 });
@@ -617,28 +637,11 @@ export function createCronPromptExecutor(
           requestedRouteResolution: "resolved",
           modelFallbacksOverride: runOptions.modelFallbacksOverride,
           resolvedModelSelection: runOptions.resolvedModelSelection,
-          authProfileId: binding?.profileId ?? params.liveSelection.authProfileId,
-          ...(binding && inferenceAuthorization
-            ? {
-                authProfileBinding: {
-                  profileId: binding.profileId,
-                  authRequirement: binding.authRequirement,
-                  assertCurrent: inferenceAuthorization.assertCurrent,
-                  revalidate: inferenceAuthorization.revalidate,
-                },
-                allowAuthProfileFallback: false,
-                onSuccessfulAuthProfile: (profileId: string | undefined) => {
-                  if (profileId !== binding.profileId) {
-                    throw new Error("Automation inference account changed during execution.");
-                  }
-                },
-              }
-            : {}),
-          authProfileIdSource:
-            binding?.source ??
-            (params.liveSelection.authProfileId
-              ? params.liveSelection.authProfileIdSource
-              : undefined),
+          authProfileId: params.liveSelection.authProfileId,
+          authProfileIdSource: params.liveSelection.authProfileId
+            ? params.liveSelection.authProfileIdSource
+            : undefined,
+          ...inference?.runParams,
           // Cron keeps overload failures local while sharing real credential failures.
           authProfileFailurePolicy: runOptions.authProfileFailurePolicy ?? "local_transient",
           verboseLevel: params.resolvedVerboseLevel,

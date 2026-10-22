@@ -57,6 +57,10 @@ export default {
           delete env[key];
         }
       }
+      env.OPENCLAW_VITEST_RUNTIME = process.versions.bun ? "bun" : "node";
+      if (process.versions.bun) {
+        env.OPENCLAW_BUN_PATH = process.execPath;
+      }
       env.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH = path.join(root, "modules");
       env.NO_COLOR = "1";
       const result = await runVitestShutdownCommand({

@@ -1,4 +1,3 @@
-// Telegram tests cover exec approvals plugin behavior.
 import path from "node:path";
 import type { OpenClawConfig, TelegramAccountConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -28,14 +27,23 @@ function buildConfig(
   channelOverrides?: Partial<NonNullable<NonNullable<OpenClawConfig["channels"]>["telegram"]>>,
 ): OpenClawConfig {
   return {
-    channels: {
-      telegram: {
-        botToken: "tok",
-        ...channelOverrides,
-        execApprovals,
-      },
-    },
+    channels: { telegram: { botToken: "tok", ...channelOverrides, execApprovals } },
   } as OpenClawConfig;
+}
+
+async function storeDelivery(storePath: string, accountId: string, updatedAt: number) {
+  await upsertSessionEntry({
+    storePath,
+    sessionKey: "agent:ops:telegram:direct:123",
+    entry: {
+      sessionId: "main",
+      updatedAt,
+      delivery: normalizeSessionDeliveryState({
+        context: { channel: "telegram", accountId },
+        origin: { provider: "telegram", accountId },
+      }),
+    },
+  });
 }
 
 function buildMultiAccountTelegramConfig(params: {
@@ -129,18 +137,7 @@ describe("telegram exec approvals", () => {
   it("routes non-telegram turn sources using the current stored telegram account", async () => {
     const tmpDir = sessionDirs.make();
     const storePath = path.join(tmpDir, "sessions.json");
-    await upsertSessionEntry({
-      storePath,
-      sessionKey: "agent:ops:telegram:direct:123",
-      entry: {
-        sessionId: "main",
-        updatedAt: 1,
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "telegram", accountId: "ops" },
-          origin: { provider: "telegram", accountId: "ops" },
-        }),
-      },
-    });
+    await storeDelivery(storePath, "ops", 1);
     const cfg = buildMultiAccountTelegramConfig({ sessionStorePath: storePath });
     const request = makeChannelApprovalRequest({
       id: "req-2",
@@ -148,32 +145,13 @@ describe("telegram exec approvals", () => {
     });
 
     expect(
-      await shouldHandleTelegramExecApprovalRequest({
-        cfg,
-        accountId: "default",
-        request,
-      }),
+      await shouldHandleTelegramExecApprovalRequest({ cfg, accountId: "default", request }),
     ).toBe(false);
-    expect(
-      await shouldHandleTelegramExecApprovalRequest({
-        cfg,
-        accountId: "ops",
-        request,
-      }),
-    ).toBe(true);
+    expect(await shouldHandleTelegramExecApprovalRequest({ cfg, accountId: "ops", request })).toBe(
+      true,
+    );
 
-    await upsertSessionEntry({
-      storePath,
-      sessionKey: "agent:ops:telegram:direct:123",
-      entry: {
-        sessionId: "main",
-        updatedAt: 2,
-        delivery: normalizeSessionDeliveryState({
-          context: { channel: "telegram", accountId: "default" },
-          origin: { provider: "telegram", accountId: "default" },
-        }),
-      },
-    });
+    await storeDelivery(storePath, "default", 2);
     expect(
       await shouldHandleTelegramExecApprovalRequest({ cfg, accountId: "default", request }),
     ).toBe(true);
@@ -190,19 +168,11 @@ describe("telegram exec approvals", () => {
     });
 
     expect(
-      await shouldHandleTelegramExecApprovalRequest({
-        cfg,
-        accountId: "default",
-        request,
-      }),
+      await shouldHandleTelegramExecApprovalRequest({ cfg, accountId: "default", request }),
     ).toBe(true);
-    expect(
-      await shouldHandleTelegramExecApprovalRequest({
-        cfg,
-        accountId: "ops",
-        request,
-      }),
-    ).toBe(false);
+    expect(await shouldHandleTelegramExecApprovalRequest({ cfg, accountId: "ops", request })).toBe(
+      false,
+    );
   });
 
   it("only injects approval buttons on eligible telegram targets", () => {

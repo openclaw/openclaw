@@ -22,7 +22,6 @@ import { shortenHomePath } from "../utils.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
 import type { GatewayServiceSetupOutcome } from "../wizard/setup.finalize.js";
 import {
-  assertSetupTarget,
   projectInferenceRoute,
   sameSetupConfiguredRoute,
   sameSetupInferenceRoute,
@@ -69,8 +68,6 @@ export type SystemAgentSetupApplyParams = {
 
 export type SystemAgentSetupApplyResult = {
   configPath: string;
-  configHashBefore: string | null;
-  configHashAfter: string | null;
   bootstrapPending: boolean;
   workspaceReady: boolean;
   gateway: GatewayServiceSetupOutcome;
@@ -118,18 +115,6 @@ export function createQuickstartNotePrompter(runtime: RuntimeEnv): WizardPrompte
   };
 }
 
-function applySecurityAcknowledgement(config: OpenClawConfig): OpenClawConfig {
-  if (config.wizard?.securityAcknowledgedAt) {
-    return config;
-  }
-  // Conversational consent: the onboarding welcome shows the security note and
-  // the user approved the plan, which is the acknowledgement we persist.
-  return {
-    ...config,
-    wizard: { ...config.wizard, securityAcknowledgedAt: new Date().toISOString() },
-  };
-}
-
 export async function applySystemAgentSetup(
   params: SystemAgentSetupApplyParams,
   hooks?: SystemAgentSetupApplyHooks,
@@ -148,7 +133,7 @@ export async function applySystemAgentSetup(
   const hasExpectedConfigHash = Object.hasOwn(params, "expectedConfigHash");
   const beforePersistentApply = hooks?.beforePersistentApply;
   const [
-    { readSetupConfigFileSnapshot, resolveQuickstartGatewayDefaults },
+    { applySecurityAcknowledgement, readSetupConfigFileSnapshot, resolveQuickstartGatewayDefaults },
     onboardHelpers,
     { applyLocalSetupWorkspaceConfig, resolveOnboardingWorkspaceConflict },
     { transformConfigWithPendingPluginInstalls },
@@ -215,15 +200,28 @@ export async function applySystemAgentSetup(
     if (!guardModules) {
       return;
     }
-    assertSetupTarget({
-      config,
-      expectedAgentId: guardedExpectedAgentId,
-      expectedAgentDir: guardedExpectedAgentDir,
-      expectedModelRef,
-      resolveAgentDir: guardModules[0].resolveAgentDir,
-      resolveDefaultAgentId: (currentConfig) => resolveSetupTarget(currentConfig).agentId,
-      resolveDefaultModelForAgent: guardModules[1].resolveDefaultModelForAgent,
-    });
+    const agentId = resolveSetupTarget(config).agentId;
+    if (guardedExpectedAgentId && agentId !== guardedExpectedAgentId) {
+      throw new Error(
+        "The default agent changed while AI access was being tested. Try setup again.",
+      );
+    }
+    if (
+      guardedExpectedAgentDir &&
+      guardModules[0].resolveAgentDir(config, agentId) !== guardedExpectedAgentDir
+    ) {
+      throw new Error(
+        "The agent credential location changed while AI access was being tested. Try setup again.",
+      );
+    }
+    if (expectedModelRef) {
+      const current = guardModules[1].resolveDefaultModelForAgent({ cfg: config, agentId });
+      if (`${current.provider}/${current.model}` !== expectedModelRef) {
+        throw new Error(
+          "The default model changed while AI access was being tested. Try setup again.",
+        );
+      }
+    }
   };
   assertExpectedTarget(snapshotConfig.runtimeConfig);
 
@@ -353,6 +351,7 @@ export async function applySystemAgentSetup(
       allowWorkspaceChange: allowWorkspaceWrite,
       preserveWorkspace,
     });
+    // The onboarding welcome shows the security note; approving the plan acknowledges it.
     candidate = applySecurityAcknowledgement(candidate);
     const gateway = await configureGatewayForSetup({
       flow: "quickstart",
@@ -601,8 +600,6 @@ export async function applySystemAgentSetup(
 
   return {
     configPath: committed.path,
-    configHashBefore,
-    configHashAfter: committed.persistedHash,
     bootstrapPending: workspaceResult?.bootstrapPending === true,
     workspaceReady: workspaceResult !== undefined,
     gateway,

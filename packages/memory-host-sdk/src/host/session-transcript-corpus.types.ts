@@ -25,6 +25,8 @@ export type SessionTranscriptCorpusEntry = {
   contentRevision?: string;
   artifactKind: SessionTranscriptCorpusArtifactKind;
   sessionKey?: string;
+  /** Recorded owner of a plugin-managed transcript. */
+  pluginOwnerId?: string;
   storePath?: string;
   /** Present when an active transcript is addressed by SQLite identity, not a JSONL path. */
   transcriptSource?: "sqlite";

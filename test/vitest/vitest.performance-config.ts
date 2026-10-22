@@ -1,6 +1,6 @@
 // Vitest performance config helper normalizes performance test environment settings.
 import path from "node:path";
-import type { Plugin } from "vite";
+import type { Plugin } from "vitest/config";
 import type { CacheKeyIdGenerator } from "vitest/node";
 type EnvMap = Record<string, string | undefined>;
 

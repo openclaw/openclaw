@@ -47,7 +47,7 @@
             "type": "string"
           },
           "completionTarget": {
-            "description": "parent: return results in a private requester turn; no automatic channel delivery. After sessions_yield, answer under the conversation's normal reply rules (NO_REPLY stays silent). Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
+            "description": "parent: return substantive results in a private requester turn; no automatic channel delivery. After sessions_yield, the parent must receive the internal result even when no external reply is needed. For external replies only, exactly NO_REPLY as the entire final answer stays silent; a literal leading NO_REPLY newline suppresses that line only. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently. Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
             "enum": ["parent"],
             "type": "string"
           },
@@ -57,7 +57,7 @@
             "type": "string"
           },
           "cwd": {
-            "description": "Child working directory. Visible paths outside configured agent workspaces require operator.admin. Mutually exclusive with projectId/projectGitUrl. With no source selector and worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
+            "description": "Child working directory. Workspace-contained file tools (apply_patch/file writes) resolve and contain paths against cwd; set cwd for edits outside the agent workspace. Visible paths outside configured agent workspaces require operator.admin. Mutually exclusive with projectId/projectGitUrl. With no source selector and worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
             "type": "string"
           },
           "expectsCompletionMessage": {
@@ -183,7 +183,7 @@
             "type": "boolean"
           },
           "user": {
-            "description": "The person's requester_profile.id, required when several people have steered this turn.",
+            "description": "An admitted participant's requester_profile.id. Omit to use the turn's original requester; selection does not establish human intent or approval.",
             "type": "string"
           },
           "visible": {

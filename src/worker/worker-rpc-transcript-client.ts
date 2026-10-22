@@ -5,10 +5,9 @@ import {
   type WorkerTranscriptMessage,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { isWorkerTranscriptFrameWithinBudget } from "../../packages/gateway-protocol/src/worker-transcript-budget.js";
-import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import { type WorkerConnection, WorkerConnectionInterruptedError } from "./worker-connection.js";
 import type { TranscriptResponseError } from "./worker-rpc-client-shared.js";
-import { fenceForOwnershipError, isTerminalConnection } from "./worker-rpc-client-shared.js";
+import { fenceForOwnershipError } from "./worker-rpc-client-shared.js";
 
 const TRANSCRIPT_SIZE_FRAME_ID = "00000000-0000-4000-8000-000000000000";
 
@@ -35,7 +34,6 @@ type WorkerTranscriptCommitClientOptions = {
 export class WorkerTranscriptCommitClient {
   private baseLeafIdValue: string | null;
   private nextSeqValue: number;
-  private queue: Promise<void> = Promise.resolve();
   private terminalFailure: WorkerTranscriptCommitError | undefined;
 
   constructor(
@@ -54,17 +52,7 @@ export class WorkerTranscriptCommitClient {
     return this.nextSeqValue;
   }
 
-  commit(messages: readonly WorkerTranscriptMessage[]): Promise<WorkerTranscriptCommitResult> {
-    const snapshot = structuredClone(messages);
-    const operation = this.queue.then(() => this.commitBatches(snapshot));
-    this.queue = operation.then(
-      () => undefined,
-      () => undefined,
-    );
-    return operation;
-  }
-
-  private async commitBatches(
+  async commit(
     messages: readonly WorkerTranscriptMessage[],
   ): Promise<WorkerTranscriptCommitResult> {
     if (messages.length === 0) {
@@ -90,9 +78,6 @@ export class WorkerTranscriptCommitClient {
   ): WorkerTranscriptMessage[] {
     let batch: WorkerTranscriptMessage[] = [];
     for (const message of messages.slice(0, WORKER_TRANSCRIPT_MAX_BATCH_MESSAGES)) {
-      if (!isWorkerTranscriptMessageFrameSafe(message)) {
-        throw new Error("worker transcript message exceeds the protocol payload limit");
-      }
       const candidate = [...batch, message];
       const frame: WorkerTranscriptCommitRequestFrame = {
         type: "req",
@@ -155,10 +140,7 @@ export class WorkerTranscriptCommitClient {
         }
         throw failure;
       } catch (error) {
-        if (
-          error instanceof WorkerConnectionInterruptedError &&
-          !isTerminalConnection(this.connection)
-        ) {
+        if (error instanceof WorkerConnectionInterruptedError && !this.connection.isTerminal()) {
           continue;
         }
         throw error;

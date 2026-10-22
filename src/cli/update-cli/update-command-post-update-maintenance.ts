@@ -6,6 +6,7 @@ import {
 import { GatewayServiceAuthorityError } from "../../daemon/service-update-authority.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { adoptCandidateManagedServiceStop } from "../../infra/update-candidate-predecessor-stop.js";
+import { unsafeUpdateRecovery } from "../../infra/update-recovery.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -44,7 +45,7 @@ export async function preparePostUpdateService(
             mode: params.result.mode,
             status: params.result.status,
             runId: run.runId,
-            ledger: { env: run.env },
+            ledger: run,
             root: params.result.root ?? params.root,
             timeoutMs: params.updateStepTimeoutMs,
             assertCurrent,
@@ -101,7 +102,7 @@ export async function preparePostUpdateService(
     recordUpdateRunStep(
       params.opts.run.runId,
       { step: "restart", status: "skipped", endedAtMs: Date.now(), detail: "skipped by operator" },
-      { env: params.opts.run.env },
+      params.opts.run,
     );
   }
   return shouldRestart;
@@ -186,6 +187,27 @@ export async function completePostUpdateMaintenance(
     result: { ...result, status: "error", reason: "wrapper-retirement-failed" },
     detail: retirement.error,
   };
+}
+
+export function recordPostUpdateWindowsAutoStartFailure(
+  params: Pick<FinishUpdateParams, "root">,
+  finalResult: UpdateRunResult,
+  result: Pick<UpdateRunResult, "status" | "reason">,
+  cause: unknown,
+): void {
+  defaultRuntime.error(`Failed to restore Windows Scheduled Task autostart: ${String(cause)}`);
+  finalResult.status = "error";
+  finalResult.reason =
+    result.status === "error" ? result.reason : "windows-task-autostart-restore-failed";
+  finalResult.recovery = unsafeUpdateRecovery(finalResult.recovery);
+  finalResult.steps = finalResult.steps.concat({
+    name: "windows-task-autostart-recovery",
+    command: "openclaw update",
+    cwd: finalResult.root ?? params.root,
+    durationMs: 0,
+    exitCode: 1,
+    stderrTail: formatErrorMessage(cause),
+  });
 }
 
 export async function resumePostUpdateWindowsAutoStart(

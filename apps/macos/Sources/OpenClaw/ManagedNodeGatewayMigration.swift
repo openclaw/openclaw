@@ -358,7 +358,9 @@ enum ManagedNodeGatewayMigration {
               GatewayLaunchAgentManager.isManagedNode(executable, stateDirectory: profile.stateDirectoryURL())
         else { return nil }
         let state = profile.stateDirectoryURL()
-        guard try await !GatewayLaunchAgentManager.hasRuntimePin(stateDirectory: state, profile: profile) else {
+        let pin = try await GatewayLaunchAgentManager.runtimePinRecord(stateDirectory: state, profile: profile)
+        if pin?.status == .migrationPending { return nil }
+        guard pin == nil else {
             throw Failure(message: "Gateway runtime intent changed while its service was absent; it was preserved.")
         }
         let port = GatewayEnvironment.gatewayPort()

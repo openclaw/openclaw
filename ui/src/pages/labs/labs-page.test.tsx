@@ -126,6 +126,7 @@ describe("LabsPage", () => {
     const toggle = labToggle(page, "Composer predictions");
     expect(toggle.checked).toBe(false);
     const select = page.querySelector<HTMLSelectElement>('select[aria-label="Prediction model"]')!;
+    expect(select.closest(".settings-row--nested")).not.toBeNull();
     expect(select.value).toBe("utility");
     for (const model of ["conversation", "default", "utility"]) {
       runtimeConfig.patch.mockClear();
@@ -183,6 +184,7 @@ describe("LabsPage", () => {
     const { page, runtimeConfig } = await mountPage({ tools: { codeMode: config } });
     const select = page.querySelector<HTMLSelectElement>('select[aria-label="Code Mode executor"]');
     expect(select).not.toBeNull();
+    expect(select?.closest(".settings-row--nested")).not.toBeNull();
     select!.value = executor;
     select!.dispatchEvent(new Event("change", { bubbles: true }));
 
@@ -199,6 +201,18 @@ describe("LabsPage", () => {
       sourceConfig: { tools: { codeMode: { enabled: true } } },
       expectedPatch: { tools: { codeMode: { enabled: null } } },
       note: "labs: update codeMode",
+    },
+    {
+      label: "Custom plugin UI",
+      sourceConfig: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
+      expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: null } } } },
+      note: "labs: update customPluginUi",
+    },
+    {
+      label: "Claws",
+      sourceConfig: { gateway: { controlUi: { experimental: { claws: true } } } },
+      expectedPatch: { gateway: { controlUi: { experimental: { claws: null } } } },
+      note: "labs: update claws",
     },
     {
       label: "Host Desktop",
@@ -285,6 +299,12 @@ describe("LabsPage", () => {
       sourceConfig: {},
       expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
       note: "labs: update customPluginUi",
+    },
+    {
+      label: "Claws",
+      sourceConfig: {},
+      expectedPatch: { gateway: { controlUi: { experimental: { claws: true } } } },
+      note: "labs: update claws",
     },
     {
       label: "Host Desktop",

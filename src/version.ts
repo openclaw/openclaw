@@ -17,44 +17,29 @@ const BUILD_INFO_CANDIDATES = [
   "./build-info.json",
 ] as const;
 
-function readVersionFromJsonCandidates(
+function readStringFromJsonCandidates(
   moduleUrl: string,
   candidates: readonly string[],
-  opts: { requirePackageName?: boolean } = {},
+  field: "version" | "buildId",
+  requirePackageName = false,
 ): string | null {
   try {
     const require = createRequire(moduleUrl);
     for (const candidate of candidates) {
       try {
-        const parsed = require(candidate) as { name?: string; version?: string };
-        const version = normalizeOptionalString(parsed.version);
-        if (!version) {
+        const parsed = require(candidate) as {
+          name?: unknown;
+          version?: unknown;
+          buildId?: unknown;
+        };
+        const value = normalizeOptionalString(parsed[field]);
+        if (!value || (field === "buildId" && value.length > 96)) {
           continue;
         }
-        if (opts.requirePackageName && parsed.name !== CORE_PACKAGE_NAME) {
+        if (requirePackageName && parsed.name !== CORE_PACKAGE_NAME) {
           continue;
         }
-        return version;
-      } catch {
-        // ignore missing or unreadable candidate
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-
-function readBuildIdFromJsonCandidates(moduleUrl: string): string | null {
-  try {
-    const require = createRequire(moduleUrl);
-    for (const candidate of BUILD_INFO_CANDIDATES) {
-      try {
-        const parsed = require(candidate) as { buildId?: unknown };
-        const buildId = normalizeOptionalString(parsed.buildId);
-        if (buildId && buildId.length <= 96) {
-          return buildId;
-        }
+        return value;
       } catch {
         // ignore missing or unreadable candidate
       }
@@ -76,17 +61,15 @@ function firstNonEmpty(...values: Array<string | undefined>): string | undefined
 }
 
 export function readVersionFromPackageJsonForModuleUrl(moduleUrl: string): string | null {
-  return readVersionFromJsonCandidates(moduleUrl, PACKAGE_JSON_CANDIDATES, {
-    requirePackageName: true,
-  });
+  return readStringFromJsonCandidates(moduleUrl, PACKAGE_JSON_CANDIDATES, "version", true);
 }
 
 export function readVersionFromBuildInfoForModuleUrl(moduleUrl: string): string | null {
-  return readVersionFromJsonCandidates(moduleUrl, BUILD_INFO_CANDIDATES);
+  return readStringFromJsonCandidates(moduleUrl, BUILD_INFO_CANDIDATES, "version");
 }
 
 export function readBuildIdFromBuildInfoForModuleUrl(moduleUrl: string): string | null {
-  return readBuildIdFromJsonCandidates(moduleUrl);
+  return readStringFromJsonCandidates(moduleUrl, BUILD_INFO_CANDIDATES, "buildId");
 }
 
 export function resolveVersionFromModuleUrl(moduleUrl: string): string | null {
@@ -171,7 +154,6 @@ export function resolveRuntimeServiceCommit(): string | null {
 
 export function resolveCompatibilityHostVersion(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-  fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
 ): string {
   const explicitCompatibilityVersion = firstNonEmpty(env.OPENCLAW_COMPATIBILITY_HOST_VERSION);
   if (explicitCompatibilityVersion) {
@@ -180,7 +162,7 @@ export function resolveCompatibilityHostVersion(
   return resolveVersionFromRuntimeSources({
     env,
     runtimeVersion: resolveUsableRuntimeVersion(VERSION),
-    fallback,
+    fallback: RUNTIME_SERVICE_VERSION_FALLBACK,
     preference: env === (process.env as RuntimeVersionEnv) ? "runtime-first" : "env-first",
   });
 }

@@ -6,8 +6,7 @@ import {
   AcpSessionManager,
   baseCfg,
   createRuntime,
-  expectMockCallFields,
-  expectNoMockCallFields,
+  expectCalledWith,
   hoisted,
   installAcpSessionManagerTestLifecycle,
   installMutableAcpSessionMetaUpsert,
@@ -412,10 +411,12 @@ describe("AcpSessionManager runtime config validation", () => {
       expect(state.currentMeta?.runtimeOptions).toEqual(expected);
       await manager.runTurn(turn);
       for (const [key, value] of controls) {
-        expectMockCallFields(runtimeState.setConfigOption, { key, value });
+        expectCalledWith(runtimeState.setConfigOption, { key, value });
       }
       if (appliedModel.kind === "dropped") {
-        expectNoMockCallFields(runtimeState.setConfigOption, { key: "model" });
+        expect(runtimeState.setConfigOption).not.toHaveBeenCalledWith(
+          expect.objectContaining({ key: "model" }),
+        );
       }
       expect(runtimeState.runTurn).toHaveBeenCalledOnce();
     },
@@ -503,7 +504,7 @@ describe("AcpSessionManager resetSessionRuntimeOptions", () => {
     await expect(fixture.manager.resetSessionRuntimeOptions(fixture.target)).resolves.toEqual({});
     expect(fixture.runtimeState.ensureSession).toHaveBeenCalledOnce();
     expect(fixture.runtimeState.close).toHaveBeenCalledTimes(2);
-    expectMockCallFields(fixture.runtimeState.close, { reason: "reset-runtime-options" });
+    expectCalledWith(fixture.runtimeState.close, { reason: "reset-runtime-options" });
     expect(fixture.meta.runtimeOptions).toBeUndefined();
     expect(fixture.manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
   });

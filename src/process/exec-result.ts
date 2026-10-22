@@ -48,6 +48,14 @@ export function hasCommandProcessCleanupError(error: unknown): boolean {
   return collectNestedErrorCandidates(error).some(isCanonicalCommandProcessCleanupError);
 }
 
+/** Best-effort command reads must still propagate uncertain cleanup. */
+export function ignoreNonCleanupCommandError(error: unknown): null {
+  if (hasCommandProcessCleanupError(error)) {
+    throw error;
+  }
+  return null;
+}
+
 export type SpawnResult = {
   pid?: number;
   stdout: string;
@@ -93,34 +101,12 @@ export function recordCommandProcessFailure(error: unknown, outcome: CommandProc
 export function readCommandProcessFailure(error: unknown): CommandProcessOutcome | undefined {
   for (const cause of collectNestedErrorCandidates(error)) {
     try {
-      const outcome: unknown = isRecord(cause)
-        ? Object.getOwnPropertyDescriptor(cause, commandFailureOutcome)?.value
+      // Only recordCommandProcessFailure publishes this process-local lifecycle fact.
+      const descriptor: TypedPropertyDescriptor<CommandProcessOutcome> | undefined = isRecord(cause)
+        ? Object.getOwnPropertyDescriptor(cause, commandFailureOutcome)
         : undefined;
-      if (
-        isRecord(outcome) &&
-        (outcome.pid === undefined ||
-          (typeof outcome.pid === "number" &&
-            Number.isSafeInteger(outcome.pid) &&
-            outcome.pid > 0)) &&
-        (outcome.code === null || typeof outcome.code === "number") &&
-        (outcome.inputReleased === undefined || typeof outcome.inputReleased === "boolean") &&
-        (outcome.cleanup === undefined ||
-          outcome.cleanup === "normal" ||
-          outcome.cleanup === "cooperative" ||
-          outcome.cleanup === "forced" ||
-          outcome.cleanup === "uncertain") &&
-        (outcome.termination === "exit" ||
-          outcome.termination === "signal" ||
-          outcome.termination === "timeout" ||
-          outcome.termination === "no-output-timeout")
-      ) {
-        return {
-          pid: outcome.pid,
-          code: outcome.code,
-          cleanup: outcome.cleanup,
-          termination: outcome.termination,
-          inputReleased: outcome.inputReleased,
-        };
+      if (descriptor?.value) {
+        return descriptor.value;
       }
     } catch {
       return undefined;

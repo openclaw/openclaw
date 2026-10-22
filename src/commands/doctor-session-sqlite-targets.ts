@@ -21,8 +21,12 @@ import {
   projectExistingAgentDatabaseTargets,
   resolveTargetSqlitePath,
 } from "../infra/session-sqlite-migration-readers.js";
-import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
+import {
+  hasOrphanedSqliteSidecars,
+  resolveSqliteDatabaseFilePaths,
+} from "../infra/sqlite-files.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { HistoricalArchiveSources } from "./doctor-session-sqlite-discovery.js";
 import type {
   DoctorSessionSqliteMode,
@@ -43,6 +47,14 @@ export async function prepareDoctorSessionSqliteTargets(
     authority?: DoctorSqliteMaintenanceAuthority;
   },
 ) {
+  if (isDestructiveDoctorSessionSqliteMode(params.mode)) {
+    const statePath = resolveOpenClawStateSqlitePath(params.env);
+    if (hasOrphanedSqliteSidecars(statePath)) {
+      throw new Error(
+        `OpenClaw state database ${statePath} is unavailable: SQLite sidecars remain without the database. Restore its matching database before retrying Doctor; keep the sidecars intact.`,
+      );
+    }
+  }
   const resolved = resolveDoctorSessionSqliteTargets(params);
   if (isDestructiveDoctorSessionSqliteMode(params.mode)) {
     assertDoctorSqliteMaintenancePathsNotAliased(
@@ -61,6 +73,7 @@ export async function prepareDoctorSessionSqliteTargets(
       authority: params.authority,
       targets: projectExistingAgentDatabaseTargets(targets, params.env, params.cfg),
       deferSchemaRepair: params.mode === "import",
+      integrityCheck: params.mode === "import" ? params.integrityCheck : "full",
     });
   };
   if (params.mode === "import") {

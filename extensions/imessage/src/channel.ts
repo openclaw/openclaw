@@ -9,13 +9,13 @@ import {
   type MessageReceiptPartKind,
   sanitizeForPlainText,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveChannelGroupPolicy } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelOutboundAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
-import { questionGatewayRuntime } from "openclaw/plugin-sdk/question-gateway-runtime";
 import { chunkMarkdownText } from "openclaw/plugin-sdk/reply-runtime";
-import { buildOutboundBaseSessionKey, type RoutePeer } from "openclaw/plugin-sdk/routing";
+import { buildOutboundBaseSessionKey } from "openclaw/plugin-sdk/routing";
 import {
   collectStatusIssuesFromLastError,
   createComputedAccountStatusAdapter,
@@ -28,7 +28,7 @@ import {
   imessageApprovalCapability,
   shouldSuppressLocalIMessageExecApprovalPrompt,
 } from "./approval-native.js";
-import { resolveIMessageDirectChatService } from "./chat-context.js";
+import { normalizeDirectChatIdentifier, resolveIMessageDirectChatService } from "./chat-context.js";
 import { createIMessageConversationBindingManagerV2 } from "./conversation-bindings.js";
 import {
   matchIMessageAcpConversation,
@@ -61,6 +61,7 @@ import {
 } from "./targets.js";
 
 const loadIMessageChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
+const loadIMessageChatLookup = createLazyRuntimeModule(() => import("./chat-lookup.js"));
 
 type IMessageMessageContextExtras = {
   deps?: { [channelId: string]: unknown };
@@ -131,9 +132,6 @@ function toIMessageMessageSendResult(
 const loadIMessageApprovalReactionsModule = createLazyRuntimeModule(
   () => import("./approval-reactions.js"),
 );
-const loadIMessageQuestionReactionsModule = createLazyRuntimeModule(
-  () => import("./question-reactions.js"),
-);
 
 const imessageMessageAdapter = defineChannelMessageAdapter({
   id: "imessage",
@@ -193,59 +191,94 @@ function isCanonicalIMessageDirectHandle(raw: string, normalized: string): boole
   return /^[^\s@<>()[\]`]+@[^\s@<>()[\]`]+\.[^\s@<>()[\]`]+$/.test(trimmed);
 }
 
-function resolveIMessageOutboundSessionRoute(params: {
+async function resolveIMessageConversationTarget(params: {
   cfg: Parameters<typeof resolveIMessageAccount>[0]["cfg"];
-  agentId: string;
   accountId?: string | null;
   target: string;
 }) {
-  const parsed = parseIMessageTarget(params.target);
-  let peer: RoutePeer;
-  let from: string;
-  let to: string;
-  let recipientSessionExact = false;
-  if (parsed.kind === "handle") {
-    const handle = normalizeIMessageHandle(parsed.to);
-    if (!handle) {
+  let parsed = parseIMessageTarget(params.target);
+  const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId });
+  const deliveryTarget = parsed.kind === "handle" ? undefined : params.target;
+  if (parsed.kind !== "handle") {
+    const chat = await (
+      await loadIMessageChatLookup()
+    ).resolveIMessageChat({
+      target: parsed,
+      options: {
+        cliPath: account.config.cliPath?.trim() || "imsg",
+        dbPath: account.config.dbPath,
+        remoteHost: account.config.remoteHost,
+      },
+      conversationReadOrigin: "delegated",
+    });
+    if (!chat) {
       return null;
     }
-    const account = resolveIMessageAccount({ cfg: params.cfg, accountId: params.accountId });
-    const service =
-      resolveIMessageDirectChatService(
-        parsed.serviceExplicit ? parsed.service : account.config.service,
-      ) ?? "auto";
-    from = to = `${service}:${handle}`;
-    peer = { kind: "direct", id: handle };
-    recipientSessionExact = isCanonicalIMessageDirectHandle(parsed.to, handle);
-  } else {
-    const peerId =
-      parsed.kind === "chat_id"
-        ? String(parsed.chatId)
-        : parsed.kind === "chat_guid"
-          ? parsed.chatGuid
-          : parsed.chatIdentifier;
-    if (!peerId) {
+    const configuredGroup = resolveChannelGroupPolicy({
+      cfg: params.cfg,
+      channel: "imessage",
+      accountId: account.accountId,
+      groupId: String(chat.id),
+    }).groupConfig;
+    const chatType = configuredGroup
+      ? "group"
+      : inferIMessageTargetChatType(`chat_guid:${chat.guid}`);
+    if (!chatType) {
       return null;
     }
-    peer = { kind: "group", id: peerId };
-    from = `imessage:group:${peerId}`;
-    to = `${parsed.kind}:${peerId}`;
+    if (chatType === "group") {
+      return {
+        accountId: account.accountId,
+        peer: { kind: "group" as const, id: String(chat.id) },
+        from: `imessage:group:${chat.id}`,
+        to: params.target,
+        recipientSessionExact: false,
+      };
+    }
+    parsed = {
+      kind: "handle",
+      to: normalizeDirectChatIdentifier(chat.guid),
+      service: resolveIMessageDirectChatService(account.config.service, chat.guid) ?? "auto",
+      serviceExplicit: true,
+    };
   }
+  const handle = normalizeIMessageHandle(parsed.to);
+  if (!handle) {
+    return null;
+  }
+  const service =
+    resolveIMessageDirectChatService(
+      parsed.serviceExplicit ? parsed.service : account.config.service,
+    ) ?? "auto";
+  const from = `${service}:${handle}`;
+  return {
+    accountId: account.accountId,
+    peer: { kind: "direct" as const, id: handle },
+    from,
+    to: deliveryTarget ?? from,
+    recipientSessionExact: isCanonicalIMessageDirectHandle(parsed.to, handle),
+  };
+}
+
+async function resolveIMessageOutboundSessionRoute(
+  params: Parameters<typeof resolveIMessageConversationTarget>[0] & { agentId: string },
+) {
+  const target = await resolveIMessageConversationTarget(params);
+  if (!target) {
+    return null;
+  }
+  const { accountId, ...route } = target;
   const baseSessionKey = buildOutboundBaseSessionKey({
-    cfg: params.cfg,
+    ...params,
+    accountId,
     channel: "imessage",
-    agentId: params.agentId,
-    accountId: params.accountId,
-    peer,
+    peer: route.peer,
   });
   return {
     sessionKey: baseSessionKey,
     baseSessionKey,
-    recipientSessionExact,
-    peer,
-    chatType: peer.kind,
-    from,
-    to,
+    ...route,
+    chatType: route.peer.kind,
   };
 }
 
@@ -307,13 +340,13 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
         targetResolver: {
           looksLikeId: looksLikeIMessageExplicitTargetId,
           hint: "<phone|email|chat_id:ID|auto:contact|imessage:contact|sms:contact>",
-          resolveTarget: async ({ input }) => {
+          resolveTarget: async ({ cfg, accountId, input }) => {
             const to = normalizeIMessageMessagingTarget(input);
             if (!to) {
               return null;
             }
-            const chatType = inferIMessageTargetChatType(to);
-            if (!chatType) {
+            const target = await resolveIMessageConversationTarget({ cfg, accountId, target: to });
+            if (!target) {
               return null;
             }
             const parsed = parseIMessageTarget(to);
@@ -324,7 +357,7 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
                 : undefined;
             return {
               to,
-              kind: chatType === "direct" ? "user" : "group",
+              kind: target.peer.kind === "direct" ? "user" : "group",
               ...(display ? { display } : {}),
               source: "normalized" as const,
             };
@@ -454,14 +487,9 @@ export const imessagePlugin: ChannelPlugin<ResolvedIMessageAccount, IMessageProb
             Object.assign(payload, prepared);
           }
         },
-        renderPresentation: ({ payload, presentation }) =>
-          questionGatewayRuntime.prepareReactionPayloadForDelivery({ payload, presentation }),
         afterDeliverPayload: async ({ cfg, target, payload, results }) => {
           const accountId = resolveIMessageAccount({ cfg, accountId: target.accountId }).accountId;
           const delivery = { accountId, target, payload, results };
-          (
-            await loadIMessageQuestionReactionsModule()
-          ).registerIMessageQuestionReactionTargetForDeliveredPayload(delivery);
           await (
             await loadIMessageApprovalReactionsModule()
           ).registerIMessageApprovalReactionTargetForDeliveredPayload(delivery);

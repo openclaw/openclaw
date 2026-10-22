@@ -10,36 +10,24 @@ import { fakeRunner, success } from "./tunnel.test-support.js";
 
 const MATERIAL = "synthetic-desktop-identity";
 type Operation = "observe" | "launch";
-type Closure = "stop" | "replace-observe" | "replace-launch" | "timeout";
-
-// Only the SSH process boundary is synthetic: service, SQLite lease ownership,
-// provider invocation, desktop registry, identity preparation, and files are real.
-async function fixture() {
+async function fixture(operation: Operation) {
   const entered = createDeferredCore<WorkerSshIdentityRequest>();
   const release = createDeferredCore();
-  const providerSettled = createDeferredCore();
+  const providerSettled = release.promise.then(() => ({
+    kind: "material" as const,
+    contents: MATERIAL,
+  }));
   const provider = support.createProvider({
-    resolveSshIdentity: async (request) => {
+    resolveSshIdentity: (request) => {
       entered.resolve(request);
-      try {
-        await release.promise;
-        return { kind: "material", contents: MATERIAL };
-      } finally {
-        providerSettled.resolve();
-      }
+      return providerSettled;
     },
   });
-  const fake = fakeRunner(() => success());
-  const start = fake.runner.start.bind(fake.runner);
-  fake.runner.start = (argv, options) => {
-    const child = start(argv, options);
-    fake.starts.at(-1)!.process.becomeReady();
-    return child;
-  };
+  const fake = fakeRunner(undefined, { ready: true });
   const manager = createWorkerTunnelManager({ runner: fake.runner });
   const service = support.createService(provider, {
     tunnelManager: manager,
-    // Longer than the actual desktop deadline; provider timeout cannot prove this fence.
+    // Exceed the desktop deadline so only the caller-lifetime fence can win.
     providerCallTimeoutMs: 120_000,
     resolveSshIdentity: (request) =>
       resolveWorkerSshIdentity({
@@ -64,27 +52,61 @@ async function fixture() {
       preparedRemoved.resolve();
     }
   });
-  const startOperation = (operation: Operation) =>
+  const pending = observeOutcome(
     operation === "observe"
       ? service.observeDesktop({ environmentId: environment.environmentId, control: false })
-      : service.launchDesktopApp({ environmentId: environment.environmentId, app: "browser" });
+      : service.launchDesktopApp({ environmentId: environment.environmentId, app: "browser" }),
+  );
+  const commandRelease = createDeferredCore();
+  let closing: Promise<unknown> | undefined;
   const assertLeaseUnchanged = () => {
     expect(support.testState.store.get(environment.environmentId)).toEqual(environment);
     expect(support.testState.store.getCredential(environment.environmentId)).toEqual(credential);
   };
   return {
-    entered,
     release,
-    providerSettled,
     fake,
-    manager,
-    service,
-    environment,
     writes,
     removals,
     preparedRemoved,
-    startOperation,
+    pending,
+    commandRelease,
+    request: entered.promise,
     assertLeaseUnchanged,
+    async resolve() {
+      release.resolve();
+      await providerSettled;
+    },
+    stop: () => manager.desktop.stop(environment.environmentId, environment.ownerEpoch),
+    close(closure: "stop" | "replace-observe" | "replace-launch") {
+      const replacement = {
+        environmentId: environment.environmentId,
+        ownerEpoch: environment.ownerEpoch + 1,
+        ssh: support.SSH_ENDPOINT,
+        resolveIdentity: async () => ({
+          kind: "material" as const,
+          contents: "replacement-identity",
+        }),
+      };
+      closing = observeOutcome(
+        closure === "stop"
+          ? manager.desktop.stop(environment.environmentId, environment.ownerEpoch)
+          : closure === "replace-observe"
+            ? manager.desktop.acquire({ ...replacement, desktop: { protocol: "rfb", port: 5900 } })
+            : manager.desktop.launchApp({ ...replacement, app: support.DESKTOP.apps![0]! }),
+      );
+    },
+    async [Symbol.asyncDispose]() {
+      // Release gates before joining teardown; neither owner may wait on the test.
+      release.resolve();
+      commandRelease.resolve();
+      await providerSettled;
+      await pending;
+      await closing;
+      await manager.stopAll();
+      vi.useRealTimers();
+      assertLeaseUnchanged();
+    },
   };
 }
 
@@ -95,107 +117,66 @@ function observeOutcome(operation: Promise<unknown>) {
   );
 }
 
-const revokedCases: Array<{ operation: Operation; closure: Closure }> = [
-  { operation: "observe", closure: "stop" },
-  { operation: "observe", closure: "replace-observe" },
-  { operation: "observe", closure: "replace-launch" },
-  { operation: "launch", closure: "stop" },
-  { operation: "launch", closure: "replace-observe" },
-  { operation: "launch", closure: "replace-launch" },
-  { operation: "launch", closure: "timeout" },
-];
-
 describe.skipIf(process.platform === "win32")("desktop SSH identity caller lifetime", () => {
   support.setupWorkerEnvironmentServiceSuite();
   afterEach(() => vi.restoreAllMocks());
 
-  it.each(revokedCases)(
-    "fences $operation on $closure before late key writes",
-    async ({ operation, closure }) => {
-      if (closure === "timeout") {
-        vi.useFakeTimers();
-      }
-      const f = await fixture();
-      const pending = observeOutcome(f.startOperation(operation));
-      let closing: Promise<unknown> | undefined;
-      try {
-        const request = await f.entered.promise;
-        expect(request.assertCurrent).toBeTypeOf("function");
-        expect(() => request.assertCurrent!()).not.toThrow();
-        f.assertLeaseUnchanged();
-        if (closure === "stop") {
-          closing = observeOutcome(
-            f.manager.desktop.stop(f.environment.environmentId, f.environment.ownerEpoch),
-          );
-        } else if (closure === "timeout") {
-          await vi.advanceTimersByTimeAsync(29_999);
-          expect(() => request.assertCurrent!()).not.toThrow();
-          await vi.advanceTimersByTimeAsync(1);
-          expect(await pending).toMatchObject({
-            status: "rejected",
-            error: { code: "launcher_failure" },
-          });
-        } else {
-          // Advance the real desktop owner without changing the provider's SQLite lease.
-          // Check synchronously: a cross-operation claimant fences even before async teardown.
-          const replacement = {
-            environmentId: f.environment.environmentId,
-            ownerEpoch: f.environment.ownerEpoch + 1,
-            ssh: support.SSH_ENDPOINT,
-            resolveIdentity: async () => ({
-              kind: "material" as const,
-              contents: "replacement-identity",
-            }),
-          };
-          closing = observeOutcome(
-            closure === "replace-observe"
-              ? f.manager.desktop.acquire({
-                  ...replacement,
-                  desktop: { protocol: "rfb", port: 5900 },
-                })
-              : f.manager.desktop.launchApp({ ...replacement, app: support.DESKTOP.apps![0]! }),
-          );
-        }
-        f.assertLeaseUnchanged();
-        expect(() => request.assertCurrent!()).toThrow();
-        // The original preparation is disposed before replacement startup. Its unique
-        // directory identifies late writes without confusing valid replacement files.
-        f.release.resolve();
-        await f.providerSettled.promise;
-        await f.preparedRemoved.promise;
-        expect(await pending).toMatchObject({ status: "rejected" });
-        const removedDirectory = String(
-          f.removals.mock.calls.find(([target]) =>
-            String(target).includes("openclaw-worker-desktop"),
-          )![0],
-        );
-        expect(
-          f.writes.mock.calls.filter(
-            ([target]) => typeof target === "string" && path.dirname(target) === removedDirectory,
-          ),
-        ).toEqual([]);
-        await expect(fs.access(removedDirectory)).rejects.toMatchObject({ code: "ENOENT" });
-        await closing;
-        f.assertLeaseUnchanged();
-      } finally {
-        // Joined cleanup must never wait on a provider gate owned by this test.
-        f.release.resolve();
-        await f.providerSettled.promise;
-        await pending;
-        await closing;
-        await f.manager.stopAll();
-        vi.useRealTimers();
-      }
-    },
-  );
+  it.each([
+    ["observe", "stop"],
+    ["observe", "replace-observe"],
+    ["observe", "replace-launch"],
+    ["launch", "stop"],
+    ["launch", "replace-observe"],
+    ["launch", "replace-launch"],
+    ["launch", "timeout"],
+  ] as const)("fences %s on %s before late key writes", async (operation, closure) => {
+    if (closure === "timeout") {
+      vi.useFakeTimers();
+    }
+    await using f = await fixture(operation);
+    const { pending } = f;
+    const request = await f.request;
+    expect(request.assertCurrent).toBeTypeOf("function");
+    expect(() => request.assertCurrent!()).not.toThrow();
+    f.assertLeaseUnchanged();
+    if (closure === "timeout") {
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(() => request.assertCurrent!()).not.toThrow();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(await pending).toMatchObject({
+        status: "rejected",
+        error: { code: "launcher_failure" },
+      });
+    } else {
+      f.close(closure);
+    }
+    f.assertLeaseUnchanged();
+    expect(() => request.assertCurrent!()).toThrow();
+    // Identify the old directory without confusing valid replacement writes.
+    await f.resolve();
+    await f.preparedRemoved.promise;
+    expect(await pending).toMatchObject({ status: "rejected" });
+    const removedDirectory = String(
+      f.removals.mock.calls.find(([target]) =>
+        String(target).includes("openclaw-worker-desktop"),
+      )![0],
+    );
+    expect(
+      f.writes.mock.calls.filter(
+        ([target]) => typeof target === "string" && path.dirname(target) === removedDirectory,
+      ),
+    ).toEqual([]);
+    await expect(fs.access(removedDirectory)).rejects.toMatchObject({ code: "ENOENT" });
+    f.assertLeaseUnchanged();
+  });
 
   it.each(["observe", "launch"] as const)(
     "allows %s and disposes private files independently",
     async (operation) => {
-      const f = await fixture();
-      const pending = observeOutcome(f.startOperation(operation));
+      await using f = await fixture(operation);
+      const { pending, commandRelease } = f;
+      const request = await f.request;
       const commandEntered = createDeferredCore<string[]>();
-      const commandRelease = createDeferredCore();
       if (operation === "launch") {
         f.fake.runner.run = async (argv) => {
           commandEntered.resolve(argv);
@@ -203,43 +184,32 @@ describe.skipIf(process.platform === "win32")("desktop SSH identity caller lifet
           return success();
         };
       }
-      try {
-        const request = await f.entered.promise;
-        expect(() => request.assertCurrent!()).not.toThrow();
-        f.release.resolve();
-        let argv: string[];
-        if (operation === "launch") {
-          argv = await commandEntered.promise;
-        } else {
-          expect(await pending).toMatchObject({
-            status: "fulfilled",
-            value: { transport: "rfb" },
-          });
-          argv = f.fake.starts[0]!.argv;
-        }
-        const identityPath = argv[argv.indexOf("-i") + 1]!;
-        const directory = path.dirname(identityPath);
-        expect(await fs.readFile(identityPath, "utf8")).toBe(MATERIAL + "\n");
-        expect((await fs.stat(directory)).mode & 0o777).toBe(0o700);
-        for (const file of ["identity", "known_hosts"]) {
-          expect((await fs.stat(path.join(directory, file))).mode & 0o777).toBe(0o600);
-        }
-        expect(await fs.readFile(path.join(directory, "known_hosts"), "utf8")).toContain(
-          support.SSH_ENDPOINT.hostKey,
-        );
-        // Provider authority closes on resolution; disposal must not reuse that guard.
-        expect(() => request.assertCurrent!()).toThrow("identity invocation is closed");
-        commandRelease.resolve();
-        expect(await pending).toMatchObject({ status: "fulfilled" });
-        await f.manager.desktop.stop(f.environment.environmentId, f.environment.ownerEpoch);
-        await expect(fs.access(directory)).rejects.toMatchObject({ code: "ENOENT" });
-        f.assertLeaseUnchanged();
-      } finally {
-        f.release.resolve();
-        commandRelease.resolve();
-        await pending;
-        await f.manager.stopAll();
+      expect(() => request.assertCurrent!()).not.toThrow();
+      f.release.resolve();
+      let argv: string[];
+      if (operation === "launch") {
+        argv = await commandEntered.promise;
+      } else {
+        expect(await pending).toMatchObject({ status: "fulfilled", value: { transport: "rfb" } });
+        argv = f.fake.starts[0]!.argv;
       }
+      const identityPath = argv[argv.indexOf("-i") + 1]!;
+      const directory = path.dirname(identityPath);
+      expect(await fs.readFile(identityPath, "utf8")).toBe(MATERIAL + "\n");
+      expect((await fs.stat(directory)).mode & 0o777).toBe(0o700);
+      for (const file of ["identity", "known_hosts"]) {
+        expect((await fs.stat(path.join(directory, file))).mode & 0o777).toBe(0o600);
+      }
+      expect(await fs.readFile(path.join(directory, "known_hosts"), "utf8")).toContain(
+        support.SSH_ENDPOINT.hostKey,
+      );
+      // Provider authority closes on resolution; disposal must not reuse that guard.
+      expect(() => request.assertCurrent!()).toThrow("identity invocation is closed");
+      commandRelease.resolve();
+      expect(await pending).toMatchObject({ status: "fulfilled" });
+      await f.stop();
+      await expect(fs.access(directory)).rejects.toMatchObject({ code: "ENOENT" });
+      f.assertLeaseUnchanged();
     },
   );
 });

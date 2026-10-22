@@ -136,6 +136,7 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     const principal = ingress.resolvePrincipal();
     return {
       authenticatedUserProfile: principal.authenticatedUserProfile,
+      preparedSessionProfile: principal.preparedSessionProfile,
       operatorRolePolicy: principal.operatorRolePolicy,
       operatorRoleActor: principal.operatorRoleActor,
       operatorAccessAuthority: principal.operatorAccessAuthority,
@@ -196,6 +197,7 @@ export async function resolveAuthenticatedHttpUserProfile(params: {
     const syncGitHubIdentity = createAuthenticatedGitHubIdentitySync({
       authResult: params.authResult,
       authConfig: params.cfg.gateway?.auth,
+      config: params.cfg,
       requestHeaders: params.req.headers,
       assertCurrent,
     });

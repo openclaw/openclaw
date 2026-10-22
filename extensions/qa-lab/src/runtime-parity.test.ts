@@ -1,4 +1,3 @@
-// Qa Lab tests cover runtime parity classification behavior.
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
@@ -16,13 +15,95 @@ import {
   resolveRuntimeParityUsagePolicy,
   runRuntimeParityScenario,
   type RuntimeParityCell,
+  type RuntimeParityScenarioExecution,
   type RuntimeParityToolCall,
 } from "./runtime-parity.js";
 import { createRuntimeParityTranscriptHarness } from "./runtime-parity.test-helper.js";
 import { readQaScenarioFile } from "./scenario-catalog.js";
 import { buildQaToolCoverageReport } from "./tool-coverage-report.js";
 
-const { seedRuntimeParityTranscript, cleanup } = createRuntimeParityTranscriptHarness();
+const { seedRuntimeParityTranscript: seedTranscript, cleanup } =
+  createRuntimeParityTranscriptHarness();
+const PARENT_PROMPT = "Delegate one bounded QA task to a subagent.";
+type CellOutcome = Partial<Pick<RuntimeParityScenarioExecution, "status" | "details">> &
+  Pick<RuntimeParityCell, "runtimeErrorClass">;
+
+function runPair(codex: CellOutcome = {}, openclaw: CellOutcome = {}) {
+  return runRuntimeParityScenario({
+    scenarioId: "outcome-fixture",
+    runCell: async (runtime) => {
+      const { runtimeErrorClass, ...result } = runtime === "codex" ? codex : openclaw;
+      return {
+        status: "pass",
+        ...result,
+        cell: {
+          ...makeRuntimeParityCell(runtime),
+          ...(runtimeErrorClass ? { runtimeErrorClass } : {}),
+        },
+      };
+    },
+  });
+}
+
+function seedRuntimeParityTranscript(
+  params: Omit<Parameters<typeof seedTranscript>[0], "sessionId" | "sessionKey"> & {
+    sessionId?: string;
+    sessionKey?: string;
+  },
+) {
+  const sessionId = params.sessionId ?? "runtime-parity";
+  return seedTranscript({
+    ...params,
+    sessionId,
+    sessionKey: params.sessionKey ?? `agent:qa:${sessionId}`,
+  });
+}
+
+function captureCell(
+  runtime: RuntimeId,
+  tempRoot: string,
+  params: Partial<
+    Omit<Parameters<typeof captureRuntimeParityCell>[0], "runtime" | "gateway" | "wallClockMs">
+  > = {},
+) {
+  return captureRuntimeParityCell({
+    runtime,
+    gateway: { tempRoot },
+    scenarioResult: { status: "pass" },
+    wallClockMs: 10,
+    ...params,
+  });
+}
+function assistant(...content: unknown[]) {
+  return { role: "assistant", content };
+}
+function toolResult(toolName: string, text: string, toolCallId?: string) {
+  return {
+    role: "toolResult",
+    toolName,
+    content: [{ type: "text", text }],
+    ...(toolCallId === undefined ? {} : { toolCallId }),
+  };
+}
+function makeToolCall(id: string, name: string, args: Record<string, unknown>) {
+  return { type: "toolCall", id, name, arguments: args };
+}
+function callEvent(toolCallId: string, name: string, args: Record<string, unknown>) {
+  return { type: "tool.call", data: { toolCallId, name, arguments: args } };
+}
+function resultEvent(toolCallId: string, name: string, result: Record<string, unknown>) {
+  return { type: "tool.result", data: { toolCallId, name, ...result } };
+}
+function searchEvents(
+  id: string,
+  query: string,
+  result: Record<string, unknown> = { status: "completed" },
+) {
+  return [
+    callEvent(id, "web_search", { query }),
+    resultEvent(id, "web_search", { ...result, result: { status: "completed", query } }),
+  ];
+}
 
 afterEach(async () => {
   vi.unstubAllGlobals();
@@ -44,16 +125,13 @@ async function captureRuntimeParityWithMockRequests(params: {
     type: string;
   }>;
 }) {
-  const parentPrompt = "Delegate one bounded QA task to a subagent.";
   const tempRoot = await seedRuntimeParityTranscript({
-    sessionId: "mock-runtime-parity",
-    sessionKey: "agent:qa:mock-runtime-parity",
-    messages: params.messages ?? [{ role: "user", content: parentPrompt }],
+    messages: params.messages ?? [{ role: "user", content: PARENT_PROMPT }],
     trajectoryEvents: params.trajectoryEvents,
   });
   const requests = params.requests.map((request) => ({
-    prompt: parentPrompt,
-    allInputText: parentPrompt,
+    prompt: PARENT_PROMPT,
+    allInputText: PARENT_PROMPT,
     ...request,
   }));
   const server = createServer((request, response) => {
@@ -70,12 +148,9 @@ async function captureRuntimeParityWithMockRequests(params: {
   });
   const address = server.address() as AddressInfo;
   try {
-    return await captureRuntimeParityCell({
-      runtime: "openclaw",
-      gateway: { tempRoot },
+    return await captureCell("openclaw", tempRoot, {
       mockBaseUrl: `http://127.0.0.1:${address.port}`,
       scenarioResult: params.scenarioResult ?? { status: "pass" },
-      wallClockMs: 10,
     });
   } finally {
     await new Promise<void>((resolve, reject) => {
@@ -84,52 +159,16 @@ async function captureRuntimeParityWithMockRequests(params: {
   }
 }
 
-function createTerminalImageParityInput(
-  stepStatus: "pass" | "fail",
-  details: string,
-): Parameters<typeof captureRuntimeParityWithMockRequests>[0] {
-  return {
-    requests: [{ plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } }],
-    messages: [
-      { role: "user", content: "Generate the QA image." },
-      {
-        role: "assistant",
-        content: [
-          {
-            type: "toolCall",
-            id: "image-call",
-            name: "image_generate",
-            arguments: { prompt: "same" },
-          },
-        ],
-      },
-    ],
-    scenarioResult: {
-      status: "pass",
-      steps: [
-        {
-          status: stepStatus,
-          details,
-        },
-      ],
-    },
-  };
-}
-
 function makeRuntimeParityCell(
   runtime: RuntimeId,
-  toolCalls: RuntimeParityToolCall[],
+  toolCalls: RuntimeParityToolCall[] = [],
 ): RuntimeParityCell {
   return {
     runtime,
     transcriptBytes: '{"message":{"role":"assistant","content":"done"}}\n',
     toolCalls,
     finalText: "done",
-    usage: {
-      inputTokens: 1,
-      outputTokens: 1,
-      totalTokens: 2,
-    },
+    usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 },
     wallClockMs: 10,
     bootStateLines: [],
   };
@@ -137,32 +176,18 @@ function makeRuntimeParityCell(
 
 describe("runtime parity", () => {
   it("cancels a failed mock-request response before falling back to transcript calls", async () => {
-    const parentPrompt = "Delegate one bounded QA task to a subagent.";
     const tempRoot = await seedRuntimeParityTranscript({
-      sessionId: "mock-runtime-parity-failure",
-      sessionKey: "agent:qa:mock-runtime-parity-failure",
-      messages: [{ role: "user", content: parentPrompt }],
+      messages: [{ role: "user", content: PARENT_PROMPT }],
     });
     const cancel = vi.fn(() => {
       throw new Error("cancel failed");
     });
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          new Response(new ReadableStream<Uint8Array>({ cancel }), {
-            status: 503,
-          }),
-      ),
+      vi.fn(async () => new Response(new ReadableStream<Uint8Array>({ cancel }), { status: 503 })),
     );
 
-    const cell = await captureRuntimeParityCell({
-      runtime: "openclaw",
-      gateway: { tempRoot },
-      mockBaseUrl: "http://127.0.0.1:43123",
-      scenarioResult: { status: "pass" },
-      wallClockMs: 10,
-    });
+    const cell = await captureCell("openclaw", tempRoot, { mockBaseUrl: "http://127.0.0.1:43123" });
 
     expect(cancel).toHaveBeenCalledOnce();
     expect(cell.toolCalls).toEqual([]);
@@ -170,54 +195,25 @@ describe("runtime parity", () => {
 
   it("captures tool results from the canonical SQLite session transcript", async () => {
     const tempRoot = await seedRuntimeParityTranscript({
-      sessionId: "capability-flip",
-      sessionKey: "agent:qa:capability-flip",
       messages: [
-        {
-          role: "user",
-          content: [{ type: "text", text: "Capability flip image check" }],
-        },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "call-image-1",
-              name: "image_generate",
-              arguments: { prompt: "QA lighthouse" },
-            },
-          ],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "call-image-1",
-          toolName: "image_generate",
-          content: [{ type: "text", text: "Image generation started" }],
-        },
-        {
-          role: "assistant",
-          content: [
-            "  plain  ",
-            { type: "output_text", content: "nested" },
-            { type: "message", content: "message" },
-            { type: "unknown", text: " priority ", content: "ignored" },
-            { type: "toolResult", content: "ignored tool result" },
-            { type: "Output_Text", content: "ignored normalized type" },
-          ],
-        },
+        { role: "user", content: [{ type: "text", text: "Capability flip image check" }] },
+        assistant(makeToolCall("call-image-1", "image_generate", { prompt: "QA lighthouse" })),
+        toolResult("image_generate", "Image generation started", "call-image-1"),
+        assistant(
+          "  plain  ",
+          { type: "output_text", content: "nested" },
+          { type: "message", content: "message" },
+          { type: "unknown", text: " priority ", content: "ignored" },
+          { type: "toolResult", content: "ignored tool result" },
+          { type: "Output_Text", content: "ignored normalized type" },
+        ),
       ],
     });
 
-    const cell = await captureRuntimeParityCell({
-      runtime: "openclaw",
-      gateway: { tempRoot },
-      scenarioResult: { status: "pass" },
-      wallClockMs: 10,
-    });
+    const cell = await captureCell("openclaw", tempRoot);
 
     expect(cell.transcriptBytes).toContain('"role":"toolResult"');
-    expect(cell.toolCalls).toHaveLength(1);
-    expect(cell.toolCalls[0]).toMatchObject({ tool: "image_generate" });
+    expect(cell.toolCalls).toEqual([expect.objectContaining({ tool: "image_generate" })]);
     expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
     expect(cell.finalText).toBe("plain nested message priority");
   });
@@ -245,13 +241,8 @@ describe("runtime parity", () => {
           : []),
       ];
       const tempRoot = await seedRuntimeParityTranscript({
-        sessionId: "read-tool-coverage",
-        sessionKey: "agent:qa:read-tool-coverage",
         messages: results.flatMap(({ id, args, text, isError }) => [
-          {
-            role: "assistant",
-            content: [{ type: "toolCall", id, name: "read", arguments: args }],
-          },
+          assistant({ type: "toolCall", id, name: "read", arguments: args }),
           format === "toolResult"
             ? {
                 role: "toolResult",
@@ -273,12 +264,7 @@ describe("runtime parity", () => {
               },
         ]),
       });
-      const openclaw = await captureRuntimeParityCell({
-        runtime: "openclaw",
-        gateway: { tempRoot },
-        scenarioResult: { status: "pass" },
-        wallClockMs: 10,
-      });
+      const openclaw = await captureCell("openclaw", tempRoot);
       const scenario = readQaScenarioFile("qa/scenarios/runtime/tools/fs-read.yaml");
       const runtimeParity = await runRuntimeParityScenario({
         scenarioId: scenario.id,
@@ -315,29 +301,10 @@ describe("runtime parity", () => {
     const cell = await captureRuntimeParityWithMockRequests({
       messages: [],
       requests: [],
-      trajectoryEvents: [
-        {
-          type: "tool.call",
-          data: {
-            toolCallId: "search-1",
-            name: "web_search",
-            arguments: { query: "OpenClaw runtime parity fixed query" },
-          },
-        },
-        {
-          type: "tool.result",
-          data: {
-            toolCallId: "search-1",
-            name: "web_search",
-            status: "completed",
-            isError: false,
-            result: {
-              status: "completed",
-              query: "OpenClaw runtime parity fixed query",
-            },
-          },
-        },
-      ],
+      trajectoryEvents: searchEvents("search-1", "OpenClaw runtime parity fixed query", {
+        status: "completed",
+        isError: false,
+      }),
     });
 
     expect(cell.toolCalls).toEqual([expect.objectContaining({ tool: "web_search" })]);
@@ -347,70 +314,24 @@ describe("runtime parity", () => {
 
   it("merges trajectory-only calls without duplicating transcript calls", async () => {
     const tempRoot = await seedRuntimeParityTranscript({
-      sessionId: "mixed-runtime-tools",
-      sessionKey: "agent:qa:mixed-runtime-tools",
       messages: [
         { role: "user", content: "Read the file, run the command, then search." },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              id: "read-1",
-              name: "read",
-              arguments: { path: "README.md" },
-            },
-            {
-              type: "toolCall",
-              id: "exec-1",
-              name: "exec",
-              arguments: { command: "pwd" },
-            },
-          ],
-        },
-        {
-          role: "toolResult",
-          toolCallId: "read-1",
-          toolName: "read",
-          content: [{ type: "text", text: "README contents" }],
-        },
+        assistant(
+          makeToolCall("read-1", "read", { path: "README.md" }),
+          makeToolCall("exec-1", "exec", { command: "pwd" }),
+        ),
+        toolResult("read", "README contents", "read-1"),
       ],
       trajectoryEvents: [
-        {
-          type: "tool.result",
-          data: {
-            toolCallId: "exec-1",
-            name: "exec",
-            success: true,
-            contentItems: [{ type: "text", text: "/workspace" }],
-          },
-        },
-        {
-          type: "tool.call",
-          data: {
-            toolCallId: "search-1",
-            name: "web_search",
-            arguments: { query: "OpenClaw runtime parity fixed query" },
-          },
-        },
-        {
-          type: "tool.result",
-          data: {
-            toolCallId: "search-1",
-            name: "web_search",
-            status: "completed",
-            result: { status: "completed" },
-          },
-        },
+        resultEvent("exec-1", "exec", {
+          success: true,
+          contentItems: [{ type: "text", text: "/workspace" }],
+        }),
+        ...searchEvents("search-1", "OpenClaw runtime parity fixed query"),
       ],
     });
 
-    const cell = await captureRuntimeParityCell({
-      runtime: "codex",
-      gateway: { tempRoot },
-      scenarioResult: { status: "pass" },
-      wallClockMs: 10,
-    });
+    const cell = await captureCell("codex", tempRoot);
 
     expect(cell.toolCalls.map((toolCall) => toolCall.tool)).toEqual(["read", "exec", "web_search"]);
     expect(cell.toolCalls[0]?.errorClass).toBeUndefined();
@@ -420,53 +341,15 @@ describe("runtime parity", () => {
 
   it("keeps distinct same-tool calls with identical arguments", async () => {
     const tempRoot = await seedRuntimeParityTranscript({
-      sessionId: "distinct-web-searches",
-      sessionKey: "agent:qa:distinct-web-searches",
       messages: [
         { role: "user", content: "Search for both QA markers." },
-        {
-          role: "assistant",
-          content: [
-            {
-              type: "toolCall",
-              name: "web_search",
-              arguments: { query: "same marker" },
-            },
-          ],
-        },
-        {
-          role: "toolResult",
-          toolName: "web_search",
-          content: [{ type: "text", text: "result A" }],
-        },
+        assistant({ type: "toolCall", name: "web_search", arguments: { query: "same marker" } }),
+        toolResult("web_search", "result A"),
       ],
-      trajectoryEvents: [
-        {
-          type: "tool.call",
-          data: {
-            toolCallId: "search-b",
-            name: "web_search",
-            arguments: { query: "same marker" },
-          },
-        },
-        {
-          type: "tool.result",
-          data: {
-            toolCallId: "search-b",
-            name: "web_search",
-            status: "completed",
-            result: { status: "completed", query: "same marker" },
-          },
-        },
-      ],
+      trajectoryEvents: searchEvents("search-b", "same marker"),
     });
 
-    const cell = await captureRuntimeParityCell({
-      runtime: "codex",
-      gateway: { tempRoot },
-      scenarioResult: { status: "pass" },
-      wallClockMs: 10,
-    });
+    const cell = await captureCell("codex", tempRoot);
 
     expect(cell.toolCalls.map((toolCall) => toolCall.tool)).toEqual(["web_search", "web_search"]);
     expect(cell.toolCalls[0]?.argsHash).toBe(cell.toolCalls[1]?.argsHash);
@@ -476,28 +359,9 @@ describe("runtime parity", () => {
     const now = Date.now();
     const tempRoot = await seedRuntimeParityTranscript({
       sessionId: "web-search-session",
-      sessionKey: "agent:qa:web-search-session",
       messages: [],
       updatedAt: now - 1_000,
-      trajectoryEvents: [
-        {
-          type: "tool.call",
-          data: {
-            toolCallId: "search-1",
-            name: "web_search",
-            arguments: { query: "release marker" },
-          },
-        },
-        {
-          type: "tool.result",
-          data: {
-            toolCallId: "search-1",
-            name: "web_search",
-            status: "completed",
-            result: { status: "completed" },
-          },
-        },
-      ],
+      trajectoryEvents: searchEvents("search-1", "release marker"),
     });
     await seedRuntimeParityTranscript({
       tempRoot,
@@ -506,33 +370,12 @@ describe("runtime parity", () => {
       heartbeatIsolatedBaseSessionKey: "agent:qa:main",
       messages: [],
       updatedAt: now,
-      trajectoryEvents: [
-        {
-          type: "tool.call",
-          data: {
-            toolCallId: "heartbeat-1",
-            name: "web_search",
-            arguments: { query: "heartbeat background search" },
-          },
-        },
-        {
-          type: "tool.result",
-          data: {
-            toolCallId: "heartbeat-1",
-            name: "web_search",
-            success: true,
-            result: { status: "completed" },
-          },
-        },
-      ],
+      trajectoryEvents: searchEvents("heartbeat-1", "heartbeat background search", {
+        success: true,
+      }),
     });
 
-    const cell = await captureRuntimeParityCell({
-      runtime: "codex",
-      gateway: { tempRoot },
-      scenarioResult: { status: "pass" },
-      wallClockMs: 10,
-    });
+    const cell = await captureCell("codex", tempRoot);
 
     expect(cell.toolCalls.map((toolCall) => toolCall.tool)).toEqual(["web_search"]);
     expect(cell.toolCalls[0]?.argsHash).toBe(stableHash({ query: "release marker" }));
@@ -546,35 +389,18 @@ describe("runtime parity", () => {
       messages: [{ role: "user", content: "tool search qa check target=session_status" }],
       updatedAt: now - 1_000,
       trajectoryEvents: [
-        {
-          type: "tool.call",
-          data: {
-            toolCallId: "session-status-1",
-            name: "session_status",
-            arguments: {},
-          },
-        },
-        {
-          type: "tool.result",
-          data: {
-            toolCallId: "session-status-1",
-            name: "session_status",
-            status: "completed",
-            result: { status: "completed" },
-          },
-        },
+        callEvent("session-status-1", "session_status", {}),
+        resultEvent("session-status-1", "session_status", {
+          status: "completed",
+          result: { status: "completed" },
+        }),
       ],
     });
     await seedRuntimeParityTranscript({
       tempRoot,
       sessionId: "session-status-failure",
       sessionKey: "agent:qa:runtime-tool:session_status:failure",
-      messages: [
-        {
-          role: "user",
-          content: "tool search qa failure target=session_status",
-        },
-      ],
+      messages: [{ role: "user", content: "tool search qa failure target=session_status" }],
       updatedAt: now,
     });
     await seedRuntimeParityTranscript({
@@ -585,9 +411,7 @@ describe("runtime parity", () => {
       updatedAt: now + 1_000,
     });
 
-    const cell = await captureRuntimeParityCell({
-      runtime: "codex",
-      gateway: { tempRoot },
+    const cell = await captureCell("codex", tempRoot, {
       scenarioResult: {
         status: "pass",
         steps: [
@@ -600,7 +424,6 @@ describe("runtime parity", () => {
           },
         ],
       },
-      wallClockMs: 10,
     });
 
     expect(cell.transcriptBytes).toContain("target=session_status");
@@ -608,65 +431,58 @@ describe("runtime parity", () => {
     expect(cell.transcriptBytes).not.toContain("Unrelated setup.");
     expect(cell.toolCalls).toEqual([expect.objectContaining({ tool: "session_status" })]);
 
-    const missingCell = await captureRuntimeParityCell({
-      runtime: "codex",
-      gateway: { tempRoot },
+    const missingCell = await captureCell("codex", tempRoot, {
       scenarioResult: {
         status: "fail",
         details: "RUNTIME_PARITY_SESSION_KEY=agent:qa:runtime-tool:missing:happy",
       },
-      wallClockMs: 10,
     });
     expect(missingCell.transcriptBytes).toBe("");
     expect(missingCell.toolCalls).toEqual([]);
   });
 
   it("still classifies terminal scenario failure diagnostics", async () => {
-    const cell = await captureRuntimeParityCell({
-      runtime: "openclaw",
-      gateway: {
-        tempRoot: `/tmp/openclaw-qa-runtime-parity-missing-${process.pid}`,
-      },
-      scenarioResult: {
-        status: "fail",
-        details: "timed out after 20000ms",
-      },
-      wallClockMs: 10,
-    });
+    const cell = await captureCell(
+      "openclaw",
+      `/tmp/openclaw-qa-runtime-parity-missing-${process.pid}`,
+      { scenarioResult: { status: "fail", details: "timed out after 20000ms" } },
+    );
 
     expect(cell.runtimeErrorClass).toBe("timeout");
   });
 
-  it("records resolved mock calls as provider-plan evidence", async () => {
-    const cell = await captureRuntimeParityWithMockRequests({
-      requests: [
-        { plannedToolName: "read_file", plannedToolArgs: { path: "README.md" } },
-        { toolOutput: JSON.stringify({ ok: true }) },
-      ],
-    });
+  it.each([
+    { name: "object", toolOutput: '{"ok":true}', expected: { ok: true } },
+    { name: "array", toolOutput: '[{"ok":true}]', expected: '[{"ok":true}]' },
+    { name: "malformed JSON", toolOutput: "not-json", expected: "not-json" },
+  ])(
+    "records resolved mock calls as provider-plan evidence ($name)",
+    async ({ toolOutput, expected }) => {
+      const cell = await captureRuntimeParityWithMockRequests({
+        requests: [
+          { plannedToolName: "read_file", plannedToolArgs: { path: "README.md" } },
+          { toolOutput },
+        ],
+      });
 
-    expect(cell.toolCalls).toEqual([]);
-    expect(cell.providerPlanToolCalls).toEqual([
-      {
-        tool: "read_file",
-        argsHash: stableHash({ path: "README.md" }),
-        resultHash: stableHash({ ok: true }),
-      },
-    ]);
+      expect(cell.toolCalls).toEqual([]);
+      expect(cell.providerPlanToolCalls).toEqual([
+        {
+          tool: "read_file",
+          argsHash: stableHash({ path: "README.md" }),
+          resultHash: stableHash(expected),
+        },
+      ]);
 
-    const result = await runRuntimeParityScenario({
-      scenarioId: "resolved-tool",
-      runCell: async (runtime) => ({
-        status: "pass",
-        cell: { ...cell, runtime },
-      }),
-    });
+      const result = await runRuntimeParityScenario({
+        scenarioId: "resolved-tool",
+        runCell: async (runtime) => ({ status: "pass", cell: { ...cell, runtime } }),
+      });
 
-    expect(result.drift).toBe("none");
-    expect(result.runtimeParityUsage).toEqual({
-      expectation: "assistant-message-required",
-    });
-  });
+      expect(result.drift).toBe("none");
+      expect(result.runtimeParityUsage).toEqual({ expectation: "assistant-message-required" });
+    },
+  );
 
   it("preserves explicit usage-not-applicable metadata on parity results", async () => {
     const result = await runRuntimeParityScenario({
@@ -675,10 +491,7 @@ describe("runtime parity", () => {
         expectation: "not-applicable",
         reason: " Local fixture only; no assistant turn runs. ",
       },
-      runCell: async (runtime) => ({
-        status: "pass",
-        cell: makeRuntimeParityCell(runtime, []),
-      }),
+      runCell: async (runtime) => ({ status: "pass", cell: makeRuntimeParityCell(runtime, []) }),
     });
 
     expect(result.runtimeParityUsage).toEqual({
@@ -741,50 +554,37 @@ describe("runtime parity", () => {
     expect(isRuntimeParityResultPass(result)).toBe(false);
   });
 
-  it("requires call-linked passed step evidence for terminal image results", async () => {
-    const proven = await captureRuntimeParityWithMockRequests(
-      createTerminalImageParityInput(
-        "pass",
-        "QA-CAPABILITY-1234\nimage_generate=true\nMEDIA:/tmp/qa-image.png",
-      ),
-    );
-    const unrelated = await captureRuntimeParityWithMockRequests(
-      createTerminalImageParityInput("pass", "MEDIA:/tmp/unrelated-screenshot.png"),
-    );
-    const failed = await captureRuntimeParityWithMockRequests(
-      createTerminalImageParityInput("fail", "image_generate=true\nMEDIA:/tmp/failed-image.png"),
-    );
-
-    expect(proven.toolCalls[0]?.errorClass).toBeUndefined();
-    expect(unrelated.toolCalls[0]?.errorClass).toBe("tool-result-missing");
-    expect(failed.toolCalls[0]?.errorClass).toBe("tool-result-missing");
+  it.each([
+    ["pass", "QA-CAPABILITY-1234\nimage_generate=true\nMEDIA:/tmp/qa-image.png", undefined],
+    ["pass", "MEDIA:/tmp/unrelated-screenshot.png", "tool-result-missing"],
+    ["fail", "image_generate=true\nMEDIA:/tmp/failed-image.png", "tool-result-missing"],
+  ] as const)("requires linked image evidence for %s/%s", async (status, details, expected) => {
+    const cell = await captureRuntimeParityWithMockRequests({
+      requests: [{ plannedToolName: "image_generate", plannedToolArgs: { prompt: "same" } }],
+      messages: [
+        { role: "user", content: "Generate the QA image." },
+        assistant(makeToolCall("image-call", "image_generate", { prompt: "same" })),
+      ],
+      scenarioResult: { status: "pass", steps: [{ status, details }] },
+    });
+    expect(cell.toolCalls[0]?.errorClass).toBe(expected);
   });
 
   it("scopes process-global mock requests to the parent session prompt", async () => {
+    const child = "Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.";
+    const followup = "Continue the bounded QA task with the retained child result.";
     const cell = await captureRuntimeParityWithMockRequests({
-      messages: [
-        { role: "user", content: "Delegate one bounded QA task to a subagent." },
-        {
-          role: "user",
-          content: "Continue the bounded QA task with the retained child result.",
-        },
-      ],
+      messages: [PARENT_PROMPT, followup].map((content) => ({ role: "user", content })),
       requests: [
         {
-          prompt: "Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
-          allInputText:
-            "Delegate one bounded QA task to a subagent. Fanout worker alpha: inspect the QA workspace and finish with exactly ALPHA-OK.",
+          prompt: child,
+          allInputText: `${PARENT_PROMPT} ${child}`,
           plannedToolName: "read",
         },
+        { plannedToolName: "sessions_spawn" },
         {
-          prompt: "Delegate one bounded QA task to a subagent.",
-          allInputText: "Delegate one bounded QA task to a subagent.",
-          plannedToolName: "sessions_spawn",
-        },
-        {
-          prompt: "Continue the bounded QA task with the retained child result.",
-          allInputText:
-            "Delegate one bounded QA task to a subagent. Continue the bounded QA task with the retained child result.",
+          prompt: followup,
+          allInputText: `${PARENT_PROMPT} ${followup}`,
           plannedToolName: "sessions_spawn",
         },
         {
@@ -793,8 +593,7 @@ describe("runtime parity", () => {
           plannedToolName: "read",
         },
         {
-          prompt: "Delegate one bounded QA task to a subagent.",
-          allInputText: "Delegate one bounded QA task to a subagent. Tool result: child accepted.",
+          allInputText: `${PARENT_PROMPT} Tool result: child accepted.`,
           toolOutput: "child accepted",
         },
       ],
@@ -821,7 +620,145 @@ describe("runtime parity", () => {
       requests: [],
       scenarioResult: { status: "pass", modelSwitchEvidence },
     });
-
     expect(cell.modelSwitchEvidence).toEqual(modelSwitchEvidence);
+  });
+});
+
+describe("runtime parity outcomes", () => {
+  it("keeps a skip diagnostic out of runtime error classification", async () => {
+    const cell = await captureRuntimeParityCell({
+      runtime: "codex",
+      gateway: { tempRoot: `/tmp/openclaw-qa-runtime-parity-missing-${process.pid}` },
+      scenarioResult: {
+        status: "skip",
+        details: "expected-unavailable tool: this fixture is report-only",
+      },
+      wallClockMs: 10,
+    });
+
+    expect(cell.runtimeErrorClass).toBeUndefined();
+  });
+
+  it("does not claim both canonical runtime-pair cells failed for a one-sided failure", async () => {
+    const result = await runPair({ runtimeErrorClass: "scenario-failure" });
+
+    expect(result).toMatchObject({
+      drift: "failure-mode",
+      driftDetails: "at least one runtime failed",
+    });
+  });
+
+  it("preserves skipped cell outcomes instead of promoting matching empty evidence", async () => {
+    const skipped = { status: "skip", details: "implementation unavailable" } as const;
+    const result = await runPair(skipped, skipped);
+
+    expect(result).toMatchObject({
+      cells: {
+        openclaw: { status: "skip", details: "implementation unavailable" },
+        codex: { status: "skip", details: "implementation unavailable" },
+      },
+      drift: "failure-mode",
+      driftDetails: "both canonical runtime-pair cells skipped",
+    });
+    expect(isRuntimeParityResultPass(result)).toBe(false);
+  });
+
+  it("keeps one explicitly known harness gap advisory when its paired runtime passes", async () => {
+    const result = await runPair({
+      status: "skip",
+      details: "known-harness-gap exec: Codex owns command execution natively\ntracking: #80319",
+    });
+
+    expect(result).toMatchObject({
+      cells: { openclaw: { status: "pass" }, codex: { status: "skip" } },
+      drift: "structural",
+      driftDetails: "known harness gap in codex runtime; paired runtime passed",
+    });
+    expect(isRuntimeParityResultPass(result)).toBe(true);
+  });
+
+  it("keeps unannotated, doubly skipped, and failed known-gap cells blocking", async () => {
+    const expectBlocked = async (codex: CellOutcome, openclaw: CellOutcome = {}) => {
+      const result = await runPair(codex, openclaw);
+      expect(result.drift).toBe("failure-mode");
+      expect(isRuntimeParityResultPass(result)).toBe(false);
+    };
+    await expectBlocked({ status: "skip", details: "implementation unavailable" });
+    const knownGap = { status: "skip", details: "known-harness-gap exec: tracked" } as const;
+    await expectBlocked(knownGap, { status: "skip" });
+    await expectBlocked({ ...knownGap, runtimeErrorClass: "auth" });
+  });
+
+  it("requires every canonical runtime-pair cell status to pass", async () => {
+    const result = await runPair();
+
+    expect(isRuntimeParityResultPass(result)).toBe(true);
+
+    expect(
+      isRuntimeParityResultPass({
+        ...result,
+        cells: { ...result.cells, codex: { ...result.cells.codex, status: "skip" } },
+      }),
+    ).toBe(false);
+
+    expect(
+      isRuntimeParityResultPass({
+        ...result,
+        cells: { openclaw: result.cells.openclaw } as typeof result.cells,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("runtime parity execution order", () => {
+  it.each([
+    [undefined, false],
+    [["codex", "openclaw"], false],
+    [["codex", "openclaw"], true],
+  ] satisfies Array<[[RuntimeId, RuntimeId] | undefined, boolean]>)(
+    "runs pair %j (Codex failure: %s) with canonical result cells",
+    async (runtimePair, failCodex) => {
+      const runCell = vi.fn(async (runtime: RuntimeId) => ({
+        status: failCodex && runtime === "codex" ? ("fail" as const) : ("pass" as const),
+        ...(failCodex && runtime === "codex" ? { details: "Codex scenario failed" } : {}),
+        cell: makeRuntimeParityCell(runtime),
+      }));
+      const result = await runRuntimeParityScenario({
+        scenarioId: "runtime-execution-order",
+        ...(runtimePair ? { runtimePair } : {}),
+        runCell,
+      });
+      expect(runCell.mock.calls.map(([runtime]) => runtime)).toEqual(
+        runtimePair ?? ["openclaw", "codex"],
+      );
+      expect(Object.keys(result.cells)).toEqual(["openclaw", "codex"]);
+      expect(result).toMatchObject({
+        cells: {
+          openclaw: { runtime: "openclaw", status: "pass" },
+          codex: { runtime: "codex", status: failCodex ? "fail" : "pass" },
+        },
+        drift: failCodex ? "failure-mode" : "none",
+      });
+      if (failCodex) {
+        expect(result.cells.codex.details).toBe("Codex scenario failed");
+        expect(result.driftDetails).toBe("runtime-pair cell status differs (pass vs fail)");
+        expect(isRuntimeParityResultPass(result)).toBe(false);
+      }
+    },
+  );
+
+  it("rejects duplicate runtimes before executing a parity cell", async () => {
+    const runCell = vi.fn(async (runtime: RuntimeId) => ({
+      status: "pass" as const,
+      cell: makeRuntimeParityCell(runtime),
+    }));
+    await expect(
+      runRuntimeParityScenario({
+        scenarioId: "duplicate-runtime-pair",
+        runtimePair: ["openclaw", "openclaw"],
+        runCell,
+      }),
+    ).rejects.toThrow(/different|distinct|duplicate/i);
+    expect(runCell).not.toHaveBeenCalled();
   });
 });

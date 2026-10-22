@@ -10,12 +10,12 @@ import {
   isToolAllowedByPolicyName,
 } from "./tool-policy-match.js";
 
-function requireCoreToolProfilePolicy(profile: Parameters<typeof resolveCoreToolProfilePolicy>[0]) {
-  const policy = resolveCoreToolProfilePolicy(profile);
-  if (!policy) {
-    throw new Error(`expected ${profile} tool profile policy`);
-  }
-  return policy;
+function expectAccess(
+  tool: string,
+  policies: Parameters<typeof isToolAllowedByPolicies>[1],
+  allowed = true,
+) {
+  expect(isToolAllowedByPolicies(tool, policies), tool).toBe(allowed);
 }
 
 describe("tool-catalog", () => {
@@ -30,25 +30,22 @@ describe("tool-catalog", () => {
     expect(ids(config)).toContain(id);
   });
 
-  it.each(["group:automation", "group:openclaw"])(
-    "includes the helper in %s allows and denies",
-    (group) => {
-      expect(isToolAllowedByPolicyName("openclaw", { allow: [group] })).toBe(true);
-      expect(isToolAllowedByPolicyName("openclaw", { allow: [group], deny: ["openclaw"] })).toBe(
-        false,
-      );
-      expect(isToolAllowedByPolicyName("openclaw", { allow: ["openclaw"], deny: [group] })).toBe(
-        false,
-      );
-      for (const profile of [undefined, "full"]) {
-        const policy = resolveCoreToolProfilePolicy(profile);
-        expect(isToolAllowedByPolicies("openclaw", [policy])).toBe(true);
-        expect(isToolAllowedByPolicies("message", [policy])).toBe(true);
-        expect(isToolAllowedByPolicies("openclaw", [policy, { deny: [group] }])).toBe(false);
-        expect(isToolAllowedByPolicies("exec", [policy, { deny: ["exec"] }])).toBe(false);
-      }
-    },
-  );
+  it.each(["group:automation", "group:openclaw"])("respects %s helper policy", (group) => {
+    expect(
+      [
+        { allow: [group] },
+        { allow: [group], deny: ["openclaw"] },
+        { allow: ["openclaw"], deny: [group] },
+      ].map((policy) => isToolAllowedByPolicyName("openclaw", policy)),
+    ).toEqual([true, false, false]);
+    for (const profile of [undefined, "full"]) {
+      const policy = resolveCoreToolProfilePolicy(profile);
+      expectAccess("openclaw", [policy]);
+      expectAccess("message", [policy]);
+      expectAccess("openclaw", [policy, { deny: [group] }], false);
+      expectAccess("exec", [policy, { deny: ["exec"] }], false);
+    }
+  });
 
   it("lets operators configure run-dependent tools without granting restricted profiles", () => {
     const ids = listCoreToolSections().flatMap((section) => section.tools.map((tool) => tool.id));
@@ -58,54 +55,35 @@ describe("tool-catalog", () => {
     expect(resolveCoreToolProfiles("transcripts")).toEqual([]);
   });
 
-  it.each(["group:media", "group:openclaw"])(
-    "preserves saved %s grants and denies when listing transcripts",
-    (group) => {
-      const tools = [{ name: "transcripts" }, { name: "pdf" }];
-      expect(filterToolsByPolicy(tools, { allow: [group] })).toEqual([{ name: "pdf" }]);
-      expect(filterToolsByPolicy(tools, { allow: ["*"], deny: [group] })).toEqual([
-        { name: "transcripts" },
-      ]);
-      expect(filterToolsByPolicy(tools, { allow: ["transcripts"], deny: [group] })).toEqual([
-        { name: "transcripts" },
-      ]);
-      expect(filterToolsByPolicy(tools, { allow: ["*"], deny: ["transcripts"] })).toEqual([
-        { name: "pdf" },
-      ]);
-    },
-  );
+  it.each(["group:media", "group:openclaw"])("preserves saved %s transcript policy", (group) => {
+    const transcript = { name: "transcripts" },
+      pdf = { name: "pdf" };
+    const tools = [{ ...transcript }, { ...pdf }];
+    expect(filterToolsByPolicy(tools, { allow: [group] })).toEqual([pdf]);
+    for (const allow of [["*"], ["transcripts"]]) {
+      expect(filterToolsByPolicy(tools, { allow, deny: [group] })).toEqual([transcript]);
+    }
+    expect(filterToolsByPolicy(tools, { allow: ["*"], deny: ["transcripts"] })).toEqual([pdf]);
+  });
 
   it.each([
-    {
-      profile: "minimal",
-      allowed: ["presence", "session_status", "gateway"],
-      denied: ["exec", "message", "sessions_create"],
-    },
-    {
-      profile: "coding",
-      allowed: ["read", "exec", "bundle-mcp", "sessions_create"],
-      denied: ["browser", "message"],
-    },
-    {
-      profile: "messaging",
-      allowed: ["message", "bundle-mcp", "sessions_create"],
-      denied: ["exec", "process", "write"],
-    },
-  ] as const)("keeps the $profile capability boundary", ({ profile, allowed, denied }) => {
-    const policy = requireCoreToolProfilePolicy(profile);
+    ["minimal", ["presence", "session_status", "gateway"], ["exec", "message", "sessions_create"]],
+    ["coding", ["read", "exec", "bundle-mcp", "sessions_create"], ["browser", "message"]],
+    ["messaging", ["message", "bundle-mcp", "sessions_create"], ["exec", "process", "write"]],
+  ] as const)("keeps the %s capability boundary", (profile, allowed, denied) => {
+    const policy = resolveCoreToolProfilePolicy(profile);
     if (profile === "minimal") {
-      expect(policy.allow).toEqual(["presence", "session_status", "gateway"]);
+      expect(policy?.allow).toEqual(["presence", "session_status", "gateway"]);
     }
     for (const tool of allowed) {
-      expect(isToolAllowedByPolicies(tool, [policy]), tool).toBe(true);
+      expectAccess(tool, [policy]);
     }
     for (const tool of [...denied, "tts", "openclaw"]) {
-      expect(isToolAllowedByPolicies(tool, [policy]), tool).toBe(false);
+      expectAccess(tool, [policy], false);
     }
   });
 
   it("full profile uses wildcard to grant all tools (#76507)", () => {
-    const policy = requireCoreToolProfilePolicy("full");
-    expect(policy.allow).toEqual(["*"]);
+    expect(resolveCoreToolProfilePolicy("full")?.allow).toEqual(["*"]);
   });
 });

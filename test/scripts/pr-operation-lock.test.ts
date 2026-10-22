@@ -117,6 +117,10 @@ function fixtureEventBeforeSettlement(record: string, operation: PromiseLike<unk
   return Promise.race([receipts.waitFor(record, "ready"), settled]);
 }
 
+function waitForFixtureEvent(record: string, child: ChildProcess, signal: AbortSignal) {
+  return withinTest(fixtureEventBeforeSettlement(record, childCompletion(child)), signal);
+}
+
 // Foreign groups have no ChildProcess owner after the launcher exits. Keep this
 // one observation loop under the test signal, never a competing wall-clock budget.
 async function waitForProcessGroupExit(pgid: number, signal: AbortSignal) {
@@ -327,9 +331,22 @@ function installPrCliFixture(repoDir: string, env?: NodeJS.ProcessEnv) {
 function installRequiredPrCommandStubs(binDir: string) {
   for (const command of ["gh", "jq", "pnpm", "rg"]) {
     const stub = join(binDir, command);
-    writeFileSync(stub, "#!/bin/sh\nexit 0\n");
+    writeFileSync(
+      stub,
+      command === "gh"
+        ? '#!/bin/sh\ncase "$*" in "api user --include") printf \'HTTP/2.0 200 OK\\n\\n{"login":"fixture"}\\n\' ;; esac\nexit 0\n'
+        : "#!/bin/sh\nexit 0\n",
+    );
     chmodSync(stub, 0o755);
   }
+}
+
+function commitPrCliFixture(repoDir: string, sources: string[]) {
+  execFileSync("git", ["add", "--", ...sources], { cwd: repoDir });
+  execFileSync("git", ["commit", "-qm", "test: admit fixture wrapper"], { cwd: repoDir });
+  execFileSync("git", ["remote", "add", "origin", repoDir], { cwd: repoDir });
+  execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: repoDir });
+  linkPrWrapperDependencies(repoDir);
 }
 
 interface SupervisedFixtureOptions {
@@ -947,10 +964,11 @@ describePosix("scripts/pr per-PR operation lock", () => {
   });
   it("does not trust an ambient dedicated-process-group marker", () => {
     const repoDir = createRepo();
-    const { binDir, cli } = installPrCliFixture(repoDir);
+    const { binDir, cli, wrapperSources } = installPrCliFixture(repoDir);
     const reviewScript = join(repoDir, "scripts/pr-lib/review.sh");
     writeFileSync(reviewScript, `${readFileSync(reviewScript, "utf8")}\nreview_init() { :; }\n`);
     installRequiredPrCommandStubs(binDir);
+    commitPrCliFixture(repoDir, wrapperSources);
     const env: NodeJS.ProcessEnv = {
       ...createIndependentPrFixtureEnv(),
       OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
@@ -964,57 +982,62 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(refExists(repoDir)).toBe(false);
   });
-  it("releases a validation-phase lock when temporary storage is unavailable", () => {
-    const repoDir = createRepo();
-    const { binDir, cli } = installPrCliFixture(repoDir);
-    const reviewScript = join(repoDir, "scripts/pr-lib/review.sh");
-    writeFileSync(
-      reviewScript,
-      `${readFileSync(reviewScript, "utf8")}\nreview_init() { printf 'review ran\\n'; }\n`,
-    );
-    installRequiredPrCommandStubs(binDir);
-    const mktempStub = join(binDir, "mktemp");
-    writeFileSync(mktempStub, "#!/bin/sh\necho 'mktemp: No space left on device' >&2\nexit 1\n");
-    chmodSync(mktempStub, 0o755);
+  it.each([
+    {
+      name: "temporary storage is unavailable",
+      overrides: "review_init() { printf 'review ran\\n'; }",
+      error: "mktemp: No space left on device",
+      unexpectedOutput: "review ran",
+      unavailableStorage: true,
+    },
+    {
+      name: "review-init metadata fails",
+      overrides:
+        "enter_worktree() { printf 'entered-worktree\\n'; }\npr_meta_json() { echo 'fixture metadata failure' >&2; return 1; }",
+      error: "fixture metadata failure",
+      unexpectedOutput: "entered-worktree",
+      unavailableStorage: false,
+    },
+  ])(
+    "releases a validation-phase lock when $name",
+    ({ overrides, error, unexpectedOutput, unavailableStorage }) => {
+      const repoDir = createRepo();
+      const { binDir, cli, wrapperSources } = installPrCliFixture(repoDir);
+      const reviewScript = join(repoDir, "scripts/pr-lib/review.sh");
+      writeFileSync(reviewScript, `${readFileSync(reviewScript, "utf8")}\n${overrides}\n`);
+      installRequiredPrCommandStubs(binDir);
+      commitPrCliFixture(repoDir, wrapperSources);
+      if (unavailableStorage) {
+        const mktempStub = join(binDir, "mktemp");
+        const mktemp = execFileSync("which", ["mktemp"], { encoding: "utf8" }).trim();
+        writeFileSync(
+          mktempStub,
+          `#!/bin/sh
+case "$*" in *'/openclaw-pr.XXXXXX') echo 'mktemp: No space left on device' >&2; exit 1 ;; esac
+exec ${shellQuote(mktemp)} "$@"
+`,
+        );
+        chmodSync(mktempStub, 0o755);
+      }
 
-    const result = spawnSync(cli, ["review-init", "42"], {
-      cwd: repoDir,
-      encoding: "utf8",
-      env: { ...createIndependentPrFixtureEnv(), PATH: `${binDir}:${process.env.PATH ?? ""}` },
-    });
+      const result = spawnSync(cli, ["review-init", "42"], {
+        cwd: repoDir,
+        encoding: "utf8",
+        env: { ...createIndependentPrFixtureEnv(), PATH: `${binDir}:${process.env.PATH ?? ""}` },
+      });
 
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
-    expect(result.stderr).toContain("mktemp: No space left on device");
-    expect(result.stderr).toContain("temporary-storage preflight failed");
-    expect(result.stderr).toContain("Free disk space or set TMPDIR");
-    expect(result.stderr).not.toContain("Retaining the operation lock");
-    expect(result.stderr).not.toContain("scripts/pr lock-recover");
-    expect(result.stdout).not.toContain("review ran");
-    expect(refExists(repoDir)).toBe(false);
-  });
-  it("releases a validation-phase lock when review-init metadata fails", () => {
-    const repoDir = createRepo();
-    const { binDir, cli } = installPrCliFixture(repoDir);
-    const reviewScript = join(repoDir, "scripts/pr-lib/review.sh");
-    writeFileSync(
-      reviewScript,
-      `${readFileSync(reviewScript, "utf8")}\nenter_worktree() { printf 'entered-worktree\\n'; }\npr_meta_json() { echo 'fixture metadata failure' >&2; return 1; }\n`,
-    );
-    installRequiredPrCommandStubs(binDir);
-
-    const result = spawnSync(cli, ["review-init", "42"], {
-      cwd: repoDir,
-      encoding: "utf8",
-      env: { ...createIndependentPrFixtureEnv(), PATH: `${binDir}:${process.env.PATH ?? ""}` },
-    });
-
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
-    expect(refExists(repoDir), result.stderr).toBe(false);
-    expect(result.stderr).toContain("fixture metadata failure");
-    expect(result.stderr).not.toContain("Retaining the operation lock");
-    expect(result.stderr).not.toContain("scripts/pr lock-recover");
-    expect(result.stdout).not.toContain("entered-worktree");
-  });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(1);
+      expect(refExists(repoDir), result.stderr).toBe(false);
+      expect(result.stderr).toContain(error);
+      if (unavailableStorage) {
+        expect(result.stderr).toContain("temporary-storage preflight failed");
+        expect(result.stderr).toContain("Free disk space or set TMPDIR");
+      }
+      expect(result.stderr).not.toContain("Retaining the operation lock");
+      expect(result.stderr).not.toContain("scripts/pr lock-recover");
+      expect(result.stdout).not.toContain(unexpectedOutput);
+    },
+  );
   it("retries when the prior owner releases between failed create CAS and ref read", () => {
     const repoDir = createRepo();
     const raceTriggered = join(repoDir, "race-triggered");
@@ -1550,10 +1573,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     let waiter: ChildProcess | undefined;
     let holderPgid: number | undefined;
     try {
-      await withinTest(
-        fixtureEventBeforeSettlement(holderReady, childCompletion(controller)),
-        signal,
-      );
+      await waitForFixtureEvent(holderReady, controller, signal);
       const operationPgid = requireProcessId(operationPgidFile);
       await waitForProcessGroupExit(operationPgid, signal);
       holderPgid = requireProcessId(holderPidFile);
@@ -1690,10 +1710,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       }),
     );
     try {
-      await withinTest(
-        fixtureEventBeforeSettlement(ghStarted, childCompletion(controller)),
-        signal,
-      );
+      await waitForFixtureEvent(ghStarted, controller, signal);
       expect(existsSync(ghStarted) && refExists(repoDir)).toBe(true);
       const probe = probeOperationLock(repoDir);
       expect(probe.status, `${probe.stdout}\n${probe.stderr}`).toBe(0);
@@ -1728,7 +1745,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     );
     let pgid: number | undefined;
     try {
-      await withinTest(fixtureEventBeforeSettlement(held, childCompletion(controller)), signal);
+      await waitForFixtureEvent(held, controller, signal);
       expect(existsSync(pidFile) && existsSync(held)).toBe(true);
       pgid = requireProcessId(pidFile);
       const ownerOid = refOid(repoDir);
@@ -1806,10 +1823,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     });
     let pgid: number | undefined;
     try {
-      await withinTest(
-        fixtureEventBeforeSettlement(childReady, childCompletion(controller)),
-        signal,
-      );
+      await waitForFixtureEvent(childReady, controller, signal);
       expect(existsSync(pidFile) && existsSync(childReady)).toBe(true);
       pgid = requireProcessId(pidFile);
       const ownerOid = refOid(repoDir);
@@ -1873,19 +1887,13 @@ describePosix("scripts/pr per-PR operation lock", () => {
       );
       let nestedPgid: number | undefined;
       try {
-        await withinTest(
-          fixtureEventBeforeSettlement(nestedPidFile, childCompletion(controller)),
-          signal,
-        );
+        await waitForFixtureEvent(nestedPidFile, controller, signal);
         expect(existsSync(nestedPidFile) && refExists(repoDir)).toBe(true);
         nestedPgid = requireProcessId(nestedPidFile);
         const ownerOid = refOid(repoDir);
         expect(processGroupExists(nestedPgid!)).toBe(true);
         controller.kill("SIGTERM");
-        await withinTest(
-          fixtureEventBeforeSettlement(signalRelayedFile, childCompletion(controller)),
-          signal,
-        );
+        await waitForFixtureEvent(signalRelayedFile, controller, signal);
         expect(existsSync(signalRelayedFile)).toBe(true);
         controller.kill("SIGTERM");
         await withinTest(childCompletion(controller), signal);
@@ -1988,12 +1996,15 @@ describePosix("scripts/pr per-PR operation lock", () => {
     );
     expect(gitStatus(repoDir, ["show-ref", "--verify", "--quiet", "refs/heads/pr-42"])).toBe(1);
   });
-  it.each([23])("propagates status %s from NUL-framed worktree listings", (code) => {
+  it.each([
+    { name: "failed", listing: "worktree %s\\0branch refs/heads/pr-42\\0\\0", code: 23 },
+    { name: "truncated", listing: "worktree %s\\0branch refs/heads/pr-42", code: 0 },
+  ])("rejects $name NUL-framed worktree listings", ({ listing, code }) => {
     const repoDir = createRepo();
     const result = runLockShell(repoDir, [
       "pr_git() {",
-      '  if [ "$1" = worktree ] && [ "$2" = list ]; then',
-      "    printf 'worktree %s\\0branch refs/heads/pr-42\\0\\0' \"$PWD\"",
+      '  if [ "${1:-} ${2:-}" = "worktree list" ]; then',
+      `    printf '${listing}' "$PWD"`,
       `    return ${code}`,
       "  fi",
       '  command git "$@"',
@@ -2006,32 +2017,31 @@ describePosix("scripts/pr per-PR operation lock", () => {
       'printf "%s %s\\n" "$registered_status" "$branch_status"',
     ]);
     expect(result.status, result.stdout + "\n" + result.stderr).toBe(0);
-    expect(result.stdout.trim()).toBe(`${code} ${code}`);
+    expect(result.stdout.trim()).toBe(`${code || 1} ${code || 1}`);
   });
-  it.each(["temp/pr-42"])(
-    "does not confuse absent branch %s with a checked-out descendant",
-    (branch) => {
-      const repoDir = createRepo();
-      const sibling = join(repoDir, ".worktrees", "pr-99");
-      gitOutput(repoDir, ["worktree", "add", "-q", "-b", `${branch}/topic`, sibling]);
-      const otherBranch = branch === "pr-42-prep" ? "pr-42" : "pr-42-prep";
-      execFileSync("git", ["branch", otherBranch], { cwd: repoDir });
-      const head = gitOutput(repoDir, ["rev-parse", `refs/heads/${branch}/topic`]);
-      const result = runLockShell(repoDir, [
-        'cleanup_pr_worktree ".worktrees/pr-42" || exit $?',
-        "echo cleanup-completed",
-      ]);
-      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-      expect(result.stdout).toContain("cleanup-completed");
-      expect(gitOutput(repoDir, ["rev-parse", `refs/heads/${branch}/topic`])).toBe(head);
-      expect(gitOutput(sibling, ["rev-parse", "HEAD"])).toBe(head);
-      expectWorktreeBranch(sibling, `${branch}/topic`);
-      expect(
-        gitStatus(repoDir, ["show-ref", "--verify", "--quiet", `refs/heads/${otherBranch}`]),
-      ).toBe(1);
-    },
-  );
-  it.each(["temp/pr-42"])("verifies only the exact branch %s after native deletion", (branch) => {
+  it("does not confuse an absent branch with a checked-out descendant", () => {
+    const branch = "temp/pr-42";
+    const repoDir = createRepo();
+    const sibling = join(repoDir, ".worktrees", "pr-99");
+    gitOutput(repoDir, ["worktree", "add", "-q", "-b", `${branch}/topic`, sibling]);
+    const otherBranch = "pr-42-prep";
+    execFileSync("git", ["branch", otherBranch], { cwd: repoDir });
+    const head = gitOutput(repoDir, ["rev-parse", `refs/heads/${branch}/topic`]);
+    const result = runLockShell(repoDir, [
+      'cleanup_pr_worktree ".worktrees/pr-42" || exit $?',
+      "echo cleanup-completed",
+    ]);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("cleanup-completed");
+    expect(gitOutput(repoDir, ["rev-parse", `refs/heads/${branch}/topic`])).toBe(head);
+    expect(gitOutput(sibling, ["rev-parse", "HEAD"])).toBe(head);
+    expectWorktreeBranch(sibling, `${branch}/topic`);
+    expect(
+      gitStatus(repoDir, ["show-ref", "--verify", "--quiet", `refs/heads/${otherBranch}`]),
+    ).toBe(1);
+  });
+  it("verifies only the exact branch after native deletion", () => {
+    const branch = "temp/pr-42";
     const repoDir = createRepo();
     const sibling = join(repoDir, ".worktrees", "pr-99");
     execFileSync("git", ["branch", branch], { cwd: repoDir });
@@ -2051,26 +2061,6 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(gitOutput(repoDir, ["rev-parse", `refs/heads/${branch}/topic`])).toBe(head);
     expect(gitOutput(sibling, ["rev-parse", "HEAD"])).toBe(head);
     expectWorktreeBranch(sibling, `${branch}/topic`);
-  });
-  it.each([0])("rejects truncated listings without masking Git status %s", (code) => {
-    const repoDir = createRepo();
-    const result = runLockShell(repoDir, [
-      "pr_git() {",
-      '  if [ "${1:-} ${2:-}" = "worktree list" ]; then',
-      "    printf 'worktree %s\\0branch refs/heads/pr-42' \"$PWD\"",
-      `    return ${code}`,
-      "  fi",
-      '  command git "$@"',
-      "}",
-      "set +e",
-      'worktree_registration_state "$PWD" >/dev/null',
-      'registered_status="$?"',
-      "worktree_path_for_branch pr-42 >/dev/null",
-      'branch_status="$?"',
-      'printf "%s %s\\n" "$registered_status" "$branch_status"',
-    ]);
-    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
-    expect(result.stdout.trim()).toBe(`${code || 1} ${code || 1}`);
   });
   it.each([23, 0])(
     "preserves a sibling's branch when its listing is unavailable (status %s)",
@@ -2107,7 +2097,8 @@ describePosix("scripts/pr per-PR operation lock", () => {
       expectWorktreeBranch(sibling, "pr-42");
     },
   );
-  it.each([23])("preserves a failed branch-ref query with status %s", (code) => {
+  it("preserves a failed branch-ref query status", () => {
+    const code = 23;
     const repoDir = createRepo();
     execFileSync("git", ["branch", "pr-42"], { cwd: repoDir });
     const result = runLockShell(repoDir, [
@@ -2201,7 +2192,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(readFileSync(join(sibling, "marker"), "utf8")).toBe("preserve sibling\n");
     expect(readFileSync(join(siblingAdmin, "gitdir"))).toEqual(siblingBacklink);
   });
-  it.each([true])("preserves native remove failure after partial deletion=%s", (partial) => {
+  it("preserves native remove failure after partial deletion", () => {
     const repoDir = createRepo();
     const worktreeDir = join(repoDir, ".worktrees", "pr-42");
     mkdirSync(dirname(worktreeDir), { recursive: true });
@@ -2209,7 +2200,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const result = runLockShell(repoDir, [
       "pr_git() {",
       "  if [ \"$1 $2\" = 'worktree remove' ]; then",
-      ...(partial ? ['    command git "$@" || return $?'] : []),
+      '    command git "$@" || return $?',
       "    echo 'fixture remove failure' >&2",
       "    return 73",
       "  fi",
@@ -2221,7 +2212,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(73);
     expect(result.stderr).toContain("fixture remove failure");
     expect(result.stdout).not.toContain("unexpected-cleanup-completed");
-    expect(existsSync(worktreeDir)).toBe(!partial);
+    expect(existsSync(worktreeDir)).toBe(false);
     expect(gitStatus(repoDir, ["show-ref", "--verify", "--quiet", "refs/heads/pr-42"])).toBe(0);
   });
   it.each(["locked", "retained-admin"])(

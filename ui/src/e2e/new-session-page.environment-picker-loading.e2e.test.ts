@@ -1,22 +1,12 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it, vi } from "vitest";
 import {
   LOCAL_GIT_WORKSPACE_RESPONSES,
-  captureUiProofEnabled,
   createNewSessionPageE2eSuite,
   installMockGateway,
   openEnvironmentPicker,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
-
-async function takeScreenshot(page: Parameters<typeof openEnvironmentPicker>[0]) {
-  await page.evaluate(async () => {
-    await document.fonts.ready;
-  });
-  return page.screenshot({ animations: "disabled", scale: "css" });
-}
 
 suite.define(() => {
   it("shows catalog skeletons, then uses provider capabilities and fallback defaults", async () => {
@@ -41,24 +31,9 @@ suite.define(() => {
           .locator(".new-session-page__environment-skeleton-row")
           .evaluateAll((rows) => rows.map((row) => Math.round(row.getBoundingClientRect().width)));
         expect(new Set(skeletonWidths).size).toBe(1);
-        if (captureUiProofEnabled) {
-          await writeFile(
-            path.join(suite.artifactDir, "environment-picker-loading-after.png"),
-            await takeScreenshot(page),
-          );
-        }
 
         await gateway.resolveDeferred("environments.list", {
-          environments: [
-            {
-              id: "node:studio",
-              type: "node",
-              label: "Studio Mac",
-              status: "available",
-              sessionHost: true,
-              workerSlots: { total: 2, available: 2 },
-            },
-          ],
+          environments: [],
           profiles: [
             {
               id: "Daytona Crabbox",
@@ -95,20 +70,9 @@ suite.define(() => {
           expect(plusBox).not.toBeNull();
           expect(plusBox?.width).toBeLessThanOrEqual(20);
           expect(chevronBox).not.toBeNull();
-          expect(
-            Math.abs(
-              (plusBox?.x ?? 0) +
-                (plusBox?.width ?? 0) / 2 -
-                ((chevronBox?.x ?? 0) + (chevronBox?.width ?? 0) / 2),
-            ),
-          ).toBeLessThanOrEqual(4);
+          const center = (box: typeof plusBox) => (box?.x ?? 0) + (box?.width ?? 0) / 2;
+          expect(Math.abs(center(plusBox) - center(chevronBox))).toBeLessThanOrEqual(4);
         });
-        if (captureUiProofEnabled) {
-          await writeFile(
-            path.join(suite.artifactDir, "environment-picker-capabilities-after.png"),
-            await takeScreenshot(page),
-          );
-        }
       },
     );
   });

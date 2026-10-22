@@ -3,7 +3,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { createRouter } from "@openclaw/uirouter";
 import { IDBFactory } from "fake-indexeddb";
-import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../../lib/sessions/route-navigation.ts";
@@ -14,7 +13,7 @@ import { createSolidApplicationContextProvider } from "../../test-helpers/solid-
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { chatHistoryRequests } from "./chat-history-state.ts";
 import { settleChatPage, stubMatchMedia } from "./chat-page.test-support.ts";
-import { ChatPageView, type ChatPage } from "./chat-page.ts";
+import "./chat-page.tsx";
 import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
 import { nativeHistoryMessage } from "./chat-pane.test-support.ts";
@@ -141,18 +140,20 @@ it.each([false, true])(
     const release = createDeferred();
     // oxlint-disable-next-line typescript/unbound-method -- Rebound to the original page-store receiver below.
     const originalRead = SessionSnapshotStore.prototype.read;
-    const storedRead = vi
-      .spyOn(SessionSnapshotStore.prototype, "read")
-      .mockImplementation(async function (this: SessionSnapshotStore, key) {
-        const snapshot = await originalRead.call(this, key);
-        if (key === mainSnapshotKey) {
-          entered.resolve();
-          await release.promise;
-        }
-        return snapshot;
-      });
+    vi.spyOn(SessionSnapshotStore.prototype, "read").mockImplementation(async function (
+      this: SessionSnapshotStore,
+      key,
+      onBoard,
+    ) {
+      const snapshot = await originalRead.call(this, key, onBoard);
+      if (key === mainSnapshotKey) {
+        entered.resolve();
+        await release.promise;
+      }
+      return snapshot;
+    });
     let pane: ChatPaneRuntime | undefined;
-    const connected = vi.spyOn(ChatPaneRuntime.prototype, "connectedCallback");
+    const connected = vi.spyOn(ChatPaneRuntime.prototype, "start");
     const provider = createSolidApplicationContextProvider(context);
     const container = document.body.appendChild(createApplicationContextProvider(context));
     let view: ReturnType<typeof mountSolid> | undefined;
@@ -162,12 +163,15 @@ it.each([false, true])(
       return expectDefined(state, "mounted pane state");
     };
     try {
-      view = mountSolid(() => createComponent(ChatPageView, { data: route }), {
-        container,
-        wrapper: provider.wrapper,
-      });
+      view = mountSolid(
+        () => Object.assign(document.createElement("openclaw-chat-page"), { data: route }),
+        {
+          container,
+          wrapper: provider.wrapper,
+        },
+      );
       const page = expectDefined(
-        view.container.querySelector<ChatPage>("openclaw-chat-page"),
+        view.container.querySelector("openclaw-chat-page"),
         "mounted page",
       );
       await settleChatPage(page);
@@ -181,7 +185,6 @@ it.each([false, true])(
       );
       expect(expectDefined(pane, "mounted pane runtime").element).toBe(paneElement);
       expect(chatHistoryRequests(pageState()).initialSnapshotHydration).toBeDefined();
-      expect(storedRead).toHaveBeenCalledWith(mainSnapshotKey);
       await entered.promise;
       expect(pane?.agentId).toBeUndefined();
       const state = pageState();

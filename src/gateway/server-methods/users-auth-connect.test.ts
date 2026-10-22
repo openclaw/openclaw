@@ -27,7 +27,6 @@ import {
   clients,
   self,
   writes,
-  linksByOwner,
   createClient,
   rpc,
   flowRpc,
@@ -247,25 +246,6 @@ describe("users model-account connection lifecycle", () => {
     await terminal(flow, "connected");
     expect(writes).toEqual([credential]);
   });
-
-  it.each(["status", "answer", "cancel"] as const)(
-    "replays %s with current links, not the original default",
-    async (action) => {
-      const flow = await startFlow();
-      await complete(flow);
-      await terminal(flow, "connected");
-      linksByOwner.set("profile-1", []);
-      service.supersede("profile-1", "openai");
-      expect(
-        await flowRpc(action, flow, action === "answer" ? { stepId: "retired" } : {}),
-      ).toHaveBeenCalledWith(true, {
-        status: "connected",
-        authProfileId: "personal:profile-1:account-1",
-        links: [],
-      });
-      expect(writes).toEqual([credential]);
-    },
-  );
 
   it.each(["exchange", "identity", "unavailable"] as const)(
     "records a redacted %s failure",

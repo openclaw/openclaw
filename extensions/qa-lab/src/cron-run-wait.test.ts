@@ -2,26 +2,28 @@
 import { describe, expect, it, vi } from "vitest";
 import { waitForCronRunCompletion } from "./cron-run-wait.js";
 
+type WaitParams = Parameters<typeof waitForCronRunCompletion>[0];
+const gateway = () => vi.fn<WaitParams["callGateway"]>();
+const olderRun = { entries: [{ ts: 100, status: "ok", summary: "older run" }] };
+const wait = (callGateway: WaitParams["callGateway"], overrides: Partial<WaitParams> = {}) =>
+  waitForCronRunCompletion({
+    callGateway,
+    jobId: "dreaming-job",
+    afterTs: 150,
+    timeoutMs: 100,
+    intervalMs: 0,
+    ...overrides,
+  });
+
 describe("waitForCronRunCompletion", () => {
   it("ignores older entries and returns the newly finished run", async () => {
-    const callGateway = vi
-      .fn<
-        (method: string, rpcParams?: unknown, opts?: { timeoutMs?: number }) => Promise<unknown>
-      >()
-      .mockResolvedValueOnce({
-        entries: [{ ts: 100, status: "ok", summary: "older run" }],
-      })
+    const callGateway = gateway()
+      .mockResolvedValueOnce(olderRun)
       .mockResolvedValueOnce({
         entries: [{ ts: 180, status: "ok", summary: "new run" }],
       });
 
-    const result = await waitForCronRunCompletion({
-      callGateway,
-      jobId: "dreaming-job",
-      afterTs: 150,
-      timeoutMs: 100,
-      intervalMs: 0,
-    });
+    const result = await wait(callGateway);
 
     expect(result).toEqual({ ts: 180, status: "ok", summary: "new run" });
     expect(callGateway).toHaveBeenNthCalledWith(
@@ -36,36 +38,17 @@ describe("waitForCronRunCompletion", () => {
   });
 
   it("surfaces recent run history on timeout", async () => {
-    const callGateway = vi
-      .fn<
-        (method: string, rpcParams?: unknown, opts?: { timeoutMs?: number }) => Promise<unknown>
-      >()
-      .mockResolvedValue({
-        entries: [{ ts: 100, status: "ok", summary: "older run" }],
-      });
-
-    await expect(
-      waitForCronRunCompletion({
-        callGateway,
-        jobId: "dreaming-job",
-        afterTs: 150,
-        timeoutMs: 5,
-        intervalMs: 0,
-      }),
-    ).rejects.toThrow(/timed out waiting for cron run completion/);
+    const callGateway = gateway().mockResolvedValue(olderRun);
+    await expect(wait(callGateway, { timeoutMs: 5 })).rejects.toThrow(
+      /timed out waiting for cron run completion/,
+    );
   });
 
   it("allows live CLI scenarios to extend the gateway call deadline", async () => {
-    const callGateway = vi
-      .fn<
-        (method: string, rpcParams?: unknown, opts?: { timeoutMs?: number }) => Promise<unknown>
-      >()
-      .mockResolvedValue({ entries: [{ ts: 180, status: "ok" }] });
+    const callGateway = gateway().mockResolvedValue({ entries: [{ ts: 180, status: "ok" }] });
 
-    await waitForCronRunCompletion({
-      callGateway,
+    await wait(callGateway, {
       jobId: "slow-cli-job",
-      afterTs: 150,
       timeoutMs: 120_000,
       gatewayCallTimeoutMs: 90_000,
     });
@@ -80,10 +63,7 @@ describe("waitForCronRunCompletion", () => {
   it("caps each gateway call at the remaining overall deadline", async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
-    const callGateway = vi
-      .fn<
-        (method: string, rpcParams?: unknown, opts?: { timeoutMs?: number }) => Promise<unknown>
-      >()
+    const callGateway = gateway()
       .mockImplementationOnce(async () => {
         now = 1_080;
         return { entries: [{ ts: 100, status: "ok", summary: "older run" }] };
@@ -91,12 +71,8 @@ describe("waitForCronRunCompletion", () => {
       .mockResolvedValueOnce({ entries: [{ ts: 180, status: "ok" }] });
 
     try {
-      await waitForCronRunCompletion({
-        callGateway,
+      await wait(callGateway, {
         jobId: "bounded-call-job",
-        afterTs: 150,
-        timeoutMs: 100,
-        intervalMs: 0,
         gatewayCallTimeoutMs: 90,
       });
 
@@ -112,19 +88,10 @@ describe("waitForCronRunCompletion", () => {
   });
 
   it("keeps oversized poll intervals within the overall timeout", async () => {
-    const callGateway = vi
-      .fn<
-        (method: string, rpcParams?: unknown, opts?: { timeoutMs?: number }) => Promise<unknown>
-      >()
-      .mockResolvedValue({
-        entries: [{ ts: 100, status: "ok", summary: "older run" }],
-      });
+    const callGateway = gateway().mockResolvedValue(olderRun);
 
     await expect(
-      waitForCronRunCompletion({
-        callGateway,
-        jobId: "dreaming-job",
-        afterTs: 150,
+      wait(callGateway, {
         timeoutMs: 5,
         intervalMs: Number.MAX_SAFE_INTEGER,
       }),

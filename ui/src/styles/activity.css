@@ -49,11 +49,6 @@ main.content:where(.content--activity-page) .content-header {
   max-height: none;
 }
 
-.activity-mode-tabs + #activity-mode-panel {
-  flex: 1 1 auto;
-  min-height: 0;
-}
-
 .activity-current-work {
   display: flex;
   flex: 0 0 auto;
@@ -626,6 +621,11 @@ a.activity-current-work__row:hover {
 .activity-feed__pr[data-state="closed"] .activity-feed__git-icon,
 .activity-feed__deletions {
   color: var(--danger);
+}
+
+.activity-feed__diff {
+  display: inline-flex;
+  gap: 6px;
 }
 
 .activity-feed__additions,

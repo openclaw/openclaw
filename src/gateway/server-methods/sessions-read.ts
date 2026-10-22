@@ -56,7 +56,7 @@ import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
 import { searchProjectedSessionTranscripts } from "./sessions-search-projected.js";
 import { resolveSessionSearchScope } from "./sessions-search-scope.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 export const sessionReadHandlers: GatewayRequestHandlers = {
   "sessions.search": async ({ params, respond, context, client, sessionMutationAuthorization }) => {
@@ -95,7 +95,7 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       }
       return;
     }
-    const discoveredTargets = new Map<string, Promise<SessionStoreTarget[]>>();
+    const discoveredTargets = new Map<string, Promise<readonly SessionStoreTarget[]>>();
     const prepareSearch = async () => {
       sessionMutationAuthorization?.assertCurrent();
       const cfg = context.getRuntimeConfig();
@@ -325,178 +325,171 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       throw error;
     }
   }),
-  "sessions.preview": async ({
-    params,
-    respond,
-    context,
-    client,
-    sessionMutationAuthorization,
-  }) => {
-    if (!assertValidParams(params, validateSessionsPreviewParams, "sessions.preview", respond)) {
-      return;
-    }
-    const keys = params.keys
-      .map((key) => normalizeOptionalString(key))
-      .filter((key): key is string => Boolean(key))
-      .slice(0, 64);
-    const limit = params.limit ?? 12;
-    const maxChars = params.maxChars ?? 240;
+  "sessions.preview": defineValidatedGatewayHandler(
+    "sessions.preview",
+    validateSessionsPreviewParams,
+    async ({ params, respond, context, client, sessionMutationAuthorization }) => {
+      const keys = params.keys
+        .map((key) => normalizeOptionalString(key))
+        .filter((key): key is string => Boolean(key))
+        .slice(0, 64);
+      const limit = params.limit ?? 12;
+      const maxChars = params.maxChars ?? 240;
 
-    if (keys.length === 0) {
-      respond(true, { ts: Date.now(), previews: [] } satisfies SessionsPreviewResult, undefined);
-      return;
-    }
-
-    const projection = requireSessionRowProjection(context);
-    const withPreviewRows = <T>(
-      requestedKeys: readonly string[],
-      consume: (read: SessionRowReadView) => T,
-    ): Promise<T> =>
-      withReadySessionRows(
-        projection,
-        (cfg) =>
-          requestedKeys.flatMap((key) => {
-            const agent = resolveRequestedGlobalAgentId(cfg, key);
-            return agent.ok ? [{ key, agentId: agent.agentId }] : [];
-          }),
-        consume,
-      );
-    const previews: SessionsPreviewEntry[] = [];
-    const buffered: Array<{
-      preview: SessionsPreviewEntry;
-      record: MaterializedRow;
-      generation: MaterializedRow["generation"];
-      sessionId: string;
-      lifecycleRevision?: string;
-    }> = [];
-
-    for (const key of keys) {
-      if (previews.length > 0) {
-        await yieldToEventLoop();
-      }
-      const requestedAgent = resolveRequestedGlobalAgentId(context.getRuntimeConfig(), key);
-      if (!requestedAgent.ok) {
-        respond(false, undefined, requestedAgent.error);
+      if (keys.length === 0) {
+        respond(true, { ts: Date.now(), previews: [] } satisfies SessionsPreviewResult, undefined);
         return;
       }
-      const preview: SessionsPreviewEntry = { key, status: "missing", items: [] };
-      previews.push(preview);
-      try {
-        const record = await withPreviewRows([key], (read) => {
+
+      const projection = requireSessionRowProjection(context);
+      const withPreviewRows = <T>(
+        requestedKeys: readonly string[],
+        consume: (read: SessionRowReadView) => T,
+      ): Promise<T> =>
+        withReadySessionRows(
+          projection,
+          (cfg) =>
+            requestedKeys.flatMap((key) => {
+              const agent = resolveRequestedGlobalAgentId(cfg, key);
+              return agent.ok ? [{ key, agentId: agent.agentId }] : [];
+            }),
+          consume,
+        );
+      const previews: SessionsPreviewEntry[] = [];
+      const buffered: Array<{
+        preview: SessionsPreviewEntry;
+        record: MaterializedRow;
+        generation: MaterializedRow["generation"];
+        sessionId: string;
+        lifecycleRevision?: string;
+      }> = [];
+
+      for (const key of keys) {
+        if (previews.length > 0) {
+          await yieldToEventLoop();
+        }
+        const requestedAgent = resolveRequestedGlobalAgentId(context.getRuntimeConfig(), key);
+        if (!requestedAgent.ok) {
+          respond(false, undefined, requestedAgent.error);
+          return;
+        }
+        const preview: SessionsPreviewEntry = { key, status: "missing", items: [] };
+        previews.push(preview);
+        try {
+          const record = await withPreviewRows([key], (read) => {
+            sessionMutationAuthorization?.assertCurrent();
+            const { cfg, policyConfig } = read.state;
+            const currentAgent = resolveRequestedGlobalAgentId(cfg, key);
+            if (!currentAgent.ok) {
+              return undefined;
+            }
+            const current = read.describe({ key, agentId: currentAgent.agentId });
+            const visibilityFilter = hasOperatorBoundary(client, policyConfig)
+              ? createSessionListEntryFilter({ client, cfg: policyConfig })
+              : undefined;
+            return current?.entry.sessionId &&
+              visibilityFilter?.(current.key, current.entry) !== false
+              ? current
+              : undefined;
+          });
+          if (!record) {
+            continue;
+          }
+          buffered.push({
+            preview,
+            record,
+            generation: record.generation,
+            sessionId: record.entry.sessionId,
+            lifecycleRevision: record.entry.lifecycleRevision,
+          });
+          preview.items = await readSessionPreviewItemsFromTranscriptAsync(
+            {
+              agentId: record.agentId,
+              sessionEntry: record.entry,
+              sessionId: record.entry.sessionId,
+              sessionKey: record.key,
+              storePath: record.storeTarget.storePath,
+            },
+            limit,
+            maxChars,
+          );
+          preview.status = preview.items.length > 0 ? "ok" : "empty";
+        } catch (error) {
+          if (error instanceof SessionMutationAuthorizationChangedError) {
+            throw error;
+          }
+          preview.status = error instanceof SessionTranscriptColdError ? "cold" : "error";
+        }
+      }
+
+      // Later keys yield after earlier previews are buffered. Reauthorize the exact
+      // incarnations together, without another await before publishing their content.
+      await withPreviewRows(
+        buffered.map(({ preview }) => preview.key),
+        (read) => {
           sessionMutationAuthorization?.assertCurrent();
           const { cfg, policyConfig } = read.state;
-          const currentAgent = resolveRequestedGlobalAgentId(cfg, key);
-          if (!currentAgent.ok) {
-            return undefined;
-          }
-          const current = read.describe({ key, agentId: currentAgent.agentId });
           const visibilityFilter = hasOperatorBoundary(client, policyConfig)
             ? createSessionListEntryFilter({ client, cfg: policyConfig })
             : undefined;
-          return current?.entry.sessionId &&
-            visibilityFilter?.(current.key, current.entry) !== false
-            ? current
-            : undefined;
-        });
-        if (!record) {
-          continue;
-        }
-        buffered.push({
-          preview,
-          record,
-          generation: record.generation,
-          sessionId: record.entry.sessionId,
-          lifecycleRevision: record.entry.lifecycleRevision,
-        });
-        preview.items = await readSessionPreviewItemsFromTranscriptAsync(
-          {
-            agentId: record.agentId,
-            sessionEntry: record.entry,
-            sessionId: record.entry.sessionId,
-            sessionKey: record.key,
-            storePath: record.storeTarget.storePath,
-          },
-          limit,
-          maxChars,
-        );
-        preview.status = preview.items.length > 0 ? "ok" : "empty";
-      } catch (error) {
-        if (error instanceof SessionMutationAuthorizationChangedError) {
-          throw error;
-        }
-        preview.status = error instanceof SessionTranscriptColdError ? "cold" : "error";
-      }
-    }
-
-    // Later keys yield after earlier previews are buffered. Reauthorize the exact
-    // incarnations together, without another await before publishing their content.
-    await withPreviewRows(
-      buffered.map(({ preview }) => preview.key),
-      (read) => {
-        sessionMutationAuthorization?.assertCurrent();
-        const { cfg, policyConfig } = read.state;
-        const visibilityFilter = hasOperatorBoundary(client, policyConfig)
-          ? createSessionListEntryFilter({ client, cfg: policyConfig })
-          : undefined;
-        for (const previous of buffered) {
-          const agent = resolveRequestedGlobalAgentId(cfg, previous.preview.key);
-          const current = agent.ok
-            ? read.describe({ key: previous.preview.key, agentId: agent.agentId }, previous.record)
-            : undefined;
-          if (
-            !current ||
-            current.agentId !== previous.record.agentId ||
-            current.key !== previous.record.key ||
-            current.storeTarget.storePath !== previous.record.storeTarget.storePath ||
-            current.generation !== previous.generation ||
-            current.entry.sessionId !== previous.sessionId ||
-            current.entry.lifecycleRevision !== previous.lifecycleRevision ||
-            visibilityFilter?.(current.key, current.entry) === false
-          ) {
-            previous.preview.status = "missing";
-            previous.preview.items = [];
+          for (const previous of buffered) {
+            const agent = resolveRequestedGlobalAgentId(cfg, previous.preview.key);
+            const current = agent.ok
+              ? read.describe(
+                  { key: previous.preview.key, agentId: agent.agentId },
+                  previous.record,
+                )
+              : undefined;
+            if (
+              !current ||
+              current.agentId !== previous.record.agentId ||
+              current.key !== previous.record.key ||
+              current.storeTarget.storePath !== previous.record.storeTarget.storePath ||
+              current.generation !== previous.generation ||
+              current.entry.sessionId !== previous.sessionId ||
+              current.entry.lifecycleRevision !== previous.lifecycleRevision ||
+              visibilityFilter?.(current.key, current.entry) === false
+            ) {
+              previous.preview.status = "missing";
+              previous.preview.items = [];
+            }
           }
-        }
-        respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
-      },
-    );
-  },
-  "sessions.resolve": async ({
-    params,
-    respond,
-    context,
-    client,
-    sessionMutationAuthorization,
-  }) => {
-    if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {
-      return;
-    }
-    const projection = requireSessionRowProjection(context);
-    await withPreparedSessionResolve(
-      {
-        projection,
-        client,
-        p: params,
-        isCurrent: () => getSessionRowProjection(context) === projection,
-      },
-      (resolved) => {
-        sessionMutationAuthorization?.assertCurrent();
-        if (!resolved.ok) {
-          respond(false, undefined, resolved.error);
-          return;
-        }
-        if ("missing" in resolved) {
-          respond(true, { ok: false }, undefined);
-          return;
-        }
-        if ("ambiguous" in resolved) {
-          respond(true, { ok: false, candidates: resolved.candidates }, undefined);
-          return;
-        }
-        respond(true, resolved, undefined);
-      },
-    );
-  },
+          respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
+        },
+      );
+    },
+  ),
+  "sessions.resolve": defineValidatedGatewayHandler(
+    "sessions.resolve",
+    validateSessionsResolveParams,
+    async ({ params, respond, context, client, sessionMutationAuthorization }) => {
+      const projection = requireSessionRowProjection(context);
+      await withPreparedSessionResolve(
+        {
+          projection,
+          client,
+          p: params,
+          isCurrent: () => getSessionRowProjection(context) === projection,
+        },
+        (resolved) => {
+          sessionMutationAuthorization?.assertCurrent();
+          if (!resolved.ok) {
+            respond(false, undefined, resolved.error);
+            return;
+          }
+          if ("missing" in resolved) {
+            respond(true, { ok: false }, undefined);
+            return;
+          }
+          if ("ambiguous" in resolved) {
+            respond(true, { ok: false, candidates: resolved.candidates }, undefined);
+            return;
+          }
+          respond(true, resolved, undefined);
+        },
+      );
+    },
+  ),
   ...sessionByKeyReadHandlers,
   ...sessionMaintenanceHandlers,
 };

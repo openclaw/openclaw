@@ -70,6 +70,9 @@ and `npm-stable-v1` coverage policies, artifacts, and focused rerun handles.
 The `normal_ci` child dispatches `ci.yml` with the exact target and release scope,
 without `release_gate`. Every selected failure remains blocking, including
 Windows Node failures.
+Its type-check lanes run tsgo (`OPENCLAW_TYPECHECKER=tsgo`) instead of the
+default tsrs, so every release is also checked by the TypeScript team's
+compiler. PR and main CI keep using tsrs.
 Complete campaigns (`rerun_group=all`) retain QA Smoke's
 full scenario profile and Control UI performance independently of changed paths.
 Docker seed runs all five lanes in every ordinary manual/release scope:

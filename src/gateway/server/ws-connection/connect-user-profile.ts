@@ -1,8 +1,5 @@
-import { isDeepStrictEqual } from "node:util";
-import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveHostAccountName } from "../../../infra/host-account-name.js";
 import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
-import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
@@ -98,22 +95,21 @@ export function createGatewayConnectProfileLifecycle(
 ) {
   const { handler } = context;
   let client: GatewayWsClient | undefined;
-  const rolesCurrent = () =>
-    isDeepStrictEqual(context.configSnapshot.gateway?.roles, getRuntimeConfig().gateway?.roles);
   const clientCurrent = () =>
     !handler.isClosed() &&
     handler.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
     (!client || (handler.getClient() === client && !client.invalidated));
   const assertCurrent = () => {
     handler.connectionWork.signal.throwIfAborted();
-    if (!clientCurrent() || resolveGatewayConnectPolicyFailure(context, state) || !rolesCurrent()) {
+    if (!clientCurrent() || resolveGatewayConnectPolicyFailure(context, state)) {
       throw new Error("Gateway profile acquisition authority expired");
     }
   };
   return {
     assertCurrent,
     isCurrent: (prepared: PreparedConnectProfile | undefined) =>
-      (!prepared || prepared.authority.isCurrent()) && rolesCurrent(),
+      (!prepared || prepared.authority.isCurrent()) &&
+      !resolveGatewayConnectPolicyFailure(context, state),
     bind: (registered: GatewayWsClient) => {
       client = registered;
     },
@@ -162,10 +158,6 @@ async function resolveAuthenticatedProfile(
   assertCurrent?: () => void,
 ) {
   assertCurrent?.();
-  if (hasGatewayOperatorAccessPolicies(getRuntimeConfig())) {
-    (await prepareUserProfileCatalog()).release();
-    assertCurrent?.();
-  }
   const authority = await prepareUserProfileRoleAuthority(profileId);
   assertCurrent?.();
   if (!authority?.isCurrent()) {
@@ -186,7 +178,10 @@ async function resolveAuthenticatedProfile(
 
 /** Role and access policies need verified identity before admission; attribution alone may defer it. */
 export async function resolveGatewayConnectProfileAdmission(params: {
-  context: Pick<GatewayConnectPhaseContext, "configSnapshot"> &
+  context: Pick<
+    GatewayConnectPhaseContext,
+    "configSnapshot" | "recordAttachTiming" | "setConnectPhase"
+  > &
     Parameters<typeof rejectUnavailableProfileConnect>[0] & {
       handler: Pick<GatewayConnectPhaseContext["handler"], "connId" | "logWsControl">;
     };
@@ -209,6 +204,8 @@ export async function resolveGatewayConnectProfileAdmission(params: {
   try {
     params.assertCurrent?.();
     const options = { assertCurrent: params.assertCurrent };
+    const ensureStartedAt = performance.now();
+    context.setConnectPhase?.("profile-ensure");
     const profile = ownerProfileExpected
       ? await ensureCanonicalGatewayOwnerProfile(resolveHostAccountName, options)
       : params.resolveAuthenticatedGitHubIdentity
@@ -220,12 +217,16 @@ export async function resolveGatewayConnectProfileAdmission(params: {
             )
           : await ensureCanonicalUserProfileForEmail(authenticatedUserId!, options);
     params.assertCurrent?.();
+    params.context.recordAttachTiming?.("profileEnsureMs", ensureStartedAt);
+    const authorityStartedAt = performance.now();
+    context.setConnectPhase?.("profile-authority");
     const prepared = await resolveAuthenticatedProfile(
       "profileId" in profile ? profile.profileId : profile.id,
       profile.updatedAt,
       params.assertCurrent,
     );
     params.assertCurrent?.();
+    params.context.recordAttachTiming?.("profileAuthorityMs", authorityStartedAt);
     if (!prepared.authority.isCurrent()) {
       throw new Error("Gateway profile changed during acquisition");
     }

@@ -9,9 +9,26 @@ import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
+type ResolveModel = typeof import("../agents/embedded-agent-runner/model.js").resolveModelAsync;
+
 const resolveModelAsync = vi.hoisted(() => vi.fn());
 vi.mock("../agents/embedded-agent-runner/model.js", () => ({ resolveModelAsync }));
 const { prepareDoctorToolSchemaFrames } = await import("./doctor-tool-schema-frames.js");
+const realModel = () =>
+  vi.importActual<typeof import("../agents/embedded-agent-runner/model.js")>(
+    "../agents/embedded-agent-runner/model.js",
+  );
+function model(id: string, contextWindow = 32000) {
+  return {
+    id,
+    name: id,
+    reasoning: false,
+    input: ["text" as const],
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+    contextWindow,
+    maxTokens: 4096,
+  };
+}
 
 beforeEach(() => {
   resolveModelAsync.mockReset();
@@ -20,9 +37,7 @@ afterEach(() => clearPluginMetadataLifecycleCaches());
 
 it("retains the selected alias's runtime metadata instead of normalizing it again", async () => {
   await withOpenClawTestState({}, async (state) => {
-    const real = await vi.importActual<typeof import("../agents/embedded-agent-runner/model.js")>(
-      "../agents/embedded-agent-runner/model.js",
-    );
+    const real = await realModel();
     const provider = "doctor-selected";
     const metadataSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [
@@ -39,26 +54,7 @@ it("retains the selected alias's runtime metadata instead of normalizing it agai
     stores.modelRegistry.registerProvider(provider, {
       api: "openai-completions",
       baseUrl: "https://doctor-selected.example/v1",
-      models: [
-        {
-          id: "middle",
-          name: "middle",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 32000,
-          maxTokens: 4096,
-        },
-        {
-          id: "final",
-          name: "final",
-          reasoning: false,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 4096,
-          maxTokens: 4096,
-        },
-      ],
+      models: [model("middle"), model("final", 4096)],
     });
     resolveModelAsync.mockImplementation(
       async (...args: Parameters<typeof real.resolveModelAsync>) =>
@@ -91,9 +87,7 @@ it.each([
     await withOpenClawTestState(
       { env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" } },
       async (state) => {
-        const real = await vi.importActual<
-          typeof import("../agents/embedded-agent-runner/model.js")
-        >("../agents/embedded-agent-runner/model.js");
+        const real = await realModel();
         const stores = real.createEmptyAgentDiscoveryStores();
         const { resolveProviderRuntimePlugin } =
           await import("../plugins/provider-hook-runtime.js");
@@ -133,17 +127,7 @@ it.each([
           stores.modelRegistry.registerProvider(provider, {
             api: "openai-completions",
             baseUrl: "https://doctor-fixture.example/v1",
-            models: [
-              {
-                id: "selected",
-                name: "selected",
-                reasoning: false,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 32000,
-                maxTokens: 4096,
-              },
-            ],
+            models: [model("selected")],
           });
         }
         const cfg = captureRuntimeConfig({
@@ -207,8 +191,7 @@ it.each([
                 contextWindow: 64000,
               });
             }
-            expect([...registrations.keys()].toSorted()).toEqual([...providers].toSorted());
-            expect([...registrations.values()]).toEqual(providers.map(() => 1));
+            expect(registrations).toEqual(new Map(providers.map((provider) => [provider, 1])));
             expect(peakRetainedInstances).toBe(providers.length);
             expect(captures).toBeLessThanOrEqual(providers.length * 2);
           } finally {
@@ -223,35 +206,29 @@ it.each([
 
 it("records deferred model preparation and continues with a healthy agent", async () => {
   await withOpenClawTestState({}, async (state) => {
-    resolveModelAsync.mockImplementation(
-      async (
-        _provider: string,
-        id: string,
-        _dir: string,
-        _cfg: OpenClawConfig,
-        options: { deferProviderDynamicModelPreparation?: boolean },
-      ) => {
-        if (id === "deferred") {
-          if (!options.deferProviderDynamicModelPreparation) {
-            throw new Error("live provider preparation must not start");
-          }
-          return {
-            error: "provider dynamic model preparation is deferred",
-            deferred: "provider-dynamic-model",
-          };
+    resolveModelAsync.mockImplementation(async (...args: Parameters<ResolveModel>) => {
+      const [, id] = args;
+      const options = args[4];
+      if (id === "deferred") {
+        if (!options?.deferProviderDynamicModelPreparation) {
+          throw new Error("live provider preparation must not start");
         }
         return {
-          model: {
-            id,
-            name: id,
-            provider: "fixture",
-            api: "openai-completions",
-            baseUrl: "http://127.0.0.1:1/v1",
-            contextWindow: 32000,
-          },
+          error: "provider dynamic model preparation is deferred",
+          deferred: "provider-dynamic-model",
         };
-      },
-    );
+      }
+      return {
+        model: {
+          id,
+          name: id,
+          provider: "fixture",
+          api: "openai-completions",
+          baseUrl: "http://127.0.0.1:1/v1",
+          contextWindow: 32000,
+        },
+      };
+    });
     const cfg: OpenClawConfig = {
       agents: {
         ownership: "explicit",

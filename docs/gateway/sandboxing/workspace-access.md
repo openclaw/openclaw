@@ -23,6 +23,22 @@ mount. This prevents guests from sharing the writable agent workspace; `none`
 and `ro` remain unchanged. Sessions without a role-required sandbox retain their
 configured workspace access.
 
+The session Files browser follows this workspace boundary. With local Docker or
+Podman and `workspaceAccess: "none"`, listings, searches, previews, and downloads
+use the session's private sandbox workspace, including files created during
+ordinary noncoding chats. An unavailable private workspace never falls back to
+the shared agent workspace. Explicit `ro` access and managed project workspaces
+retain their existing admitted source access. Viewing a shared session uses that
+session's workspace; it does not switch to the viewer's own sandbox. Session
+visibility alone does not let a sandbox-required reader browse an unsandboxed
+shared host workspace. Ordinary nonsandbox-required read-only readers keep
+their existing in-root access.
+
+The Changes view requires an admitted project checkout. An unmanaged private
+sandbox remains available in Files, but Changes returns the existing `not_git`
+notice instead of running host Git against private sandbox metadata. Managed
+project and admitted host checkouts retain their existing diff behavior.
+
 ## Managed project workspaces
 
 A sandboxed session with a session-owned managed worktree uses a private Git
@@ -63,6 +79,77 @@ workspace owner before container allocation, while the skill mounts remain
 read-only. This also keeps normal retention cleanup independent of container
 user-namespace ownership.
 
+At the checkout root, `.cache/vitest/`, `.cache/bun-transpiler/`, `.cache/openclaw/bun/`,
+`.cache/ms-playwright/`, and `.local/share/pnpm/store/` caches stay with the runtime
+that produced them, along with `.artifacts/vitest-workers/` compiler outputs,
+`.artifacts/vitest-worker-cache/` retained compiler outputs,
+`.artifacts/vitest-shard-timings.json` scheduling samples, and
+`.artifacts/dist-artifacts.lock/` ownership files.
+Synchronization and recovery of older pending results exclude these exact paths,
+so dependency and test-tool downloads do not count as authored workspace results.
+Other guest-created files under `.cache/`, `.local/`, and `.artifacts/` still
+reconcile, including nested paths and explicit staged inputs; an ignore
+rule alone does not make a file disposable. Source changes cannot remove a
+runtime-owned lock subtree by replacing its parent directory.
+
+Local managed guest workspaces also exclude disposable `.artifacts/build-all-cache/`
+build snapshots and `.artifacts/build-cache-inputs/` temporary receipts. Original
+inputs admitted from the host source or its Git index remain protected even within
+those roots. Guest Git metadata cannot admit generated files as original inputs.
+The same input custody applies during capture, synchronization and recovery without
+changing saved manifest bytes. This build-cache policy does not change native-node
+or SSH workspace synchronization. Older archives can lack the original index
+membership of saved files. Exact cache-root paths in the owned archive remain
+restored inputs; new generated paths under the same directories are still excluded.
+An ambiguous older cache file may therefore remain preserved.
+
+If you are a guest, you can ask the agent:
+
+> Bring this workspace up to date with the latest project changes, keeping my
+> edits. Resolve any conflicts, rerun the relevant checks and Auto Review, and
+> update the same PR. Do not merge it.
+
+Use `github_publish` with `action: "refresh_base"` to explicitly integrate the
+current selected repository base into this session's existing local managed
+workspace. This action is offered only in sessions with a writable managed sandbox;
+sessions running directly on the host merge the base with git in their workspace,
+then publish. The Gateway fetches with its host identity and prepares any missing
+file contents from the selected repository before offline merge and snapshot
+operations, including the ancestor versions needed to merge diverged branches.
+This also works when a partial clone already knows the base commit. A
+content-fetch failure leaves saved work available for retry. Refresh preserves
+saved guest files, ignored guest data, and empty directories. The operation returns the exact
+`baseCommit`, changed paths, and conflicting paths; it does not publish or change
+the GitHub pull request. It accepts no repository, URL, arbitrary ref, other
+session, or pull-request selector.
+
+Resolve any reported conflicts in the same workspace, then repeat `refresh_base`
+with `conflictsResolved: true` and the returned `baseCommit`. This acknowledges
+that exact pending integration, including a deliberate choice to keep an unchanged
+binary file. Without acknowledgment, a retry keeps reporting conflicts. Remaining
+text conflict markers block completion. On completion, the calling sandbox imports
+only the selected base commit and source tree through bounded stdin, reusing
+available objects from host-selected snapshots when possible, then stages its
+current source. Guest HEAD, branches, and commit history remain unchanged.
+The result includes `review: { mode: "local", base: "<commit>" }`. Run tests and
+normal Auto Review with that exact target after refresh or conflict resolution,
+then publish to update the same PR, preserving its current draft or open state.
+Reviewing against the old guest HEAD would
+also include upstream-only changes. The operation requires the prepared sandbox
+of the current agent; a direct RPC cannot supply another runtime. Publication
+refuses a pending integration and never silently merges new base changes into
+reviewed files. A retry or restart settles the existing retained source result
+through the workspace journal; host merge ancestry remains outside guest Git
+metadata. Worktree removal is deferred while the host integration is pending;
+finish refresh before retrying archive cleanup. Existing privileged PR actions
+still require full operator write access.
+
+Finish refresh and conflict resolution before downgrading. An interrupted transfer
+retains a source result that earlier Gateways reject instead of applying as ordinary
+workspace synchronization. Once both copies accept the transfer, that result is
+cleaned and native merge state owns any remaining conflict resolution. Return to a
+version supporting `refresh_base` to finish either pending phase.
+
 The private checkout is writable with `none` or `rw` workspace access; explicit
 `ro` remains read-only. This does not make the shared agent workspace writable.
 Other sandbox backends cannot use this local managed-project projection and
@@ -79,8 +166,12 @@ filesystem and engine preparation, immediately before filesystem commands,
 container creation/start/setup, and late browser restarts. Closing the owner
 during preparation prevents those effects rather than rejecting only afterward.
 Stopping a run blocks new commands and file operations while allowing its accepted
-workspace changes to finish checkpointing. Accepted command cleanup retains the
-workspace owner until finalization finishes, even after the parent exits.
+workspace changes to finish checkpointing. Accepted command cleanup waits for an active checkpoint to resume the runtime
+before reaping its processes. Its reap budget starts after admission; the command's
+original exit and timeout results remain unchanged. Termination checkpoints any
+final writes from signal handlers before returning, including when an earlier
+finalization already checkpointed the command. Cleanup retains the workspace owner
+until termination and finalization finish, even after the parent exits.
 Settlement still requires the original
 session and worktree binding and live Gateway ownership; a replacement session or
 unresolved checkpoint failure cannot be reported as a clean stop.
@@ -97,6 +188,13 @@ return to a supporting version before continuing guest work.
 With the OpenShell backend, `mirror` mode still uses the local workspace as the source of truth between exec turns, and `remote` mode uses the remote OpenShell workspace as the source of truth after the initial seed. The same access rules apply: `none` permits private workspace writes, while `ro` disables writes.
 
 Inbound media is copied into the active sandbox workspace (`media/inbound/*`).
+Later conversation turns load retained images from that same staged copy.
+Missing copies and paths outside the active sandbox remain unavailable.
+For a managed project session, attachments on follow-up messages use that
+session's private checkout, including after its worktree has been created.
+Attachment staging retains the managed workspace owner until the copy settles.
+If the worktree is removed while an attachment is being read, staging stops
+before creating its input directory or file; the original attachment remains available.
 
 `image_generate`, `video_generate`, and `music_generate` also copy locally saved
 outputs into a private, Git-ignored directory under `media/inbound/` in the
@@ -115,6 +213,8 @@ a copy, staging stops with the same warning while the original remains available
 **Skills**: the `read` tool is sandbox-rooted. With `workspaceAccess: "none"`, OpenClaw mirrors eligible skills into the sandbox workspace (`.../skills`) as read-only instruction roots; other private workspace files remain writable. With `"rw"`, workspace skills are readable from `/workspace/skills`, and eligible managed, bundled, or plugin skills are materialized into the generated read-only path `/workspace/.openclaw/sandbox-skills/skills`.
 
 Local container mounts and sandbox file tools enforce these read-only roots.
+Generated skill copies carry their own Git ignore rule, so ordinary Git discovery
+omits them while tracked changes and other project files remain visible.
 The Gateway refreshes its own mirrored copies even when an earlier copy inherited
 read-only directory permissions; no manual permission repair is needed.
 SSH and OpenShell shell execution relies on the remote host or OpenShell policy

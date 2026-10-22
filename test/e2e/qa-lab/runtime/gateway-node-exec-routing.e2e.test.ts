@@ -16,6 +16,7 @@ import { loadOrCreateDeviceIdentity } from "../../../../src/infra/device-identit
 import { closeOpenClawStateDatabaseForTest } from "../../../../src/state/openclaw-state-db.js";
 import { runQaGatewayFixture, stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import { writeJsonFile } from "../../../helpers/temp-repo.js";
 import {
   TEST_TIMEOUT_MS,
   WAIT_OPTIONS,
@@ -71,14 +72,11 @@ it(
       const tmp = path.join(nodeRoot, "tmp");
       const config = path.join(nodeRoot, "openclaw.json");
       await Promise.all([home, state, tmp].map((dir) => fs.mkdir(dir, { recursive: true })));
-      await fs.writeFile(
-        config,
-        JSON.stringify({
-          gateway: { mode: "local" },
-          plugins: { enabled: false },
-          nodeHost: { browserProxy: { enabled: false }, skills: { enabled: false } },
-        }),
-      );
+      writeJsonFile(config, {
+        gateway: { mode: "local" },
+        plugins: { enabled: false },
+        nodeHost: { browserProxy: { enabled: false }, skills: { enabled: false } },
+      });
       const env = createChildEnv({
         home,
         tempDir: tmp,
@@ -140,7 +138,7 @@ it(
         const callerState = path.join(callerHome, "state");
         const callerConfig = path.join(callerHome, "openclaw.json");
         await fs.mkdir(callerState, { recursive: true });
-        await fs.writeFile(callerConfig, JSON.stringify(gateway.cfg));
+        writeJsonFile(callerConfig, gateway.cfg);
         vi.stubEnv("HOME", callerHome);
         vi.stubEnv("OPENCLAW_HOME", callerHome);
         vi.stubEnv("OPENCLAW_STATE_DIR", callerState);
@@ -160,6 +158,18 @@ it(
             notifyOnExit: false,
           });
         const exec = makeExec();
+        const rejectRun = async (
+          tool: ReturnType<typeof makeExec>,
+          marker: string,
+          error: RegExp,
+          node?: string,
+        ) => {
+          requests.mockClear();
+          await expect(tool.execute(marker, { command: command(marker), node })).rejects.toThrow(
+            error,
+          );
+          expect(nodeInvokes()).toEqual([]);
+        };
         const first = await startExecutor(gateway, "first");
         const inventory = (await gateway.call("node.list", {})) as {
           nodes: Array<{ nodeId: string; caps: string[]; commands: string[] }>;
@@ -188,7 +198,7 @@ it(
         expect(await effects(first.home)).toBe("sole\n");
 
         const canvasIdentity = loadOrCreateDeviceIdentity({
-          path: path.join(root, "canvas.sqlite"),
+          path: path.join(root, "canvas", "client", "credentials.sqlite"),
         });
         const startCanvas = () => {
           const client = new GatewayClient({
@@ -219,21 +229,11 @@ it(
         await run("mixed", first);
         expect(await effects(first.home)).toBe("sole\nmixed\n");
 
-        requests.mockClear();
-        await expect(
-          makeExec(first.displayName).execute("ambiguous-binding", {
-            command: command("ambiguous-binding"),
-          }),
-        ).rejects.toThrow(/ambiguous node/);
-        expect(nodeInvokes()).toEqual([]);
+        await rejectRun(makeExec(first.displayName), "ambiguous-binding", /ambiguous node/);
         expect(await effects(first.home)).toBe("sole\nmixed\n");
 
         const second = await startExecutor(gateway, "second");
-        requests.mockClear();
-        await expect(exec.execute("ambiguous", { command: command("ambiguous") })).rejects.toThrow(
-          /multiple executable nodes/,
-        );
-        expect(nodeInvokes()).toEqual([]);
+        await rejectRun(exec, "ambiguous", /multiple executable nodes/);
         expect(await effects(first.home)).toBe("sole\nmixed\n");
         await expect(effects(second.home)).rejects.toMatchObject({ code: "ENOENT" });
 
@@ -249,11 +249,7 @@ it(
           ["bound-offline", makeExec(second.nodeId), undefined],
           ["bound-mismatch", makeExec(second.nodeId), first.nodeId],
         ] as const) {
-          requests.mockClear();
-          await expect(tool.execute(name, { command: command(name), node })).rejects.toThrow(
-            /not eligible|exec node not allowed/,
-          );
-          expect(nodeInvokes()).toEqual([]);
+          await rejectRun(tool, name, /not eligible|exec node not allowed/, node);
           expect(await effects(first.home)).toBe("sole\nmixed\n");
           expect(await effects(second.home)).toBe("explicit\n");
         }

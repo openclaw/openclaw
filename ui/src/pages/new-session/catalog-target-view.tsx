@@ -11,11 +11,26 @@ export function CatalogBar(props: {
   groupPending?: boolean;
   agentSelect: JSX.Element;
   placeSelect: JSX.Element;
+  ref?: (elements: () => readonly HTMLElement[]) => void;
 }) {
+  let runtime: HTMLSpanElement | undefined;
+  let unavailable: HTMLSpanElement | undefined;
   return (
-    <div class="new-session-page__triggers">
+    <div
+      class="new-session-page__triggers"
+      ref={() =>
+        props.ref?.(() =>
+          [runtime, unavailable].filter(
+            (element): element is HTMLSpanElement => element?.isConnected === true,
+          ),
+        )
+      }
+    >
       {isTarget(props.data) ? (
         <span
+          ref={(element) => {
+            runtime = element;
+          }}
           class="new-session-page__trigger new-session-page__runtime"
           title={
             props.data?.startTerminal && props.data.catalogLabel
@@ -35,13 +50,18 @@ export function CatalogBar(props: {
       )}
       {props.placeSelect}
       {isPendingRouteTarget(props.data) || props.groupPending === true ? (
-        <span class="new-session-page__catalog-unavailable">
+        <span
+          class="new-session-page__catalog-unavailable"
+          ref={(element) => {
+            unavailable = element;
+          }}
+        >
           {t("newSession.catalogUnavailable")}
           <button
             class="btn btn--sm"
             type="button"
             disabled={props.retrying}
-            onClick={props.onRetry}
+            onClick={() => props.onRetry()}
           >
             {props.retrying ? t("common.loading") : t("lazyView.retry")}
           </button>

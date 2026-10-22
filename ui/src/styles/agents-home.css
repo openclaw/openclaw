@@ -1,127 +1,141 @@
-.agents-home {
-  padding: 0 24px 24px;
-}
-
-.agents-home__header .content-header {
-  max-height: none;
-  padding: 4px 24px 16px;
-}
-
-.agents-home__grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(min(100%, 280px), 1fr));
-  gap: 16px;
-}
-
-.agents-home__card,
-.agents-home__skeleton {
+.agents-home__claw-card,
+.agents-home__claw-skeleton {
+  min-width: 0;
+  padding: 12px;
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
-  padding: 24px;
-  background: var(--card);
+  background: var(--bg-elevated);
 }
 
-.agents-home__card {
+.agents-home__claw-skeleton {
+  min-height: 168px;
+  background: var(--bg-accent);
+}
+
+.agents-home__claw-card {
+  position: relative;
+  /* Card width, not viewport width, decides the title row: multi-column grids
+     make cards narrow on laptop-sized screens. */
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 16px;
-  min-width: 0;
-  color: var(--text);
-  text-decoration: none;
+  gap: 10px;
 }
 
-.agents-home__card:hover,
-.agents-home__card:focus-visible {
-  border-color: var(--accent);
-  text-decoration: none;
+.agents-home__claw-card-link {
+  position: absolute;
+  z-index: 1;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  border-radius: inherit;
+  background: transparent;
+  cursor: var(--cursor-action);
 }
 
-.agents-home__identity {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  max-width: 100%;
+.agents-home__claw-card-link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -3px;
 }
 
-.agents-home__avatar {
-  width: 56px;
-  height: 56px;
-  flex: none;
-  overflow: hidden;
+.agents-home__claw-card-link:disabled {
+  cursor: default;
+}
+
+.agents-home__claw-head {
+  position: relative;
+  z-index: 2;
+  display: grid;
+  grid-template-areas: "art identity add";
+  grid-template-columns: 36px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 8px;
+  pointer-events: none;
+}
+
+/* Narrow cards: give the name the full card width instead of the gap between
+   the artwork and Add, which otherwise breaks names one or two words per line. */
+@container (max-width: 279px) {
+  .agents-home__claw-head {
+    grid-template-areas:
+      "art . add"
+      "identity identity identity";
+    align-items: center;
+  }
+}
+
+.agents-home__claw-head .btn {
+  position: relative;
+  z-index: 3;
+  pointer-events: auto;
+}
+
+.agents-home__claw-art {
+  grid-area: art;
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
   border-radius: var(--radius-md);
   background: var(--bg-accent);
-  font-size: 28px;
+  color: var(--accent);
 }
 
-.agents-home__name {
+.agents-home__claw-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+}
+
+.agents-home__claw-art svg {
+  width: 20px;
+  height: 20px;
+}
+
+.agents-home__claw-identity {
+  grid-area: identity;
   min-width: 0;
-  overflow-wrap: anywhere;
 }
 
-.agents-home__name h2 {
+.agents-home__claw-identity h3 {
+  display: -webkit-box;
   margin: 0;
-  font-size: 18px;
-}
-
-.agents-home__name p,
-.agents-home__preview {
-  margin: 0;
-  color: var(--muted);
-}
-
-.agents-home__model,
-.agents-home__preview {
-  max-width: 100%;
   overflow: hidden;
+  overflow-wrap: break-word;
+  font-size: 15px;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.agents-home__claw-identity span {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.agents-home__model,
-.agents-home__working {
-  padding: 4px 8px;
-  border-radius: var(--radius-md);
-  font-size: 12px;
-  background: var(--bg-accent);
+.agents-home__claw-add {
+  grid-area: add;
 }
 
-.agents-home__working {
-  color: var(--ok);
-}
-
-.agents-home__activity {
-  font-size: 13px;
+.agents-home__claw-summary {
+  position: relative;
+  z-index: 2;
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
   color: var(--muted);
+  font-size: 13px;
+  line-height: 1.4;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  pointer-events: none;
 }
 
-.agents-home__open {
-  margin-top: auto;
-}
-
-.agents-home__skeleton {
-  min-height: 250px;
-  background: var(--bg-accent);
-}
-
-.agents-home__empty {
-  padding: 48px 24px;
-  text-align: center;
-}
-
-@media (max-width: 560px) {
-  .agents-home {
-    padding: 0 16px 16px;
-  }
-
-  .agents-home__header .content-header {
-    flex-direction: column;
-    align-items: stretch;
-    padding-inline: 16px;
-  }
-
-  .agents-home__header .page-header-actions {
-    justify-content: flex-start;
-    flex-wrap: wrap;
-  }
+.agents-home__claw-empty {
+  margin: 0 0 16px;
+  color: var(--muted);
 }

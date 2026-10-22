@@ -6,6 +6,7 @@ import { withTimeout } from "../../infra/fs-safe.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { CommandOptions, SpawnResult } from "../../process/exec.js";
 import { withGitProcessOperation } from "../../process/spawn-diagnostics.js";
+import { createPendingPromiseTracker } from "../../shared/pending-promises.js";
 import { isWorkspaceInspectionCommand } from "../../worker/workspace-inspection-protocol.js";
 import {
   type PreparedWorkerSsh,
@@ -27,13 +28,8 @@ import {
   createAcceptedWorkspacePublisher,
   recoverAcceptedWorkspacePublication,
 } from "./workspace-accepted-sync.js";
-import { runInstrumentedWorkspaceReconcile } from "./workspace-finalize.js";
 import { prepareWorkerWorkspaceGitPack } from "./workspace-git-base.js";
-import {
-  MAX_WORKSPACE_HASH_MEMO_BYTES,
-  type WorkspaceHashMemo,
-  type WorkspaceReconcileMetrics,
-} from "./workspace-hash-memo.js";
+import { MAX_WORKSPACE_HASH_MEMO_BYTES, type WorkspaceHashMemo } from "./workspace-hash-memo.js";
 import {
   MAX_WORKSPACE_INVENTORY_ENTRIES,
   MAX_WORKSPACE_MANIFEST_BYTES,
@@ -95,14 +91,7 @@ export function createWorkerWorkspaceActions(
   WorkerTunnelHandle,
   "quiesceWorkspace" | "reconcileWorkspace" | "runWorkspaceCommand" | "syncWorkspace"
 > {
-  const track = <T>(task: Promise<T>): Promise<T> => {
-    options.tasks.add(task);
-    void task.then(
-      () => options.tasks.delete(task),
-      () => options.tasks.delete(task),
-    );
-    return task;
-  };
+  const track = createPendingPromiseTracker(options.tasks);
 
   const waitForPrepared = async (
     timeoutMs: number,
@@ -464,13 +453,12 @@ export function createWorkerWorkspaceActions(
 
   const reconcileWorkspaceRun = async (
     request: WorkerLocalWorkspaceReconcileRequest,
-    metrics: WorkspaceReconcileMetrics,
   ): Promise<WorkerWorkspaceReconcileResult> => {
     if (!path.isAbsolute(request.localPath) || !path.posix.isAbsolute(request.remoteWorkspaceDir)) {
       throw new Error("Worker workspace reconcile paths must be absolute");
     }
     const hashMemo = placementHashMemo;
-    const acceptLocal = await prepareLocalWorkspaceReconciliation({ request, hashMemo, metrics });
+    const acceptLocal = await prepareLocalWorkspaceReconciliation({ request, hashMemo });
     const baseDigest = await resolveRemoteWorkspaceManifest(
       runWorkspaceCommand,
       request.remoteWorkspaceDir,
@@ -538,7 +526,6 @@ export function createWorkerWorkspaceActions(
           // still invalidates the late-writer fence.
           priorManifestDigests: base.baseCommit ? [expectedDigest, baseDigest] : [],
           hashMemo,
-          metrics,
         });
         if (observedRef !== expectedRef) {
           throw new Error("Cloud workspace changed during final reconciliation");
@@ -550,7 +537,6 @@ export function createWorkerWorkspaceActions(
         baseCommit: base.baseCommit,
         priorManifestDigests: base.baseCommit ? [baseDigest] : [],
         hashMemo,
-        metrics,
       });
       const changed = currentRef !== request.baseManifestRef;
       let current = base;
@@ -568,7 +554,6 @@ export function createWorkerWorkspaceActions(
         remoteManifest: current,
         initialRemoteRef: currentRef,
         hashMemo,
-        metrics,
       });
       if (changed) {
         const transferPaths = workerWorkspaceTransferPaths(current, base, options.ownerSignal);
@@ -640,9 +625,7 @@ export function createWorkerWorkspaceActions(
       assertCurrent: request.source.assertCurrent,
       stagedResult: request.source.stagedResult,
     };
-    return await runInstrumentedWorkspaceReconcile((metrics) =>
-      reconcileWorkspaceRun(localRequest, metrics),
-    );
+    return await reconcileWorkspaceRun(localRequest);
   };
 
   return {

@@ -85,7 +85,7 @@ function buildHookStatus(
   const hookKey = resolveHookKey(entry.hook.name, entry);
   const hookConfig = resolveHookConfig(config, hookKey);
   const managedByPlugin = entry.hook.source === "openclaw-plugin";
-  const enableState = resolveHookEnableState({ entry, config, hookConfig });
+  const enableState = resolveHookEnableState({ entry, hookConfig });
   const always = entry.metadata?.always === true;
   const events = entry.metadata?.events ?? [];
   const unknownEvents = events.filter((event) => !isKnownInternalHookEventKey(event));

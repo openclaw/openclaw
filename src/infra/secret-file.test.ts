@@ -15,9 +15,7 @@ import {
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-secret-file-test-");
 
-afterEach(async () => {
-  await tempDirs.cleanup();
-});
+afterEach(() => tempDirs.cleanup());
 
 async function expectSecretFileError(params: {
   setup: (dir: string) => Promise<string>;
@@ -37,6 +35,15 @@ async function createSecretPath(setup: (dir: string) => Promise<string>): Promis
   return setup(dir);
 }
 
+async function secret(content: string) {
+  const file = path.join(await createTempDir(), "secret.txt");
+  await fsPromises.writeFile(file, content, "utf8");
+  return file;
+}
+const writeSecret = (rootDir: string, filePath = path.join(rootDir, "nested", "auth.json")) =>
+  writePrivateSecretFileAtomic({ rootDir, filePath, content: '{"ok":true}\n' });
+const diagnostic = { configPath: "channels.telegram.tokenFile" };
+
 describe("readSecretFileSync", () => {
   it("rejects blank file paths", () => {
     expect(() => readSecretFileSync("   ", "Gateway password")).toThrow(
@@ -45,9 +52,7 @@ describe("readSecretFileSync", () => {
   });
 
   it("reads and trims a regular secret file", async () => {
-    const dir = await createTempDir();
-    const file = path.join(dir, "secret.txt");
-    await fsPromises.writeFile(file, " top-secret \n", "utf8");
+    const file = await secret(" top-secret \n");
 
     expect(readSecretFileSync(file, "Gateway password")).toBe("top-secret");
     expect(tryReadSecretFileSync(file, "Gateway password")).toBe("top-secret");
@@ -70,18 +75,14 @@ describe("readSecretFileSync", () => {
   it.each([
     {
       name: "rejects files larger than the secret-file limit",
-      setup: async (dir: string) => {
-        const file = path.join(dir, "secret.txt");
-        await fsPromises.writeFile(file, "x".repeat(DEFAULT_SECRET_FILE_MAX_BYTES + 1), "utf8");
-        return file;
-      },
+      setup: () => secret("x".repeat(DEFAULT_SECRET_FILE_MAX_BYTES + 1)),
       expectedMessage: (file: string) =>
         `Gateway password file at ${file} exceeds ${DEFAULT_SECRET_FILE_MAX_BYTES} bytes.`,
     },
     {
       name: "rejects non-regular files",
-      setup: async (dir: string) => {
-        const nestedDir = path.join(dir, "secret-dir");
+      setup: async () => {
+        const nestedDir = path.join(await createTempDir(), "secret-dir");
         await fsPromises.mkdir(nestedDir);
         return nestedDir;
       },
@@ -101,11 +102,7 @@ describe("readSecretFileSync", () => {
     },
     {
       name: "rejects empty secret files after trimming",
-      setup: async (dir: string) => {
-        const file = path.join(dir, "secret.txt");
-        await fsPromises.writeFile(file, " \n\t ", "utf8");
-        return file;
-      },
+      setup: () => secret(" \n\t "),
       expectedMessage: (file: string) => `Gateway password file at ${file} is empty.`,
     },
   ])("$name", async ({ setup, expectedMessage, options }) => {
@@ -113,13 +110,9 @@ describe("readSecretFileSync", () => {
   });
 
   it("throws from the try helper for rejected files", async () => {
-    const file = await createSecretPath(async (dir) => {
-      const target = path.join(dir, "target.txt");
-      const link = path.join(dir, "secret-link.txt");
-      await fsPromises.writeFile(target, "top-secret\n", "utf8");
-      await fsPromises.symlink(target, link);
-      return link;
-    });
+    const target = await secret("top-secret\n");
+    const file = path.join(path.dirname(target), "secret-link.txt");
+    await fsPromises.symlink(target, file);
 
     expect(() =>
       tryReadSecretFileSync(file, "Telegram bot token", { rejectSymlink: true }),
@@ -174,9 +167,7 @@ describe("tryReadSecretFileSync diagnostics", () => {
     const dir = await createTempDir();
     const file = path.join(dir, "missing-token.txt");
 
-    const result = tryReadSecretFileSync(file, "Telegram bot token", undefined, {
-      configPath: "channels.telegram.tokenFile",
-    });
+    const result = tryReadSecretFileSync(file, "Telegram bot token", undefined, diagnostic);
 
     expect(result).toEqual({
       status: "configured_unavailable",
@@ -190,11 +181,9 @@ describe("tryReadSecretFileSync diagnostics", () => {
   });
 
   it("distinguishes missing input from an unavailable configured file", () => {
-    expect(
-      tryReadSecretFileSync(undefined, "Telegram bot token", undefined, {
-        configPath: "channels.telegram.tokenFile",
-      }),
-    ).toEqual({ status: "missing" });
+    expect(tryReadSecretFileSync(undefined, "Telegram bot token", undefined, diagnostic)).toEqual({
+      status: "missing",
+    });
   });
 });
 
@@ -203,11 +192,7 @@ describe("writePrivateSecretFileAtomic", () => {
     const dir = await createTempDir();
     const file = path.join(dir, "nested", "auth.json");
 
-    await writePrivateSecretFileAtomic({
-      rootDir: dir,
-      filePath: file,
-      content: '{"ok":true}\n',
-    });
+    await writeSecret(dir, file);
 
     expect(readSecretFileSync(file, "Gateway password")).toBe('{"ok":true}');
     if (process.platform !== "win32") {
@@ -221,19 +206,12 @@ describe("writePrivateSecretFileAtomic", () => {
   it("rejects symlinked target files", async () => {
     const dir = await createTempDir();
     const nestedDir = path.join(dir, "nested");
-    const target = path.join(dir, "outside.txt");
+    const target = await secret("outside");
     const link = path.join(nestedDir, "auth.json");
     await fsPromises.mkdir(nestedDir);
-    await fsPromises.writeFile(target, "outside", "utf8");
     await fsPromises.symlink(target, link);
 
-    await expect(
-      writePrivateSecretFileAtomic({
-        rootDir: dir,
-        filePath: link,
-        content: '{"ok":true}\n',
-      }),
-    ).rejects.toThrow("must not be a symlink");
+    await expect(writeSecret(dir, link)).rejects.toThrow("must not be a symlink");
   });
 
   it("tightens an existing world-readable directory before writing secrets", async () => {
@@ -241,11 +219,7 @@ describe("writePrivateSecretFileAtomic", () => {
     const nestedDir = path.join(dir, "nested");
     await fsPromises.mkdir(nestedDir, { mode: 0o777 });
     if (process.platform !== "win32") {
-      await writePrivateSecretFileAtomic({
-        rootDir: dir,
-        filePath: path.join(nestedDir, "auth.json"),
-        content: '{"ok":true}\n',
-      });
+      await writeSecret(dir);
       const dirStat = await fsPromises.stat(nestedDir);
       expect(dirStat.mode & 0o777).toBe(PRIVATE_SECRET_DIR_MODE);
     }
@@ -257,13 +231,9 @@ describe("writePrivateSecretFileAtomic", () => {
     const aliasDir = path.join(dir, "nested");
     await fsPromises.symlink(targetDir, aliasDir);
 
-    await expect(
-      writePrivateSecretFileAtomic({
-        rootDir: dir,
-        filePath: path.join(aliasDir, "auth.json"),
-        content: '{"ok":true}\n',
-      }),
-    ).rejects.toThrow("must not be a symlink");
+    await expect(writeSecret(dir, path.join(aliasDir, "auth.json"))).rejects.toThrow(
+      "must not be a symlink",
+    );
   });
 
   it("rejects a symlinked root without chmodding its destination", async () => {
@@ -275,17 +245,11 @@ describe("writePrivateSecretFileAtomic", () => {
     const rootLink = path.join(dir, "root-link");
     await fsPromises.symlink(targetDir, rootLink);
 
-    await expect(
-      writePrivateSecretFileAtomic({
-        rootDir: rootLink,
-        filePath: path.join(rootLink, "auth.json"),
-        content: '{"ok":true}\n',
-      }),
-    ).rejects.toThrow("must not be a symlink");
+    await expect(writeSecret(rootLink, path.join(rootLink, "auth.json"))).rejects.toThrow(
+      "must not be a symlink",
+    );
 
     if (process.platform !== "win32") {
-      // The tightening wrapper must never resolve-and-chmod a symlinked root;
-      // the destination's permissions stay exactly as they were.
       const targetStat = await fsPromises.stat(targetDir);
       expect(targetStat.mode & 0o777).toBe(0o777);
     }

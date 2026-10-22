@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { lazyCompile } from "../../../packages/gateway-protocol/src/protocol-validator.js";
 import { SessionsGoalMutationResultSchema } from "../../../packages/gateway-protocol/src/schema/sessions-goal.js";
@@ -6,11 +5,13 @@ import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
-import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
+import { getAdmittedSqlSchemaFacts } from "../../infra/sqlite-schema-facts.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { SESSION_GOAL_OPERATIONS_TABLE } from "../../state/openclaw-agent-goal-operations-schema.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
   assertSessionGoalOperationTime,
   createSessionGoalOperationResult,
@@ -59,12 +60,11 @@ export function readSessionGoalOperationInDatabase(
 ): SessionGoalOperationResult | undefined {
   assertSessionGoalOperationTime(options.operation, Date.now());
   const { db } = database;
-  return runSqliteDeferredTransactionSync(db, () => {
-    const schema = getAdmittedSqliteSchemaFacts(db);
-    if (!schema) {
+  return runSqliteReadSnapshotSync(db, () => {
+    if (!getAdmittedSqlSchemaFacts(db)) {
       throw new Error("Goal receipt reads require admitted schema facts");
     }
-    if (!schema.tables.has(SESSION_GOAL_OPERATIONS_TABLE)) {
+    if (!tableExists(db, SESSION_GOAL_OPERATIONS_TABLE)) {
       return undefined;
     }
     const receipt = readSessionGoalOperationReceipt(
@@ -89,7 +89,7 @@ export function readSessionGoalOperationInDatabase(
 
 /** The caller has installed the schema before BEGIN; this read participates in its transaction. */
 export function readSessionGoalOperationReceipt(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
   sessionId: string,
   operation: SessionGoalOperation,
@@ -137,7 +137,7 @@ export function readSessionGoalOperationReceipt(
 
 /** Called only after every Goal/turn/lifecycle write succeeds, in that same transaction. */
 export function writeSessionGoalOperationReceipt(
-  db: DatabaseSync,
+  db: EngineConnection,
   sessionKey: string,
   sessionId: string,
   operation: SessionGoalOperation,
@@ -258,11 +258,11 @@ export async function mutateSessionGoal(
   }
   const resolved = captureLifecycleDatabaseScope(resolveSqliteScope(options));
   const databaseOptions = toDatabaseOptions(resolved);
-  const input = structuredClone({
+  const input = {
     sessionKey: resolved.sessionKey,
     expectedSessionId: options.expectedSessionId,
     operation: options.operation,
-  });
+  };
   return runExclusiveSqliteSessionWrite(
     resolved,
     async () => {

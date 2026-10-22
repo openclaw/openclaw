@@ -225,19 +225,20 @@ export async function updateMessageSlack(params: {
   accountId?: string;
   channelId: string;
   teamId?: string;
+  token?: string;
+  eventScope?: SlackEventScope;
   messageTs: string;
   text: string;
   blocks: (Block | KnownBlock)[];
 }): Promise<void> {
   const cfg = requireRuntimeConfig(params.cfg, "Slack update");
   const account = resolveSlackAccount({ cfg, accountId: params.accountId });
-  assertSlackDetachedTargetAllowed(account.accountId, params.teamId);
-  const token = resolveToken({
-    accountId: account.accountId,
-    fallbackToken: account.botToken,
-    fallbackSource: account.botTokenSource,
+  const { client } = resolveSlackDelivery({
+    account,
+    eventScope: params.eventScope,
+    opts: { cfg, token: params.token },
+    recipient: { kind: "channel", id: params.channelId, teamId: params.teamId },
   });
-  const client = getSlackWriteClient(token, { teamId: params.teamId });
   await client.chat.update({
     channel: params.channelId,
     ts: params.messageTs,
@@ -363,20 +364,21 @@ function resolveSlackDelivery(params: {
     if (!params.eventScope.writeClient) {
       throw new Error("missing_enterprise_slack_write_client");
     }
-    return Object.freeze({
+    return {
       client: params.eventScope.writeClient,
       credential: SLACK_ENTERPRISE_LISTENER_QUEUE_CREDENTIAL,
       identity: normalizeSlackSendIdentity(params.opts.identity),
       recipient: params.recipient,
       teamId: params.eventScope.teamId,
       unfurl: { unfurlMedia: params.account.config.unfurlMedia },
-      upload: Object.freeze({
+      upload: {
         client: params.eventScope.client,
         auditContext: "slack-enterprise-immediate-upload",
-      }),
-    });
+      },
+    };
   }
 
+  assertSlackDetachedTargetAllowed(params.account.accountId, params.recipient.teamId);
   const credential = resolveToken({
     explicit: params.opts.token,
     accountId: params.account.accountId,
@@ -396,7 +398,7 @@ function resolveSlackDelivery(params: {
         params.opts.assertDirectAdapterHandoff,
       )
     : cachedClient;
-  return Object.freeze({
+  return {
     client,
     ...(client !== cachedClient ? { dmCacheOwner: cachedClient } : {}),
     credential,
@@ -411,7 +413,7 @@ function resolveSlackDelivery(params: {
           unfurlLinks: params.account.config.unfurlLinks,
           unfurlMedia: params.account.config.unfurlMedia,
         },
-  });
+  };
 }
 
 async function resolveChannelId(
@@ -890,14 +892,11 @@ export async function sendMessageSlack(
     throw new Error("invalid_enterprise_slack_listener_scope");
   }
   const recipient = eventScope ? parseEnterpriseEventRecipient(to) : parseRecipient(to);
-  if (!eventScope) {
-    assertSlackDetachedTargetAllowed(account.accountId, recipient.teamId);
-  }
   const blocks = opts.blocks == null ? undefined : validateSlackBlocksArray(opts.blocks);
   if (!normalizedMessage && !opts.mediaUrl && !blocks) {
     throw new Error("Slack send requires text, blocks, or media");
   }
-  const queuedOpts = Object.freeze({ ...opts });
+  const queuedOpts = { ...opts };
   const delivery = resolveSlackDelivery({ account, eventScope, opts: queuedOpts, recipient });
   const workspaceScope = delivery.teamId ? `:${delivery.teamId}` : "";
   const queueKey = `${account.accountId}:${createSlackTokenCacheKey(delivery.credential)}${workspaceScope}:${delivery.recipient.kind}:${delivery.recipient.id}:${opts.threadTs ?? ""}`;
@@ -955,7 +954,7 @@ async function sendMessageSlackQueued(params: {
   ) => {
     // Fallback can split blocks across several sends; identify controls on the
     // actual posted card so uploads and text chunks cannot steal finalization.
-    // Preserve only accepted display blocks; actions contain private callback data.
+    // Keep private accepted blocks so finalization can retain unrelated controls.
     const slackQuestionActionIds = resolveSlackQuestionActionIds(deliveredBlocks);
     const deliveryResult = slackQuestionActionIds.length
       ? {
@@ -963,9 +962,7 @@ async function sendMessageSlackQueued(params: {
           meta: {
             ...result.meta,
             slackQuestionActionIds,
-            [SLACK_QUESTION_FINALIZATION_BLOCKS]: deliveredBlocks!.filter(
-              (block) => block.type !== "actions",
-            ),
+            [SLACK_QUESTION_FINALIZATION_BLOCKS]: deliveredBlocks,
           },
         }
       : result;

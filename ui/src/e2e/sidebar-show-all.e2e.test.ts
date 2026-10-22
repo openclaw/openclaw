@@ -72,6 +72,7 @@ suite.define(() => {
           }
           await switcher.click();
           await page.getByRole("menuitem", { name: "Show all", exact: true }).click();
+          await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
           await expect
             .poll(() => page.locator(".shell").getAttribute("class"))
             .not.toContain("shell--nav-collapsed");
@@ -100,7 +101,7 @@ suite.define(() => {
           }
         }
         await page.reload();
-        await waitForControlUiRoute(page, { routeId: "chat" });
+        await waitForControlUiRoute(page, { routeId: "sessions", pathname: "/sessions" });
         await expect.poll(() => sidebar.locator("[data-agent-group]").count()).toBe(2);
       },
     );

@@ -13,6 +13,7 @@ import type {
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { makeBridge } from "../talk/session-runtime.test-support.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { createMeetingRealtimeEngineBindings } from "./agent-consult.js";
 import { startMeetingAgentRealtimeEngine } from "./realtime-agent-engine.js";
@@ -69,10 +70,6 @@ async function createFixture(
     tts: { textToSpeechTelephony },
   } as unknown as PluginRuntime;
   const logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
-  const config = {
-    chrome: { audioFormat: "pcm16-24khz" as const },
-    realtime: { strategy: "agent", provider: "test", providers: { test: {} } },
-  };
   const bindings = createMeetingRealtimeEngineBindings({
     platform: {
       id: "test-meeting",
@@ -98,9 +95,8 @@ async function createFixture(
   let inputAudio = (_audio: Buffer) => {};
   const sendAudio = vi.fn();
   const disposed = createDeferredCore();
-  const writeOutput = vi.fn(async (_audio: Buffer) => {});
   const sendUserMessage = vi.fn();
-  const transport: MeetingRealtimeAudioTransport = {
+  const transport = {
     inputAudioIsolated,
     onFatal: (handler) => {
       fatal = handler;
@@ -114,10 +110,13 @@ async function createFixture(
       disposed.resolve();
     }),
     clearOutput: vi.fn(async () => {}),
-    writeOutput,
-  };
+    writeOutput: vi.fn(async (_audio: Buffer) => {}),
+  } satisfies MeetingRealtimeAudioTransport;
   const common = {
-    config,
+    config: {
+      chrome: { audioFormat: "pcm16-24khz" as const },
+      realtime: { strategy: "agent", provider: "test", providers: { test: {} } },
+    },
     fullConfig: {},
     runtime,
     ...bindings,
@@ -127,12 +126,11 @@ async function createFixture(
     logger,
     transport,
   };
+  const providerMetadata = { id: "test", label: "Test", isConfigured: () => true };
   let handle;
   if (engine === "transcription") {
     const provider: RealtimeTranscriptionProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
+      ...providerMetadata,
       createSession: (request) => {
         transcript = (text) => request.onTranscript?.(text);
         return { connect: async () => {}, sendAudio, close() {}, isConnected: () => true };
@@ -141,33 +139,25 @@ async function createFixture(
     handle = await startMeetingAgentRealtimeEngine({ ...common, providers: [provider] });
   } else {
     const provider: RealtimeVoiceProviderPlugin = {
-      id: "test",
-      label: "Test",
-      isConfigured: () => true,
+      ...providerMetadata,
       createBridge: (request) => {
         transcript = (text) => request.onTranscript?.("user", text, true);
-        return {
+        return makeBridge({
           connect: async () => {
             request.onReady?.();
           },
-          sendAudio() {},
-          setMediaTimestamp() {},
-          submitToolResult() {},
-          acknowledgeMark() {},
-          close() {},
-          isConnected: () => true,
+          triggerGreeting: undefined,
           sendUserMessage,
-        };
+        });
       },
     };
     handle = await startMeetingRealtimeEngine({ ...common, providers: [provider] });
   }
   return {
     handle,
-    runtime,
     runEmbeddedAgent,
     textToSpeechTelephony,
-    writeOutput,
+    writeOutput: transport.writeOutput,
     sendUserMessage,
     logger,
     transcript: (text: string) => transcript(text),

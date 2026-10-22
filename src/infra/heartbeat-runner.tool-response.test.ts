@@ -1,5 +1,6 @@
 import { STREAM_ERROR_FALLBACK_TEXT } from "@openclaw/ai/internal/shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { deleteCronJobScratch } from "../../test/helpers/cron/scratch-store.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
   HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
@@ -10,10 +11,11 @@ import { normalizeReplyPayloadDirectives } from "../auto-reply/reply/reply-deliv
 import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { readCronScratchSnapshot } from "../cron/scratch-read.js";
-import { deleteCronJobScratch, readCronJobScratchState } from "../cron/scratch-store.js";
+import { readCronJobScratchState } from "../cron/scratch-store.js";
 import { resolveCronJobsStorePath, saveCronJobsStore } from "../cron/store.js";
 import { getLastHeartbeatEvent, resetHeartbeatEventsForTest } from "./heartbeat-events.js";
 import { claimHeartbeatOutcomeForRun } from "./heartbeat-outcome-store.js";
+import { bindHeartbeatReply, bindHeartbeatSend } from "./heartbeat-runner.boundary-test-support.js";
 import { runHeartbeatOnce } from "./heartbeat-runner.js";
 import { installHeartbeatRunnerTestRuntime } from "./heartbeat-runner.test-harness.js";
 import {
@@ -22,6 +24,7 @@ import {
   seedHeartbeatScratchForTest,
   seedMainSessionStore,
   setHeartbeatAgentTurnStatus,
+  setHeartbeatSilentCompletion,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 import { isRetryableHeartbeatSkipReason } from "./heartbeat-wake.js";
@@ -80,21 +83,17 @@ async function createFixture(
   });
   const sendTelegram = vi.fn().mockResolvedValue({ messageId: "m1" });
   replySpy.mockResolvedValue(quietReply());
+  bindHeartbeatReply(replySpy);
+  bindHeartbeatSend("telegram", sendTelegram);
   return {
     ...sandbox,
     cfg,
     sessionKey,
     sendTelegram,
-    run: (overrides: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg" | "deps"> = {}) =>
+    run: (overrides: Omit<Parameters<typeof runHeartbeatOnce>[0], "cfg"> = {}) =>
       runHeartbeatOnce({
         cfg,
         ...overrides,
-        deps: {
-          telegram: sendTelegram,
-          getReplyFromConfig: replySpy,
-          getQueueSize: () => 0,
-          nowMs: () => 0,
-        },
       }),
     expectSend: (text: string, silent?: boolean) => {
       expect(sendTelegram).toHaveBeenCalledExactlyOnceWith(TELEGRAM_GROUP, text, {
@@ -299,8 +298,11 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   it("recalculates isolated runtime instructions and suppresses a quiet text fallback", async () => {
     await withHeartbeat(
       async ({ replySpy, run, sendTelegram }) => {
-        replySpy.mockResolvedValue({ text: SILENT_REPLY_TOKEN });
-        expect((await run()).status).toBe("ran");
+        replySpy.mockImplementation(async (_ctx, options) => {
+          setHeartbeatSilentCompletion(options);
+          return undefined;
+        });
+        expect(await run()).toEqual({ status: "ran", durationMs: expect.any(Number) });
         expectToolPrompt(replySpy);
         const context = replySpy.mock.calls[0]?.[0];
         expect(context?.SessionKey).toMatch(/:heartbeat$/);

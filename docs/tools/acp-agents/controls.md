@@ -53,7 +53,7 @@ sessions must be upgraded before those sessions can run.
 | Command              | What it does                                              | Example                                                       |
 | -------------------- | --------------------------------------------------------- | ------------------------------------------------------------- |
 | `/acp spawn`         | Create ACP session; optional current bind or thread bind. | `/acp spawn codex --bind here --cwd /repo`                    |
-| `/acp cancel`        | Cancel in-flight turn for target session.                 | `/acp cancel agent:codex:acp:<uuid>`                          |
+| `/acp cancel`        | Stop the turn and waiting messages for target session.    | `/acp cancel agent:codex:acp:<uuid>`                          |
 | `/acp steer`         | Queue an instruction to run after the in-flight turn.     | `/acp steer --session support inbox prioritize failing tests` |
 | `/acp close`         | Close session and unbind thread targets.                  | `/acp close`                                                  |
 | `/acp status`        | Show backend, mode, state, runtime options, capabilities. | `/acp status`                                                 |
@@ -75,6 +75,13 @@ Gateway clients. Authorized non-owner senders can still use `sessions`,
 `doctor`, `install`, and `help`. For non-owner senders, `/acp sessions`
 lists only the current bound or requester session; owner identity and
 `operator.admin` clients see all recent sessions.
+
+`/acp cancel` stops the target session's current turn, cancels its waiting
+messages, stops its sub-agents, and fires the `command:stop` hook once, like a
+Gateway client abort. When the session has no OpenClaw turn, it still sends
+cancel to the ACP backend in case a persistent backend is still working. A
+turn that is already finishing reports that instead of being cancelled.
+Channel `/stop` stops OpenClaw turns only; it does not cancel an idle backend.
 
 `/acp steer` queues a follow-up; it cannot add input to the running ACP turn.
 The instruction waits for that turn to finish, then runs in the same session

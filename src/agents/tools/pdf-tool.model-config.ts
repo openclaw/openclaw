@@ -51,15 +51,12 @@ function resolveConfiguredTextModelFromConfig(params: {
   providerId: string;
 }): string | undefined {
   const providers = params.cfg?.models?.providers;
-  if (!providers || typeof providers !== "object") {
+  if (!providers) {
     return undefined;
   }
   const providerCfg = findNormalizedProviderValue(providers, params.providerId);
   const modelId = providerCfg?.models
-    ?.find(
-      (model: { id?: string; input?: readonly string[] }) =>
-        Boolean(model?.id?.trim()) && Array.isArray(model?.input) && model.input.includes("text"),
-    )
+    ?.find((model) => Boolean(model?.id?.trim()) && model.input?.includes("text"))
     ?.id?.trim();
   return modelId || undefined;
 }
@@ -236,7 +233,7 @@ export function resolvePdfModelConfigForTool(
   const preferPrimaryTextExtraction =
     providerOk && textExtractionCandidates.some((ref) => ref.startsWith(`${primary.provider}/`));
 
-  if (params.cfg?.models?.providers && typeof params.cfg.models.providers === "object") {
+  if (params.cfg?.models?.providers) {
     // Configured provider vision models are added even when not present in static media defaults.
     for (const [providerKey, providerCfg] of Object.entries(params.cfg.models.providers)) {
       const providerId = providerKey.trim();
@@ -258,12 +255,7 @@ export function resolvePdfModelConfigForTool(
       }
       const models = providerCfg?.models ?? [];
       const modelId = models
-        .find(
-          (model) =>
-            Boolean(model?.id?.trim()) &&
-            Array.isArray(model?.input) &&
-            model.input.includes("image"),
-        )
+        .find((model) => Boolean(model?.id?.trim()) && model.input?.includes("image"))
         ?.id?.trim();
       if (!modelId) {
         continue;

@@ -14,9 +14,12 @@ export async function readSessionEntrySnapshotRequest(
     await import("./session-accessor.sqlite-read.js");
   const { projectSessionEntryRecord } =
     await import("../../../packages/memory-host-sdk/src/host/session-entry-projection.js");
+  const { prepareAssistantTranscriptText } = await import("../../shared/chat-message-content.js");
   return {
     snapshot: readTranscriptExportSnapshotReadOnlySync(request.options, {
-      projectEvent: request.includeOriginalMessages ? undefined : projectSessionEntryRecord,
+      projectEvent: request.includeOriginalMessages
+        ? undefined
+        : (event) => projectSessionEntryRecord(event, prepareAssistantTranscriptText),
     }),
   };
 }

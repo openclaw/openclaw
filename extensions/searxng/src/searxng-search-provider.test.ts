@@ -1,33 +1,31 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import plugin from "../index.js";
 import { resolveSearxngBaseUrl } from "./config.js";
+import { createSearxngWebSearchProvider } from "./searxng-search-provider.js";
 
 const { runSearxngSearch } = vi.hoisted(() => ({
   runSearxngSearch: vi.fn(async (params: Record<string, unknown>) => params),
 }));
 
-vi.mock("./searxng-client.js", () => ({
-  runSearxngSearch,
-}));
+// mock-isolation: Provider argument mapping must not execute real search requests.
+vi.mock("./searxng-client.js", () => ({ runSearxngSearch }));
 
 function configWithBaseUrl(baseUrl: unknown): OpenClawConfig {
   return { plugins: { entries: { searxng: { config: { webSearch: { baseUrl } } } } } };
 }
 
+function envRef(provider = "default") {
+  return { source: "env", provider, id: "SEARXNG_BASE_URL" };
+}
+
 describe("searxng web search provider", () => {
-  let createSearxngWebSearchProvider: typeof import("./searxng-search-provider.js").createSearxngWebSearchProvider;
-  let plugin: typeof import("../index.js").default;
-
-  beforeAll(async () => {
-    ({ createSearxngWebSearchProvider } = await import("./searxng-search-provider.js"));
-    ({ default: plugin } = await import("../index.js"));
-  });
-
   beforeEach(() => {
     vi.unstubAllEnvs();
-    runSearxngSearch.mockReset();
-    runSearxngSearch.mockImplementation(async (params: Record<string, unknown>) => params);
+    runSearxngSearch
+      .mockReset()
+      .mockImplementation(async (params: Record<string, unknown>) => params);
   });
 
   function createTool() {
@@ -38,49 +36,27 @@ describe("searxng web search provider", () => {
   }
 
   it("registers a setup-visible web search provider", () => {
-    const webSearchProviders: unknown[] = [];
-
-    plugin.register({
-      registerWebSearchProvider(provider: unknown) {
-        webSearchProviders.push(provider);
-      },
-    } as never);
-
+    const registerWebSearchProvider = vi.fn();
+    plugin.register({ registerWebSearchProvider } as never);
     expect(plugin.id).toBe("searxng");
-    expect(webSearchProviders).toEqual([
+    expect(registerWebSearchProvider).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         id: "searxng",
         requiresCredential: true,
         envVars: ["SEARXNG_BASE_URL"],
         onboardingScopes: ["text-inference"],
       }),
-    ]);
+    );
   });
 
   it("maps generic tool arguments into SearXNG search params", async () => {
-    await createTool().execute({
-      query: "openclaw docs",
-      count: 4,
-      categories: "general,news",
-      language: "en",
-    });
-
-    expect(runSearxngSearch).toHaveBeenCalledWith({
-      config: {},
-      query: "openclaw docs",
-      count: 4,
-      categories: "general,news",
-      language: "en",
-    });
+    const args = { query: "openclaw docs", count: 4, categories: "general,news", language: "en" };
+    await createTool().execute(args);
+    expect(runSearxngSearch).toHaveBeenCalledWith({ config: {}, ...args });
   });
 
-  it("rejects fractional and out-of-range counts before searching", async () => {
-    const tool = createTool();
-
-    await expect(tool.execute({ query: "openclaw docs", count: 4.5 })).rejects.toThrow(
-      "count must be an integer from 1 to 10.",
-    );
-    await expect(tool.execute({ query: "openclaw docs", count: 11 })).rejects.toThrow(
+  it.each([4.5, 11])("rejects invalid count %s before searching", async (count) => {
+    await expect(createTool().execute({ query: "openclaw docs", count })).rejects.toThrow(
       "count must be an integer from 1 to 10.",
     );
     expect(runSearxngSearch).not.toHaveBeenCalled();
@@ -88,15 +64,7 @@ describe("searxng web search provider", () => {
 
   it("reads base URL from plugin config SecretRef, then env var, stripping trailing slashes", () => {
     vi.stubEnv("SEARXNG_BASE_URL", "http://localhost:8888/");
-    expect(
-      resolveSearxngBaseUrl(
-        configWithBaseUrl({
-          source: "env",
-          provider: "default",
-          id: "SEARXNG_BASE_URL",
-        }),
-      ),
-    ).toBe("http://localhost:8888");
+    expect(resolveSearxngBaseUrl(configWithBaseUrl(envRef()))).toBe("http://localhost:8888");
 
     vi.stubEnv("SEARXNG_BASE_URL", "https://search.local/searxng///");
     expect(resolveSearxngBaseUrl({})).toBe("https://search.local/searxng");
@@ -108,15 +76,8 @@ describe("searxng web search provider", () => {
   it("does not fall back to ambient env when an explicit SecretRef is blocked", () => {
     vi.stubEnv("SEARXNG_BASE_URL", "https://ambient.example/");
     const config: OpenClawConfig = {
-      ...configWithBaseUrl({ source: "env", provider: "restricted", id: "SEARXNG_BASE_URL" }),
-      secrets: {
-        providers: {
-          restricted: {
-            source: "env",
-            allowlist: [],
-          },
-        },
-      },
+      ...configWithBaseUrl(envRef("restricted")),
+      secrets: { providers: { restricted: { source: "env", allowlist: [] } } },
     };
 
     expect(resolveSearxngBaseUrl(config)).toBeUndefined();

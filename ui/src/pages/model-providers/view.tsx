@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import type { ModelsProbeResult } from "../../api/types.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -18,7 +18,7 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatCompactTokenCount, formatCost, formatTimeMs } from "../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import type { JSX } from "../../types/solid-elements.js";
@@ -26,14 +26,10 @@ import { MODEL_SETTINGS_TARGET_IDS } from "../config/route-data.ts";
 import "../../styles/model-providers.css";
 import "../../styles/usage.css";
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
-import type {
-  DefaultModelSelection,
-  ModelPickerEntry,
-  ModelProviderCard,
-  ProviderOption,
-} from "./data.ts";
+import type { DefaultModelSelection, ModelProviderCard } from "./data.ts";
 import { DefaultModels, type DefaultModelsViewProps } from "./default-models-view.tsx";
 import { MODEL_PROVIDERS_COST_DAYS } from "./load.ts";
+import type { ModelProvidersOwner } from "./model-providers-controller.ts";
 import {
   apiKeySource,
   ProviderProfiles,
@@ -49,59 +45,35 @@ import {
 
 registerEnglishCatalog(registerSettingsEnglish);
 
-export type ModelProvidersViewProps = Omit<
-  DefaultModelsViewProps,
-  "models" | "selection" | "message"
-> &
-  Omit<ProviderProfilesViewProps, "onAddAccount" | "addAccountDisabled"> & {
-    connected: boolean;
-    loading: boolean;
-    refreshing: boolean;
-    error: string | null;
-    providerUsageFailed: boolean;
-    supplementalLoading: boolean;
-    updatedAt: number | null;
-    credentialAgentLabel: string;
-    cards: ModelProviderCard[];
-    configuredModels: ModelPickerEntry[];
-    defaultModels: DefaultModelSelection;
-    catalogDiscovering: boolean;
-    /** Retryable error from a picker-triggered catalog discovery. */
-    catalogDiscoveryError: string | null;
-    configBusy: boolean;
-    unconfiguredProviders: ProviderOption[];
-    canViewProfiles: boolean;
-    defaultsMutationBlockedReason: string | null;
-    /** Usage never converged before the retry budget ran out; cards lack usage. */
-    providerUsageStalled: boolean;
-    probeAvailable: boolean;
-    messages: Record<string, ModelProviderRowMessage>;
-    probeResults: Record<string, ModelsProbeResult>;
-    keyEditorProvider: string | null;
-    keyDraft: string;
-    addProviderOpen: boolean;
-    addProviderId: string;
-    addProviderKey: string;
-    installedAgents: JSX.Element | typeof undefined;
-    onRefresh: () => void;
-    onOpenKeyEditor: (provider: string) => void;
-    onCloseKeyEditor: () => void;
-    onKeyDraftChange: (value: string) => void;
-    onSaveKey: (provider: string, configKey: string) => void;
-    onRemoveKey: (provider: string, configKey: string) => void;
-    onProbe: (cardId: string, providers: string[]) => void;
-    onAddProviderToggle: () => void;
-    onAddProviderKeyChange: (value: string) => void;
-    onAddProvider: () => void;
-    providerScope?: JSX.Element;
-    accountRecovery?: JSX.Element | typeof undefined;
-    providerQuery?: string;
-    onProviderQueryChange?: (value: string) => void;
-    onConnectProvider: () => void;
-    onConnect: (card: ModelProviderCard) => void;
-    canConnect: (card: ModelProviderCard) => boolean;
-    loginBusy: boolean;
-  };
+type SharedModelProvidersProps = Omit<DefaultModelsViewProps, "models" | "selection" | "message"> &
+  Omit<ProviderProfilesViewProps, "onAddAccount" | "addAccountDisabled">;
+type ModelProvidersOwnerProps = Omit<
+  ReturnType<ModelProvidersOwner["viewProps"]>["props"],
+  | keyof SharedModelProvidersProps
+  | "installedAgents"
+  | "defaultModels"
+  | "providerQuery"
+  | "onProviderQueryChange"
+>;
+
+export type ModelProvidersViewProps = SharedModelProvidersProps & {
+  [Key in keyof ModelProvidersOwnerProps]: Key extends "canConnect"
+    ? ModelProvidersOwnerProps[Key]
+    : ModelProvidersOwnerProps[Key] extends (...args: infer Args) => unknown
+      ? (...args: Args) => void
+      : ModelProvidersOwnerProps[Key];
+} & {
+  defaultModels: DefaultModelSelection;
+  loading: boolean;
+  catalogDiscovering: boolean;
+  catalogDiscoveryError: string | null;
+  providerDetailsReady?: boolean;
+  installedAgents: JSX.Element | typeof undefined;
+  providerScope?: JSX.Element;
+  accountRecovery?: JSX.Element | typeof undefined;
+  providerQuery?: string;
+  onProviderQueryChange?: (value: string) => void;
+};
 
 function configMutationDisabled(state: ModelProvidersViewProps): boolean {
   return !state.canMutate || state.configBusy;
@@ -176,7 +148,10 @@ function renderProbeResult(result: ModelsProbeResult | undefined) {
     result.status === "ok" && result.results.some((target) => target.status !== "ok");
   const presentation = hasWarnings ? "warning" : result.status === "ok" ? "success" : "error";
   return (
-    <div class={"model-providers__probe model-providers__probe--" + presentation} role="status">
+    <div
+      class={["model-providers__probe", `model-providers__probe--${presentation}`]}
+      role="status"
+    >
       <div class="model-providers__probe-summary">
         <strong>
           {hasWarnings
@@ -501,28 +476,19 @@ function renderProviderNoticeRow(text: string) {
 }
 
 export function ModelProviders(props: ModelProvidersViewProps) {
-  return (
-    <Show
-      when={props.connected}
-      fallback={
-        <SettingsPage>
-          <SettingsGroup>
-            <SettingsEmpty message={t("modelProviders.disconnected")} />
-          </SettingsGroup>
-        </SettingsPage>
-      }
-    >
-      <ConnectedModelProviders {...props} />
-    </Show>
-  );
-}
-
-function ConnectedModelProviders(props: ModelProvidersViewProps) {
+  const receipt = createMemo(() => props.coreReceipt);
+  // Observe core refreshes without holding edits; initial loading stays router-owned.
+  const coreReady = createMemo(() => receipt()?.promise.then(() => null) ?? null, {
+    loadingValue: null,
+  });
   return (
     <>
+      <Loading fallback={null}>{latest(coreReady)}</Loading>
       <SettingsPage>
         <>
-          <ModelReadiness {...props} />
+          <Show when={props.connected || !props.loading}>
+            <ModelReadiness {...props} />
+          </Show>
           <div id={MODEL_SETTINGS_TARGET_IDS.behavior}>
             <DefaultModels
               {...props}
@@ -533,13 +499,22 @@ function ConnectedModelProviders(props: ModelProvidersViewProps) {
               message={props.messages.defaults}
             />
           </div>
-          {props.installedAgents}
-          <ProviderAccess {...props} />
-          {props.providerUsageStalled ? (
-            <div class="callout warning" role="status">
-              {t("usage.providerUsage.stalled")}
-            </div>
-          ) : undefined}
+          <Show
+            when={props.providerDetailsReady !== false}
+            fallback={
+              <div class="model-providers__loading">
+                <SettingsLoadingSkeleton rows={1} />
+              </div>
+            }
+          >
+            {props.installedAgents}
+            <ProviderAccess {...props} refreshing={isPending(coreReady)} />
+            {props.providerUsageStalled ? (
+              <div class="callout warning" role="status">
+                {t("usage.providerUsage.stalled")}
+              </div>
+            ) : undefined}
+          </Show>
         </>
       </SettingsPage>
       <AddProvider {...props} />
@@ -547,7 +522,58 @@ function ConnectedModelProviders(props: ModelProvidersViewProps) {
   );
 }
 
-function ProviderAccess(props: ModelProvidersViewProps) {
+function CoreReadFeedback(props: Pick<ModelProvidersViewProps, "coreReceipt" | "error">) {
+  const result = createMemo(() => props.coreReceipt?.promise);
+  const feedback = createMemo(() => {
+    result();
+    if (props.error) {
+      throw new Error(props.error);
+    }
+    return undefined;
+  });
+  return <>{feedback()}</>;
+}
+
+function ProviderReadFeedback(props: ModelProvidersViewProps & { refreshing: boolean }) {
+  // Data rollback can clear an accepted error without starting another core read.
+  const feedback = createMemo(() => ({ receipt: props.coreReceipt, error: props.error }), {
+    equals: (before, after) => before.receipt === after.receipt && before.error === after.error,
+  });
+  return (
+    <Show when={props.scopeError ?? props.error}>
+      <SettingsGroup>
+        <Show
+          when={props.scopeError}
+          fallback={
+            <Show when={feedback()} keyed>
+              {(current) => (
+                <Errored fallback={(error) => renderProviderNoticeRow(formatUiError(error()))}>
+                  <Loading
+                    fallback={current.error ? renderProviderNoticeRow(current.error) : undefined}
+                  >
+                    <CoreReadFeedback coreReceipt={current.receipt} error={current.error} />
+                  </Loading>
+                </Errored>
+              )}
+            </Show>
+          }
+        >
+          {(error) => renderProviderNoticeRow(error())}
+        </Show>
+        <button
+          type="button"
+          class="btn btn--sm"
+          disabled={props.refreshing}
+          onClick={() => props.onRefresh()}
+        >
+          {t("common.retry")}
+        </button>
+      </SettingsGroup>
+    </Show>
+  );
+}
+
+function ProviderAccess(props: ModelProvidersViewProps & { refreshing: boolean }) {
   const query = () => (props.providerQuery ?? "").trim().toLocaleLowerCase();
   const matchingCards = createMemo(() =>
     props.cards.filter((card) =>
@@ -568,19 +594,7 @@ function ProviderAccess(props: ModelProvidersViewProps) {
         />
       </label>
       <div class="model-providers__provider-list">
-        {props.error ? (
-          <SettingsGroup>
-            {renderProviderNoticeRow(props.error)}
-            <button
-              type="button"
-              class="btn btn--sm"
-              disabled={props.refreshing}
-              onClick={() => props.onRefresh()}
-            >
-              {t("common.retry")}
-            </button>
-          </SettingsGroup>
-        ) : undefined}
+        <ProviderReadFeedback {...props} />
         {props.providerUsageFailed ? (
           <SettingsGroup>
             {renderProviderNoticeRow(t("usage.providerUsage.unavailable"))}

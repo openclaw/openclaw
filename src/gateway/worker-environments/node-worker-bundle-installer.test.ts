@@ -55,10 +55,7 @@ function installerFixture(
   nodes: NodeWorkerSupervisorNodeProof[],
   listCurrentNodes: NodeWorkerSupervisorTransport["listCurrentNodes"] = async () => nodes,
 ) {
-  let tokenId = 65;
-  const transfer = createNodeWorkerBundleTransferService({
-    generateToken: () => String.fromCharCode(tokenId++).repeat(43),
-  });
+  const transfer = createNodeWorkerBundleTransferService();
   const transport: NodeWorkerSupervisorTransport = {
     hasCurrentRunner: () => false,
     async getCurrentNode(nodeId) {

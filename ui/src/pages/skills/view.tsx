@@ -1,8 +1,8 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { createMemo, For, Show } from "solid-js";
 import type { SkillStatusEntry } from "../../api/types.ts";
-import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
+import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import {
   SettingsEmpty,
@@ -26,7 +26,6 @@ import {
   isSkillAvailable,
 } from "../../lib/skills-shared.ts";
 import type { ClawHubSkillSecurityVerdict } from "../../lib/skills/index.ts";
-import { LitContent } from "../../lit/solid-bridge.ts";
 import { SkillDiscovery } from "./discovery-view.tsx";
 import { ClawHubDetailDialog, MarkdownContent, SkillReaderDialog } from "./skill-reader-dialog.tsx";
 import {
@@ -255,16 +254,14 @@ function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
 
 function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
   const updateLocked = createMemo(() => skillControlsLocked(props.view) || !props.view.canUpdate);
-  const active = createMemo(
-    () =>
-      props.view.state.skillOperation?.kind === "skill" &&
-      props.view.state.skillOperation.skillKey === props.skill.skillKey,
-  );
+  const active = () =>
+    props.view.state.skillOperation?.kind === "skill" &&
+    props.view.state.skillOperation.skillKey === props.skill.skillKey;
   const homepageHref = createMemo(() =>
     resolveSafeExternalUrl(props.skill.homepage ?? "", window.location.href),
   );
   const editValue = createMemo(() => props.view.state.skillEdits[props.skill.skillKey] ?? "");
-  const message = createMemo(() => props.view.state.skillMessages[props.skill.skillKey] ?? null);
+  const message = () => props.view.state.skillMessages[props.skill.skillKey] ?? null;
   const installOption = createMemo(() => {
     const missingBins = new Set([...props.skill.missing.bins, ...props.skill.missing.anyBins]);
     // An installer must provide a currently missing binary, not an unrelated dependency.
@@ -273,12 +270,11 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
   const missing = createMemo(() => computeSkillMissing(props.skill));
   const reasons = createMemo(() => computeSkillReasons(props.skill));
   const verdict = createMemo(() => verdictForSkill(props.skill, props.view.state.clawhubVerdicts));
-  const detailTab = createMemo<SkillDetailTab>(() =>
+  const detailTab = (): SkillDetailTab =>
     props.view.state.skillsDetailTab === "card" && props.skill.skillCard?.present
       ? "card"
-      : "overview",
-  );
-  const hasTabs = createMemo(() => Boolean(props.skill.clawhub || props.skill.skillCard?.present));
+      : "overview";
+  const hasTabs = () => Boolean(props.skill.clawhub || props.skill.skillCard?.present);
   return (
     <SkillReaderDialog
       label={props.skill.name}
@@ -340,23 +336,21 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
           />
         </div>
         <Show when={hasTabs()}>
-          <LitContent
-            render={() =>
-              renderHubTabs({
-                id: "skill-detail",
-                active: detailTab(),
-                tabs: [
-                  { value: "overview", label: t("skillsPage.overview") },
-                  ...(props.skill.skillCard?.present
-                    ? [{ value: "card" as const, label: t("skillsPage.skillCard") }]
-                    : []),
-                ],
-                ariaLabel: props.skill.name,
-                panelId: "skill-detail-panel",
-                variant: "sub",
-                onSelect: props.view.onDetailTabChange,
-              })
-            }
+          <HubTabs
+            {...{
+              id: "skill-detail",
+              active: detailTab(),
+              tabs: [
+                { value: "overview", label: t("skillsPage.overview") },
+                ...(props.skill.skillCard?.present
+                  ? [{ value: "card" as const, label: t("skillsPage.skillCard") }]
+                  : []),
+              ],
+              ariaLabel: props.skill.name,
+              panelId: "skill-detail-panel",
+              variant: "sub",
+              onSelect: props.view.onDetailTabChange,
+            }}
           />
         </Show>
         <div
@@ -480,17 +474,17 @@ function InstalledClawHubOverview(props: {
   view: SkillsProps;
   verdict: ClawHubSkillSecurityVerdict | null;
 }) {
-  const link = createMemo(() => props.skill.clawhub);
-  const invalidReason = createMemo(() => {
+  const link = () => props.skill.clawhub;
+  const invalidReason = () => {
     const value = link();
     return value?.status === "invalid" ? value.reason : null;
-  });
-  const installedRef = createMemo(() => {
+  };
+  const installedRef = () => {
     const value = link();
     return value?.status === "linked"
       ? `${value.ownerHandle ? `@${value.ownerHandle}/` : ""}${value.slug}@${value.installedVersion}`
       : "";
-  });
+  };
   const auditHref = createMemo(() =>
     resolveSafeExternalUrl(props.verdict?.securityAuditUrl ?? "", window.location.href),
   );
@@ -501,9 +495,7 @@ function InstalledClawHubOverview(props: {
         ? formatUiExternalText(props.verdict.reasons.join(", "))
         : null),
   );
-  const status = createMemo(() =>
-    verdictStatus(props.verdict, props.view.state.clawhubVerdictsLoading),
-  );
+  const status = () => verdictStatus(props.verdict, props.view.state.clawhubVerdictsLoading);
   return (
     <Show when={link()}>
       {(current) => (
@@ -563,7 +555,7 @@ function InstalledClawHubOverview(props: {
 
 function InstalledSkillCard(props: { skill: SkillStatusEntry; view: SkillsProps }) {
   const content = createMemo(() => props.view.state.skillCardContents[props.skill.skillKey]);
-  const error = createMemo(() => props.view.state.skillCardErrors[props.skill.skillKey]);
+  const error = () => props.view.state.skillCardErrors[props.skill.skillKey];
   return (
     <Show when={props.skill.skillCard?.present}>
       <Show

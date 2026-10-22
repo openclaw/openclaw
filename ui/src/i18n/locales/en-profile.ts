@@ -49,14 +49,13 @@ const enProfile = {
         "Verified sign-in identity, not permission to publish. Manage publishing access under GitHub connections below.",
       githubVerified: "Verified from your GitHub-backed sign-in",
       githubUnavailable: "Unavailable",
-      githubUnavailableDescription: "GitHub-backed sign-in is unavailable. Refresh to retry.",
+      githubUnavailableDescription:
+        "No single verified GitHub sign-in account is available to display.",
       ownerGithubDescription:
         "GitHub-backed sign-in through Cloudflare Access or Tailscale Serve provides this identity.",
       gitCoauthor: "Git co-author credit",
       gitCoauthorDescription:
-        "Adds this account's public GitHub noreply address to commits created from shared sessions. Turning it off affects future commits only.",
-      gitCoauthorUnavailable:
-        "Available after your GitHub-backed sign-in is verified. Refresh to retry.",
+        "When a verified account is available, adds this profile's public GitHub noreply address or verified enterprise email address to shared-session commits, depending on the publishing host. The enterprise address is visible in commit history. Turning it off affects future commits only.",
       ownerGitCoauthorDescription:
         "Requires GitHub-backed sign-in through Cloudflare Access or Tailscale Serve.",
       avatarErrors: {

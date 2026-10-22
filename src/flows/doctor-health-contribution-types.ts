@@ -88,7 +88,6 @@ export type DoctorHealthFlowContext = {
   authProfileHealthReady?: boolean;
   gatewayDetails?: ReturnType<typeof buildGatewayConnectionDetails>;
   healthOk?: boolean;
-  gatewayHealthAuthenticated?: boolean;
   gatewayHealthSkipped?: boolean;
   gatewayStatus?: import("../status/summary.js").StatusSummary;
   gatewayMemoryProbe?: Awaited<ReturnType<typeof probeGatewayMemoryStatus>>;

@@ -1,6 +1,8 @@
-/** Original-state update captures in user-invoked cleanup. Only the update run ledger attributes a capture. */
+/** Original-state update and standalone Doctor captures in user-invoked cleanup. */
 import fs from "node:fs";
 import path from "node:path";
+import { readRootStructuredFileSync } from "@openclaw/fs-safe/json";
+import { collectStandaloneDoctorCaptures } from "../infra/doctor-capture-retention.js";
 import { hasSymbolicLinkInDirectoryPath } from "../infra/session-sqlite-migration-manifest.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
 import { UPDATE_CAPTURE_PRIVACY_MARKER } from "../infra/update-capture-privacy-marker.js";
@@ -9,6 +11,10 @@ import { getUpdateRun, listUpdateRuns } from "../infra/update-run-reader.js";
 import type { UpdateRunRecord } from "../infra/update-run-record.js";
 import { isUpdateRecoveryPending } from "../infra/update-run-recovery-schema.js";
 import { loadUpdateRecovery } from "../infra/update-run-recovery.js";
+import {
+  parseUpdateRecoveryBackupManifest,
+  type UpdateRecoveryBackupManifest,
+} from "./backup-verify-manifest.js";
 import type { RecoveryCleanupArtifact } from "./update-cleanup-types.js";
 
 type CaptureIdentity = { dev: bigint; ino: bigint };
@@ -111,6 +117,7 @@ function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.Pro
     return { artifacts, identities };
   }
   const history = readCompletedUpdateHistory(params.env);
+  const standalone = collectStandaloneDoctorCaptures(params).captures;
   const entries = fs
     .readdirSync(root, { withFileTypes: true })
     .filter((entry) => entry.name !== UPDATE_CAPTURE_PRIVACY_MARKER)
@@ -148,18 +155,40 @@ function collectCaptureRootInventory(params: { stateDir: string; env: NodeJS.Pro
       const run =
         history.runs.find((candidate) => candidate.runId === entry.name) ??
         getUpdateRun(entry.name, { env: params.env });
-      if (!run) {
+      const doctor = standalone.get(directory);
+      if (!run && !doctor) {
+        // Doctor owns its namespace, including incomplete or unrecognized captures.
+        if (
+          entry.name.startsWith("doctor-") ||
+          fs.existsSync(path.join(directory, "manifest.json.partial"))
+        ) {
+          continue;
+        }
+        const manifest = readRootStructuredFileSync<UpdateRecoveryBackupManifest>({
+          rootDir: directory,
+          relativePath: "manifest.json",
+          boundaryLabel: "update capture",
+          rejectHardlinks: true,
+          maxBytes: 128 * 1024 * 1024,
+          parse: parseUpdateRecoveryBackupManifest,
+        });
+        if (manifest.ok && manifest.value.runId === entry.name) {
+          item.reason = "orphan-update-capture";
+          item.detail = `Sealed update capture created ${manifest.value.createdAt}; no matching update run. No supported command retires it.`;
+        }
         continue;
       }
-      item.runs = [run.runId];
+      item.runs = [entry.name];
       Object.assign(
         item,
-        classifyCapture(directory, run, history.latestCompletedStartedAt, params.env),
+        doctor
+          ? { outcome: doctor.eligible ? "candidate" : "protected", reason: doctor.reason }
+          : classifyCapture(directory, run!, history.latestCompletedStartedAt, params.env),
       );
       if (item.outcome === "candidate") {
-        item.detail = `update ${run.status}`;
+        item.detail = doctor ? "standalone Doctor capture" : `update ${run!.status}`;
         item.consequence =
-          "Permanently deletes this update's original-state capture and any recovery generations inside it.";
+          "Permanently deletes this original-state capture and any recovery generations inside it.";
         const stat = fs.lstatSync(directory, { bigint: true });
         identities.set(directory, { dev: stat.dev, ino: stat.ino });
       }
@@ -179,9 +208,11 @@ export async function retireUpdateCaptures(params: {
   selected: RecoveryCleanupArtifact[];
   identities: ReadonlyMap<string, CaptureIdentity>;
   assertCurrent: () => void;
+  onProgress?: (item: RecoveryCleanupArtifact, index: number) => void;
 }): Promise<void> {
-  for (const item of params.selected) {
+  for (const [index, item] of params.selected.entries()) {
     try {
+      params.onProgress?.(item, index);
       params.assertCurrent();
       const expected = params.identities.get(item.path);
       const current = fs.lstatSync(item.path, { bigint: true });

@@ -9,7 +9,7 @@ import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { readExactSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
-import { patchSessionEntryCore } from "./session-accessor.sqlite-entry.js";
+import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
 import { readSessionPendingInputByKey } from "./session-accessor.sqlite-pending-inputs.js";
 import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
@@ -19,6 +19,59 @@ import { withSessionTranscriptSourcePublication } from "./transcript-write-conte
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+it("prepares shared-ID input through its transcript owner and retains intervening metadata", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    setRuntimeConfigSnapshot({});
+    const f = fixture();
+    const base = { ...f.scope, sessionKey: "agent:main:cron:job" };
+    const run = { ...base, sessionKey: `${base.sessionKey}:run:${base.sessionId}` };
+    replaceSessionEntrySync(base, {
+      sessionId: base.sessionId,
+      updatedAt: 2,
+      lifecycleRevision: "base",
+      label: "base entry",
+    });
+    replaceSessionEntrySync(run, {
+      sessionId: run.sessionId,
+      updatedAt: 3,
+      lifecycleRevision: "run",
+      label: "run entry",
+    });
+    const baseEntry = readExactSessionEntryRow(f.database, base.sessionKey)!.entry;
+    const input = expectDefined(
+      await acquireSessionInputActor(
+        { ...run, target: { canonicalKey: run.sessionKey, storeKeys: [run.sessionKey] } },
+        { assertCurrent() {}, assertReadable() {} },
+      ),
+      "transcript owner actor",
+    );
+    const persist = async (key: string) => {
+      const recorder = createUserTurnTranscriptRecorder({
+        message: { role: "user", content: key, timestamp: 1, idempotencyKey: key },
+        target: { ...base, expectedSessionId: base.sessionId, sessionEntry: baseEntry },
+        updateMode: "none",
+      });
+      bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
+      return recorder.persistApproved();
+    };
+    try {
+      await expect(persist("shared-id:first")).resolves.toMatchObject({
+        appended: true,
+        sessionEntry: { lifecycleRevision: "run", label: "run entry" },
+      });
+      await patchSessionEntryCore(run, () => ({ label: "later metadata" }));
+      await expect(persist("shared-id:second")).resolves.toMatchObject({
+        appended: true,
+        sessionEntry: { lifecycleRevision: "run", label: "later metadata" },
+      });
+      expect(readExactSessionEntryRow(f.database, base.sessionKey)?.entry).toEqual(baseEntry);
+      expect(f.events().filter((event) => event.type === "message")).toHaveLength(2);
+    } finally {
+      await input.actor.release();
+    }
+  });
 });
 
 it.each([false, true])(

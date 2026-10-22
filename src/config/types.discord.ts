@@ -2,9 +2,11 @@ import type { ChannelPreviewStreamingConfig, SessionThreadBindingsConfig } from 
 import type {
   ChannelBotInteractionConfig,
   ChannelExecApprovalConfig,
+  ChannelGroupDmConfig,
   ChannelReactionConfig,
   CommonChannelGroupConfig,
   CommonChannelMessagingConfig,
+  MultiAccountChannelConfig,
 } from "./types.channel-messaging-common.js";
 import type { DiscordPresenceEventsConfig } from "./types.discord-presence.js";
 import type { ProviderCommandsConfig } from "./types.messages.js";
@@ -20,14 +22,7 @@ export type DiscordPluralKitConfig = {
 
 export type DiscordMentionAliasesConfig = Record<string, string>;
 
-export type DiscordDmConfig = {
-  /** If false, ignore all incoming Discord DMs. Default: true. */
-  enabled?: boolean;
-  /** If true, allow group DMs (default: false). */
-  groupEnabled?: boolean;
-  /** Optional allowlist for group DM channels (ids or slugs). */
-  groupChannels?: string[];
-};
+export type DiscordDmConfig = ChannelGroupDmConfig<string>;
 
 export type DiscordGuildChannelConfig = Omit<CommonChannelGroupConfig, "allowFrom"> & {
   /** Override mention gating in threads created by this bot; omitted preserves autoThread behavior. */
@@ -305,8 +300,4 @@ export type DiscordAccountConfig = Omit<
     };
   };
 
-export type DiscordConfig = {
-  accounts?: Record<string, DiscordAccountConfig>;
-  /** Optional default account id when multiple accounts are configured. */
-  defaultAccount?: string;
-} & DiscordAccountConfig;
+export type DiscordConfig = MultiAccountChannelConfig<DiscordAccountConfig>;

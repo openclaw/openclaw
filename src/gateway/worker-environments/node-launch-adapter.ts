@@ -21,7 +21,6 @@ import { getGatewayRestartDrainSignal } from "../../process/gateway-work-admissi
 import {
   nodeWorkerPlanHash,
   NODE_WORKER_STATUS_WAIT_MAX_MS,
-  parseNodeWorkerLaunchInput,
   parseNodeWorkerSupervisorReceipt,
   type NodeWorkerLaunchInput,
   type NodeWorkerSupervisorIdentity,
@@ -94,6 +93,8 @@ type DeviceWorkerLaunchRequest = {
   timeoutMs: number;
   credentialExpiresAtMs?: number;
   signal?: AbortSignal;
+  /** Shutdown bounds receipt waits independently of the turn's cancellation. */
+  cancellationSignal?: AbortSignal;
   onDispatchReady?: () => void;
 };
 
@@ -125,16 +126,6 @@ function isTerminalReceipt(
   receipt: NodeWorkerSupervisorReceipt,
 ): receipt is TerminalNodeWorkerSupervisorReceipt {
   return receipt.state !== "pending" && receipt.state !== "running";
-}
-
-function snapshotLaunchInput(input: NodeWorkerLaunchInput): NodeWorkerLaunchInput {
-  let encoded: string;
-  try {
-    encoded = JSON.stringify(input);
-  } catch {
-    throw new Error("node worker launch input is not serializable");
-  }
-  return parseNodeWorkerLaunchInput(encoded);
 }
 
 function rearmNodeWorkerLaunchInput(
@@ -434,6 +425,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     const deadline = createDeadline({
       now,
       timeoutMs: cancellationTimeoutMs,
+      signal: params.request.cancellationSignal,
       label: "node worker cancellation",
     });
     let delayMs = pollIntervalMs;
@@ -482,7 +474,8 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     request: DeviceWorkerLaunchRequest,
   ): Promise<TerminalNodeWorkerSupervisorReceipt> => {
     const restartSignal = getGatewayRestartDrainSignal();
-    const originalInput = snapshotLaunchInput(request.input);
+    // The tunnel owns the prepared descriptor; only negotiated launch options change here.
+    const originalInput = { ...request.input };
     let input = originalInput;
     const stableRequest = { ...request, input };
     let expected = expectedIdentity(input);

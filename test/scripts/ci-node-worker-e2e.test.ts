@@ -57,10 +57,14 @@ it("selects node-worker process proofs for their owners without static test impo
   expect(NODE_WORKER_E2E_TEST_FILES.toSorted()).toEqual(expectedFiles);
 });
 
-it("reserves hourly main capacity for the complete node-worker E2E group", () => {
+it("balances hourly node-worker E2Es inside the existing matrix capacity", () => {
   const rows = createNodeWorkerE2eTestShards();
-  expect(rows).toHaveLength(1);
-  expect(rows[0]?.planConcurrency).toBe(1);
+  expect(rows).toHaveLength(2);
+  expect(rows.every((row) => row.planConcurrency === 1)).toBe(true);
+  expect(rows.every((row) => row.runner === "blacksmith-8vcpu-ubuntu-2404")).toBe(true);
+  expect(Math.max(...rows.map((row) => row.predictedSeconds ?? Infinity))).toBeLessThanOrEqual(
+    1_260,
+  );
   expect(rows.flatMap((row) => row.targets ?? []).toSorted()).toEqual(expectedFiles);
   expect(rows.every((row) => row.pretestBuildMode === "private-qa")).toBe(true);
   const result = runCiManifestFixture({
@@ -76,9 +80,11 @@ it("reserves hourly main capacity for the complete node-worker E2E group", () =>
   });
   expect(result.status, result.output).toBe(0);
   const matrix = JSON.parse(result.outputs.checks_node_core_nondist_matrix!);
-  expect(
-    matrix.include.find((row: { targets?: string[] }) => row.targets?.length)?.plan_concurrency,
-  ).toBe(1);
+  const workerRows = matrix.include.filter((row: { targets?: string[] }) => row.targets?.length);
+  expect(workerRows).toHaveLength(2);
+  expect(workerRows.every((row: { plan_concurrency?: number }) => row.plan_concurrency === 1)).toBe(
+    true,
+  );
   const selected = matrix.include.flatMap((row: { targets?: string[] }) => row.targets ?? []);
   expect(selected.toSorted()).toEqual(expectedFiles);
   const optionsLine = result.output

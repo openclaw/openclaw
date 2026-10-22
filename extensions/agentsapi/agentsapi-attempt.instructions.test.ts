@@ -9,6 +9,7 @@ import {
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt } from "./agentsapi-attempt.js";
+import { createAttemptParams } from "./agentsapi-attempt.test-helpers.js";
 import type { AgentsApiBinding } from "./agentsapi-bindings.js";
 import type { AgentsApiToolSurface } from "./agentsapi-tools.js";
 import { createModel } from "./agentsapi.test-support.js";
@@ -396,14 +397,18 @@ describe("Agents API agent workspace instructions", () => {
     expect(promptFixture.turnInputs[0]).toContain("Current date: 2026-09-25");
     expect(promptFixture.turnInputs[0]).toContain("Time zone: America/Los_Angeles");
     expect(promptFixture.turnInputs[0]).toContain(
-      "OpenClaw delivers your final response automatically.",
+      "OpenClaw delivers your final response automatically to the caller.",
     );
     expect(promptFixture.turnInputs[0]).toContain("Watched fixture session: fixture-one");
     expect(promptFixture.turnInputs[0]).toContain("Fixture prompt");
 
     now.mockReturnValue(Date.parse("2026-09-26T12:00:00-07:00"));
     watchedSessionsContextMock.mockResolvedValueOnce("Watched fixture session: fixture-two");
-    await fixture.run(binding, { sourceReplyDeliveryMode: "message_tool_only" });
+    await fixture.run(binding, {
+      sourceReplyDeliveryMode: "message_tool_only",
+      messageChannel: "telegram",
+      currentChannelId: "123",
+    });
     expect(promptFixture.turnInputs[1]).toContain("Current date: 2026-09-26");
     expect(promptFixture.turnInputs[1]).toContain("Use `message(action=send)`");
     expect(promptFixture.turnInputs[1]).toContain("Watched fixture session: fixture-two");
@@ -511,37 +516,22 @@ async function createFixture(
     sessionKey: overrides.sessionKey ?? `agent:main:${root}`,
     storePath: path.join(root, "agent.sqlite"),
   };
-  const params: AgentHarnessAttemptParamsV2 = {
+  const params = createAttemptParams({
     ...target,
     sessionTarget: target,
     workspaceDir: executionWorkspace,
     bootstrapWorkspaceDir: workspace,
     agentDir: root,
     sessionFile: path.join(root, "transcript"),
-    prompt: "Fixture prompt",
     extraSystemPrompt: "Extra fixture instructions",
-    runId: "run-fixture",
     timeoutMs: 60_000,
-    provider: "openai",
     modelId: "model-fixture",
     model: createModel({ id: "model-fixture" }),
-    thinkLevel: "off",
-    resolvedApiKey: "fixture-not-a-real-api-key",
-    authProfileStore: { version: 1, profiles: {} },
     // Credentials and catalog are unused by the stubbed Gateway tool surface.
     authStorage: {} as AgentHarnessAttemptParamsV2["authStorage"],
     modelRegistry: {} as AgentHarnessAttemptParamsV2["modelRegistry"],
-    hostCapabilities: {
-      kind: "agent-harness-host-capability",
-      version: 1,
-      assertActive: () => {},
-      bindToolSurface: (tools) => tools,
-      runBeforeToolCall: async ({ params: toolParams }) => ({ blocked: false, params: toolParams }),
-      requestApproval: async () => undefined,
-      waitForApproval: async () => undefined,
-    },
     ...overrides,
-  };
+  });
   return {
     workspace,
     executionWorkspace,

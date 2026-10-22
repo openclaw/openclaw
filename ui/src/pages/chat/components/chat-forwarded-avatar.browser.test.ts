@@ -1,17 +1,22 @@
-import { html, nothing, render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, expect, it } from "vitest";
 import { page } from "vitest/browser";
-import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
-import { renderMessageGroup } from "./chat-message-group.test-support.ts";
+import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { MessageGroup } from "./chat-message-group-view.tsx";
 import baseCss from "../../../styles/base.css?inline";
 import groupedCss from "../../../styles/chat/grouped.css?inline";
 import startupCss from "../../../styles/chat/startup-layout.css?inline";
 import textCss from "../../../styles/chat/text.css?inline";
 
 let container: HTMLElement;
+let root: ReturnType<typeof mountSolid>;
+const query = (parent: ParentNode, selector: string) => parent.querySelector(selector)!;
+const rect = (parent: ParentNode, selector: string) =>
+  query(parent, selector).getBoundingClientRect();
 
 afterEach(() => {
-  render(nothing, container);
+  root.unmount();
   container.remove();
 });
 
@@ -26,13 +31,13 @@ it.each(
   async ({ width, agentId, sessionKey }) => {
     await page.viewport(width, 1000);
     container = document.body.appendChild(document.createElement("section"));
-    const makeGroup = (key: string, count: number, forwarded: boolean): MessageGroup => ({
+    const makeGroup = (key: string, count: number, forwarded: boolean): MessageGroupData => ({
       kind: "group",
-      key,
       role: "assistant",
-      timestamp: 1000,
       isStreaming: false,
       visibleContent: "text",
+      key,
+      timestamp: 1000,
       ...(forwarded ? { senderSession: { sessionKey, agentId } } : {}),
       messages: Array.from({ length: count }, (_, index) => ({
         key: `${key}-${index}`,
@@ -43,36 +48,36 @@ it.each(
         },
       })),
     });
-    const normal = makeGroup("normal", 1, false);
-    const single = makeGroup("single", 1, true);
-    const grouped = makeGroup("grouped", 2, true);
-    render(
-      html`<style>
-          ${baseCss}${startupCss}${groupedCss}${textCss}
-        </style>
-        ${[normal, single, grouped].map((group) =>
-          renderMessageGroup(group, {
-            agentId: "main",
-            agents: [{ id: "main" }, { id: "research" }],
-            assistantTextAvatar: "M",
-            showReasoning: false,
-          }),
-        )}`,
-      container,
+    const groupsToRender = [
+      makeGroup("normal", 1, false),
+      makeGroup("single", 1, true),
+      makeGroup("grouped", 2, true),
+    ];
+    const options = {
+      agentId: "main",
+      agents: [{ id: "main" }, { id: "research" }],
+      assistantTextAvatar: "M",
+      showReasoning: false,
+    };
+    const stylesheet = document.createElement("style");
+    stylesheet.textContent = baseCss + startupCss + groupedCss + textCss;
+    root = mountSolid(
+      () => [
+        stylesheet,
+        ...groupsToRender.map((group) => createComponent(MessageGroup, { group, options })),
+      ],
+      { container },
     );
     const groups = [...container.querySelectorAll<HTMLElement>(".chat-group")];
     const normalGroup = groups[0]!;
-    const reference = normalGroup.querySelector(".chat-group-messages")!.getBoundingClientRect();
+    const reference = rect(normalGroup, ".chat-group-messages");
     const expectedGutter = width === 1440 ? 46 : 0;
     expect(reference.x - normalGroup.getBoundingClientRect().x).toBeCloseTo(expectedGutter, 1);
     if (width === 1440) {
-      expect(normalGroup.querySelector(".chat-avatar")!.getBoundingClientRect().top).toBeCloseTo(
-        reference.top,
-        1,
-      );
+      expect(rect(normalGroup, ".chat-avatar").top).toBeCloseTo(reference.top, 1);
     }
     for (const group of groups.slice(1)) {
-      const content = group.querySelector(".chat-group-messages")!.getBoundingClientRect();
+      const content = rect(group, ".chat-group-messages");
       expect(content.x).toBeCloseTo(reference.x, 1);
       expect(content.width).toBeCloseTo(reference.width, 1);
       expect(content.x - group.getBoundingClientRect().x).toBeCloseTo(expectedGutter, 1);
@@ -82,7 +87,7 @@ it.each(
       if (width === 1440 && gutterAvatar) {
         expect(gutterAvatar.getBoundingClientRect().top).toBeCloseTo(content.top, 1);
       }
-      const attribution = group.querySelector(".chat-reply-attribution")!;
+      const attribution = query(group, ".chat-reply-attribution");
       const inlineAvatar = attribution.querySelector(".chat-reply-attribution__agent-avatar");
       expect(Boolean(inlineAvatar)).toBe(hasAvatar);
       if (agentId) {
@@ -91,7 +96,7 @@ it.each(
         );
         expect(attribution.querySelector("a")?.dataset.sessionKey).toBe(sessionKey);
         const from = attribution.children[1]!.getBoundingClientRect();
-        const agent = attribution.querySelector(".chat-reply-attribution__agent")!;
+        const agent = query(attribution, ".chat-reply-attribution__agent");
         const name = agent.lastElementChild!.getBoundingClientRect();
         expect(name.x - from.right).toBeCloseTo(hasAvatar ? 6 + 18 + 4 : 6, 1);
         if (inlineAvatar) {

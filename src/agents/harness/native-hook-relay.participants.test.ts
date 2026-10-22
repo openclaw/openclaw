@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, expect, it, vi } from "vitest";
 import { withPersonalToolTurn } from "../../auto-reply/reply/personal-tool-turn.test-support.js";
 import * as relayRuntime from "../../plugin-sdk/native-hook-relay-runtime.js";
@@ -5,10 +6,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
+  prepareSystemAgentRunAdmission,
 } from "../admitted-run-context.js";
 import { prepareOperatorModelPolicy } from "../operator-model-policy.js";
+import { getGatewayToolCallerIdentity } from "../tools/gateway-caller-context.js";
 import type { AgentHarnessHostCapabilities } from "./host-capability-types.js";
 import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 import { invokeNativeHookRelay } from "./native-hook-relay.js";
@@ -29,35 +30,33 @@ afterEach(async () => {
   vi.useRealTimers();
 });
 
-it("denies native spawn at final admission when another person steers the parent", async () => {
+it("keeps collaborative native spawn under the incumbent and refuses an ended parent", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const entered = createDeferredCore();
   const resume = createDeferredCore();
+  const admittedCalls: string[] = [];
   const register = relayRuntime.registerNativeHookRelayForBundledRuntime;
   vi.spyOn(relayRuntime, "registerNativeHookRelayForBundledRuntime").mockImplementation(
     (params) => {
-      const admission = params.executionAdmission;
+      const admission = expectDefined(params.executionAdmission, "native spawn admission");
       return register({
         ...params,
-        ...(admission
-          ? {
-              executionAdmission: {
-                ...admission,
-                admit: async (invocation, assertCurrent, preparation) => {
-                  const assertAdmitted = await admission.admit(
-                    invocation,
-                    assertCurrent,
-                    preparation,
-                  );
-                  if (invocation.toolUseId === "pending-spawn") {
-                    entered.resolve();
-                    await resume.promise;
-                  }
-                  return assertAdmitted;
-                },
-              },
+        executionAdmission: {
+          ...admission,
+          admit: async (invocation, assertCurrent, preparation) => {
+            const assertAdmitted = await admission.admit(invocation, assertCurrent, preparation);
+            expect(getGatewayToolCallerIdentity()?.operatorAuthority).toMatchObject({
+              profileId: "alice",
+              scopes: ["operator.read", "operator.write"],
+            });
+            admittedCalls.push(invocation.toolUseId ?? "missing-tool-call");
+            if (invocation.toolUseId === "pending-spawn") {
+              entered.resolve();
+              await resume.promise;
             }
-          : {}),
+            return assertAdmitted;
+          },
+        },
       });
     },
   );
@@ -68,16 +67,14 @@ it("denies native spawn at final admission when another person steers the parent
     modelPolicy: prepareOperatorModelPolicy({ cfg: {}, policy: {} }),
     assertCurrent() {},
   });
-  const admission = prepareAgentRunAdmission({
-    cfg: {},
-    facts: {
-      runId: "personal-tool-run",
-      agentId: "main",
-      ingress: { kind: "system", state: "present", boundary: "native-spawn-test" },
-    },
-    operationalRunInstance: createOperationalRunInstanceRef("personal-tool-run"),
+  const admission = prepareSystemAgentRunAdmission(
+    {},
+    "personal-tool-run",
+    "main",
+    "native-spawn-test",
+    undefined,
     operatorAuthority,
-  });
+  );
   const admittedRunContext = await admission.admit("plugin-harness", "codex");
   // Production creates the host before the prepared turn scope publishes participants.
   const host = createAgentHarnessHostCapabilities({
@@ -94,6 +91,7 @@ it("denies native spawn at final admission when another person steers the parent
       {
         owner: { profileId: "alice", senderId: "alice-sender", name: "Alice", operatorAuthority },
         admittedRunContext,
+        allowCollaborativeSteering: true,
       },
       async (turn) =>
         host.runWithScope(async () => {
@@ -117,13 +115,19 @@ it("denies native spawn at final admission when another person steers the parent
               },
             });
           try {
-            for (const name of ["Agent", "spawn_agent", "crewspawn_agent"]) {
-              await expect(invoke(name, `single-${name}`)).resolves.toEqual({
-                stdout: "",
-                stderr: "",
-                exitCode: 0,
-              });
+            await expect(
+              turn.steer(
+                { profileId: "bob", senderId: "bob-sender", name: "Bob" },
+                { scopes: ["operator.read"] },
+              ),
+            ).resolves.toMatchObject({ status: "accepted" });
+            expect(turn.operation.personalToolParticipants?.resolve("bob")?.profileId).toBe("bob");
+            const names = ["Agent", "spawn_agent", "crewspawn_agent"];
+            const success = { stdout: "", stderr: "", exitCode: 0 };
+            for (const name of names) {
+              await expect(invoke(name, `single-${name}`)).resolves.toEqual(success);
             }
+            expect(admittedCalls).toEqual(names.map((name) => `single-${name}`));
             const pending = invoke("Agent", "pending-spawn");
             await Promise.race([
               entered.promise,
@@ -131,28 +135,22 @@ it("denies native spawn at final admission when another person steers the parent
                 throw new Error("Native spawn bypassed execution admission");
               }),
             ]);
-            await expect(
-              turn.steer({ profileId: "bob", senderId: "bob-sender", name: "Bob" }),
-            ).resolves.toMatchObject({ status: "accepted" });
+            await turn.complete();
             resume.resolve();
-            const ambiguity =
-              /Alice \(user: alice\).*Bob \(user: bob\).*Use sessions_spawn with the requester's requester_profile\.id as user/;
-            const expectDenied = (response: Awaited<ReturnType<typeof invoke>>, reason: RegExp) => {
+            const expectDenied = (response: Awaited<ReturnType<typeof invoke>>) => {
               expect(JSON.parse(response.stdout)).toMatchObject({
                 hookSpecificOutput: {
                   hookEventName: "PreToolUse",
                   permissionDecision: "deny",
-                  permissionDecisionReason: expect.stringMatching(reason),
+                  permissionDecisionReason: expect.stringMatching(/turn has ended/),
                 },
               });
               expect(response.exitCode).toBe(0);
             };
-            expectDenied(await pending, ambiguity);
-            for (const name of ["Agent", "spawn_agent", "crewspawn_agent"]) {
-              expectDenied(await invoke(name, `ambiguous-${name}`), ambiguity);
+            expectDenied(await pending);
+            for (const name of names) {
+              expectDenied(await invoke(name, `ended-${name}`));
             }
-            turn.complete();
-            expectDenied(await invoke("Agent", "ended-spawn"), /turn has ended/);
           } finally {
             resume.resolve();
             relay.unregister();

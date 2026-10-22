@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/agentsapi",
-  "version": "2026.10.3",
+  "version": "2026.10.5",
   "description": "OpenClaw OpenAI Agents API harness with hosted or self-hosted sessions.",
   "repository": {
     "type": "git",
@@ -8,8 +8,8 @@
   },
   "type": "module",
   "dependencies": {
-    "openai": "7.30.0",
-    "zod": "4.6.5"
+    "openai": "7.32.0",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"
@@ -19,10 +19,10 @@
       "./index.ts"
     ],
     "compat": {
-      "pluginApi": ">=2026.10.3"
+      "pluginApi": ">=2026.10.5"
     },
     "build": {
-      "openclawVersion": "2026.10.3"
+      "openclawVersion": "2026.10.5"
     }
   }
 }

@@ -27,6 +27,11 @@
       { "id": "codex-app-server-sidecars-to-plugin-state" },
       { "id": "codex-native-task-assignments" },
       {
+        "id": "codex-native-assignment-repair",
+        "doctorOnly": true,
+        "phase": "after-session-repair"
+      },
+      {
         "id": "codex-app-server-orphaned-session-bindings",
         "doctorOnly": true,
         "phase": "after-session-repair"

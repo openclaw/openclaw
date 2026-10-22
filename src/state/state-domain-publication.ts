@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { randomUUID } from "node:crypto";
 import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -6,7 +5,7 @@ import type { EngineConnection } from "../infra/sql-connection.js";
 import { sqlPublicationAnchor } from "../infra/sql-connection.js";
 import {
   createSqliteCommitReceipt,
-  hasSqliteCommitReceiptCoverage,
+  readSqliteCommitReceipt,
   type SqliteCommitReceipt,
   type SqliteCommitSource,
   type SqliteCommittedFact,
@@ -80,18 +79,23 @@ export function createKeyedStateDomainPublication<T>(codec: {
   isFact(this: void, key: string, fact: SqliteCommittedFact<unknown>): boolean;
   invalidReceiptMessage?: string;
   installFailureMessage?: string;
+  mutationDuringInstallMessage?: string;
+  closedMessage?: string;
+  changedOwnerMessage?: string;
 }) {
   type Receipt = SqliteCommitReceipt<T>;
   type Facts = Map<string, SqliteCommittedFact<T>>;
-  const state = resolveGlobalSingleton(
-    Symbol.for(`openclaw.stateDomainPublication.${codec.domain}`),
-    () => ({
-      sources: new WeakMap<EngineConnection, SqliteCommitSource>(),
-      capture: new AsyncLocalStorage<{ db: EngineConnection; facts: Facts }>(),
-      facts: new Set<(change: StateDomainChange<T>) => void>(),
-      observers: new Set<(change: StateDomainChange<T>) => void>(),
-    }),
-  );
+  type Capture = { db: EngineConnection; facts: Facts };
+  const state = resolveGlobalSingleton<{
+    sources: WeakMap<EngineConnection, SqliteCommitSource>;
+    capture?: Capture;
+    facts: Set<(change: StateDomainChange<T>) => void>;
+    installingFacts: number;
+  }>(Symbol.for(`openclaw.stateDomainPublication.${codec.domain}`), () => ({
+    sources: new WeakMap<EngineConnection, SqliteCommitSource>(),
+    facts: new Set<(change: StateDomainChange<T>) => void>(),
+    installingFacts: 0,
+  }));
   const sourceFor = (db: EngineConnection) => {
     const anchor = sqlPublicationAnchor(db);
     let source = state.sources.get(anchor);
@@ -119,7 +123,12 @@ export function createKeyedStateDomainPublication<T>(codec: {
     });
   const install = (change: StateDomainChange<T>) => {
     const errors: unknown[] = [];
-    notifyListeners(state.facts, change, (error) => errors.push(error));
+    state.installingFacts++;
+    try {
+      notifyListeners(state.facts, change, (error) => errors.push(error));
+    } finally {
+      state.installingFacts--;
+    }
     if (errors.length) {
       throw new AggregateError(
         errors,
@@ -135,14 +144,17 @@ export function createKeyedStateDomainPublication<T>(codec: {
         change = { kind: "unknown", identity: receipt.source.identity };
         install(change);
       },
-      notify: () => notifyListeners(state.observers, change),
+      notify() {},
     };
   };
   const stage = (db: EngineConnection, facts: Facts) => {
+    if (codec.mutationDuringInstallMessage && state.installingFacts) {
+      throw new Error(codec.mutationDuringInstallMessage);
+    }
     if (!facts.size) {
       return;
     }
-    const capture = state.capture.getStore();
+    const capture = state.capture;
     if (capture && sqlPublicationAnchor(capture.db) === sqlPublicationAnchor(db)) {
       const previous = new Map([...facts.keys()].map((key) => [key, capture.facts.get(key)]));
       if (
@@ -172,27 +184,16 @@ export function createKeyedStateDomainPublication<T>(codec: {
       publishSqliteCommittedState(next);
     }
   };
-  const readReceipt = (value: unknown, isFact = codec.isFact): Receipt => {
-    if (
-      !isRecord(value) ||
-      !isRecord(value.source) ||
-      typeof value.source.identity !== "string" ||
-      typeof value.source.incarnation !== "string" ||
-      !(value.facts instanceof Map) ||
-      !hasSqliteCommitReceiptCoverage(value, {
-        source: { identity: value.source.identity, incarnation: value.source.incarnation },
-        domain: codec.domain,
-        keys: [...value.facts.keys()],
-      }) ||
-      ![...value.facts].every(([key, fact]) => typeof key === "string" && isFact(key, fact))
-    ) {
-      throw new Error(codec.invalidReceiptMessage ?? "State domain commit receipt is invalid");
-    }
-    // SAFETY: The envelope, domain, keys, and every postimage were validated above.
-    return value as Receipt;
-  };
+  const readReceipt = (value: unknown, isFact = codec.isFact): Receipt =>
+    readSqliteCommitReceipt<T>(value, {
+      domain: codec.domain,
+      isFact,
+      invalidReceiptMessage: codec.invalidReceiptMessage,
+    });
   return {
     receipt: receiptFor,
+    readReceipt,
+    stageFacts: stage,
     stagePostimages(db: EngineConnection, entries: readonly (readonly [string, T])[]) {
       stage(
         db,
@@ -208,16 +209,19 @@ export function createKeyedStateDomainPublication<T>(codec: {
       stage(db, new Map(keys.map((key) => [key, { kind: "absent" }])));
     },
     capture<Result>(db: EngineConnection, operation: () => Result) {
-      const parent = state.capture.getStore();
-      return state.capture.run(
+      const parent = state.capture;
+      const capture: Capture =
         parent && sqlPublicationAnchor(parent.db) === sqlPublicationAnchor(db)
           ? parent
-          : { db, facts: new Map() },
-        () => {
-          const result = operation();
-          return { result, receipt: receiptFor(db, state.capture.getStore()!.facts) };
-        },
-      );
+          : { db, facts: new Map() };
+      // Captures produce their receipt inside a synchronous transaction callback.
+      state.capture = capture;
+      try {
+        const result = operation();
+        return { result, receipt: receiptFor(db, capture.facts) };
+      } finally {
+        state.capture = parent;
+      }
     },
     /** Leave space for sibling domains and the operation's existing settlement metadata. */
     bound(receipt: Receipt): Receipt | { kind: "unknown"; identity: string | symbol } {
@@ -227,8 +231,6 @@ export function createKeyedStateDomainPublication<T>(codec: {
     },
     subscribeFacts: (listener: (change: StateDomainChange<T>) => void) =>
       registerListener(state.facts, listener),
-    subscribe: (listener: (change: StateDomainChange<T>) => void) =>
-      registerListener(state.observers, listener),
     begin(
       owner: { identity: string | symbol; assertCurrent(): void; publishPending?: boolean },
       isFact = codec.isFact,
@@ -257,21 +259,28 @@ export function createKeyedStateDomainPublication<T>(codec: {
         }
       } catch (error) {
         unsubscribe();
+        try {
+          install({ kind: "settled", identity: owner.identity, operationId });
+        } catch {
+          // The writer never started; preserve the original observer failure.
+        }
         throw error;
       }
       return {
-        committed(value: unknown, publish?: () => void) {
+        committed(this: void, value: unknown, publish?: () => void) {
           try {
             owner.assertCurrent();
             if (finished) {
-              throw new Error("State domain publication owner is closed");
+              throw new Error(codec.closedMessage ?? "State domain publication owner is closed");
             }
             if (isRecord(value) && value.kind === "unknown" && value.identity === owner.identity) {
               install({ kind: "unknown", identity: owner.identity });
             } else {
               const receipt = readReceipt(value, isFact);
               if (receipt.source.identity !== owner.identity) {
-                throw new Error("State domain commit receipt changed owner");
+                throw new Error(
+                  codec.changedOwnerMessage ?? "State domain commit receipt changed owner",
+                );
               }
               const next = publication({
                 ...receipt,

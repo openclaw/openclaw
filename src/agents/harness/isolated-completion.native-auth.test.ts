@@ -1,5 +1,6 @@
+import { performance } from "node:perf_hooks";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isolatedAssistant,
   isolatedCompletionMocks as mocks,
@@ -17,7 +18,21 @@ const { createPluginMetadataSnapshot, makeRegistry } =
 
 const { AsyncWorkScope } = await import("../../shared/async-work-scope.js");
 
-beforeEach(resetIsolatedCompletionTestState);
+beforeEach(() => {
+  resetIsolatedCompletionTestState();
+  // Authorization routing must not consume its budget while CI schedules other workers.
+  // isolated-completion.deadline.test.ts owns elapsed-time and expiry behavior.
+  vi.spyOn(performance, "now").mockReturnValue(0);
+});
+
+afterEach(() => vi.restoreAllMocks());
+
+const reply = (text: string) => ({ assistant: isolatedAssistant([{ type: "text", text }]) });
+function registerReply(text: string) {
+  const run = vi.fn(async () => reply(text));
+  registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2: run });
+  return run;
+}
 
 describe("runIsolatedCompletion native authorization", () => {
   it.each(["profile", "dependent-direct"] as const)(
@@ -45,14 +60,6 @@ describe("runIsolatedCompletion native authorization", () => {
       const subscriptionPlan = {
         ...nativeAuthPlan,
         forwardedAuthProfileId: "openai:subscription",
-        modelRoute: {
-          provider: "openai",
-          modelId: "gpt-test",
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api/codex",
-          authRequirement: "subscription",
-          requestTransportOverrides: "none",
-        },
       };
       const apiPlan = {
         ...subscriptionPlan,
@@ -98,10 +105,7 @@ describe("runIsolatedCompletion native authorization", () => {
             : []),
         ],
       });
-      const runIsolatedCompletionV2 = vi.fn(async () => ({
-        assistant: isolatedAssistant([{ type: "text", text: "API sibling reply" }]),
-      }));
-      registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2 });
+      const runIsolatedCompletionV2 = registerReply("API sibling reply");
       const pending = runIsolatedCompletion(isolatedRequest());
       if (apiSibling === "profile") {
         await expect(pending).resolves.toMatchObject({ text: "API sibling reply" });
@@ -135,13 +139,7 @@ describe("runIsolatedCompletion native authorization", () => {
         maxTokens: 1_024,
       },
     });
-    const runIsolatedCompletionV2 = vi.fn(async () => ({
-      assistant: isolatedAssistant([{ type: "text", text: "native result" }]),
-    }));
-    registerIsolatedHarness({
-      authBootstrap: "harness",
-      runIsolatedCompletionV2,
-    });
+    const runIsolatedCompletionV2 = registerReply("native result");
 
     await runIsolatedCompletion({
       ...isolatedRequest(),
@@ -191,13 +189,8 @@ describe("runIsolatedCompletion native authorization", () => {
         current = !retired;
         throw new Error("first profile unavailable");
       })
-      .mockResolvedValueOnce({
-        assistant: isolatedAssistant([{ type: "text", text: "backup result" }]),
-      });
-    registerIsolatedHarness({
-      authBootstrap: "harness",
-      runIsolatedCompletionV2,
-    });
+      .mockResolvedValueOnce(reply("backup result"));
+    registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2 });
 
     const completion = runIsolatedCompletion({
       ...isolatedRequest(),
@@ -217,33 +210,16 @@ describe("runIsolatedCompletion native authorization", () => {
       text: "backup result",
     });
     expect(runIsolatedCompletionV2).toHaveBeenCalledTimes(2);
-    expect(
-      runIsolatedCompletionV2.mock.calls.map(([params]) => ({
-        profileId:
-          params.authorization.owner === "harness"
-            ? params.authorization.plan.forwardedAuthProfileId
-            : undefined,
-        candidateIds:
-          params.authorization.owner === "harness"
-            ? params.authorization.plan.forwardedAuthProfileCandidateIds
-            : undefined,
-        profiles:
-          params.authorization.owner === "harness"
-            ? Object.keys(params.authorization.authProfileStore.profiles)
-            : [],
-      })),
-    ).toEqual([
-      {
-        profileId: "openai:first",
-        candidateIds: ["openai:first"],
-        profiles: ["openai:first"],
-      },
-      {
-        profileId: "openai:backup",
-        candidateIds: ["openai:backup"],
-        profiles: ["openai:backup"],
-      },
-    ]);
+    for (const [index, id] of ["openai:first", "openai:backup"].entries()) {
+      const authorization = runIsolatedCompletionV2.mock.calls[index]![0].authorization;
+      expect(authorization.owner).toBe("harness");
+      if (authorization.owner !== "harness") {
+        throw new Error("expected harness authorization");
+      }
+      expect(authorization.plan.forwardedAuthProfileId).toBe(id);
+      expect(authorization.plan.forwardedAuthProfileCandidateIds).toEqual([id]);
+      expect(Object.keys(authorization.authProfileStore.profiles)).toEqual([id]);
+    }
     expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
   });
 
@@ -266,9 +242,7 @@ describe("runIsolatedCompletion native authorization", () => {
       };
       mocks.ensureAuthProfileStore.mockReturnValueOnce({
         version: 1,
-        profiles: {
-          "openai:first": { type: "token", provider: "openai", token: "first" },
-        },
+        profiles: { "openai:first": { type: "token", provider: "openai", token: "first" } },
         usageStats: cooled ? { "openai:first": { cooldownUntil: Date.now() + 60_000 } } : {},
       });
       mocks.prepareAgentRuntimeAuth.mockReturnValueOnce({
@@ -286,13 +260,8 @@ describe("runIsolatedCompletion native authorization", () => {
       const runIsolatedCompletionV2 = vi
         .fn()
         .mockRejectedValueOnce(new Error("profile unavailable"))
-        .mockResolvedValueOnce({
-          assistant: isolatedAssistant([{ type: "text", text: "direct result" }]),
-        });
-      registerIsolatedHarness({
-        authBootstrap: "harness",
-        runIsolatedCompletionV2,
-      });
+        .mockResolvedValueOnce(reply("direct result"));
+      registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2 });
 
       if (cooled) {
         await expect(runIsolatedCompletion(isolatedRequest())).rejects.toThrow(
@@ -349,10 +318,7 @@ describe("runIsolatedCompletion native authorization", () => {
     mocks.resolveModelAsync.mockResolvedValue({
       model: { provider: "openai", id: "gpt-5.5", api: route.api, baseUrl: route.baseUrl },
     });
-    const runIsolatedCompletionV2 = vi.fn(async () => ({
-      assistant: isolatedAssistant([{ type: "text", text: "prepared route result" }]),
-    }));
-    registerIsolatedHarness({ authBootstrap: "harness", runIsolatedCompletionV2 });
+    const runIsolatedCompletionV2 = registerReply("prepared route result");
 
     const parent = new AsyncWorkScope();
     try {

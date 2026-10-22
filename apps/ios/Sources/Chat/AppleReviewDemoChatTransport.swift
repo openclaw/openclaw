@@ -19,11 +19,23 @@ enum ScreenshotFixtureMode {
         ProcessInfo.processInfo.arguments.contains("--openclaw-progress-bar-fixture")
     }
 
+    static var modelSignInScenario: String? {
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let index = arguments.firstIndex(of: "--openclaw-model-sign-in-fixture"),
+              arguments.indices.contains(index + 1)
+        else { return nil }
+        return arguments[index + 1]
+    }
+
     static let gatewayName = "OpenClaw Gateway"
     static let gatewayAddress = "Gateway on local network"
     static let gatewayID = "screenshot-fixture-gateway"
     static var reactionsEnabled: Bool {
         !ProcessInfo.processInfo.arguments.contains("--openclaw-no-reactions-fixture")
+    }
+
+    static var progressCardEnabled: Bool {
+        ProcessInfo.processInfo.arguments.contains("--openclaw-progress-card-fixture")
     }
 }
 
@@ -143,7 +155,7 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
     {
         OpenClawChatComposerCapabilityCatalog(
             sessionSettingsAvailable: true,
-            modelMutationAvailable: true,
+            modelMutationAvailable: ScreenshotFixtureMode.modelSignInScenario != "read-only",
             effortMutationAvailable: true,
             webSearchBaseEnabled: true,
             webSearchAvailable: true,
@@ -237,18 +249,29 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
         try await self.store.history(sessionKey: sessionKey)
     }
 
+    func gatewayAdvertisesMethod(_ method: String) async -> Bool? {
+        guard ScreenshotFixtureMode.progressCardEnabled,
+              ["progressCard.get", "progressCard.refresh"].contains(method)
+        else { return nil }
+        return true
+    }
+
     func fetchProgressCard(sessionKey: String, agentID _: String?) async throws -> ProgressCard? {
-        guard ScreenshotFixtureMode.progressBarEnabled else { return nil }
+        guard ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled else { return nil }
         return ProgressCard(
             sessionkey: sessionKey,
             revision: 1,
             updatedat: 0,
-            markdown: """
+            markdown: ScreenshotFixtureMode.progressCardEnabled ? nil : """
             <progress aria-label="Sample tasks · 3/5" value="3" max="5"></progress>
 
             Now: reading the sample diff.
             """,
-            steps: [])
+            steps: ScreenshotFixtureMode.progressCardEnabled ? [
+                ProgressCardStep(step: "Collect the sample data", status: .completed),
+                ProgressCardStep(step: "Draft the summary", status: .inProgress),
+                ProgressCardStep(step: "Share the result", status: .pending),
+            ] : [])
     }
 
     func acquireReactionsRouteLease() async -> OpenClawChatReactionsRouteLease? {
@@ -276,7 +299,21 @@ struct LocalFixtureChatTransport: OpenClawChatTransport {
             })
     }
 
+    func acquireModelSignInContext(agentID: String?) async -> OpenClawChatModelSignInContext? {
+        guard self.fixture.sessionIDPrefix == "screenshot-fixture",
+              ScreenshotFixtureMode.modelSignInScenario != nil
+        else { return nil }
+        return OpenClawChatModelSignInContext(
+            agentID: agentID ?? self.fixture.defaultAgentID,
+            request: { method, _ in
+                guard method == "models.authStatus" else { throw CancellationError() }
+                return Data(#"{"providers":[],"providerCapabilities":[]}"#.utf8)
+            },
+            isCurrent: { true })
+    }
+
     func listModels(agentID _: String?) async throws -> [OpenClawChatModelChoice] {
+        if ScreenshotFixtureMode.modelSignInScenario == "empty" { return [] }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-unavailable-model-fixture") {
             return try OpenClawChatGatewayPayloadCodec.decodeModelChoices(Data(#"""
             {"models":[
@@ -502,7 +539,8 @@ private actor LocalFixtureChatStore {
     }
 
     func history(sessionKey: String) throws -> OpenClawChatHistoryPayload {
-        let owner = ScreenshotFixtureMode.progressBarEnabled ? self.fixture.defaultAgentID : nil
+        let owner = ScreenshotFixtureMode.progressCardEnabled || ScreenshotFixtureMode.progressBarEnabled
+            ? self.fixture.defaultAgentID : nil
         let normalizedSessionKey = Self.normalizedSessionKey(sessionKey, fallback: self.fixture.sessionKey)
         var startupSnapshot: OpenClawChatInFlightRun?
         if ProcessInfo.processInfo.arguments.contains("--openclaw-startup-status-fixture"),
@@ -516,6 +554,11 @@ private actor LocalFixtureChatStore {
             ]])
             let events = try JSONDecoder().decode([OpenClawAgentEventPayload].self, from: wire)
             startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: events)
+        }
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture"),
+           let runID = self.activeRunID
+        {
+            startupSnapshot = OpenClawChatInFlightRun(runId: runID, text: "", events: self.externalRunEvents)
         }
         let historyMessages: [OpenClawChatMessage] = if self.fixture.sessionIDPrefix == "screenshot-fixture",
                                                         ProcessInfo.processInfo.arguments
@@ -535,6 +578,7 @@ private actor LocalFixtureChatStore {
             sessionId: "\(self.fixture.sessionIDPrefix)-\(normalizedSessionKey)",
             messages: JSONDecoder().decode([AnyCodable].self, from: JSONEncoder().encode(historyMessages)),
             thinkingLevel: self.thinkingLevel,
+            // The progress card is read only for a session whose owner the history names.
             sessionInfo: OpenClawChatSessionInfo(
                 hasActiveRun: self.activeRunID != nil,
                 activeRunIds: self.activeRunID.map { [$0] },
@@ -689,8 +733,52 @@ private actor LocalFixtureChatStore {
         // Chat and its session sidebar independently subscribe to the fixture transport.
         let id = UUID()
         self.eventContinuations[id] = continuation
+        if self.fixture.sessionIDPrefix == "screenshot-fixture",
+           ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture"),
+           !self.externalRunStarted
+        {
+            self.externalRunStarted = true
+            Task {
+                try? await Task.sleep(for: .seconds(4))
+                self.publishExternalRunStatus()
+                try? await Task.sleep(for: .seconds(8))
+                self.publishExternalRunTool()
+            }
+        }
         continuation.onTermination = { [weak self] _ in
             Task { await self?.removeEventContinuation(id) }
+        }
+    }
+
+    private var externalRunStarted = false
+    private var externalRunEvents: [OpenClawAgentEventPayload] = []
+
+    private func publishExternalRunStatus() {
+        self.activeRunID = "fixture-external-run"
+        let wire = Data(#"""
+        {"runId":"fixture-external-run","sessionKey":"main","state":"status",
+         "phase":"starting_model","seq":1}
+        """#.utf8)
+        if let event = try? JSONDecoder().decode(OpenClawChatEventPayload.self, from: wire) {
+            let statusWire = Data(#"""
+            {"runId":"fixture-external-run","seq":1,"stream":"run_status","data":{"phase":"starting_model"}}
+            """#.utf8)
+            if let status = try? JSONDecoder().decode(OpenClawAgentEventPayload.self, from: statusWire) {
+                self.externalRunEvents.append(status)
+            }
+            self.publish(.chat(event))
+        }
+    }
+
+    private func publishExternalRunTool() {
+        let wire = Data(#"""
+        {"runId":"fixture-external-run","seq":2,"stream":"tool",
+         "data":{"phase":"start","name":"read","toolCallId":"external-read",
+                 "args":{"path":"external-fixture.txt"}}}
+        """#.utf8)
+        if let event = try? JSONDecoder().decode(OpenClawAgentEventPayload.self, from: wire) {
+            self.externalRunEvents.append(event)
+            self.publish(.agent(event))
         }
     }
 
@@ -927,6 +1015,13 @@ private actor LocalFixtureChatStore {
 
     private static func seedMessages(fixture: LocalChatFixture) -> [OpenClawChatMessage] {
         let now = Date().timeIntervalSince1970 * 1000
+        if ProcessInfo.processInfo.arguments.contains("--openclaw-external-run-fixture") {
+            return [Self.message(
+                role: "user",
+                text: "Read external-fixture.txt. Sent from another client.",
+                timestamp: now,
+                transcriptMessageID: "fixture-external-user")]
+        }
         if ProcessInfo.processInfo.arguments.contains("--openclaw-system-notices-fixture") {
             return [
                 OpenClawChatMessage(

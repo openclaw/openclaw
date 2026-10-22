@@ -1,6 +1,6 @@
 import { readSessionMessageIdentity } from "@openclaw/gateway-client/browser";
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import type { MessageGroup } from "../../lib/chat/chat-types.ts";
+import type { MessageGroup, SystemEventGroup } from "../../lib/chat/chat-types.ts";
 import {
   assistantMessageCanOwnTurnActions,
   assistantMessageIsInterrupted,
@@ -19,6 +19,7 @@ import {
   chatItemStartsDisplayTurn,
   chatItemStartsUserTurn,
   hasForwardedSource,
+  assistantGroupIsIndependentBoundary,
 } from "./chat-turn-boundary.ts";
 
 type AgentRunFramePart =
@@ -42,7 +43,9 @@ export type AgentRunFrameRenderItem = {
 
 type AgentRunFrameInput = CompletedTurnRenderItem | ActivityRunRenderItem;
 
-export function chatItemGroups(item: AgentRunFrameInput | AgentRunFrameRenderItem): MessageGroup[] {
+export function chatItemGroups(
+  item: AgentRunFrameInput | AgentRunFrameRenderItem | SystemEventGroup,
+): MessageGroup[] {
   if (item.kind === "agent-run-frame") {
     return item.parts.flatMap(chatItemGroups);
   }
@@ -274,7 +277,12 @@ export function coalesceAgentRunFrames(
       presentationBoundaryKey = boundaryGroup.key;
       segmentId = undefined;
       const nextBoundaryId = groupBoundaryId(boundaryGroup);
-      if (boundaryGroup.role === "user" || hasForwardedSource(boundaryGroup) || !nextBoundaryId) {
+      if (
+        boundaryGroup.role === "user" ||
+        hasForwardedSource(boundaryGroup) ||
+        assistantGroupIsIndependentBoundary(boundaryGroup) ||
+        !nextBoundaryId
+      ) {
         result.push(item);
         boundaryId = nextBoundaryId;
         continue;

@@ -7,7 +7,7 @@ import type {
   AzureResponsesTextContentPart,
   AzureResponsesTextDeltaEvent,
 } from "../providers/openai-responses-stream-compat.js";
-import type { Usage } from "../types.js";
+import type { StreamOptions, Usage } from "../types.js";
 import type { FirstStreamEventInternalOptions } from "../utils/stream-first-event-timeout.js";
 import type { OpenAIResponsesReasoningReplayMetadata } from "./openai-responses-contracts.js";
 
@@ -46,6 +46,8 @@ export type ResponsesStreamOptions = FirstStreamEventInternalOptions & {
   canRetryIdentityConflict?: () => boolean;
   asyncToolExecution?: boolean;
   serviceTier?: ResponseCreateParamsStreaming["service_tier"];
+  /** Lifetime from the dispatched payload, not the authored config (which a route may omit). */
+  promptCacheTtl?: StreamOptions["promptCacheTtl"];
   onServiceTier?: (
     responseTier: CompletedResponse["service_tier"],
     response: Pick<CompletedResponse, "id" | "model" | "usage">,

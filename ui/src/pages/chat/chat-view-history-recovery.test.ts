@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { setChatHistoryRetrying } from "./chat-history-state.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { renderChatView, renderChatInto, getComposerTextarea } from "./chat-view.test-helpers.ts";
 import {
   installTranscriptDomMocks,

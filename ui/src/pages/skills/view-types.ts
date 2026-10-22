@@ -1,12 +1,21 @@
 import type { JSX } from "@solidjs/web";
 import type { SkillLibraryEntry } from "../../../../packages/gateway-protocol/src/index.ts";
-import type { SkillsState } from "../../lib/skills/index.ts";
+import type { ClawHubSkillDetail, SkillsState } from "../../lib/skills/index.ts";
 
 export type SkillsStatusFilter = "all" | "ready" | "needs-setup" | "disabled";
 export type SkillDetailTab = "overview" | "card";
 
+export type SkillsPresentation = {
+  skillsFilter: string;
+  skillsStatusFilter: SkillsStatusFilter;
+  skillsDetailKey: string | null;
+  skillsDetailTab: SkillDetailTab;
+  clawhubSearchQuery: string;
+};
+
 export type SkillsProps = {
-  state: SkillsState;
+  state: SkillsState & SkillsPresentation;
+  readClawHubDetail: () => ClawHubSkillDetail | null;
   surface?: "discovery" | "settings";
   libraryEntries?: SkillLibraryEntry[];
   onLibraryOpen?: (skillId: string) => void;

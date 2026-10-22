@@ -3,11 +3,11 @@ import type { SessionCapability } from "../lib/sessions/index.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
 import type { SidebarSessionStatusFilter } from "./app-sidebar-session-types.ts";
-import type { SessionDataController } from "./session-data-controller.ts";
+import type { SessionDataOwner } from "./session-data.ts";
 
 export function projectSidebarArchiveVisibility(input: {
   sessionData: Pick<
-    SessionDataController,
+    SessionDataOwner,
     | "childSessionRowsByParent"
     | "loadedChildSessionKeys"
     | "loadingChildSessionKeys"

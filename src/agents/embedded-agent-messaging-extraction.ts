@@ -1,4 +1,3 @@
-/** Extracts message delivery evidence from embedded-agent tool calls and results. */
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -155,72 +154,6 @@ function readSourceReplyPayload(
   return Object.keys(payload).length > 0 ? payload : undefined;
 }
 
-function resolveMessagingToolThreadEvidence(params: {
-  providerId: string;
-  to: string;
-  accountId?: string;
-  threadId?: string;
-  replyToId?: string;
-  allowImplicitThread: boolean;
-  threadSuppressed: boolean;
-  options?: Parameters<typeof extractMessagingToolSend>[2];
-}): Pick<MessagingToolSend, "threadId" | "threadImplicit" | "threadSuppressed"> {
-  const threading = getChannelPlugin(params.providerId)?.threading;
-  const autoThreadResolver = params.allowImplicitThread
-    ? threading?.resolveAutoThreadId
-    : undefined;
-  const replyTransport = params.replyToId
-    ? threading?.resolveReplyTransport?.({
-        cfg: params.options?.config ?? {},
-        accountId: params.accountId,
-        threadId: params.threadId,
-        replyToId: params.replyToId,
-      })
-    : undefined;
-  const transportThreadId = normalizeOptionalStringifiedId(replyTransport?.threadId);
-  const replyToThreadId =
-    replyTransport?.threadId === null
-      ? normalizeOptionalString(replyTransport.replyToId)
-      : undefined;
-  const explicitThreadId = transportThreadId ?? replyToThreadId ?? params.threadId;
-  const currentChannelId = normalizeOptionalString(params.options?.currentChannelId);
-  const currentMessagingTarget = normalizeOptionalString(params.options?.currentMessagingTarget);
-  const currentThreadId = normalizeOptionalString(params.options?.currentThreadId);
-  const replyToMode = params.options?.replyToMode ?? (currentThreadId ? "all" : undefined);
-  const canResolveCurrentThread = Boolean(
-    (currentChannelId || currentMessagingTarget) && currentThreadId,
-  );
-  const resolvedCurrentThreadId =
-    !explicitThreadId && !params.threadSuppressed && autoThreadResolver && canResolveCurrentThread
-      ? autoThreadResolver({
-          cfg: params.options?.config ?? {},
-          accountId: params.accountId,
-          to: params.to,
-          replyToId: params.replyToId,
-          toolContext: {
-            currentChannelId,
-            currentMessagingTarget,
-            currentThreadTs: currentThreadId,
-            currentMessageId: params.options?.currentMessageId,
-            replyToMode,
-            hasRepliedRef: params.options?.hasRepliedRef,
-          },
-        })
-      : undefined;
-  const threadImplicit =
-    !explicitThreadId &&
-    !params.threadSuppressed &&
-    Boolean(autoThreadResolver) &&
-    (!canResolveCurrentThread || Boolean(resolvedCurrentThreadId));
-  return {
-    ...((explicitThreadId ?? resolvedCurrentThreadId)
-      ? { threadId: explicitThreadId ?? resolvedCurrentThreadId }
-      : {}),
-    ...(threadImplicit ? { threadImplicit: true } : {}),
-    ...(params.threadSuppressed ? { threadSuppressed: true } : {}),
-  };
-}
-
 export function extractMessagingToolSend(
   toolName: string,
   args: Record<string, unknown>,
@@ -326,29 +259,76 @@ export function extractMessagingToolSend(
       nativeReplyToMode !== undefined &&
       (!nativeSingleUseMode || options?.hasRepliedRef !== undefined);
   }
-  return to
-    ? {
-        tool: toolName,
-        provider,
-        accountId: resolvedAccountId,
-        to,
-        ...(providerId
-          ? resolveMessagingToolThreadEvidence({
-              providerId,
-              to,
-              accountId: resolvedAccountId,
-              threadId,
-              replyToId: outboundReplyToId,
-              allowImplicitThread,
-              threadSuppressed,
-              options,
-            })
-          : {
-              ...(threadId ? { threadId } : {}),
-              ...(threadSuppressed ? { threadSuppressed: true } : {}),
-            }),
-      }
-    : undefined;
+  if (!to) {
+    return undefined;
+  }
+  let threadEvidence: Pick<MessagingToolSend, "threadId" | "threadImplicit" | "threadSuppressed">;
+  if (providerId) {
+    const threading = getChannelPlugin(providerId)?.threading;
+    const autoThreadResolver = allowImplicitThread ? threading?.resolveAutoThreadId : undefined;
+    const replyTransport = outboundReplyToId
+      ? threading?.resolveReplyTransport?.({
+          cfg: options?.config ?? {},
+          accountId: resolvedAccountId,
+          threadId,
+          replyToId: outboundReplyToId,
+        })
+      : undefined;
+    const transportThreadId = normalizeOptionalStringifiedId(replyTransport?.threadId);
+    const replyToThreadId =
+      replyTransport?.threadId === null
+        ? normalizeOptionalString(replyTransport.replyToId)
+        : undefined;
+    const explicitThreadId = transportThreadId ?? replyToThreadId ?? threadId;
+    const currentChannelId = normalizeOptionalString(options?.currentChannelId);
+    const currentMessagingTarget = normalizeOptionalString(options?.currentMessagingTarget);
+    const currentThreadId = normalizeOptionalString(options?.currentThreadId);
+    const replyToMode = options?.replyToMode ?? (currentThreadId ? "all" : undefined);
+    const canResolveCurrentThread = Boolean(
+      (currentChannelId || currentMessagingTarget) && currentThreadId,
+    );
+    const resolvedCurrentThreadId =
+      !explicitThreadId && !threadSuppressed && autoThreadResolver && canResolveCurrentThread
+        ? autoThreadResolver({
+            cfg: options?.config ?? {},
+            accountId: resolvedAccountId,
+            to,
+            replyToId: outboundReplyToId,
+            toolContext: {
+              currentChannelId,
+              currentMessagingTarget,
+              currentThreadTs: currentThreadId,
+              currentMessageId: options?.currentMessageId,
+              replyToMode,
+              hasRepliedRef: options?.hasRepliedRef,
+            },
+          })
+        : undefined;
+    const threadImplicit =
+      !explicitThreadId &&
+      !threadSuppressed &&
+      Boolean(autoThreadResolver) &&
+      (!canResolveCurrentThread || Boolean(resolvedCurrentThreadId));
+    threadEvidence = {
+      ...((explicitThreadId ?? resolvedCurrentThreadId)
+        ? { threadId: explicitThreadId ?? resolvedCurrentThreadId }
+        : {}),
+      ...(threadImplicit ? { threadImplicit: true } : {}),
+      ...(threadSuppressed ? { threadSuppressed: true } : {}),
+    };
+  } else {
+    threadEvidence = {
+      ...(threadId ? { threadId } : {}),
+      ...(threadSuppressed ? { threadSuppressed: true } : {}),
+    };
+  }
+  return {
+    tool: toolName,
+    provider,
+    accountId: resolvedAccountId,
+    to,
+    ...threadEvidence,
+  };
 }
 
 /** Reconciles pending send evidence with the provider's successful action result. */

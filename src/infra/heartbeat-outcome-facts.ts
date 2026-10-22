@@ -30,9 +30,8 @@ sessionChanges.subscribeFacts((change) => {
   const changed = change.facts;
   if (
     !change.factsInvalidated &&
-    changed &&
-    changed.kind !== "removed" &&
-    !((changed.kind === "entry" || changed.kind === "replacement") && changed.lifecycleChanged)
+    changed?.kind !== "removed" &&
+    !((changed?.kind === "entry" || changed?.kind === "replacement") && changed.lifecycleChanged)
   ) {
     return;
   }

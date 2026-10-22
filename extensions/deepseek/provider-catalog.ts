@@ -5,6 +5,6 @@ export function buildDeepSeekProvider(): ModelProviderConfig {
   return {
     baseUrl: DEEPSEEK_BASE_URL,
     api: "openai-completions",
-    models: structuredClone(DEEPSEEK_MODEL_CATALOG),
+    models: DEEPSEEK_MODEL_CATALOG,
   };
 }

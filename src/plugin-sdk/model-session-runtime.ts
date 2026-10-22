@@ -1,6 +1,3 @@
-/**
- * Runtime SDK subpath for model overrides and agent concurrency session helpers.
- */
 import {
   applySessionModelSelectionInternal,
   type ApplySessionModelSelectionParams,

@@ -1,8 +1,7 @@
-// Manages compile-cache respawn behavior for the CLI entrypoint.
-import { spawn } from "node:child_process";
 import { getCompileCacheDir } from "node:module";
 import path from "node:path";
 import process from "node:process";
+import { resolveOpenClawCliInvocation, resolveOpenClawCliRespawn } from "../cli-invocation.mjs";
 import {
   enableOpenClawCompileCache as enableInstallCompileCache,
   resolveOpenClawCompileCacheDirectory,
@@ -14,7 +13,6 @@ import {
   isTerminalInteractiveRespawnArgv,
   shouldKeepNativeHookRelayInProcess,
 } from "./cli/respawn-policy.js";
-import { attachChildProcessBridge } from "./process/child-process-bridge.js";
 import { runRespawnChildWithSignalBridge } from "./process/respawn-child-runner.js";
 
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
@@ -71,9 +69,11 @@ function buildOpenClawCompileCacheRespawnPlan(params: {
   };
   delete nextEnv.NODE_COMPILE_CACHE;
   return {
-    command: process.execPath,
-    args: [...process.execArgv, params.currentFile, ...argv.slice(2)],
-    env: nextEnv,
+    ...resolveOpenClawCliRespawn({
+      entryPath: params.currentFile,
+      args: argv.slice(2),
+      env: nextEnv,
+    }),
     detachForProcessTree: platform !== "win32" && !isTerminalInteractiveRespawnArgv(argv),
   };
 }
@@ -94,12 +94,12 @@ export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
       foregroundGateway: true,
     });
     if (env) {
-      const args = [...process.execArgv, params.currentFile, ...process.argv.slice(2)];
+      const { command, args } = resolveOpenClawCliInvocation({ entryPath: params.currentFile });
       if (process.platform !== "win32" && process.execve) {
-        process.execve(process.execPath, [process.execPath, ...args], env);
+        process.execve(command, [command, ...args], env);
       }
       const { runRespawnedChild } = await import("../node-runtime-recovery.mjs");
-      return runRespawnedChild(process.execPath, args, env);
+      return runRespawnedChild(resolveOpenClawCliRespawn({ entryPath: params.currentFile, env }));
     }
   }
   const plan = buildOpenClawCompileCacheRespawnPlan({
@@ -120,7 +120,6 @@ export async function respawnWithoutOpenClawCompileCacheIfNeeded(params: {
     args: plan.args,
     env: plan.env,
     detachForProcessTree: plan.detachForProcessTree,
-    runtime: { spawn, attachChildProcessBridge },
     onError: (error) =>
       writeError(
         `[openclaw] Failed to respawn CLI without compile cache: ${

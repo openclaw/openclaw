@@ -26,6 +26,10 @@ export { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js"
 export { withTempDir } from "../test-utils/temp-dir.js";
 export { createStagedInputOwnershipFixture } from "../media/staged-inputs.test-support.js";
 export { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+export {
+  runQaGatewayFixture,
+  stopQaGatewayFixture,
+} from "../../test/helpers/qa-gateway-cleanup.js";
 export { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 export { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 export { useFrozenTime, useRealTime } from "../test-utils/frozen-time.js";

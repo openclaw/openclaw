@@ -399,7 +399,6 @@ describe("mantis before/after runtime", () => {
           outputRoot: {
             exists: outputRoot.exists.bind(outputRoot),
             mkdir: outputRoot.mkdir.bind(outputRoot),
-            stat: outputRoot.stat.bind(outputRoot),
             async move(from, to, options) {
               await outputRoot.move(from, to, options);
               if (
@@ -482,7 +481,6 @@ describe("mantis before/after runtime", () => {
             await outputRoot.move(from, to, options);
           }),
           remove: outputRoot.remove.bind(outputRoot),
-          stat: outputRoot.stat.bind(outputRoot),
         },
         runId: "test",
         staging,

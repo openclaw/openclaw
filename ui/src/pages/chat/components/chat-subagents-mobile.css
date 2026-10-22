@@ -1,0 +1,288 @@
+.chat-subagents-mobile {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  padding: 12px 14px 24px;
+  scroll-padding-block: 12px 24px;
+  color: var(--text);
+}
+
+.chat-subagents-mobile__group {
+  margin: 0 0 20px;
+}
+
+.chat-subagents-mobile__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  margin: 0;
+  padding: 0 12px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-subagents-mobile__row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+}
+
+.chat-subagents-mobile__row + .chat-subagents-mobile__row::before {
+  position: absolute;
+  top: 0;
+  right: 12px;
+  left: 49px;
+  height: 1px;
+  background: color-mix(in srgb, var(--border-strong) 65%, transparent);
+  content: "";
+}
+
+.chat-subagents-mobile__open,
+.chat-subagents-mobile__stop,
+.chat-subagents-mobile__disclosure,
+.chat-subagents-mobile__back {
+  display: flex;
+  align-items: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: default;
+}
+
+.chat-subagents-mobile__open {
+  flex: 1;
+  gap: 12px;
+  min-width: 0;
+  min-height: 44px;
+  padding: 0;
+  text-align: left;
+  text-decoration: none;
+}
+
+.chat-subagents-mobile__list {
+  --subagent-row-surface: color-mix(in srgb, var(--popover) 95%, var(--text) 5%);
+  border-radius: 14px;
+  background: var(--subagent-row-surface);
+}
+
+.chat-subagents-mobile__open::after {
+  position: absolute;
+  inset: 0;
+  border-radius: 14px;
+  content: "";
+}
+
+.chat-subagents-mobile__indicator {
+  position: relative;
+  flex: 0 0 25px;
+  width: 25px;
+  height: 25px;
+  color: var(--muted);
+}
+
+.chat-subagents-mobile__status {
+  position: absolute;
+  right: -3px;
+  bottom: -3px;
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: var(--subagent-row-surface);
+  box-shadow: 0 0 0 2px var(--subagent-row-surface);
+}
+
+.chat-subagents-mobile__chevron {
+  pointer-events: none;
+  flex: none;
+  width: 14px;
+  height: 14px;
+  color: var(--muted);
+}
+
+.chat-subagents-mobile__indicator[data-status="finished"] {
+  color: var(--ok);
+}
+
+.chat-subagents-mobile__indicator[data-status="failed"] {
+  color: var(--danger);
+}
+
+.chat-subagents-mobile__copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.chat-subagents-mobile__copy strong {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  font-size: var(--control-ui-text-md);
+  font-weight: 500;
+  line-height: 20px;
+}
+
+.chat-subagents-mobile__copy strong[data-scrollable="true"] {
+  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+}
+
+.chat-subagents-mobile__stats,
+.chat-subagents-mobile__empty {
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  line-height: 18px;
+}
+
+.chat-subagents-mobile__stats {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 0;
+  font-variant-numeric: tabular-nums;
+}
+
+.chat-subagents-mobile__stop {
+  position: relative;
+  z-index: 1;
+  flex: none;
+  justify-content: center;
+  gap: 6px;
+  min-width: 64px;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--danger);
+  font-size: var(--control-ui-text-sm);
+  line-height: 16px;
+}
+
+.chat-subagents-mobile__stop svg {
+  width: 12px;
+  height: 12px;
+}
+
+.chat-subagents-mobile__stop svg rect {
+  fill: currentColor;
+  stroke: none;
+}
+
+.chat-subagents-mobile__stop:hover:enabled {
+  filter: brightness(1.12);
+}
+
+.chat-subagents-mobile__stop:disabled {
+  opacity: var(--rail-header-action-disabled-opacity);
+  cursor: default;
+}
+
+.chat-subagents-mobile__disclosure {
+  justify-content: flex-start;
+  gap: 6px;
+  width: 100%;
+  min-height: 44px;
+  padding: 0 12px;
+  color: var(--muted);
+}
+
+.chat-subagents-mobile__disclosure .chat-subagents-mobile__heading {
+  padding: 0;
+}
+
+.chat-subagents-mobile__disclosure svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+}
+
+.chat-subagents-mobile__header {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: var(--mobile-panel-rail-height, 40px);
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border-strong);
+  background: var(--mobile-panel-rail-background);
+  color: var(--text);
+}
+
+.chat-subagents-mobile__back {
+  flex: none;
+  justify-content: center;
+  width: var(--mobile-panel-rail-control, 32px);
+  height: var(--mobile-panel-rail-control, 32px);
+  padding: 0;
+  color: var(--muted);
+}
+
+.chat-subagents-mobile__back svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-subagents-mobile__title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--mobile-panel-rail-title-size, 14px);
+  font-weight: 500;
+  line-height: 20px;
+  white-space: nowrap;
+}
+
+.chat-subagents-mobile__title[data-scrollable="true"] {
+  mask-image: linear-gradient(to right, var(--text) calc(100% - 16px), transparent);
+}
+
+.chat-subagents-mobile__header .chat-subagents-mobile__stop {
+  border-radius: 8px;
+  background: transparent;
+}
+
+.chat-subagents-mobile__open:focus-visible,
+.chat-subagents-mobile__stop:focus-visible,
+.chat-subagents-mobile__disclosure:focus-visible,
+.chat-subagents-mobile__back:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* The child owns Back while open; the list keeps the host's return to Details. */
+.side-panel:has(.chat-subagents__detail-pane) > .chat-mobile-host__local-back {
+  display: none;
+}
+
+.chat-subagents-mobile__back:hover {
+  border-radius: 6px;
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.chat-subagents-mobile__elapsed {
+  flex: none;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.chat-subagents-mobile__row--finished {
+  padding-block: 4px;
+}
+
+.chat-subagents-mobile__indicator .subagents-desktop__spinner {
+  background: var(--subagent-row-surface);
+  box-shadow: 0 0 0 2px var(--subagent-row-surface);
+}

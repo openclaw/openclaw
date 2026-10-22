@@ -1,0 +1,8 @@
+{
+  "pluginId": "opencode",
+  "plugin": "OpenCode",
+  "icon": "opencode",
+  "key": "sessionCatalog",
+  "labelKey": "configView.sessionSources.opencode",
+  "order": 30
+}

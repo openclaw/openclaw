@@ -1,4 +1,5 @@
-import { expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import { expect, it, onTestFinished, vi } from "vitest";
 import {
   bindTestChannelParticipantAdmissionEvidence,
   createChannelParticipantAdmissionEvidence,
@@ -24,16 +25,37 @@ import {
   onAgentRuntimeEvent,
 } from "../infra/agent-events.js";
 import { claimAgentRunContext, releaseAgentRunContext } from "../infra/agent-run-registry.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
+import { bindGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
+import {
+  releaseSessionControllerClaim,
+  retireSessionControllerInput,
+} from "../sessions/session-controller.mailbox.js";
+import type { RpcSourceRef } from "../sessions/session-controller.rpc-sources.js";
+import {
+  getRpcSource,
+  getRpcSourceProjectSessionActive,
+} from "../sessions/session-controller.rpc-sources.js";
 import { emitSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import { registerChatAbortController, type ChatAbortControllerEntry } from "./chat-abort.js";
+import { waitForChatAbortTerminalPersistence } from "./chat-abort-lifecycle-internal.js";
+import { registerChatAbortController } from "./chat-abort.js";
 import {
   createChatRunState,
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
+import { prepareGatewayRunShutdown } from "./server-run-shutdown.js";
 import type { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
+
+export function waitForFast<T>(
+  callback: () => T | Promise<T>,
+  options: { timeout?: number; interval?: number } = {},
+) {
+  return vi.waitFor(callback, { interval: 1, ...options });
+}
 
 export function createSubscriptionTestFixture() {
   const warn = vi.fn();
@@ -67,7 +89,6 @@ export function createSubscriptionTestFixture() {
         toolEventRecipients: chatRunState.toolEventRecipients,
         sessionEventSubscribers: createSessionEventSubscriberRegistry(),
         sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-        chatAbortControllers: new Map(),
         restartRecoveryCandidates: new Map(),
         refreshConnectedUserProfiles: vi.fn(),
       };
@@ -76,31 +97,48 @@ export function createSubscriptionTestFixture() {
 }
 
 export function registerSubscriptionChatRun(
-  params: Parameters<typeof startGatewayEventSubscriptions>[0],
-  input: Omit<
-    Parameters<typeof registerChatAbortController>[0],
-    "chatAbortControllers" | "timeoutMs"
-  >,
+  _params: Parameters<typeof startGatewayEventSubscriptions>[0],
+  input: Omit<Parameters<typeof registerChatAbortController>[0], "timeoutMs">,
 ) {
   const registration = registerChatAbortController({
     ...input,
-    chatAbortControllers: params.chatAbortControllers,
+    target:
+      input.target ??
+      captureSessionTarget({
+        storeScope: `/synthetic/subscription/${randomUUID()}/sessions`,
+        sessionKey: input.sessionKey ?? "agent:main:subscription",
+        agentId: input.agentId,
+        incarnation: input.sessionId,
+      }),
     timeoutMs: 60_000,
   });
   if (!registration.entry) {
     throw new Error("expected registered chat abort controller");
   }
-  return { ...registration, entry: registration.entry };
+  registration.initializeTiming();
+  const entry = registration.entry;
+  onTestFinished(async () => {
+    const claim = entry.input.claim;
+    claim?.operation?.complete();
+    if (claim) {
+      releaseSessionControllerClaim(claim);
+      await Promise.allSettled([claim.settlement.promise]);
+    }
+    registration.cleanup();
+    retireSessionControllerInput(entry.input);
+    await Promise.allSettled([entry.input.settlement.promise]);
+  });
+  return { ...registration, entry };
 }
 
-export function readLifecycleState(entry: ChatAbortControllerEntry) {
+export function readLifecycleState(entry: RpcSourceRef) {
   return {
-    projectSessionActive: entry.projectSessionActive,
-    projectSessionTerminalPending: entry.projectSessionTerminalPending,
-    projectSessionTerminalObservedAt: entry.projectSessionTerminalObservedAt,
-    projectSessionTerminalPersistence: entry.projectSessionTerminalPersistence,
-    projectSessionTerminalPersisted: entry.projectSessionTerminalPersisted,
-    registrationCleanupRequested: entry.registrationCleanupRequested,
+    projectSessionActive: getRpcSourceProjectSessionActive(entry),
+    projectSessionTerminalPending: entry.adapter.projectSessionTerminalPending,
+    projectSessionTerminalObservedAt: entry.adapter.projectSessionTerminalObservedAt,
+    projectSessionTerminalPersistence: entry.adapter.projectSessionTerminalPersistence,
+    projectSessionTerminalPersisted: entry.adapter.projectSessionTerminalPersisted,
+    retirementRequested: entry.input.retirementRequested,
   };
 }
 
@@ -110,7 +148,7 @@ export function lifecycleState(
   projectSessionTerminalObservedAt?: number,
   projectSessionTerminalPersistence?: Promise<void>,
   projectSessionTerminalPersisted?: boolean,
-  registrationCleanupRequested?: boolean,
+  retirementRequested?: boolean,
 ): ReturnType<typeof readLifecycleState> {
   return {
     projectSessionActive,
@@ -118,7 +156,7 @@ export function lifecycleState(
     projectSessionTerminalObservedAt,
     projectSessionTerminalPersistence,
     projectSessionTerminalPersisted,
-    registrationCleanupRequested,
+    retirementRequested,
   };
 }
 
@@ -146,7 +184,7 @@ export function registerAuditSubscriptionTests(params: {
       stream: "lifecycle",
       data: { phase: "start", startedAt: 1_000 },
     });
-    expect(auditTestState.recorded).toBe(1);
+    expect(auditTestState.recorded).toBe(0);
     expect(hasExecutionIdentityAdmissionSink()).toBe(true);
     expect(
       enqueueExecutionIdentityContextAtAdmission(
@@ -161,6 +199,7 @@ export function registerAuditSubscriptionTests(params: {
     ).toBe(true);
     expect(auditTestState.identityRecorded).toBe(1);
     await unsubs.agentUnsub();
+    expect(auditTestState.recorded).toBe(1);
     expect(auditTestState.stopped).toBe(1);
     expect(hasExecutionIdentityAdmissionSink()).toBe(false);
   });
@@ -168,6 +207,15 @@ export function registerAuditSubscriptionTests(params: {
   it("owns channel evidence collection without retiring host routing on audit changes", async () => {
     const unsubs = start();
     const participant = { channelId: "test", participantId: "person-1" };
+    const evidenceFor = (subscription = unsubs) =>
+      createChannelParticipantAdmissionEvidence({
+        audit: subscription.channelAdmissionAudit,
+        ...participant,
+      });
+    const setPolicy = (enabled: boolean) => {
+      runtimeConfigState.value = { logging: { audit: { enabled, executionIdentity: true } } };
+      unsubs.reconcileAuditPolicy(runtimeConfigState.value);
+    };
     const context = {};
     expect(
       bindTestChannelParticipantAdmissionEvidence({
@@ -181,12 +229,8 @@ export function registerAuditSubscriptionTests(params: {
     const gateway = resolveGateway?.();
     expect(gateway?.channelAdmissionAudit).toBe(unsubs.channelAdmissionAudit);
 
-    runtimeConfigState.value = { logging: { audit: { executionIdentity: true } } };
-    unsubs.reconcileAuditPolicy(runtimeConfigState.value);
-    const evidence = createChannelParticipantAdmissionEvidence({
-      audit: unsubs.channelAdmissionAudit,
-      ...participant,
-    });
+    setPolicy(true);
+    const evidence = evidenceFor();
     expect(evidence).toBeDefined();
     unsubs.reconcileAuditPolicy(runtimeConfigState.value);
     expect(consumeChannelAdmissionEvidence(evidence)).toMatchObject({ ingressState: "present" });
@@ -201,13 +245,9 @@ export function registerAuditSubscriptionTests(params: {
     expect(recordChannelAdmissionDecision(evidence, decision)).toBe(true);
     expect(auditTestState.decisionRecorded).toBe(1);
 
-    const retired = createChannelParticipantAdmissionEvidence({
-      audit: unsubs.channelAdmissionAudit,
-      ...participant,
-    });
+    const retired = evidenceFor();
     expect(retired).toBeDefined();
-    runtimeConfigState.value = { logging: { audit: { enabled: false, executionIdentity: true } } };
-    unsubs.reconcileAuditPolicy(runtimeConfigState.value);
+    setPolicy(false);
     const disabledContext = {};
     expect(
       bindTestChannelParticipantAdmissionEvidence({
@@ -222,18 +262,14 @@ export function registerAuditSubscriptionTests(params: {
       readChannelContextGatewayContextResolver(disabledContext)?.()?.channelAdmissionAudit,
     ).toBe(unsubs.channelAdmissionAudit);
 
-    runtimeConfigState.value = { logging: { audit: { executionIdentity: true } } };
-    unsubs.reconcileAuditPolicy(runtimeConfigState.value);
+    setPolicy(true);
     expect(consumeChannelAdmissionEvidence(retired)).toMatchObject({ ingressState: "unknown" });
     expect(recordChannelAdmissionDecision(evidence, decision)).toBe(false);
     expect(auditTestState.decisionRecorded).toBe(1);
     expect(readChannelContextGatewayContextResolver(context)).toBe(resolveGateway);
     expect(resolveGateway?.()).toBe(gateway);
 
-    const beforeShutdown = createChannelParticipantAdmissionEvidence({
-      audit: unsubs.channelAdmissionAudit,
-      ...participant,
-    });
+    const beforeShutdown = evidenceFor();
     expect(beforeShutdown).toBeDefined();
     await unsubs.agentUnsub();
     unsubs.reconcileAuditPolicy({ logging: { audit: { enabled: false } } });
@@ -241,25 +277,16 @@ export function registerAuditSubscriptionTests(params: {
     expect(consumeChannelAdmissionEvidence(beforeShutdown)).toMatchObject({
       ingressState: "unknown",
     });
-    expect(
-      createChannelParticipantAdmissionEvidence({
-        audit: unsubs.channelAdmissionAudit,
-        ...participant,
-      }),
-    ).toBeUndefined();
+    expect(evidenceFor()).toBeUndefined();
 
-    unsubs.heartbeatUnsub();
+    heartbeatNotifications.onEvent = () => {};
     unsubs.transcriptUnsub();
     unsubs.lifecycleUnsub();
     const restarted = start();
-    expect(
-      consumeChannelAdmissionEvidence(
-        createChannelParticipantAdmissionEvidence({
-          audit: restarted.channelAdmissionAudit,
-          ...participant,
-        }),
-      ),
-    ).toMatchObject({ ingressState: "present", invoker: { state: "present" } });
+    expect(consumeChannelAdmissionEvidence(evidenceFor(restarted))).toMatchObject({
+      ingressState: "present",
+      invoker: { state: "present" },
+    });
     expect(consumeChannelAdmissionEvidence(beforeShutdown)).toMatchObject({
       ingressState: "unknown",
     });
@@ -268,41 +295,29 @@ export function registerAuditSubscriptionTests(params: {
   it("applies audit policy changes through the existing event subscriptions", async () => {
     runtimeConfigState.value = { logging: { audit: { enabled: false } } };
     const unsubs = start();
-    const steps: Array<{
-      audit: NonNullable<NonNullable<OpenClawConfig["logging"]>["audit"]>;
-      events: number;
-      messages: number;
-      identities: number;
-    }> = [
-      {
-        audit: { enabled: false, messages: "all", executionIdentity: true },
-        events: 0,
-        messages: 0,
-        identities: 0,
-      },
-      { audit: {}, events: 1, messages: 0, identities: 0 },
-      {
-        audit: { messages: "direct", executionIdentity: true },
-        events: 2,
-        messages: 1,
-        identities: 1,
-      },
-      { audit: { messages: "all" }, events: 3, messages: 3, identities: 1 },
-      {
-        audit: { enabled: false, messages: "all", executionIdentity: true },
-        events: 3,
-        messages: 3,
-        identities: 1,
-      },
+    const disabled = { enabled: false, messages: "all", executionIdentity: true } as const;
+    const steps: Array<
+      [NonNullable<NonNullable<OpenClawConfig["logging"]>["audit"]>, number, number, number]
+    > = [
+      [disabled, 0, 0, 0],
+      [{}, 2, 0, 0],
+      [{ messages: "direct", executionIdentity: true }, 4, 1, 1],
+      [{ messages: "all" }, 6, 3, 1],
+      [disabled, 6, 3, 1],
     ];
-    for (const [index, step] of steps.entries()) {
-      runtimeConfigState.value = { logging: { audit: step.audit } };
+    for (const [index, [audit, recorded, messages, identityRecorded]] of steps.entries()) {
+      runtimeConfigState.value = { logging: { audit } };
       unsubs.reconcileAuditPolicy(runtimeConfigState.value);
       const runId = `live-audit-${index}`;
       emitAgentAuditEvent({
         runId,
         stream: "lifecycle",
         data: { phase: "start", startedAt: 1_000 },
+      });
+      emitAgentAuditEvent({
+        runId,
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
       });
       for (const conversationKind of ["direct", "group"] as const) {
         emitTrustedMessageAuditEvent({
@@ -330,9 +345,9 @@ export function registerAuditSubscriptionTests(params: {
       expect(auditTestState).toMatchObject({
         created: 1,
         stopped: 0,
-        recorded: step.events,
-        messages: step.messages,
-        identityRecorded: step.identities,
+        recorded,
+        messages,
+        identityRecorded,
       });
     }
     await unsubs.agentUnsub();
@@ -361,7 +376,7 @@ export function registerAuditSubscriptionTests(params: {
       stream: "lifecycle",
       data: { phase: "start", startedAt: 2_000 },
     });
-    expect(auditTestState.recorded).toBe(1);
+    expect(auditTestState.recorded).toBe(0);
     runtimeConfigState.value = { logging: { audit: { enabled: false } } };
     emitAgentAuditEvent({
       runId: "disabled-again",
@@ -369,7 +384,7 @@ export function registerAuditSubscriptionTests(params: {
       data: { phase: "start", startedAt: 3_000 },
     });
     expect(auditTestState.recorded).toBe(1);
-    await vi.waitFor(() => expect(warn).toHaveBeenCalledOnce(), { interval: 1 });
+    await waitForFast(() => expect(warn).toHaveBeenCalledOnce());
     warn.mockClear();
     await unsubs.agentUnsub();
     expect(auditTestState.stopped).toBe(1);
@@ -378,8 +393,102 @@ export function registerAuditSubscriptionTests(params: {
 
 export function registerSubscriptionRegistrationTests(
   start: typeof startGatewayEventSubscriptions,
+  prepareTerminalWrite: (terminal: Promise<void>) => void,
 ) {
   const { createParams } = createSubscriptionTestFixture();
+  it.each(["fulfilled", "rejected"] as const)(
+    "joins the subscription-owned terminal write during registration cleanup and restart (%s)",
+    async (outcome) => {
+      const params = createParams();
+      const runId = "terminal-cleanup-restart";
+      const sessionKey = "agent:main:main";
+      const sessionId = "terminal-cleanup-session";
+      const lifecycleGeneration = getAgentEventLifecycleGeneration();
+      const resolveGatewayContext = () => undefined;
+      const registration = registerSubscriptionChatRun(params, {
+        runId,
+        sessionId,
+        sessionKey,
+        lifecycleGeneration,
+      });
+      bindGatewayContextResolver(registration.entry.input, resolveGatewayContext);
+      const terminal = createDeferred();
+      const failure = new Error("terminal write failed");
+      prepareTerminalWrite(terminal.promise);
+      const unsubs = start({ ...params, resolveGatewayContext });
+      const marker =
+        vi.fn<
+          NonNullable<
+            Parameters<typeof prepareGatewayRunShutdown>[0]["markMainSessionsAbortedForRestart"]
+          >
+        >();
+      try {
+        emitAgentEvent({
+          runId,
+          stream: "lifecycle",
+          sessionKey,
+          sessionId,
+          lifecycleGeneration,
+          data: { phase: "end", endedAt: Date.now() },
+        });
+        const persistence = registration.entry.adapter.projectSessionTerminalPersistence;
+        expect(persistence).toBeInstanceOf(Promise);
+        registration.cleanup();
+        expect(getRpcSource(runId)).toBe(registration.entry);
+        const shutdown = prepareGatewayRunShutdown({
+          ...params,
+          resolveGatewayContext,
+          removeChatRun: (chatSessionId, clientRunId, key) =>
+            params.chatRunState.registry.remove(chatSessionId, clientRunId, key),
+          getPendingReplyCount: () => 0,
+          timeoutMs: 0,
+          warnings: [],
+          markMainSessionsAbortedForRestart: marker,
+        });
+        expect(marker).not.toHaveBeenCalled();
+        if (outcome === "fulfilled") {
+          terminal.resolve();
+        } else {
+          terminal.reject(failure);
+        }
+        const { released } = await shutdown;
+        if (outcome === "fulfilled") {
+          await released;
+        } else {
+          // The terminal owner below asserts failure; shutdown still joins physical settlement.
+          await Promise.allSettled([released]);
+        }
+        await unsubs.agentUnsub();
+        expect(getRpcSource(runId)).toBeUndefined();
+        expect(registration.entry.adapter.projectSessionTerminalPersisted).toBe(
+          outcome === "fulfilled",
+        );
+        expect(marker).toHaveBeenCalledOnce();
+        const recovery = marker.mock.calls[0]?.[0];
+        expect(recovery?.activeRuns.filter(recovery.isActiveRun)).toEqual(
+          outcome === "fulfilled"
+            ? []
+            : [
+                expect.objectContaining({
+                  runId,
+                  sessionKey,
+                  sessionId,
+                }),
+              ],
+        );
+        if (outcome === "rejected") {
+          await expect(waitForChatAbortTerminalPersistence(registration.entry)).rejects.toBe(
+            failure,
+          );
+        }
+      } finally {
+        terminal.resolve();
+        await unsubs.agentUnsub();
+        registration.cleanup();
+      }
+    },
+  );
+
   it("does not mark a reentrant replacement terminal from the previous claim", () => {
     const params = createParams();
     const runId = "replaced-terminal-claim";
@@ -409,8 +518,8 @@ export function registerSubscriptionRegistrationTests(
     try {
       emitAgentEventForOwner({ runId, stream: "lifecycle", data: { phase: "end" } }, originalClaim);
       expect(replacementClaim).toBeTruthy();
-      expect(registration.entry.terminalOutcomeObserved).toBeUndefined();
-      expect(readLifecycleState(registration.entry)).toEqual(lifecycleState(true));
+      expect(registration.entry.adapter.terminalOutcomeObserved).toBeUndefined();
+      expect(readLifecycleState(registration.entry)).toEqual(lifecycleState(undefined));
     } finally {
       removeListener();
       registration.cleanup();
@@ -430,8 +539,8 @@ export function registerSubscriptionRegistrationTests(
     });
     try {
       await unsubs.agentUnsub();
-      expect(readLifecycleState(registration.entry)).toEqual(lifecycleState(true));
-      expect(registration.entry.terminalOutcomeObserved).toBeUndefined();
+      expect(readLifecycleState(registration.entry)).toEqual(lifecycleState(undefined));
+      expect(registration.entry.adapter.terminalOutcomeObserved).toBeUndefined();
     } finally {
       registration.cleanup();
     }

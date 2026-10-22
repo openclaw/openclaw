@@ -212,7 +212,6 @@ export async function resolveSlackSessionEventRoutingContext(
             client: eventScope?.client ?? ctx.app.client,
             channelId: message.channel,
             threadTs,
-            userId: message.user,
           }));
     allowDirectParent = !assistantThread && !managedThread;
     owner = await readOwner();

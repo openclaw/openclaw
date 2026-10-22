@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { isDeepStrictEqual } from "node:util";
 import {
   sessionRowChangeSource,
   type SessionRowChange,
@@ -23,6 +24,7 @@ import {
 } from "./session-accessor.sqlite-entry-cache.types.js";
 import {
   projectSessionEntryPredicateChange,
+  projectSessionEntryPredicatePostimage,
   publishRetainedSessionEntryPredicate,
   publishRetainedSessionGeneration,
   recordAcquiringSessionEntry,
@@ -32,6 +34,7 @@ import {
   type PreparedSessionSharingRead,
   type SessionSharingRetentionRequest,
 } from "./session-accessor.sqlite-sharing-acquisition.js";
+import type { SessionEntryProjection } from "./session-entry-snapshot-values.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export const preparedSharingReads = resolveGlobalSingleton(
@@ -46,6 +49,40 @@ const unknownSharingAuthorities = resolveGlobalSet<string>(
   Symbol.for("openclaw.unknownSessionSharingAuthorities"),
   "close-and-restart",
 );
+
+/** ID selection cannot pass a worker commit whose identity facts are not yet published. */
+export function isSessionIdSelectionPublished(params: {
+  databaseIdentity: string;
+  sessionId: string;
+  sessionKey?: string;
+}): boolean {
+  const prefix = `${params.databaseIdentity}\0`;
+  for (const key of unknownSharingAuthorities) {
+    if (key.startsWith(prefix)) {
+      return false;
+    }
+  }
+  for (const [key, publications] of pendingSessionEntryPublications) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    const sessionKey = key.slice(prefix.length);
+    for (const publication of publications) {
+      if (
+        !publication.settled &&
+        !publication.superseded.has(sessionKey) &&
+        !publication.generationUnchanged.has(sessionKey) &&
+        (sessionKey === params.sessionKey ||
+          !publication.entryPostimages?.has(sessionKey) ||
+          publication.entryPostimages.get(sessionKey)?.sessionId?.trim() ===
+            params.sessionId.trim())
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
 
 /** A fresh snapshot cannot settle a write whose outcome the authority owner lost. */
 export function markSessionSharingAuthorityUnknown(
@@ -114,6 +151,7 @@ export function recordCommittedSessionMetadataPublication(
   sessionKey: string,
   change?: SessionRowFacts,
   entry?: SessionEntry,
+  fullEntry?: SessionEntry,
 ): void {
   for (const read of retainedSharingReads(database, sessionKey) ?? []) {
     const postimage =
@@ -121,7 +159,9 @@ export function recordCommittedSessionMetadataPublication(
       (read.predicate && change
         ? projectSessionEntryPredicateChange(read.predicate, change)
         : undefined);
-    publishRetainedSessionEntryPredicate(read, postimage, postimage !== undefined);
+    publishRetainedSessionEntryPredicate(read, postimage, postimage !== undefined, {
+      fullEntry: entry ? fullEntry : postimage,
+    });
   }
   recordCommittedSessionEntryPublication(database, sessionKey);
 }
@@ -217,10 +257,11 @@ export function publishRetainedSessionEntryChange(
   previousIdentity: Pick<SessionSharingEntry, "sessionId" | "lifecycleRevision"> | undefined,
   known: boolean,
   metadataEntry?: SessionEntry,
+  fullEntry?: SessionEntry,
 ): void {
   recordCommittedSessionEntryPublication(database, sessionKey);
   for (const read of retainedSharingReads(database, sessionKey) ?? []) {
-    publishRetainedSessionEntryPredicate(read, metadataEntry, known);
+    publishRetainedSessionEntryPredicate(read, metadataEntry, known, { fullEntry });
     recordAcquiringSessionEntry(read.acquisition, entry, previousIdentity);
     publishRetainedSessionGeneration(read, entry, known);
     const previous = read.facts;
@@ -228,7 +269,7 @@ export function publishRetainedSessionEntryChange(
       entry &&
       previous?.entry &&
       previous.entry.sessionId === entry.sessionId &&
-      previous.entry.lifecycleRevision === entry.lifecycleRevision
+      (read.followLifecycle || previous.entry.lifecycleRevision === entry.lifecycleRevision)
         ? { entry, membership: previous.membership }
         : undefined;
   }
@@ -239,6 +280,7 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
   const key = `${params.databaseIdentity}\0${params.sessionKey}`;
   const initial = "acquiring" in params ? undefined : params;
   const read: PreparedSessionSharingRead = {
+    followLifecycle: params.followLifecycle,
     predicate: params.predicate,
     pending: new Set(),
     facts: initial && {
@@ -253,26 +295,44 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
   reads.add(read);
   preparedSharingReads.set(key, reads);
   let active = true;
-  const pending = (membership: boolean, staged = read.pending) =>
-    staged.size > 0 ||
-    [...(pendingSessionEntryPublications.get(key) ?? [])].some(
-      (publication) =>
-        !publication.settled &&
-        ((!publication.superseded.has(params.sessionKey) &&
-          (!membership || !publication.sharingUnchanged.has(params.sessionKey))) ||
-          (membership && publication.membershipInvalidated.has(params.sessionKey))),
-    );
-  // Generation readers compare only sessionId and lifecycleRevision, so a publication
-  // whose committed rows prove both unchanged cannot alter a synchronous generation read.
-  // prepareRead still joins every pending publication: owners order effects after it.
-  const generationPending = () =>
+  const pending = () =>
     read.pending.size > 0 ||
     [...(pendingSessionEntryPublications.get(key) ?? [])].some(
       (publication) =>
         !publication.settled &&
-        !publication.superseded.has(params.sessionKey) &&
-        !publication.generationUnchanged.has(params.sessionKey),
+        ((!publication.superseded.has(params.sessionKey) &&
+          !publication.sharingUnchanged.has(params.sessionKey)) ||
+          publication.membershipInvalidated.has(params.sessionKey)),
     );
+  // Unchanged identity and settings remain usable during unrelated metadata writes.
+  // prepareRead still joins publications; pending policy changes cannot donate old grants.
+  const generationPending = (settings = false) =>
+    read.pending.size > 0 ||
+    [...(pendingSessionEntryPublications.get(key) ?? [])].some((publication) => {
+      if (publication.settled) {
+        return false;
+      }
+      if (settings && publication.membershipInvalidated.has(params.sessionKey)) {
+        return true;
+      }
+      if (publication.superseded.has(params.sessionKey)) {
+        return false;
+      }
+      if (!publication.generationUnchanged.has(params.sessionKey)) {
+        return true;
+      }
+      if (!settings || publication.sharingUnchanged.has(params.sessionKey)) {
+        return false;
+      }
+      const entry = publication.entryPostimages?.get(params.sessionKey);
+      const current = read.generation?.current;
+      return (
+        !entry ||
+        !current ||
+        entry.permissionMode !== current.permissionMode ||
+        !isDeepStrictEqual(entry.toolOverrides, current.toolOverrides)
+      );
+    });
   const predicatePending = () =>
     (read.predicate?.pending.size ?? 0) > 0 ||
     [...(pendingSessionEntryPublications.get(key) ?? [])].some((publication) => {
@@ -283,7 +343,12 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
       if (read.predicate && entryPostimage) {
         // These fields are unchanged whether the pending transaction commits or rolls back.
         try {
-          return !read.predicate.matches(entryPostimage);
+          const postimage = projectSessionEntryPredicatePostimage(
+            read.predicate,
+            entryPostimage,
+            publication.fullEntryPostimages?.get(params.sessionKey),
+          );
+          return !postimage.known || !read.predicate.matches(postimage.entry);
         } catch {
           return true;
         }
@@ -330,9 +395,9 @@ export function retainPreparedSessionSharingFacts(params: SessionSharingRetentio
       read.facts = { entry, membership: new Set() };
     },
     readGeneration: () => (active && !generationPending() ? read.generation?.current : undefined),
-    readGenerationSettings: () => (active && !pending(true) ? read.generation?.current : undefined),
-    readCurrent: () =>
-      pending(true) || unknownSharingAuthorities.has(key) ? undefined : read.facts,
+    readGenerationSettings: () =>
+      active && !generationPending(true) ? read.generation?.current : undefined,
+    readCurrent: () => (pending() || unknownSharingAuthorities.has(key) ? undefined : read.facts),
     release: () => {
       if (!active) {
         return;
@@ -354,16 +419,20 @@ export function retainPreparedSessionEntryPredicate(params: {
   sessionKey: string;
   entry: SessionEntry | undefined;
   matches: (before: SessionEntry | undefined, after: SessionEntry | undefined) => boolean;
+  acquiring?: boolean;
+  projection?: SessionEntryProjection;
 }) {
+  const { acquiring, ...retention } = params;
   const predicate: PreparedSessionEntryPredicate = {
     entry: params.entry,
-    matches: (entry) => params.matches(params.entry, entry),
-    state: "current",
+    matches: (entry) => params.matches(acquiring ? predicate.entry : params.entry, entry),
+    state: acquiring ? "acquiring" : "current",
     revision: 0,
     pending: new Set(),
+    projection: params.projection,
   };
   const retained = retainPreparedSessionSharingFacts({
-    ...params,
+    ...retention,
     predicate,
     membership: new Set(),
   });
@@ -379,7 +448,14 @@ export function retainPreparedSessionEntryPredicate(params: {
     canRefresh,
     captureRevision: () => predicate.revision,
     acknowledge: (entry: SessionEntry | undefined, revision: number) => {
-      if (!canRefresh() || retained.hasPendingPublication() || revision !== predicate.revision) {
+      if (predicate.state === "acquiring" && predicate.revision === 0) {
+        predicate.entry = entry;
+      }
+      if (
+        !canRefresh() ||
+        retained.hasPendingPublication() ||
+        (revision !== predicate.revision && predicate.state !== "acquiring")
+      ) {
         return false;
       }
       if (!predicate.matches(entry)) {

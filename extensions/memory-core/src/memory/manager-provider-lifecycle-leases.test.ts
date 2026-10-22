@@ -1,56 +1,75 @@
-// Memory Core tests cover manager provider lifecycle lease behavior.
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
+import { setTimeout as delay, setImmediate as yieldToEventLoop } from "node:timers/promises";
+import type { EmbeddingProvider } from "openclaw/plugin-sdk/embedding-providers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  hashText,
+  type MemoryFileEntry,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { describe, expect, it, vi } from "vitest";
 import * as generationLease from "./manager-index-generation-lease.js";
-import { createManagerIndexFixture } from "./manager-index.test-support.js";
+import {
+  createManagerIndexFixture,
+  holdMemoryTestOperation as hold,
+} from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
 
+type QueryRuntime = { inlineQueryTimeoutMs?: number };
+type LifecycleFields = {
+  provider: EmbeddingProvider | null;
+  providerKey: string;
+  providerRuntime?: QueryRuntime;
+  closing: boolean;
+  closed: boolean;
+  db: DatabaseSync;
+  computeProviderKey: () => string;
+  ensureProviderInitialized: () => Promise<void>;
+  markLocalEmbeddingProviderDegraded: (err: unknown) => void;
+  activateFallbackProvider: (reason: string) => Promise<boolean>;
+  beginSyncProviderGeneration: () => void;
+  endSyncProviderGeneration: () => void;
+  indexFile: (entry: MemoryFileEntry, source: "memory") => Promise<void>;
+  retireCurrentProvider: () => Promise<void>;
+  acquireProviderUse: (provider: EmbeddingProvider) => () => void;
+  embedQueryWithRetry: (
+    text: string,
+    signal: AbortSignal | undefined,
+    provider: EmbeddingProvider,
+    runtime: QueryRuntime,
+  ) => Promise<number[]>;
+  searchVector: () => Promise<{ results: unknown[]; candidates: unknown[] }>;
+  ensureVectorReady: () => Promise<boolean>;
+};
 describe("memory index", () => {
   const fixture = createManagerIndexFixture({
     getMemorySearchManager,
     closeAllMemorySearchManagers,
   });
   const { provider: providerFixture } = fixture;
-  const { createConfig: createCfg, getFreshManager, getPersistentManager, trackManager } = fixture;
+  const { createConfig: createCfg, getFreshManager, getPersistentManager } = fixture;
+  async function open(
+    params: Parameters<typeof createCfg>[0] = { provider: "openai" },
+    sync = false,
+  ) {
+    const manager = await getPersistentManager(createCfg(params));
+    if (sync) {
+      await manager.sync({ reason: "test" });
+    }
+    return { manager, fields: manager as unknown as LifecycleFields };
+  }
 
   it("keeps an active FTS-only generation stable while fallback activates", async () => {
     const manager = await getFreshManager(
       createCfg({ provider: "openai", fallback: "fallback-provider" }),
       "cli",
     );
-    trackManager(manager);
-    type IndexEntry = {
-      path: string;
-      absPath: string;
-      mtimeMs: number;
-      size: number;
-      hash: string;
-      content: string;
-    };
-    const fields = manager as unknown as {
-      provider: { id: string } | null;
-      providerKey: string;
-      computeProviderKey: () => string;
-      ensureProviderInitialized: () => Promise<void>;
-      markLocalEmbeddingProviderDegraded: (err: unknown) => void;
-      activateFallbackProvider: (reason: string) => Promise<boolean>;
-      beginSyncProviderGeneration: () => void;
-      endSyncProviderGeneration: () => void;
-      indexFile: (entry: IndexEntry, source: "memory") => Promise<void>;
-      db: {
-        prepare: (sql: string) => {
-          get: (...params: unknown[]) => { model?: string } | undefined;
-        };
-      };
-    };
+    const fields = manager as unknown as LifecycleFields;
     await fields.ensureProviderInitialized();
-    if (!fields.provider) {
-      throw new Error("Expected a test embedding provider");
-    }
+    assert.ok(fields.provider, "Expected a test embedding provider");
     fields.provider.id = "local";
     fields.providerKey = fields.computeProviderKey();
     fields.markLocalEmbeddingProviderDegraded(providerFixture.createLocalWorkerExitError());
@@ -59,7 +78,7 @@ describe("memory index", () => {
       expect(providerFixture.providerCloseCalls).toBe(1);
     });
 
-    const createEntry = (name: string): IndexEntry => {
+    const createEntry = (name: string) => {
       const content = `# Log\n${name} FTS-only generation.`;
       return {
         path: `memory/${name}.md`,
@@ -85,60 +104,31 @@ describe("memory index", () => {
     }
 
     expect(
-      fields.db.prepare("SELECT model FROM memory_index_chunks WHERE path = ?").get(first.path)
-        ?.model,
-    ).toBe("fts-only");
-    expect(
-      fields.db.prepare("SELECT model FROM memory_index_chunks WHERE path = ?").get(second.path)
-        ?.model,
-    ).toBe("fts-only");
+      [first, second].map(
+        (entry) =>
+          fields.db.prepare("SELECT model FROM memory_index_chunks WHERE path = ?").get(entry.path)
+            ?.model,
+      ),
+    ).toEqual(["fts-only", "fts-only"]);
   });
 
   it("waits for admitted provider users before retirement", async () => {
-    const cfg = createCfg({ provider: "openai" });
-    const manager = await getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-    const fields = manager as unknown as {
-      provider: {
-        embed: (text: string) => Promise<number[]>;
-      } | null;
-      retireCurrentProvider: () => Promise<void>;
-    };
-    if (!fields.provider) {
-      throw new Error("Expected a test embedding provider");
-    }
-    let releaseFirstQuery: () => void = () => {};
-    let markFirstQueryStarted: () => void = () => {};
-    const firstQueryGate = new Promise<void>((resolve) => {
-      releaseFirstQuery = resolve;
-    });
-    const firstQueryStarted = new Promise<void>((resolve) => {
-      markFirstQueryStarted = resolve;
-    });
-    fields.provider.embed = async () => {
-      markFirstQueryStarted();
-      await firstQueryGate;
-      return [1, 0, 0, 0];
-    };
+    const { manager, fields } = await open(undefined, true);
+    assert.ok(fields.provider, "Expected a test embedding provider");
+    const firstQueryGate = hold(() => [1, 0, 0, 0]);
+    fields.provider.embed = firstQueryGate.run;
 
     const queryPromise = manager.search("alpha");
-    await firstQueryStarted;
+    await firstQueryGate.entered;
     const retirementPromise = fields.retireCurrentProvider();
-    let retirementSettled = false;
-    void retirementPromise.then(
-      () => {
-        retirementSettled = true;
-      },
-      () => {
-        retirementSettled = true;
-      },
-    );
+    const retirementSettled = vi.fn();
+    void retirementPromise.then(retirementSettled, retirementSettled);
     try {
       await Promise.resolve();
-      expect(retirementSettled).toBe(false);
+      expect(retirementSettled).not.toHaveBeenCalled();
       expect(providerFixture.providerCloseCalls).toBe(0);
     } finally {
-      releaseFirstQuery();
+      firstQueryGate.release();
     }
 
     await expect(queryPromise).resolves.toEqual(
@@ -149,42 +139,20 @@ describe("memory index", () => {
   });
 
   it("uses the leased provider runtime after retirement starts", async () => {
-    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
-    type QueryProvider = {
-      embed: (text: string, options?: { signal?: AbortSignal }) => Promise<number[]>;
-    };
-    const fields = manager as unknown as {
-      provider: QueryProvider | null;
-      providerRuntime?: { inlineQueryTimeoutMs?: number };
-      acquireProviderUse: (provider: QueryProvider) => () => void;
-      retireCurrentProvider: () => Promise<void>;
-      embedQueryWithRetry: (
-        text: string,
-        signal: AbortSignal | undefined,
-        provider: QueryProvider,
-        providerRuntime: { inlineQueryTimeoutMs?: number },
-      ) => Promise<number[]>;
-    };
+    const { manager, fields } = await open();
     await manager.probeEmbeddingAvailability();
     const provider = fields.provider;
-    if (!provider) {
-      throw new Error("Expected a test embedding provider");
-    }
+    assert.ok(provider, "Expected a test embedding provider");
     const providerRuntime = { inlineQueryTimeoutMs: 10 };
     fields.providerRuntime = providerRuntime;
-    provider.embed = async (_text, options) =>
-      await new Promise<number[]>((resolve, reject) => {
-        const timer = setTimeout(() => resolve([1, 0, 0, 0]), 100);
-        options?.signal?.addEventListener(
-          "abort",
-          () => {
-            clearTimeout(timer);
-            const reason = options.signal?.reason;
-            reject(reason instanceof Error ? reason : new Error("embedding aborted"));
-          },
-          { once: true },
-        );
-      });
+    provider.embed = async (_text, options) => {
+      try {
+        return await delay(100, [1, 0, 0, 0], { signal: options?.signal });
+      } catch {
+        const reason = options?.signal?.reason;
+        throw reason instanceof Error ? reason : new Error("embedding aborted");
+      }
+    };
 
     const releaseProvider = fields.acquireProviderUse(provider);
     const retirementPromise = fields.retireCurrentProvider();
@@ -203,68 +171,39 @@ describe("memory index", () => {
   });
 
   it("waits for an admitted search before manager teardown", async () => {
-    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
-    await manager.sync({ reason: "test" });
-    const fields = manager as unknown as {
-      searchVector: () => Promise<{ results: unknown[]; candidates: unknown[] }>;
-      closing: boolean;
-      closed: boolean;
-    };
-    let releaseVectorSearch: () => void = () => {};
-    let markVectorSearchStarted: () => void = () => {};
-    const vectorSearchGate = new Promise<void>((resolve) => {
-      releaseVectorSearch = resolve;
-    });
-    const vectorSearchStarted = new Promise<void>((resolve) => {
-      markVectorSearchStarted = resolve;
-    });
-    fields.searchVector = async () => {
-      markVectorSearchStarted();
-      await vectorSearchGate;
-      return { results: [], candidates: [] };
-    };
+    const { manager, fields } = await open(undefined, true);
+    const vectorSearchGate = hold(() => ({ results: [], candidates: [] }));
+    fields.searchVector = vectorSearchGate.run;
 
-    const generationReleaseStarted = createDeferred<void>();
-    const generationReleaseGate = createDeferred<void>();
+    const generationRelease = hold(() => {});
     const acquireGeneration = generationLease.acquireMemoryIndexReadGeneration;
     vi.spyOn(generationLease, "acquireMemoryIndexReadGeneration").mockImplementationOnce(
       async (...args) => {
         const release = await acquireGeneration(...args);
         return async () => {
-          generationReleaseStarted.resolve();
-          await generationReleaseGate.promise;
+          await generationRelease.run();
           await release();
         };
       },
     );
     const searchPromise = manager.search("alpha");
-    await vectorSearchStarted;
+    await vectorSearchGate.entered;
     const closePromise = manager.close();
-    let closeSettled = false;
-    void closePromise.then(
-      () => {
-        closeSettled = true;
-      },
-      () => {
-        closeSettled = true;
-      },
-    );
+    const closeSettled = vi.fn();
+    void closePromise.then(closeSettled, closeSettled);
     try {
       await Promise.resolve();
-      expect(closeSettled).toBe(false);
-      expect(fields.closing).toBe(true);
-      expect(fields.closed).toBe(false);
+      expect(closeSettled).not.toHaveBeenCalled();
+      expect(fields).toMatchObject({ closing: true, closed: false });
       expect(providerFixture.providerCloseCalls).toBe(0);
-      releaseVectorSearch();
-      await generationReleaseStarted.promise;
-      await new Promise<void>((resolve) => {
-        setImmediate(resolve);
-      });
-      expect(closeSettled).toBe(false);
+      vectorSearchGate.release();
+      await generationRelease.entered;
+      await yieldToEventLoop();
+      expect(closeSettled).not.toHaveBeenCalled();
       expect(providerFixture.providerCloseCalls).toBe(0);
     } finally {
-      releaseVectorSearch();
-      generationReleaseGate.resolve();
+      vectorSearchGate.release();
+      generationRelease.release();
       await Promise.allSettled([searchPromise, closePromise]);
     }
 
@@ -274,42 +213,21 @@ describe("memory index", () => {
   });
 
   it("waits for an admitted vector probe before manager teardown", async () => {
-    const manager = await getPersistentManager(createCfg({ provider: "openai" }));
-    const fields = manager as unknown as {
-      ensureVectorReady: () => Promise<boolean>;
-    };
-    let releaseProbe: () => void = () => {};
-    let markProbeStarted: () => void = () => {};
-    const probeGate = new Promise<void>((resolve) => {
-      releaseProbe = resolve;
-    });
-    const probeStarted = new Promise<void>((resolve) => {
-      markProbeStarted = resolve;
-    });
-    fields.ensureVectorReady = async () => {
-      markProbeStarted();
-      await probeGate;
-      return true;
-    };
+    const { manager, fields } = await open();
+    const probeGate = hold(() => true);
+    fields.ensureVectorReady = probeGate.run;
 
     const probePromise = manager.probeVectorAvailability();
-    await probeStarted;
+    await probeGate.entered;
     const closePromise = manager.close();
-    let closeSettled = false;
-    void closePromise.then(
-      () => {
-        closeSettled = true;
-      },
-      () => {
-        closeSettled = true;
-      },
-    );
+    const closeSettled = vi.fn();
+    void closePromise.then(closeSettled, closeSettled);
     try {
       await Promise.resolve();
-      expect(closeSettled).toBe(false);
+      expect(closeSettled).not.toHaveBeenCalled();
       expect(providerFixture.providerCloseCalls).toBe(0);
     } finally {
-      releaseProbe();
+      probeGate.release();
     }
 
     await expect(probePromise).resolves.toBe(true);
@@ -377,18 +295,11 @@ describe("memory index", () => {
   });
 
   it("fails closed and retries a required primary after a null fallback result", async () => {
-    const cfg = createCfg({
-      provider: "openai",
-      fallback: "fallback-provider",
-    });
-    const manager = await getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-    const fields = manager as unknown as {
-      provider: { embed: (text: string) => Promise<number[]> } | null;
-    };
-    if (!fields.provider) {
-      throw new Error("Expected a test embedding provider");
-    }
+    const { manager, fields } = await open(
+      { provider: "openai", fallback: "fallback-provider" },
+      true,
+    );
+    assert.ok(fields.provider, "Expected a test embedding provider");
     fields.provider.embed = async () => {
       throw new Error("embedding provider failed");
     };
@@ -427,34 +338,15 @@ describe("memory index", () => {
   });
 
   it("keeps concurrent optional searches in FTS mode when shared fallback fails", async () => {
-    const cfg = createCfg({
-      fallback: "fallback-provider",
-    });
-    const manager = await getPersistentManager(cfg);
-    await manager.sync({ reason: "test" });
-    const fields = manager as unknown as {
-      provider: {
-        embed: (text: string) => Promise<number[]>;
-      } | null;
-      ensureProviderInitialized: () => Promise<void>;
-    };
-    if (!fields.provider) {
-      throw new Error("Expected a test embedding provider");
-    }
+    const { manager, fields } = await open({ fallback: "fallback-provider" }, true);
+    assert.ok(fields.provider, "Expected a test embedding provider");
     fields.provider.embed = async () => {
       throw new Error("embedding provider failed");
     };
-    const ensureProviderInitialized = fields.ensureProviderInitialized.bind(manager);
-    let providerInitializationCalls = 0;
-    fields.ensureProviderInitialized = async () => {
-      providerInitializationCalls += 1;
-      await ensureProviderInitialized();
-    };
+    const initialization = vi.spyOn(fields, "ensureProviderInitialized");
     providerFixture.providerCreationFailure = "fallback-provider";
-    let releaseProviderInit: () => void = () => {};
-    providerFixture.providerInitGate = new Promise<void>((resolve) => {
-      releaseProviderInit = resolve;
-    });
+    const providerInit = createDeferred<void>();
+    providerFixture.providerInitGate = providerInit.promise;
 
     const callsBeforeSearch = providerFixture.providerCalls.length;
     const firstSearch = manager.search("alpha");
@@ -463,23 +355,16 @@ describe("memory index", () => {
         providerFixture.providerCalls.some((call) => call.provider === "fallback-provider"),
       ).toBe(true),
     );
-    const initializationCallsBeforeSecondSearch = providerInitializationCalls;
+    const callsBeforeSecond = initialization.mock.calls.length;
     const secondSearch = manager.search("zebra");
-    let secondSettled = false;
-    void secondSearch.then(
-      () => {
-        secondSettled = true;
-      },
-      () => {
-        secondSettled = true;
-      },
-    );
+    const secondSettled = vi.fn();
+    void secondSearch.then(secondSettled, secondSettled);
     try {
       await vi.waitFor(() =>
-        expect(providerInitializationCalls).toBeGreaterThan(initializationCallsBeforeSecondSearch),
+        expect(initialization.mock.calls.length).toBeGreaterThan(callsBeforeSecond),
       );
-      expect(secondSettled).toBe(false);
-      releaseProviderInit();
+      expect(secondSettled).not.toHaveBeenCalled();
+      providerInit.resolve();
       const results = await Promise.all([firstSearch, secondSearch]);
       expect(results.every((result) => result.length > 0)).toBe(true);
       expect(
@@ -489,7 +374,7 @@ describe("memory index", () => {
       ).toHaveLength(1);
     } finally {
       providerFixture.providerInitGate = null;
-      releaseProviderInit();
+      providerInit.resolve();
       await Promise.allSettled([firstSearch, secondSearch]);
     }
   });

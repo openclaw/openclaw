@@ -22,7 +22,6 @@ import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
   LegacyMigrationSourceClaim,
   legacyMigrationSourceOrClaimMayExist,
-  legacyMigrationSourceSnapshotsMatch as sourceSnapshotsMatch,
   readLegacyMigrationSourceSnapshot,
   type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
 } from "./state-migrations.source-snapshot.js";
@@ -336,9 +335,7 @@ export async function migrateLegacyNodeHostConfig(params: {
       const snapshot = await source.read();
       const legacy = parseLegacyNodeHostConfig(snapshot);
       params.beforeVerify?.();
-      if (!sourceSnapshotsMatch(await source.read(), snapshot)) {
-        throw new Error("legacy node-host source changed after Doctor loaded it");
-      }
+      await source.verify(snapshot, "legacy node-host source changed after Doctor loaded it");
 
       let result: ReturnType<typeof migrateIntoDatabase>;
       try {

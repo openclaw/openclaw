@@ -367,7 +367,6 @@ function addIssue(issues: Map<string, Set<string>>, key: string, sourceLabel: st
 export function collectPluginToolAllowlistWarnings(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  manifestRegistry?: PluginManifestRegistry;
 }): string[] {
   if (params.cfg.plugins?.enabled === false) {
     return [];
@@ -404,12 +403,10 @@ export function collectPluginToolAllowlistWarnings(params: {
     return warnings;
   }
 
-  const registry =
-    params.manifestRegistry ??
-    loadManifestMetadataSnapshot({
-      config: params.cfg,
-      env: params.env ?? process.env,
-    }).manifestRegistry;
+  const registry = loadManifestMetadataSnapshot({
+    config: params.cfg,
+    env: params.env ?? process.env,
+  }).manifestRegistry;
   const knownPluginIds = new Set(registry.plugins.map((plugin) => normalizePluginId(plugin.id)));
   const toolOwners = collectToolOwners(registry);
   const missingPluginIssues = new Map<string, Set<string>>();

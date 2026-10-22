@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/clawrouter",
-  "version": "2026.10.3",
+  "version": "2026.10.5",
   "private": true,
   "description": "OpenClaw ClawRouter plugin",
   "type": "module",
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*",
-    "@solidjs/compiler": "2.0.0-rc.14",
+    "@solidjs/compiler": "2.0.0-rc.16",
     "esbuild": "0.28.2"
   },
   "openclaw": {
@@ -23,7 +23,7 @@
     }
   },
   "dependencies": {
-    "@solidjs/web": "2.0.0-rc.14",
-    "solid-js": "2.0.0-rc.14"
+    "@solidjs/web": "2.0.0-rc.16",
+    "solid-js": "2.0.0-rc.16"
   }
 }

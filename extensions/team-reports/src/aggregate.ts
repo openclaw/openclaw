@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { GITHUB_ITEM_KINDS } from "./github-item-kinds.js";
 import { MAX_REPORT_BYTES } from "./limits.js";
 import { periodDayKeys } from "./periods.js";
 import { isBotLogin, primaryLogin } from "./roster.js";
@@ -8,7 +9,6 @@ import type {
   DiscordSourceConfig,
   GithubCounts,
   GithubItem,
-  GithubItemKind,
   OtherActor,
   PeriodDescriptor,
   Person,
@@ -20,27 +20,8 @@ import type {
 
 const COUNT_FIELDS = [
   "total",
-  "commits",
-  "prsOpened",
-  "prsMerged",
-  "prsClosed",
-  "issuesOpened",
-  "issuesClosed",
-  "issueComments",
-  "reviewComments",
-  "securityAdvisories",
+  ...Object.values(GITHUB_ITEM_KINDS).map(({ field }) => field),
 ] as const;
-const KIND_COUNTS: Record<GithubItemKind, Exclude<(typeof COUNT_FIELDS)[number], "total">> = {
-  commit: "commits",
-  pr_opened: "prsOpened",
-  pr_merged: "prsMerged",
-  pr_closed: "prsClosed",
-  issue_opened: "issuesOpened",
-  issue_closed: "issuesClosed",
-  issue_comment: "issueComments",
-  review_comment: "reviewComments",
-  security_advisory: "securityAdvisories",
-};
 
 function emptyGithub(): GithubCounts {
   return {
@@ -83,7 +64,7 @@ function sumGithub(target: GithubCounts, source: GithubCounts): void {
 
 function countItem(counts: GithubCounts, item: GithubItem): void {
   counts.total++;
-  counts[KIND_COUNTS[item.kind]]++;
+  counts[GITHUB_ITEM_KINDS[item.kind].field]++;
   increment(counts.repos, item.repo);
 }
 
@@ -94,8 +75,8 @@ function emptyMember(person: Person): PersonReport {
     affiliation: person.affiliation,
     roleGroup: person.roleGroup,
     roleLabel: person.roleLabel,
-    access: [...(person.access ?? [])],
-    areas: [...(person.areas ?? [])],
+    access: person.access ?? [],
+    areas: person.areas ?? [],
     aliases: person.github.slice(1),
     github: { ...emptyGithub(), items: [] },
     discord: { total: 0, channels: {}, excerpts: [] },
@@ -119,7 +100,7 @@ function emptyReport(
 ): ReportDocument {
   return {
     version: 1,
-    period: { ...period },
+    period,
     generatedAtMs: nowMs,
     status: nowMs < period.untilMs ? "partial" : "closed",
     orgs: [...new Set(orgs)].toSorted(),
@@ -129,7 +110,7 @@ function emptyReport(
     members: [],
     otherActors: [],
     unmatchedDiscord: [],
-    sources: structuredClone(sources),
+    sources,
   };
 }
 
@@ -143,7 +124,7 @@ function newestFirst(a: GithubItem, b: GithubItem): number {
 
 function evidenceItem(item: GithubItem): GithubItem {
   const { body: _body, ...evidence } = item;
-  return structuredClone(evidence);
+  return evidence;
 }
 
 function finishReport(report: ReportDocument): ReportDocument {
@@ -338,7 +319,7 @@ function mergeStatus(statuses: SourceStatus[]): SourceStatus {
 export function aggregateDays(options: {
   period: PeriodDescriptor;
   nowMs: number;
-  days: ReportDocument[] | (() => Iterable<ReportDocument>);
+  days: Iterable<ReportDocument>;
   roster?: Roster;
   orgs?: string[];
 }): ReportDocument {
@@ -346,51 +327,10 @@ export function aggregateDays(options: {
   if (period.period === "day") {
     throw new Error("Stored days can only be aggregated into a week or month");
   }
-  const input = options.days;
-  const readDays =
-    typeof input === "function"
-      ? input
-      : () => input.toSorted((a, b) => a.period.sinceMs - b.period.sinceMs);
-  const byDay = new Map<
-    string,
-    Pick<ReportDocument, "period" | "generatedAtMs" | "orgs" | "sources" | "truncated">
-  >();
-  for (const day of readDays()) {
-    if (
-      day.period.period === "day" &&
-      day.period.sinceMs >= period.sinceMs &&
-      day.period.untilMs <= period.untilMs &&
-      day.period.sinceMs < nowMs
-    ) {
-      const previous = byDay.get(day.period.key);
-      if (!previous || previous.generatedAtMs < day.generatedAtMs) {
-        const { period: dayPeriod, generatedAtMs, orgs, sources, truncated } = day;
-        byDay.set(dayPeriod.key, { period: dayPeriod, generatedAtMs, orgs, sources, truncated });
-      }
-    }
-  }
-  const days = [...byDay.values()].toSorted((a, b) => a.period.sinceMs - b.period.sinceMs);
-  const scopes = new Set(
-    days.map((day) =>
-      day.orgs
-        .map((org) => org.toLowerCase())
-        .toSorted()
-        .join(","),
-    ),
-  );
-  if (scopes.size > 1) {
-    throw new Error("Cannot aggregate day reports from different GitHub organization scopes");
-  }
-  const github = mergeStatus(days.map((day) => day.sources.github));
-  const missing = periodDayKeys(period, nowMs).filter((key) => !byDay.has(key));
-  if (missing.length) {
-    github.warnings.push(`Missing day reports: ${missing.join(", ")}`);
-    github.stale = true;
-  }
-  const discordStatuses = days.flatMap((day) => (day.sources.discord ? [day.sources.discord] : []));
-  const report = emptyReport(period, nowMs, options.orgs ?? days[0]?.orgs ?? [], {
-    github,
-    ...(discordStatuses.length ? { discord: mergeStatus(discordStatuses) } : {}),
+  const githubStatuses: SourceStatus[] = [];
+  const discordStatuses: SourceStatus[] = [];
+  const report = emptyReport(period, nowMs, options.orgs ?? [], {
+    github: mergeStatus([]),
   });
   const currentRoster = nowMs < period.untilMs ? roster : undefined;
   const members = new Map(
@@ -399,14 +339,39 @@ export function aggregateDays(options: {
   const others = new Map<string, OtherActor>();
   const unmatched = new Map<string, number>();
   const included = new Set<string>();
-  for (const day of readDays()) {
+  let scope: string | undefined;
+  // The store streams one accepted row per day in chronological order.
+  for (const day of options.days) {
     if (
       included.has(day.period.key) ||
-      byDay.get(day.period.key)?.generatedAtMs !== day.generatedAtMs
+      !(
+        day.period.period === "day" &&
+        day.period.sinceMs >= period.sinceMs &&
+        day.period.untilMs <= period.untilMs &&
+        day.period.sinceMs < nowMs
+      )
     ) {
       continue;
     }
+    const dayScope = day.orgs
+      .map((org) => org.toLowerCase())
+      .toSorted()
+      .join(",");
+    if (scope !== undefined && scope !== dayScope) {
+      throw new Error("Cannot aggregate day reports from different GitHub organization scopes");
+    }
+    scope = dayScope;
+    if (included.size === 0 && options.orgs === undefined) {
+      report.orgs = [...new Set(day.orgs)].toSorted();
+    }
     included.add(day.period.key);
+    githubStatuses.push(day.sources.github);
+    if (day.sources.discord) {
+      discordStatuses.push(day.sources.discord);
+    }
+    if (day.truncated) {
+      report.truncated = true;
+    }
     sumGithub(report.totals.github, day.totals.github);
     report.totals.discord.messages += day.totals.discord.messages;
     sumMap(report.totals.discord.channels, day.totals.discord.channels);
@@ -426,7 +391,7 @@ export function aggregateDays(options: {
       let member = members.get(login);
       if (!member) {
         member = {
-          ...structuredClone(source),
+          ...source,
           login,
           github: { ...emptyGithub(), items: [] },
           discord: { total: 0, channels: {}, excerpts: [] },
@@ -438,7 +403,7 @@ export function aggregateDays(options: {
       member.github.items.push(...source.github.items);
       member.discord.total += source.discord.total;
       sumMap(member.discord.channels, source.discord.channels);
-      member.discord.excerpts.push(...structuredClone(source.discord.excerpts));
+      member.discord.excerpts.push(...source.discord.excerpts);
       boundMemberEvidence(report, member);
     }
     for (const actor of day.otherActors) {
@@ -448,9 +413,16 @@ export function aggregateDays(options: {
       unmatched.set(entry.authorId, (unmatched.get(entry.authorId) ?? 0) + entry.messages);
     }
   }
-  if (days.some((day) => day.truncated)) {
-    report.truncated = true;
+  const github = mergeStatus(githubStatuses);
+  const missing = periodDayKeys(period, nowMs).filter((key) => !included.has(key));
+  if (missing.length) {
+    github.warnings.push(`Missing day reports: ${missing.join(", ")}`);
+    github.stale = true;
   }
+  report.sources = {
+    github,
+    ...(discordStatuses.length ? { discord: mergeStatus(discordStatuses) } : {}),
+  };
   report.members = [...members.values()];
   report.otherActors = [...others.values()];
   report.unmatchedDiscord = [...unmatched].map(([authorId, messages]) => ({ authorId, messages }));
@@ -471,15 +443,25 @@ function boundMemberEvidence(report: ReportDocument, member: PersonReport): void
 }
 
 export function boundReportDocument(input: ReportDocument): ReportDocument {
-  const report = structuredClone(input);
+  // Only the report's evidence containers are changed; item facts and metadata are borrowed.
+  const report = {
+    ...input,
+    members: input.members.map((member) => ({
+      ...member,
+      github: { ...member.github },
+      discord: { ...member.discord },
+    })),
+  };
   for (const member of report.members) {
     boundMemberEvidence(report, member);
   }
-  if (Buffer.byteLength(JSON.stringify(report)) <= MAX_REPORT_BYTES) {
+  let size = Buffer.byteLength(JSON.stringify(report));
+  if (size <= MAX_REPORT_BYTES) {
     return report;
   }
+  // Update the flag's byte cost without serializing all evidence again.
+  size += report.truncated === undefined ? ',"truncated":true'.length : report.truncated ? 0 : -1;
   report.truncated = true;
-  let size = Buffer.byteLength(JSON.stringify(report));
   const evidence = report.members
     .flatMap((member) => [
       ...member.github.items.map((item) => ({

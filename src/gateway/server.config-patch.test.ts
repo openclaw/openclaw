@@ -232,17 +232,17 @@ describe("gateway config methods", () => {
       const rootBefore = await fs.readFile(original.path, "utf8");
       const includeBefore = await fs.readFile(includePath, "utf8");
       const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      // Only inference is supplied: config reads, approved writes, and both journals are real.
+      const inference = await import("../system-agent/setup-inference.js");
+      const verification = vi.spyOn(inference, "verifySetupInferenceConfig");
+      verification.mockResolvedValue({ ok: true, modelRef: model, latencyMs: 1 });
+      // Only inference is mocked: config reads, approved writes, and both journals are real.
       const result = await executeSystemAgentOperation(
         { kind: "set-default-model", model },
         runtime,
-        {
-          approved: true,
-          deps: {
-            verifyInferenceConfig: async () => ({ ok: true, modelRef: model, latencyMs: 1 }),
-          },
-        },
-      );
+        { approved: true },
+      ).finally(() => {
+        verification.mockRestore();
+      });
       expect(result).toEqual({ applied: true });
       expect(runtime.error).not.toHaveBeenCalled();
       expect((await readConfigFileSnapshot()).sourceConfig.agents?.defaults?.model).toEqual({

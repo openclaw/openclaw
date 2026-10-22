@@ -80,6 +80,7 @@ export async function doctorCommand(
       await import("../state/openclaw-state-db-readonly.js");
     const sessionSqliteOptions = {
       mode: sessionSqliteMode,
+      ...(options.fullIntegrityCheck ? { integrityCheck: "full" as const } : {}),
       ...(options.sessionSqliteStore ? { store: options.sessionSqliteStore } : {}),
       ...(options.sessionSqliteAgent ? { agent: options.sessionSqliteAgent } : {}),
       ...(options.sessionSqliteAllAgents ? { allAgents: true } : {}),
@@ -174,7 +175,12 @@ export async function doctorCommand(
     exitCliAfterOutput(outputRuntime, hasError ? 1 : 0);
   }
   const doctorHealth = await import("../flows/doctor-health.js");
-  await doctorHealth.runDoctorHealthFlow(runtime, options, undefined, databasePreflight);
+  try {
+    await doctorHealth.runDoctorHealthFlow(runtime, options, undefined, databasePreflight);
+  } catch (error) {
+    const { diagnoseDoctorStateStorageFailure } = await import("./doctor-database-preflight.js");
+    throw diagnoseDoctorStateStorageFailure(error) ?? error;
+  }
 }
 
 async function maybeCreateSessionSqliteGithubIssue(

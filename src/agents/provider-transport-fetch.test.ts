@@ -3,6 +3,7 @@ import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { prepareModelRequestBody } from "../../packages/ai/src/transports/model-request-body.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
 import { mintSecretSentinel } from "../secrets/sentinel.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -102,6 +103,22 @@ describe("buildGuardedModelFetch", () => {
     } finally {
       vi.unstubAllEnvs();
     }
+  });
+
+  it("keeps the completed body and releases its local lease when guard cleanup fails", async () => {
+    const releaseLease = vi.fn();
+    ensureModelProviderLocalServiceMock.mockResolvedValue({ release: releaseLease });
+    const releaseGuard = mockResponse(
+      new Response("ok"),
+      vi.fn(async () => {
+        throw new Error("synthetic guard cleanup failure");
+      }),
+    );
+
+    await expect((await request({}, localModel)).text()).resolves.toBe("ok");
+
+    expect(releaseGuard).toHaveBeenCalledOnce();
+    expect(releaseLease).toHaveBeenCalledOnce();
   });
 
   it("releases the local lease when guarded fetch fails", async () => {
@@ -337,18 +354,31 @@ describe("buildGuardedModelFetch", () => {
     expect(refreshTimeout).toHaveBeenCalledTimes(3);
   });
 
-  it.each([
+  it.for([
     { contentType: "text/event-stream", error: /exceeded max buffer size/i },
     { contentType: "application/json", error: /exceeded.*bytes while synthesizing SSE/i },
   ])(
-    "bounds oversized $contentType bodies without content-length",
-    async ({ contentType, error }) => {
-      mockResponse(
-        new Response(new Uint8Array(17 * 1024 * 1024), {
-          headers: { "content-type": contentType },
+    "reports oversized $contentType and releases resources while a clone stays unread",
+    async ({ contentType, error }, { signal }) => {
+      const upstream = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new Uint8Array(17 * 1024 * 1024));
+          },
         }),
+        { headers: { "content-type": contentType } },
       );
-      await expect((await request(streaming)).text()).rejects.toThrow(error);
+      const unreadClone = upstream.clone();
+      const release = mockResponse(upstream);
+      const reading = (await request(streaming)).text();
+      try {
+        await expect(withinTest(reading, signal)).rejects.toThrow(error);
+        expect(release).toHaveBeenCalledOnce();
+        expect(upstream.body!.locked).toBe(false);
+      } finally {
+        await unreadClone.body!.cancel();
+        await reading.catch(() => undefined);
+      }
     },
   );
 

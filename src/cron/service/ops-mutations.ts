@@ -10,15 +10,15 @@ import {
   requestActiveCronJobCancellation,
 } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId, tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
-import { resolveCronJobConfigRevision } from "../config-revision.js";
+import {
+  CronJobConfigRevisionConflictError,
+  resolveCronJobConfigRevision,
+} from "../config-revision.js";
 import { normalizeCronRunJobId } from "../run-history.js";
 import { removeCronJobBaseSession } from "../session-reaper.js";
 import { removeStaleCronJobFamilyRows } from "../store.js";
 import type { CronJobMutation } from "../store/job-mutations.types.js";
-import {
-  isSystemMonitorDeclaration,
-  systemOwnedDeclarationKeyNamespace,
-} from "../system-owned-declaration.js";
+import { systemOwnedDeclarationKeyNamespace } from "../system-owned-declaration.js";
 import type { CronJobCreate, CronJobPatch } from "../types.js";
 import { declarativeFields } from "./jobs-declarative.js";
 import { persistUpdatedJob } from "./jobs-mutation-persistence.js";
@@ -42,6 +42,7 @@ import { captureCronSchedulerSnapshot } from "./scheduler-config.js";
 import type {
   CronAddOptions,
   CronAddResult,
+  CronRemoveOptions,
   CronServiceState,
   CronUpdateOptions,
   CronUpdatePrecondition,
@@ -63,7 +64,7 @@ const RETRY_ADD_AFTER_SESSION_CLEANUP = new Error("retry add after session clean
 export async function quiesceJobs(
   state: CronServiceState,
   jobs: readonly { id: string; revision: string }[],
-  commitGuard: () => void,
+  commitGuard: (cancel: () => void) => void | Promise<void>,
 ): Promise<void> {
   await locked(state, async () => {
     await ensureLoadedForOperation(state);
@@ -73,10 +74,18 @@ export async function quiesceJobs(
         throw new Error(`Cron job ${expected.id} changed before cancellation.`);
       }
     }
-    commitGuard();
-    for (const job of jobs) {
-      requestActiveCronJobCancellation(job.id, "Claw agent removal.");
-    }
+    let cancelled = false;
+    const cancel = () => {
+      if (cancelled) {
+        return;
+      }
+      cancelled = true;
+      for (const job of jobs) {
+        requestActiveCronJobCancellation(job.id, "Claw agent removal.");
+      }
+    };
+    await commitGuard(cancel);
+    cancel();
   });
 }
 
@@ -91,9 +100,6 @@ export async function add(
   return await locked(state, async () => {
     source.assertCurrent();
     warnIfDisabled(state, "add");
-    if (input.payload.kind === "heartbeat" && opts?.systemOwned !== true) {
-      throw new Error("system-owned payloads cannot be created by cron clients");
-    }
     const declarationKey = normalizeOptionalString(input.declarationKey);
     const systemOwnedDeclarationNamespace = systemOwnedDeclarationKeyNamespace(declarationKey);
     if (systemOwnedDeclarationNamespace && opts?.systemOwned !== true) {
@@ -124,11 +130,13 @@ export async function add(
         ? (state.store?.jobs.filter(opts.matchesExisting).map((job) => job.id) ?? [])
         : undefined,
       options: {
+        streamSandbox: opts?.streamSandbox,
         enabledExplicit: opts?.enabledExplicit,
         systemOwned: opts?.systemOwned,
         createdActor: opts?.createdActor,
         inferenceBinding: opts?.inferenceBinding,
         sourceConversation: opts?.sourceConversation,
+        operatorSource: opts?.operatorSource,
         skillLibrarySelections: opts?.skillLibrarySelections,
         scheduledToolPolicy: opts?.scheduledToolPolicy,
         toolsAllowProvenance: opts?.toolsAllowProvenance,
@@ -166,6 +174,7 @@ export async function add(
         previousJob: existing,
         nextJob: job,
         commitGuard: opts?.commitGuard,
+        streamAuthority: opts,
         agentId,
         mutationMethod: "cron.add",
         jobMutation: mutation,
@@ -178,6 +187,7 @@ export async function add(
       source,
       method: "cron.add",
       assertCurrent: opts?.commitGuard,
+      streamAuthority: opts,
       agentId,
       expectedJob: existing
         ? { id: existing.id, configRevision: resolveCronJobConfigRevision(existing) }
@@ -249,17 +259,8 @@ async function updateLoadedJob(params: {
   const { state, source, id, patch, precondition, opts } = params;
   source.assertCurrent();
   warnIfDisabled(state, "update");
-  if (patch.payload?.kind === "heartbeat") {
-    throw new Error("system-owned payloads cannot be patched by cron clients");
-  }
   await ensureLoadedForOperation(state);
   const job = findJobOrThrow(state, id);
-  // Existing monitors are config-driven: any patch (disable, reschedule,
-  // repurpose) would silently diverge from its owner until the next reconcile,
-  // so updates are rejected outright. Removal stays allowed only to the owner.
-  if (isSystemMonitorDeclaration(job.declarationKey)) {
-    throw new Error("system-owned monitor jobs cannot be edited by cron clients");
-  }
   const now = state.deps.nowMs();
   const configuredChannels = cronPatchTouchesDeliveryResolution(patch)
     ? await resolveConfiguredChannelsForValidation(state)
@@ -271,6 +272,7 @@ async function updateLoadedJob(params: {
     id,
     patch,
     options: {
+      streamSandbox: opts?.streamSandbox,
       inferenceBinding: opts?.inferenceBinding,
       scheduledToolPolicy: opts?.scheduledToolPolicy,
       toolsAllowProvenance: opts?.toolsAllowProvenance,
@@ -303,6 +305,7 @@ async function updateLoadedJob(params: {
     nextJob,
     source,
     commitGuard: opts?.commitGuard,
+    streamAuthority: opts,
     agentId:
       patch.agentId !== undefined
         ? resolveCronJobEffectiveAgentId(nextJob, resolveCurrentDefaultAgentId(state))
@@ -341,11 +344,7 @@ export async function updateWithPrecondition(
 }
 
 /** Removes a cron job through its worker owner before canceling and cleaning up host work. */
-export async function remove(
-  state: CronServiceState,
-  id: string,
-  opts?: { systemOwned?: boolean; commitGuard?: () => void },
-) {
+export async function remove(state: CronServiceState, id: string, opts?: CronRemoveOptions) {
   const source = captureCronJobMutationSource(state);
   let sessionCleanup:
     | {
@@ -367,11 +366,14 @@ export async function remove(
     if (!removedJob) {
       return { ok: true, removed: false } as const;
     }
-    // Config is the monitor's source of truth: ad-hoc deletion would disable
-    // the feature until an unrelated reload, so only gateway reconciliation
-    // (stale-monitor cleanup) may remove one.
-    if (isSystemMonitorDeclaration(removedJob.declarationKey) && opts?.systemOwned !== true) {
-      throw new Error("system-owned monitor jobs cannot be removed by cron clients");
+    if (opts?.expectedConfigRevision !== undefined) {
+      const actualConfigRevision = resolveCronJobConfigRevision(removedJob);
+      if (actualConfigRevision !== opts.expectedConfigRevision) {
+        throw new CronJobConfigRevisionConflictError(
+          opts.expectedConfigRevision,
+          actualConfigRevision,
+        );
+      }
     }
     source.assertCurrent();
     opts?.commitGuard?.();
@@ -385,6 +387,9 @@ export async function remove(
       source,
       method: "cron.remove",
       assertCurrent: opts?.commitGuard,
+      ...(opts?.expectedConfigRevision !== undefined
+        ? { expectedJob: { id, configRevision: opts.expectedConfigRevision } }
+        : {}),
       jobMutation: { kind: "remove", ids: [id], systemOwned: opts?.systemOwned },
       jobMutationSnapshot: {
         nowMs: state.deps.nowMs(),

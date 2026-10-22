@@ -187,7 +187,7 @@ function collectModelRefsFromAgentAllowlist(
 
   for (const configured of collectPolicyConfiguredAgents(agents)) {
     const agent = configured.value;
-    if (!isRecord(agent) || !isRecord(agent.models)) {
+    if (!isRecord(agent.models)) {
       continue;
     }
     collectModelRefsFromModelMap(refs, agent.models, `${configured.sourceBase}/models`);

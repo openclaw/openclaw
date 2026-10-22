@@ -14,7 +14,7 @@ import {
   TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
   transcriptDirectiveArchivesNeedMigration,
 } from "./state-migrations.transcript-directives-archives.js";
-import * as directiveTransform from "./state-migrations.transcript-directives-transform.js";
+import { repairHistoricalTranscriptEventJson } from "./state-migrations.transcript-directives-transform.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];
@@ -23,6 +23,13 @@ const replacementLine = '{"type":"custom","data":"normalized"}';
 const replacement = `${replacementLine}\n`;
 const count = 202;
 const key = (index: number) => String(index).padStart(3, "0");
+const directiveLine = (raw: string, owner: string) =>
+  repairHistoricalTranscriptEventJson({
+    raw,
+    owner,
+    scope: "all",
+    resolveMaskedProvider: () => undefined,
+  });
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -121,16 +128,16 @@ describe("canonical archive migration progress", () => {
         expect(f.rewritten()).toBe(count);
         expect(f.cursor()).toEqual({ phase: "complete" });
       } else {
-        const parse = directiveTransform.parseDirectiveMigrationTranscriptEvent;
-        vi.spyOn(directiveTransform, "parseDirectiveMigrationTranscriptEvent").mockImplementation(
-          (...args) => {
-            visit();
-            return parse(...args);
-          },
-        );
-        expect(await transcriptDirectiveArchivesNeedMigration(f.database, f.options.start)).toBe(
-          false,
-        );
+        expect(
+          await transcriptDirectiveArchivesNeedMigration(
+            f.database,
+            f.options.start,
+            (raw, owner) => {
+              visit();
+              return directiveLine(raw, owner);
+            },
+          ),
+        ).toBe(false);
         expect(f.rewritten()).toBe(0);
       }
       expect(visited).toBe(count);
@@ -185,24 +192,21 @@ describe("canonical archive migration progress", () => {
   it("cancels archive inspection while decoding a batch", async () => {
     const f = fixture();
     const interrupted = new Error("Doctor interrupted by SIGINT");
-    const parse = directiveTransform.parseDirectiveMigrationTranscriptEvent;
     let calls = 0;
-    const parsed = vi
-      .spyOn(directiveTransform, "parseDirectiveMigrationTranscriptEvent")
-      .mockImplementation((...args) => {
-        const event = parse(...args);
-        if (++calls === TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE) {
-          f.controller.abort(interrupted);
-        }
-        return event;
-      });
     await expect(
       withSqliteReadOnlyWorkerScope(
-        () => transcriptDirectiveArchivesNeedMigration(f.database, f.options.start),
+        () =>
+          transcriptDirectiveArchivesNeedMigration(f.database, f.options.start, (raw, owner) => {
+            const line = directiveLine(raw, owner);
+            if (++calls === TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE) {
+              f.controller.abort(interrupted);
+            }
+            return line;
+          }),
         { signal: f.controller.signal, deadlineOwnedByCaller: true },
       ),
     ).rejects.toBe(interrupted);
-    expect(parsed).toHaveBeenCalledTimes(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
+    expect(calls).toBe(TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE);
     expect(f.rewritten()).toBe(0);
   });
 

@@ -34,20 +34,24 @@ export type WorkerTaskServerHost<TaskContext> = {
   onMessage: (sampleMemory: boolean) => void;
   installTaskContext: (context: TaskContext) => void;
   onIdle: () => void;
+  /** Optional host telemetry rides the terminal reply; never a separate task round trip. */
+  collectTaskDiagnostics?: () => unknown;
   /** Release host-owned diagnostics after task and resource receipts settle. */
   onRetire?: () => void | Promise<void>;
 };
 
+export type WorkerTaskHandler<Output, Input = unknown> = (
+  input: Input,
+  channel: WorkerTaskChannel | undefined,
+  control: WorkerTaskControl,
+) => Output | Promise<Output>;
+
 /** Pool dispatch is serial per worker; resource closures and handlers settle before successors. */
-export function serveOwnedWorkerTasks<Output, TaskContext>(
-  handler: (
-    input: unknown,
-    channel: WorkerTaskChannel | undefined,
-    control: WorkerTaskControl,
-  ) => Output | Promise<Output>,
+export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
+  handler: WorkerTaskHandler<Output, Input>,
   options: {
     transferList?: (value: Output) => Transferable[];
-    closeResource?: (key?: string) => void | Promise<void>;
+    closeResource: (key?: string) => void | Promise<void>;
     encodeResourceError?: (error: unknown) => unknown;
     /** Unknown native state cannot publish a reusable task failure before isolate exit. */
     retireOnError?: boolean;
@@ -69,7 +73,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
   port.on(
     "message",
     function receive(message: {
-      input: unknown;
+      input: Input;
       taskId: number;
       interactive?: boolean;
       responseId?: number;
@@ -105,9 +109,6 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
           .then(async () => {
             if (retiring) {
               throw new Error("Worker is retiring after a terminal task failure");
-            }
-            if (!options.closeResource) {
-              throw new Error("Worker does not own retained resources");
             }
             await options.closeResource(message.key);
             receipt.postMessage({ ok: true }, []);
@@ -249,7 +250,14 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
         })
         .then((value) => {
           port.postMessage(
-            { status: "ok", value, taskId: task.taskId },
+            {
+              status: "ok",
+              value,
+              taskId: task.taskId,
+              ...(host.collectTaskDiagnostics
+                ? { diagnostics: host.collectTaskDiagnostics() }
+                : {}),
+            },
             options.transferList?.(value) ?? [],
           );
         })
@@ -262,6 +270,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext>(
             status: "failed",
             taskId: task.taskId,
             error: error instanceof Error ? error.message : String(error),
+            ...(host.collectTaskDiagnostics ? { diagnostics: host.collectTaskDiagnostics() } : {}),
           });
         })
         .finally(() => {

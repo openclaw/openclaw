@@ -16,5 +16,5 @@ export type PluginStateOperationResult = {
 };
 
 export type PluginStateOperationCommit = {
-  pluginStateOperation: { receiptId: string; validUntil: number | undefined };
+  pluginStateOperation: { receiptId: string };
 };

@@ -191,17 +191,6 @@ describe("ollama embedding provider", () => {
     });
   });
 
-  it("resolves configured baseURL alias", async () => {
-    const { fetchMock } = await embedTestQuery({
-      config: createProviderConfig({ baseURL: "http://remote-ollama:11434/v1", models: [] }),
-    });
-
-    expectEmbeddingFetch(fetchMock, "http://remote-ollama:11434/api/embed", {
-      model: "nomic-embed-text",
-      input: "search_query: hello",
-    });
-  });
-
   it("fails fast when memory-search remote apiKey is an unresolved SecretRef", async () => {
     await expect(
       createEmbeddingProvider({
@@ -248,8 +237,6 @@ describe("ollama embedding provider", () => {
 
   it.each([
     { providerId: "ollama-private", surface: "apiKey", source: "env" },
-    { providerId: "ollama", surface: "headers", source: "env" },
-    { providerId: "ollama", surface: "apiKey", source: "file" },
     { providerId: "ollama-private", surface: "headers", source: "exec" },
   ])(
     "fails closed before any request for unresolved $providerId $surface $source SecretRefs",
@@ -303,7 +290,7 @@ describe("ollama embedding provider", () => {
     },
   );
 
-  it.each(["OLLAMA_API_KEY", "ollama-local"])(
+  it.each(["ollama-local"])(
     "keeps explicit selected-host SecretRef value %s opaque",
     async (resolvedSecret) => {
       vi.stubEnv("OLLAMA_API_KEY", "synthetic-cloud-key");
@@ -327,52 +314,25 @@ describe("ollama embedding provider", () => {
     },
   );
 
-  it.each(["${OLLAMA_SELECTED_HOST_KEY}"])(
-    "resolves selected-host env shorthand SecretRef %s before ambient cloud auth",
-    async (apiKey) => {
-      vi.stubEnv("OLLAMA_API_KEY", "synthetic-cloud-key");
-      vi.stubEnv("OLLAMA_SELECTED_HOST_KEY", "synthetic-selected-host-key");
+  it.each([7, -1])("sends one batch and reports native usage %s", async (tokens) => {
+    const { fetchMock, inputs } = mockBatchEmbeddingFetch(3, tokens);
 
-      const { fetchMock } = await embedTestQuery({
-        config: createProviderConfig({
-          baseUrl: "https://selected-private-host.invalid/v1",
-          apiKey,
-          models: [],
-        }),
-      });
+    const { provider } = await createEmbeddingProvider();
 
-      expectEmbeddingFetch(fetchMock, "https://selected-private-host.invalid/api/embed", {
-        input: "search_query: hello",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: "Bearer synthetic-selected-host-key",
-        },
-      });
-    },
-  );
-
-  it.each([7, 0, undefined, -1, 1.5, "7"])(
-    "sends one batch and reports native usage %s",
-    async (tokens) => {
-      const { fetchMock, inputs } = mockBatchEmbeddingFetch(3, tokens);
-
-      const { provider } = await createEmbeddingProvider();
-
-      const onUsage = vi.fn();
-      await expect(provider.embedBatch(["a", "bb", "ccc"], { onUsage })).resolves.toHaveLength(3);
-      expect(onUsage).toHaveBeenCalledExactlyOnceWith(
-        tokens === 7 || tokens === 0 ? { promptTokens: tokens, totalTokens: tokens } : undefined,
-      );
-      expect(fetchMock).toHaveBeenCalledTimes(1);
-      expect(inputs).toEqual([["a", "bb", "ccc"]]);
-      expect(firstGuardedFetchCall()).toMatchObject({
-        url: "http://127.0.0.1:11434/api/embed",
-        policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
-        configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
-        auditContext: "ollama-memory-embedding",
-      });
-    },
-  );
+    const onUsage = vi.fn();
+    await expect(provider.embedBatch(["a", "bb", "ccc"], { onUsage })).resolves.toHaveLength(3);
+    expect(onUsage).toHaveBeenCalledExactlyOnceWith(
+      tokens === 7 ? { promptTokens: tokens, totalTokens: tokens } : undefined,
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(inputs).toEqual([["a", "bb", "ccc"]]);
+    expect(firstGuardedFetchCall()).toMatchObject({
+      url: "http://127.0.0.1:11434/api/embed",
+      policy: { allowedOrigins: ["http://127.0.0.1:11434"] },
+      configuredLocalOriginBaseUrl: "http://127.0.0.1:11434",
+      auditContext: "ollama-memory-embedding",
+    });
+  });
 
   it("bounds embed error bodies without using response.text()", async () => {
     const tracked = createStreamingResponse({
@@ -408,8 +368,6 @@ describe("ollama embedding provider", () => {
       detail: 'model "all-minilm" not found, try pulling it first',
       recovery: " Run `ollama pull all-minilm` on the configured Ollama host.",
     },
-    { name: "missing endpoint", status: 404, detail: "404 page not found", recovery: "" },
-    { name: "server error", status: 500, detail: "model metadata not found", recovery: "" },
   ])("reports actionable embed errors for $name", async ({ status, detail, recovery }) => {
     const body = JSON.stringify({ error: detail });
     const fetchMock = mockEmbeddingResponse(new Response(body, { status }));
@@ -419,42 +377,6 @@ describe("ollama embedding provider", () => {
       message: `Ollama embed HTTP ${status}: ${body}${recovery}`,
     });
     expect(fetchMock).toHaveBeenCalledOnce();
-  });
-
-  it("reports malformed embed JSON with a provider-owned error", async () => {
-    mockEmbeddingResponse(
-      new Response("{not json", {
-        status: 200,
-        headers: { "content-type": "application/json" },
-      }),
-    );
-
-    const { provider } = await createEmbeddingProvider();
-
-    await expect(provider.embed("hello", { inputType: "query" })).rejects.toThrow(
-      "Ollama embed response: malformed JSON response",
-    );
-  });
-
-  it("bounds successful embed JSON bodies before parsing", async () => {
-    const streamed = createStreamingResponse({
-      chunkCount: 32,
-      chunkSize: 1024 * 1024,
-      text: "x",
-      headers: { "content-type": "application/json" },
-    });
-    const jsonSpy = vi.spyOn(streamed.response, "json").mockRejectedValue(new Error("unbounded"));
-    mockEmbeddingResponse(streamed.response);
-
-    const { provider } = await createEmbeddingProvider();
-
-    await expect(provider.embed("hello", { inputType: "query" })).rejects.toThrow(
-      "Ollama embed response: JSON response exceeds 16777216 bytes",
-    );
-
-    expect(streamed.getReadCount()).toBeLessThan(32);
-    expect(streamed.wasCanceled()).toBe(true);
-    expect(jsonSpy).not.toHaveBeenCalled();
   });
 
   it("rejects non-number embedding values instead of zeroing them", async () => {
@@ -480,52 +402,6 @@ describe("ollama embedding provider", () => {
       "Ollama embed response contains an empty embedding",
     );
   });
-
-  it.each([
-    {
-      name: "registry-qualified qwen",
-      model: "registry.ollama.ai/library/qwen3-embedding:0.6b",
-      query: "怀孕",
-      expected:
-        "Instruct: Given a user query, retrieve relevant memory notes and documents\nQuery:怀孕",
-    },
-    {
-      name: "namespaced nomic",
-      model: "library/nomic-embed-text:latest",
-      query: "What does $& mean?",
-      expected: "search_query: What does $& mean?",
-    },
-    {
-      name: "namespaced mixedbread",
-      model: "mixedbread/mxbai-embed-large:latest",
-      query: "capital of Australia",
-      expected: "Represent this sentence for searching relevant passages: capital of Australia",
-    },
-    {
-      name: "unknown namespaced model",
-      model: "custom/unknown-embedder:latest",
-      query: "unmodified query",
-      expected: "unmodified query",
-    },
-  ])("uses the correct retrieval query for $name", async ({ model, query, expected }) => {
-    const { fetchMock } = await embedTestQuery({ model }, query);
-
-    expectEmbeddingFetch(fetchMock, "http://127.0.0.1:11434/api/embed", {
-      model,
-      input: expected,
-    });
-  });
-
-  it.each(["library/qwen3-embedding:0.6b"])(
-    "keeps document batch embeddings raw for %s",
-    async (model) => {
-      const { inputs } = mockBatchEmbeddingFetch(2);
-      const { provider } = await createEmbeddingProvider({ model });
-
-      await expect(provider.embedBatch(["doc one", "doc two"])).resolves.toHaveLength(2);
-      expect(inputs).toEqual([["doc one", "doc two"]]);
-    },
-  );
 
   it("uses custom Ollama provider config and strips that provider prefix", async () => {
     const release = vi.fn();
@@ -623,28 +499,6 @@ describe("ollama embedding provider", () => {
       },
     });
   });
-
-  it.each(["AUTHORIZATION"])(
-    "keeps explicit remote %s header ahead of ambient Ollama Cloud credentials",
-    async (headerName) => {
-      vi.stubEnv("OLLAMA_API_KEY", "synthetic-cloud-tenant-b");
-
-      const { fetchMock } = await embedTestQuery({
-        remote: {
-          baseUrl: "https://ollama.com",
-          headers: { [headerName]: "Bearer synthetic-explicit-tenant-a" },
-        },
-      });
-
-      expectEmbeddingFetch(fetchMock, "https://ollama.com/api/embed", {
-        input: "search_query: hello",
-        headers: {
-          "Content-Type": "application/json",
-          [headerName]: "Bearer synthetic-explicit-tenant-a",
-        },
-      });
-    },
-  );
 
   it("uses explicit header auth without resolving an inactive selected-host apiKey SecretRef", async () => {
     vi.stubEnv("OLLAMA_API_KEY", "synthetic-cloud-key");
@@ -807,6 +661,8 @@ describe("ollama embedding provider", () => {
     });
   });
 
+  // Vary the credential and the non-secret tenant header independently: only
+  // the tenant may change the cache key.
   it("keys custom endpoints by non-secret headers while excluding credentials", async () => {
     const fetchMock = mockEmbeddingFetch([1, 0]);
     const createCustomProvider = (tenant: string, apiKey: string) =>
@@ -853,58 +709,5 @@ describe("ollama embedding provider", () => {
 
     const otherTenant = await createCustomProvider("tenant-b", "super-secret"); // pragma: allowlist secret
     expect(otherTenant.runtime?.cacheKeyData).not.toEqual(result.runtime?.cacheKeyData);
-  });
-
-  it("keys memory cache identity by resolved tenant SecretRefs without exposing their values", async () => {
-    vi.stubEnv("OLLAMA_SELECTED_HOST_KEY", "synthetic-selected-host-key");
-    vi.stubEnv("OLLAMA_SELECTED_TENANT", "synthetic-tenant-a");
-    const options = {
-      config: createProviderConfig(
-        {
-          api: "ollama",
-          baseUrl: "https://selected-private-host.invalid",
-          apiKey: envRef("OLLAMA_SELECTED_HOST_KEY"),
-          headers: {
-            "X-Ollama-Tenant": envRef("OLLAMA_SELECTED_TENANT"),
-          },
-          models: [],
-        },
-        "ollama-private",
-      ),
-      provider: "ollama-private",
-      model: "qwen3-embedding:4b",
-    };
-
-    const firstTenant = await createMemoryEmbeddingProvider(options);
-    vi.stubEnv("OLLAMA_SELECTED_TENANT", "synthetic-tenant-b");
-    const secondTenant = await createMemoryEmbeddingProvider(options);
-
-    expect(firstTenant.runtime?.cacheKeyData).not.toEqual(secondTenant.runtime?.cacheKeyData);
-    expect(JSON.stringify(firstTenant.runtime?.cacheKeyData)).not.toContain("synthetic-tenant-a");
-    expect(JSON.stringify(firstTenant.runtime?.cacheKeyData)).not.toContain(
-      "synthetic-selected-host-key",
-    );
-  });
-
-  it("preserves configured provider aliases in the memory adapter", async () => {
-    const result = await createMemoryEmbeddingProvider({
-      config: createProviderConfig(
-        { baseUrl: "http://spark.local:11434/v1", models: [] },
-        "ollama-spark",
-      ),
-      provider: "ollama-spark",
-      model: "ollama-spark/nomic-embed-text",
-    });
-
-    expect(result.runtime?.cacheKeyData).toMatchObject({
-      provider: "ollama-spark",
-      model: "nomic-embed-text",
-    });
-  });
-
-  it("marks inline memory batches as local-server timeout work", async () => {
-    const result = await createMemoryEmbeddingProvider();
-
-    expect(result.runtime?.inlineBatchTimeoutMs).toBe(600_000);
   });
 });

@@ -1,6 +1,3 @@
-/**
- * CDP page-session preparation and committed-navigation observation.
- */
 import { createHash } from "node:crypto";
 import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
@@ -17,11 +14,7 @@ const CDP_TARGET_NAVIGATION_RESULT_TIMEOUT_MS = 2_000;
 const CDP_TARGET_NAVIGATION_RESULT_POLL_MS = 50;
 const CDP_TARGET_NAVIGATION_STABILITY_MS = 250;
 
-type CdpGetFrameTreeSend = (
-  method: "Page.getFrameTree",
-  params?: undefined,
-  sessionId?: string,
-) => Promise<unknown>;
+type CdpGetFrameTreeSend = (method: "Page.getFrameTree") => Promise<unknown>;
 
 type CdpFrameTree = {
   frame?: {
@@ -63,11 +56,8 @@ function readCommittedFrameUrl(
 /** Read committed document identities together so snapshot facts share one browser observation. */
 export async function readCdpDocumentIdentities(
   send: CdpGetFrameTreeSend,
-  sessionId?: string,
 ): Promise<CdpDocumentIdentities> {
-  const result = (await send("Page.getFrameTree", undefined, sessionId).catch(
-    () => null,
-  )) as CdpFrameTreeResult | null;
+  const result = (await send("Page.getFrameTree").catch(() => null)) as CdpFrameTreeResult | null;
   const root = result?.frameTree;
   const loaderId = root?.frame?.loaderId;
   const identities: CdpDocumentIdentities = {

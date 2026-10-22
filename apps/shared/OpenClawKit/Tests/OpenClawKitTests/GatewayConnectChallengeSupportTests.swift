@@ -1,11 +1,11 @@
 import Foundation
-import OpenClawKit
 import OpenClawProtocol
 import Testing
+@testable import OpenClawKit
 
 struct GatewayConnectChallengeSupportTests {
     @Test func `parses gateway issued timestamp`() {
-        let challenge = GatewayConnectChallengeSupport.challenge(from: [
+        let challenge = GatewayConnectChallenge(payload: [
             "nonce": AnyCodable(" nonce-1 "),
             "ts": AnyCodable(1_700_000_000_123),
         ])
@@ -22,12 +22,12 @@ struct GatewayConnectChallengeSupportTests {
             ["nonce": AnyCodable(" "), "ts": AnyCodable(1_700_000_000_123)],
         ]
         for payload in payloads {
-            #expect(GatewayConnectChallengeSupport.challenge(from: payload) == nil)
+            #expect(GatewayConnectChallenge(payload: payload) == nil)
         }
     }
 
     @Test func `rejects challenge without timestamp`() {
-        #expect(GatewayConnectChallengeSupport.challenge(from: [
+        #expect(GatewayConnectChallenge(payload: [
             "nonce": AnyCodable("nonce-1"),
         ]) == nil)
     }

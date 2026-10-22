@@ -1,5 +1,6 @@
 import { asNonNegativeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { resolveEffectiveCompactionReserveTokens } from "../../agents/agent-compaction-constants.js";
+import type { AgentRunTerminalReplySnapshot } from "../../agents/agent-run-terminal-reply.types.js";
 import { DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR } from "../../agents/agent-settings.js";
 import { parseNonNegativeByteSize } from "../../config/byte-size.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -9,7 +10,6 @@ import {
   type MemoryFlushPlanResolution,
   type MemoryFlushToolsPlan,
 } from "../../plugins/memory-state.js";
-import { isSilentReplyPayloadText } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 
 const log = createSubsystemLogger("auto-reply/memory-flush");
@@ -38,10 +38,7 @@ function resolveMemoryFlushTiming(params: {
     return null;
   }
 
-  // Invalid config values retain the established defaults instead of changing flush admission.
-  let softThresholdTokens = Math.floor(
-    asNonNegativeFiniteNumber(defaults?.softThresholdTokens) ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS,
-  );
+  let softThresholdTokens = defaults?.softThresholdTokens ?? DEFAULT_MEMORY_FLUSH_SOFT_TOKENS;
   const forceFlushTranscriptBytes =
     parseNonNegativeByteSize(defaults?.forceFlushTranscriptBytes) ??
     DEFAULT_MEMORY_FLUSH_FORCE_TRANSCRIPT_BYTES;
@@ -130,8 +127,7 @@ export function resolveMemoryFlushPlanForRun(
 /** Recognize deliberate silence only in the final assistant output. */
 export function memoryFlushResultIsSilent(result: {
   payloads?: readonly ReplyPayload[];
-  meta?: { finalAssistantRawText?: string; finalAssistantVisibleText?: string };
+  meta?: { terminalReply?: AgentRunTerminalReplySnapshot };
 }): boolean {
-  const finalText = result.meta?.finalAssistantVisibleText ?? result.meta?.finalAssistantRawText;
-  return isSilentReplyPayloadText(finalText ?? result.payloads?.at(-1)?.text);
+  return result.meta?.terminalReply?.disposition === "silent";
 }

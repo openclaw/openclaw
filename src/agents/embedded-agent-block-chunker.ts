@@ -57,54 +57,6 @@ type BlockChunkDrain = {
   emit: (chunk: string, options?: BlockChunkMetadata) => void;
 };
 
-function findSafeSentenceBreakIndex(
-  text: string,
-  unsafeSpans: readonly BreakSpan[],
-  minChars: number,
-  offset = 0,
-  openFence?: FenceSpan,
-): number {
-  const matches = text.matchAll(/[.!?](?=\s|$)/g);
-  let sentenceIdx = -1;
-  for (const match of matches) {
-    const at = match.index;
-    if (at < minChars) {
-      continue;
-    }
-    const candidate = at + 1;
-    if (
-      offset + candidate !== openFence?.end &&
-      isSafeFenceBreak(unsafeSpans, offset + candidate)
-    ) {
-      sentenceIdx = candidate;
-    }
-  }
-  return sentenceIdx >= minChars ? sentenceIdx : -1;
-}
-
-function findSafeLineBreakIndex(params: {
-  text: string;
-  unsafeSpans: readonly BreakSpan[];
-  minChars: number;
-  reverse: boolean;
-  separator: "\n" | "\n\n";
-  offset?: number;
-}): number {
-  const { text, unsafeSpans, minChars, reverse, separator, offset = 0 } = params;
-  let index = reverse ? text.lastIndexOf(separator) : text.indexOf(separator);
-  while (reverse ? index >= minChars : index !== -1) {
-    for (let candidate = index; candidate < index + separator.length; candidate++) {
-      if (candidate >= minChars && isSafeFenceBreak(unsafeSpans, offset + candidate)) {
-        return candidate;
-      }
-    }
-    index = reverse
-      ? text.lastIndexOf(separator, index - 1)
-      : text.indexOf(separator, index + separator.length);
-  }
-  return -1;
-}
-
 function findFenceCloseLineStart(buffer: string, fence: FenceSpan, offset = 0): number {
   const relativeFenceEnd = Math.min(buffer.length, Math.max(0, fence.end - offset));
   if (relativeFenceEnd <= 0) {
@@ -320,7 +272,11 @@ export class EmbeddedBlockChunker {
       return;
     }
 
-    if (force && source.length <= maxChars && !this.#reopenPrefix) {
+    const { spans: fenceSpans, state: fenceState } = scanFenceSpans(source, {
+      atLineStart: startsAtLineStart,
+    });
+    const openFence = fenceState.open ? fenceSpans.at(-1) : undefined;
+    if (force && source.length <= maxChars && !this.#reopenPrefix && !openFence) {
       if (source.trim().length > 0) {
         emitChunk(source, 0, this.#buffer.length, startsAtLineStart);
       }
@@ -334,20 +290,17 @@ export class EmbeddedBlockChunker {
 
     // Keep original source text so shortened language hints and synthetic
     // fences cannot move the source cursor during checkpoint reconciliation.
-    const { spans: fenceSpans, state: fenceState } = scanFenceSpans(source, {
-      atLineStart: startsAtLineStart,
-    });
-    const openFence = fenceState.open ? fenceSpans.at(-1) : undefined;
     const removedFenceInfo: Array<{ at: number; length: number }> = [];
     let removedFenceInfoLength = 0;
     for (const fence of fenceSpans) {
       fence.start -= removedFenceInfoLength;
       fence.end -= removedFenceInfoLength;
       const reopenFenceLine = resolveFenceReopenLine(fence, maxChars);
+      const closingLength = fence === openFence ? fence.indent.length + fence.marker.length + 1 : 0;
       if (
         !reopenFenceLine ||
         reopenFenceLine === fence.openLine ||
-        fence.end - fence.start <= maxChars
+        fence.end - fence.start + closingLength <= maxChars
       ) {
         continue;
       }
@@ -429,10 +382,10 @@ export class EmbeddedBlockChunker {
 
       const view = source.slice(start);
       const breakResult =
-        force && remainingLength <= maxChars
+        force && remainingLength <= maxChars && !openFence
           ? this.#pickPreferredBreakIndex(view, unsafe, chunking, false, 1, start, openFence)
           : this.#pickBreakIndex(
-              params,
+              { ...params, force },
               view,
               spans,
               chunking,
@@ -542,28 +495,36 @@ export class EmbeddedBlockChunker {
     const separators: Array<"\n" | "\n\n"> =
       preference === "paragraph" ? ["\n\n", "\n"] : preference === "newline" ? ["\n"] : [];
     for (const separator of separators) {
-      const index = findSafeLineBreakIndex({
-        text: buffer,
-        unsafeSpans,
-        minChars,
-        reverse,
-        separator,
-        offset,
-      });
-      if (index !== -1) {
-        return { index };
+      let index = reverse ? buffer.lastIndexOf(separator) : buffer.indexOf(separator);
+      while (reverse ? index >= minChars : index !== -1) {
+        for (let candidate = index; candidate < index + separator.length; candidate++) {
+          if (candidate >= minChars && isSafeFenceBreak(unsafeSpans, offset + candidate)) {
+            return { index: candidate };
+          }
+        }
+        index = reverse
+          ? buffer.lastIndexOf(separator, index - 1)
+          : buffer.indexOf(separator, index + separator.length);
       }
     }
 
     if (preference !== "newline") {
-      const sentenceIdx = findSafeSentenceBreakIndex(
-        buffer,
-        unsafeSpans,
-        minChars,
-        offset,
-        openFence,
-      );
-      if (sentenceIdx !== -1) {
+      const matches = buffer.matchAll(/[.!?](?=\s|$)/g);
+      let sentenceIdx = -1;
+      for (const match of matches) {
+        const at = match.index;
+        if (at < minChars) {
+          continue;
+        }
+        const candidate = at + 1;
+        if (
+          offset + candidate !== openFence?.end &&
+          isSafeFenceBreak(unsafeSpans, offset + candidate)
+        ) {
+          sentenceIdx = candidate;
+        }
+      }
+      if (sentenceIdx >= minChars) {
         return { index: sentenceIdx };
       }
     }
@@ -601,7 +562,7 @@ export class EmbeddedBlockChunker {
       return preferred;
     }
 
-    if (buffer.length < maxChars) {
+    if (buffer.length < maxChars && !force) {
       return { index: -1 };
     }
 
@@ -616,7 +577,7 @@ export class EmbeddedBlockChunker {
       }
     }
 
-    if (buffer.length >= maxChars) {
+    if (buffer.length >= maxChars || force) {
       const firstCodePointWidth = (buffer.codePointAt(0) ?? 0) > 0xffff ? 2 : 1;
       const forcedBreakIndex = sliceUtf16Safe(
         buffer,

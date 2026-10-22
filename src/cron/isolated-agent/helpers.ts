@@ -11,7 +11,6 @@ import {
   setReplyPayloadMetadata,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
-import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { truncateUtf16Safe } from "../../utils.js";
 
 type DeliveryPayload = Pick<
@@ -82,15 +81,15 @@ export function pickSummaryFromOutput(text: string | undefined) {
 function pickLastNonEmptyTextFromPayloads(
   payloads: Array<{ text?: string | undefined; isError?: boolean }>,
 ) {
-  const successful = payloads
-    .findLast((payload) => !payload?.isError && payload?.text?.trim())
-    ?.text?.trim();
+  const successful = payloads.findLast(
+    (payload) => !payload?.isError && payload?.text?.trim(),
+  )?.text;
   if (successful) {
     return successful;
   }
-  return payloads
-    .findLast((payload) => !isNonTerminalToolErrorWarning(payload) && payload?.text?.trim())
-    ?.text?.trim();
+  return payloads.findLast(
+    (payload) => !isNonTerminalToolErrorWarning(payload) && payload?.text?.trim(),
+  )?.text;
 }
 
 function isDeliverablePayload(payload: DeliveryPayload | null | undefined): boolean {
@@ -195,9 +194,9 @@ export function resolveCronPayloadOutcome(params: {
   );
   const lastErrorPayloadText = lastTextErrorPayload?.text?.trim();
   const errorPayloads = params.payloads.filter((payload) => payload?.isError === true);
-  const finalText = normalizeOptionalString(params.finalAssistantVisibleText);
-  const normalizedFinalAssistantVisibleText =
-    finalText && !isSilentReplyPayloadText(finalText) ? finalText : undefined;
+  const normalizedFinalAssistantVisibleText = params.finalAssistantVisibleText?.trim()
+    ? params.finalAssistantVisibleText
+    : undefined;
   const hasSuccessfulPayloadAfterLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&

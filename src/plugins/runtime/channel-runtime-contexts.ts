@@ -93,17 +93,10 @@ export function createChannelRuntimeContextRegistry(): ChannelRuntimeContextRegi
         });
       };
       params.abortSignal?.addEventListener("abort", dispose, { once: true });
-      if (params.abortSignal?.aborted) {
-        dispose();
-        return { dispose };
-      }
       runtimeContexts.set(normalized.mapKey, {
         token,
         context: params.context,
       });
-      if (disposed) {
-        return { dispose };
-      }
       emitRuntimeContextEvent({
         type: "registered",
         key: normalized.normalizedKey,

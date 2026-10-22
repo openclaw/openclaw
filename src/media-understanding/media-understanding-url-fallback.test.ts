@@ -1,5 +1,3 @@
-// Attachment URL fallback tests cover blocked local paths falling back to
-// remote media fetches and temp-file materialization.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -14,45 +12,27 @@ vi.mock("../media/fetch.js", async () => {
   return {
     ...actual,
     readRemoteMediaBuffer: readRemoteMediaBufferMock,
+    readRemoteMediaBufferWithHeaders: readRemoteMediaBufferMock,
   };
 });
 
-function requireReadRemoteMediaBufferInput(): {
-  url?: unknown;
-  timeoutMs?: unknown;
-  maxBytes?: unknown;
-  ssrfPolicy?: unknown;
-  retry?: unknown;
-} {
-  const [call] = readRemoteMediaBufferMock.mock.calls;
-  if (!call) {
-    throw new Error("expected readRemoteMediaBuffer call");
-  }
-  const [input] = call;
-  if (typeof input !== "object" || input === null || Array.isArray(input)) {
-    throw new Error("expected readRemoteMediaBuffer input to be an object");
-  }
-  return input;
-}
+const fallbackUrl = "https://example.com/fallback.jpg";
+const readOptions = { attachmentIndex: 0, maxBytes: 1024, timeoutMs: 1000 };
 
-async function withBlockedLocalAttachmentFallback(
-  prefix: string,
-  run: (params: { cache: MediaAttachmentCache; fallbackUrl: string }) => Promise<void>,
-) {
-  await withTestDir({ prefix }, async (base) => {
+async function withFallback(missing: boolean, run: (cache: MediaAttachmentCache) => Promise<void>) {
+  await withTestDir({ prefix: "openclaw-media-url-fallback-" }, async (base) => {
     const attachmentRoot = path.join(base, "attachment");
     const allowedRoot = path.join(base, "allowed");
     const attachmentPath = path.join(attachmentRoot, "voice-note.m4a");
-    const fallbackUrl = "https://example.com/fallback.jpg";
     await fs.mkdir(attachmentRoot, { recursive: true });
     await fs.mkdir(allowedRoot, { recursive: true });
-    await fs.writeFile(attachmentPath, "ok");
+    if (!missing) {
+      await fs.writeFile(attachmentPath, "ok");
+    }
 
     const cache = new MediaAttachmentCache(
       [{ index: 0, path: attachmentPath, url: fallbackUrl, mime: "image/jpeg" }],
-      {
-        localPathRoots: [allowedRoot],
-      },
+      missing ? undefined : { localPathRoots: [allowedRoot] },
     );
     readRemoteMediaBufferMock.mockResolvedValue({
       buffer: Buffer.from("fallback-buffer"),
@@ -61,10 +41,21 @@ async function withBlockedLocalAttachmentFallback(
     });
 
     try {
-      await run({ cache, fallbackUrl });
+      await run(cache);
     } finally {
       await cache.cleanup();
     }
+  });
+}
+
+function expectFetch() {
+  expect(readRemoteMediaBufferMock).toHaveBeenCalledTimes(1);
+  expect(readRemoteMediaBufferMock.mock.calls[0]?.[0]).toStrictEqual({
+    url: fallbackUrl,
+    timeoutMs: 1000,
+    maxBytes: 1024,
+    ssrfPolicy: undefined,
+    retry: expect.objectContaining({ attempts: 3 }),
   });
 }
 
@@ -75,81 +66,20 @@ describe("media understanding attachment URL fallback", () => {
   });
 
   it("getPath falls back to URL fetch when local path is blocked", async () => {
-    await withBlockedLocalAttachmentFallback(
-      "openclaw-media-cache-getpath-url-fallback-",
-      async ({ cache, fallbackUrl }) => {
-        const result = await cache.getPath({
-          attachmentIndex: 0,
-          maxBytes: 1024,
-          timeoutMs: 1000,
-        });
-        expect(path.dirname(result)).toBe(resolvePreferredOpenClawTmpDir());
-        expect(path.extname(result)).toBe(".jpg");
-        await expect(fs.readFile(result, "utf8")).resolves.toBe("fallback-buffer");
-        expect(readRemoteMediaBufferMock).toHaveBeenCalledTimes(1);
-        const fetchInput = requireReadRemoteMediaBufferInput();
-        expect(fetchInput).toStrictEqual({
-          url: fallbackUrl,
-          timeoutMs: 1000,
-          maxBytes: 1024,
-          ssrfPolicy: undefined,
-          retry: expect.objectContaining({ attempts: 3 }),
-        });
-      },
-    );
+    await withFallback(false, async (cache) => {
+      const result = await cache.getPath(readOptions);
+      expect(path.dirname(result)).toBe(resolvePreferredOpenClawTmpDir());
+      expect(path.extname(result)).toBe(".jpg");
+      await expect(fs.readFile(result, "utf8")).resolves.toBe("fallback-buffer");
+      expectFetch();
+    });
   });
 
-  it("falls back to URL fetch when local attachment canonicalization fails", async () => {
-    await withBlockedLocalAttachmentFallback(
-      "openclaw-media-cache-url-fallback-",
-      async ({ cache, fallbackUrl }) => {
-        const result = await cache.getBuffer({
-          attachmentIndex: 0,
-          maxBytes: 1024,
-          timeoutMs: 1000,
-        });
-        expect(result.buffer.toString()).toBe("fallback-buffer");
-        expect(readRemoteMediaBufferMock).toHaveBeenCalledTimes(1);
-        const fetchInput = requireReadRemoteMediaBufferInput();
-        expect(fetchInput).toStrictEqual({
-          url: fallbackUrl,
-          timeoutMs: 1000,
-          maxBytes: 1024,
-          ssrfPolicy: undefined,
-          retry: expect.objectContaining({ attempts: 3 }),
-        });
-      },
-    );
-  });
-
-  it("keeps HTTP fallback when the supplied local path is missing", async () => {
-    await withTestDir(
-      { prefix: "openclaw-media-cache-missing-path-url-fallback-" },
-      async (base) => {
-        const fallbackUrl = "https://example.com/fallback.jpg";
-        readRemoteMediaBufferMock.mockResolvedValue({
-          buffer: Buffer.from("fallback-buffer"),
-          contentType: "image/jpeg",
-          fileName: "fallback.jpg",
-        });
-        const cache = new MediaAttachmentCache([
-          {
-            index: 0,
-            path: path.join(base, "missing.jpg"),
-            url: fallbackUrl,
-            mime: "image/jpeg",
-          },
-        ]);
-
-        const result = await cache.getBuffer({
-          attachmentIndex: 0,
-          maxBytes: 1024,
-          timeoutMs: 1000,
-        });
-
-        expect(result.buffer.toString()).toBe("fallback-buffer");
-        expect(requireReadRemoteMediaBufferInput()).toMatchObject({ url: fallbackUrl });
-      },
-    );
+  it.each([false, true])("getBuffer falls back to URL (missing local path=%s)", async (missing) => {
+    await withFallback(missing, async (cache) => {
+      const result = await cache.getBuffer(readOptions);
+      expect(result.buffer.toString()).toBe("fallback-buffer");
+      expectFetch();
+    });
   });
 });

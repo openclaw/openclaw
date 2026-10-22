@@ -1,4 +1,3 @@
-// Covers bounded untrusted web-search output and preserved provider source facts.
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { normalizeWebSearchOutput, WebSearchOutputSchema } from "./web-search-output.js";
@@ -10,72 +9,51 @@ function stripWrapMarkers(value: string): string {
   return value.replace(WRAP_MARKER_RE, "");
 }
 
+function normalize(result: Record<string, unknown>) {
+  return normalizeWebSearchOutput({ provider: "external-demo", query: "q", result });
+}
+
 function assertOutputKind<T extends { kind: string }, K extends T["kind"]>(
   value: T,
   kind: K,
 ): asserts value is Extract<T, { kind: K }> {
-  if (value.kind !== kind) {
-    throw new Error(`expected ${kind} branch`);
-  }
+  expect(value.kind).toBe(kind);
 }
 
 describe("web_search normalized output security", () => {
-  it.each([
-    {
-      label: "provider answer",
-      result: { content: "bounded answer", truncated: true },
-      expectedKind: "answer",
-    },
-  ])(
-    "preserves actual $label truncation through the closed model contract",
-    ({ result, expectedKind }) => {
-      const normalized = normalizeWebSearchOutput({
-        provider: "trusted-owner",
-        query: "q",
-        result,
-      });
-
-      expect(normalized).toMatchObject({ kind: expectedKind, truncated: true });
-      expect(Value.Check(WebSearchOutputSchema, normalized)).toBe(true);
-    },
-  );
+  it("preserves provider answer truncation through the closed model contract", () => {
+    const normalized = normalize({ content: "bounded answer", truncated: true });
+    expect(normalized).toMatchObject({ kind: "answer", truncated: true });
+    expect(Value.Check(WebSearchOutputSchema, normalized)).toBe(true);
+  });
 
   it("bounds conforming result rows to the public search count and reports the emitted count", () => {
-    const normalized = normalizeWebSearchOutput({
-      provider: "external-demo",
-      query: "bounded result rows",
-      result: {
-        count: 25,
-        results: Array.from({ length: 25 }, (_, index) => ({
-          title: `result ${index}`,
-          url: `https://example.com/result/${index}`,
-        })),
-      },
+    const normalized = normalize({
+      count: 25,
+      results: Array.from({ length: 25 }, (_, index) => ({
+        title: `result ${index}`,
+        url: `https://example.com/result/${index}`,
+      })),
     });
 
     assertOutputKind(normalized, "results");
     expect(normalized.results).toHaveLength(10);
-    expect(normalized.count).toBe(10);
-    expect(normalized.truncated).toBe(true);
+    expect(normalized).toMatchObject({ count: 10, truncated: true });
   });
 
   it.each([
     ["2026-02-30", undefined],
     ["2026-09-21T", "2026-09-21T"],
   ])("omits only impossible calendar metadata for %s", (published, expected) => {
-    const normalized = normalizeWebSearchOutput({
-      provider: "external-demo",
-      query: "publication date",
-      result: {
-        results: [
-          {
-            title: "result title",
-            url: "https://example.com/result",
-            snippet: "result snippet",
-            published,
-          },
-        ],
-      },
+    const normalized = normalize({
+      results: [
+        {
+          title: "result title",
+          url: "https://example.com/result",
+          snippet: "result snippet",
+          published,
+        },
+      ],
     });
 
     assertOutputKind(normalized, "results");
@@ -91,17 +69,13 @@ describe("web_search normalized output security", () => {
   });
 
   it("bounds the aggregate untrusted result URLs, titles, snippets, and site names", () => {
-    const normalized = normalizeWebSearchOutput({
-      provider: "external-demo",
-      query: "bounded result metadata",
-      result: {
-        results: Array.from({ length: 10 }, (_, index) => ({
-          title: "t".repeat(15_000),
-          url: `https://example.com/${index}`,
-          snippet: "s".repeat(15_000),
-          siteName: "n".repeat(15_000),
-        })),
-      },
+    const normalized = normalize({
+      results: Array.from({ length: 10 }, (_, index) => ({
+        title: "t".repeat(15_000),
+        url: `https://example.com/${index}`,
+        snippet: "s".repeat(15_000),
+        siteName: "n".repeat(15_000),
+      })),
     });
 
     assertOutputKind(normalized, "results");
@@ -119,38 +93,20 @@ describe("web_search normalized output security", () => {
     expect(JSON.stringify(normalized).length).toBeLessThan(22_000);
   });
 
-  it.each(["answer"] as const)(
-    "charges final sanitized %s text when short special tokens expand",
-    (kind) => {
-      const expanding = "<s>".repeat(6_666);
-      const result =
-        kind === "answer"
-          ? { content: expanding }
-          : { results: [{ title: expanding, url: "https://example.com/result" }] };
-      const normalized = normalizeWebSearchOutput({
-        provider: "external-demo",
-        query: "sanitizer expansion",
-        result,
-      });
-
-      expect(normalized.kind).toBe(kind);
-      expect(normalized).toMatchObject({ truncated: true });
-      expect(JSON.stringify(normalized).length).toBeLessThan(21_000);
-      expect(JSON.stringify(normalized)).not.toContain("<s>");
-    },
-  );
+  it("charges final sanitized answer text when short special tokens expand", () => {
+    const normalized = normalize({ content: "<s>".repeat(6_666) });
+    expect(normalized).toMatchObject({ kind: "answer", truncated: true });
+    expect(JSON.stringify(normalized).length).toBeLessThan(21_000);
+    expect(JSON.stringify(normalized)).not.toContain("<s>");
+  });
 
   it("bounds citations and their URLs and titles within the shared answer budget", () => {
-    const normalized = normalizeWebSearchOutput({
-      provider: "external-answer",
-      query: "bounded citation count",
-      result: {
-        content: "answer body",
-        citations: Array.from({ length: 25 }, (_, index) => ({
-          url: `https://example.com/citation/${index}`,
-          title: `citation ${index}`,
-        })),
-      },
+    const normalized = normalize({
+      content: "answer body",
+      citations: Array.from({ length: 25 }, (_, index) => ({
+        url: `https://example.com/citation/${index}`,
+        title: `citation ${index}`,
+      })),
     });
 
     assertOutputKind(normalized, "answer");
@@ -159,13 +115,9 @@ describe("web_search normalized output security", () => {
   });
 
   it("reserves valid source URLs when an answer already fills the provider content cap", () => {
-    const normalized = normalizeWebSearchOutput({
-      provider: "external-answer",
-      query: "source preservation",
-      result: {
-        content: "x".repeat(20_000),
-        citations: ["https://example.com/first", "https://example.com/second"],
-      },
+    const normalized = normalize({
+      content: "x".repeat(20_000),
+      citations: ["https://example.com/first", "https://example.com/second"],
     });
 
     assertOutputKind(normalized, "answer");
@@ -178,16 +130,12 @@ describe("web_search normalized output security", () => {
   });
 
   it("keeps the first valid citation after malformed provider entries", () => {
-    const normalized = normalizeWebSearchOutput({
-      provider: "external-answer",
-      query: "valid citation priority",
-      result: {
-        content: "answer",
-        citations: [
-          ...Array.from({ length: 20 }, () => "invalid citation"),
-          "https://example.com/valid",
-        ],
-      },
+    const normalized = normalize({
+      content: "answer",
+      citations: [
+        ...Array.from({ length: 20 }, () => "invalid citation"),
+        "https://example.com/valid",
+      ],
     });
 
     assertOutputKind(normalized, "answer");
@@ -195,14 +143,10 @@ describe("web_search normalized output security", () => {
   });
 
   it("bounds provider-controlled error text and rejects oversized unwrapped docs URLs", () => {
-    const normalized = normalizeWebSearchOutput({
-      provider: "external-demo",
-      query: "oversized error",
-      result: {
-        error: "e".repeat(3_000),
-        message: `${"m".repeat(1_997)}🤖${"m".repeat(20_000)}`,
-        docs: `https://example.com/${"x".repeat(3_000)}`,
-      },
+    const normalized = normalize({
+      error: "e".repeat(3_000),
+      message: `${"m".repeat(1_997)}🤖${"m".repeat(20_000)}`,
+      docs: `https://example.com/${"x".repeat(3_000)}`,
     });
 
     assertOutputKind(normalized, "error");
@@ -215,13 +159,9 @@ describe("web_search normalized output security", () => {
   it("rejects citations whose normalized Unicode URL expands beyond the hard bound", () => {
     const expandedUrl = `https://example.com/${"🦀".repeat(1_000)}`;
     expect(expandedUrl.length).toBeLessThan(2_048);
-    const normalized = normalizeWebSearchOutput({
-      provider: "external-answer",
-      query: "canonical citation length",
-      result: {
-        content: "body",
-        citations: [expandedUrl, "https://example.com/🦀"],
-      },
+    const normalized = normalize({
+      content: "body",
+      citations: [expandedUrl, "https://example.com/🦀"],
     });
 
     assertOutputKind(normalized, "answer");
@@ -239,8 +179,6 @@ describe("web_search normalized output security", () => {
       ],
     };
 
-    expect(
-      normalizeWebSearchOutput({ provider: "external-demo", query: "raw tail", result: payload }),
-    ).toEqual({ kind: "raw", provider: "external-demo", data: payload });
+    expect(normalize(payload)).toEqual({ kind: "raw", provider: "external-demo", data: payload });
   });
 });

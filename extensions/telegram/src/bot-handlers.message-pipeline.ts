@@ -3,7 +3,8 @@ import { firstDefined, isSenderIdAllowed } from "openclaw/plugin-sdk/allow-from"
 import { resolveChannelContextVisibilityMode } from "openclaw/plugin-sdk/context-visibility-runtime";
 import { kindFromMime } from "openclaw/plugin-sdk/media-runtime";
 import type { ChannelReplayClaimHandle } from "openclaw/plugin-sdk/persistent-dedupe";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { readRuntimeConfig as getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
+import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { evaluateSupplementalContextVisibility } from "openclaw/plugin-sdk/security-runtime";
 import { expandTelegramAllowFromWithAccessGroups } from "./access-groups.js";
 import { resolveTelegramAccount, resolveTelegramMediaRuntimeOptions } from "./accounts.js";
@@ -95,7 +96,6 @@ export function createTelegramMessagePipeline({
   resolveTelegramGroupConfig,
   processMessage,
   logger,
-  telegramDeps,
 }: RegisterTelegramHandlerParams) {
   const { token } = opts;
   const mediaRuntimeOptions = resolveTelegramMediaRuntimeOptions({
@@ -121,7 +121,6 @@ export function createTelegramMessagePipeline({
   const sessionRuntime = createTelegramMessageSessionRuntime({
     accountId,
     resolveTelegramGroupConfig,
-    telegramDeps,
   });
   const { resolveTelegramSessionState, resolvePromptContextAmbientWatermark } = sessionRuntime;
   const {
@@ -138,7 +137,6 @@ export function createTelegramMessagePipeline({
     ownerAgentId,
     opts,
     telegramCfg,
-    telegramDeps,
   });
   const replayGuard = createTelegramMessageDispatchReplayGuard({
     onDiskError: (error) => {
@@ -203,7 +201,6 @@ export function createTelegramMessagePipeline({
       msg,
     });
     if (claim.kind === "duplicate") {
-      logVerbose(`telegram dispatch dedupe: skipped message ${msg.chat.id}:${msg.message_id}`);
       return { process: false };
     }
     return { process: true, claims: claim.kind === "claimed" ? [claim.handle] : [] };
@@ -414,7 +411,7 @@ export function createTelegramMessagePipeline({
     try {
       // One assembled turn owns one config identity. Reloading below this point
       // can validate a model pin against a different allowlist than dispatch uses.
-      const runtimeCfg = telegramDeps.getRuntimeConfig();
+      const runtimeCfg = getRuntimeConfig();
       const runtimeTelegramCfg = resolveTelegramAccount({ cfg: runtimeCfg, accountId }).config;
       const replyChainNodes = await buildReplyChainForMessage(params.msg);
       const isGroupConversation =

@@ -119,6 +119,12 @@ if (endpoint === "repos/openclaw/openclaw/actions/runs/101") {
   return { result, receipt, output };
 }
 
+function sealed(data = fixture(), runAttempt = 1) {
+  const { result, receipt, output } = seal(data, runAttempt);
+  expect(result.status, result.stderr).toBe(0);
+  return { evidence: JSON.parse(readFileSync(receipt, "utf8")), output };
+}
+
 describe("full release child evidence producer", () => {
   it.each(["normalCi"])("blocks failed selected metadata and workload jobs for %s", (key) => {
     const workload = {
@@ -197,65 +203,49 @@ describe("full release child evidence producer", () => {
     expect(upload?.with?.overwrite).toBe(false);
   });
 
-  it.each(["success", "failure"])(
-    "seals %s workload facts independently of the parent",
-    (conclusion) => {
-      const data = fixture();
-      data.jobs[1]!.conclusion = conclusion;
-      const { result, receipt, output } = seal(data);
-      expect(result.status, result.stderr).toBe(0);
-      const evidence = JSON.parse(readFileSync(receipt, "utf8"));
-      expect(evidence).toMatchObject({
-        schema: "openclaw.full-release-child-evidence/v1",
-        sourceParentRunId: "77",
-        sourceParentAttempt: 1,
-        runId: "101",
-        plannedRunAttempt: 1,
-        effectiveRunAttempt: 1,
-        role: "normalCi",
-        targetSha: TARGET,
-        workflowSha: TARGET,
-        workloadConclusion: conclusion,
-        inputs: { release_scope: "full", target_ref: TARGET },
-        publisher: { jobId: "3", jobName: PUBLISHER },
-      });
-      expect(evidence.jobs.map((job: { name: string }) => job.name)).toEqual([
-        "node tests",
-        "resolve target",
-      ]);
-      const { sha256, ...payload } = evidence;
-      expect(sha256).toBe(createHash("sha256").update(JSON.stringify(payload)).digest("hex"));
-      expect(readFileSync(output, "utf8")).toBe(
-        `artifact_name=full-release-child-evidence-${TARGET}-normalCi-101-1\n`,
-      );
-    },
-  );
+  it.each([
+    ["normalCi", "success"],
+    ["normalCi", "failure"],
+    ["pluginPrereleaseIndependent", "success"],
+    ["releaseChecksCandidate", "success"],
+  ])("seals %s %s workload facts independently of the parent", (role, conclusion) => {
+    const data = fixture(role);
+    data.jobs[1]!.conclusion = conclusion;
+    const { evidence, output } = sealed(data);
+    expect(evidence).toMatchObject({
+      schema: "openclaw.full-release-child-evidence/v1",
+      sourceParentRunId: "77",
+      sourceParentAttempt: 1,
+      runId: "101",
+      plannedRunAttempt: 1,
+      effectiveRunAttempt: 1,
+      role,
+      targetSha: TARGET,
+      workflowSha: TARGET,
+      workloadConclusion: conclusion,
+      inputs: { release_scope: "full", target_ref: TARGET },
+      publisher: { jobId: "3", jobName: PUBLISHER },
+    });
+    expect(evidence.jobs.map((job: { name: string }) => job.name)).toEqual([
+      "node tests",
+      "resolve target",
+    ]);
+    const { sha256, ...payload } = evidence;
+    expect(sha256).toBe(createHash("sha256").update(JSON.stringify(payload)).digest("hex"));
+    expect(readFileSync(output, "utf8")).toBe(
+      `artifact_name=full-release-child-evidence-${TARGET}-${role}-101-1\n`,
+    );
+  });
 
   it("seals a complete paginated attempt without a monolithic metadata response", () => {
     const data = fixture();
     for (let index = 0; index < 100; index++) {
       data.jobs.push({ ...data.jobs[1]!, id: index + 10, name: `workload ${index}` });
     }
-    const { result, receipt } = seal(data);
-    expect(result.status, result.stderr).toBe(0);
-    const evidence = JSON.parse(readFileSync(receipt, "utf8"));
-    expect(evidence.workloadConclusion).toBe("success");
+    const { evidence } = sealed(data);
+    expect(evidence).toMatchObject({ workloadConclusion: "success", observedRunAttempts: [1] });
     expect(evidence.jobs).toHaveLength(102);
-    expect(evidence.observedRunAttempts).toEqual([1]);
   });
-
-  it.each(["pluginPrereleaseIndependent", "releaseChecksCandidate"])(
-    "seals %s evidence at the exact target SHA",
-    (role) => {
-      const { result, receipt } = seal(fixture(role));
-      expect(result.status, result.stderr).toBe(0);
-      expect(JSON.parse(readFileSync(receipt, "utf8"))).toMatchObject({
-        role,
-        targetSha: TARGET,
-        workflowSha: TARGET,
-      });
-    },
-  );
 
   it.each([
     { runAttempt: 2, retryWorkload: true, observedRunAttempts: [1, 2], accepted: 2 },
@@ -285,9 +275,7 @@ describe("full release child evidence producer", () => {
           },
         ]);
       }
-      const { result, receipt } = seal(data, runAttempt);
-      expect(result.status, result.stderr).toBe(0);
-      const evidence = JSON.parse(readFileSync(receipt, "utf8"));
+      const { evidence } = sealed(data, runAttempt);
       expect(evidence).toMatchObject({
         workloadConclusion: "success",
         effectiveRunAttempt: runAttempt,
@@ -307,43 +295,33 @@ describe("full release child evidence producer", () => {
     },
   );
 
-  it.each([
-    {
-      name: "workflow SHA different from the target",
-      mutate: (data: ReturnType<typeof fixture>) => {
-        data.run.head_sha = SHA;
-      },
-      error: "does not match the target SHA",
-    },
-    {
-      name: "stale run attempt",
-      mutate: (data: ReturnType<typeof fixture>) => {
-        data.run.run_attempt = 2;
-      },
-      error: "current active workflow attempt",
-    },
-    {
-      name: "foreign child repository",
-      mutate: (data: ReturnType<typeof fixture>) => {
-        data.run.repository.full_name = "other/repository";
-      },
-      error: "provenance changed",
-    },
-    {
-      name: "active predecessor",
-      mutate: (data: ReturnType<typeof fixture>) => {
-        data.jobs[1]!.status = "in_progress";
-      },
-      error: "predecessor jobs are active",
-    },
-    {
-      name: "ambiguous publisher",
-      mutate: (data: ReturnType<typeof fixture>) => {
-        data.jobs.push({ ...data.jobs[2]!, id: 4 });
-      },
-      error: "publisher job identity",
-    },
-  ])("rejects $name", ({ mutate, error }) => {
+  it.each<[string, (data: ReturnType<typeof fixture>) => void, string]>([
+    [
+      "workflow SHA different from the target",
+      (data) => void (data.run.head_sha = SHA),
+      "does not match the target SHA",
+    ],
+    [
+      "stale run attempt",
+      (data) => void (data.run.run_attempt = 2),
+      "current active workflow attempt",
+    ],
+    [
+      "foreign child repository",
+      (data) => void (data.run.repository.full_name = "other/repository"),
+      "provenance changed",
+    ],
+    [
+      "active predecessor",
+      (data) => void (data.jobs[1]!.status = "in_progress"),
+      "predecessor jobs are active",
+    ],
+    [
+      "ambiguous publisher",
+      (data) => void data.jobs.push({ ...data.jobs[2]!, id: 4 }),
+      "publisher job identity",
+    ],
+  ])("rejects %s", (_name, mutate, error) => {
     const data = fixture();
     mutate(data);
     const { result } = seal(data);

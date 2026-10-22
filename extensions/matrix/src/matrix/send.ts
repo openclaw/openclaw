@@ -3,6 +3,7 @@ import { isVoiceMessageCompatibleAudio } from "openclaw/plugin-sdk/media-runtime
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type { PollInput } from "openclaw/plugin-sdk/poll-runtime";
+import { asOptionalObjectRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CoreConfig } from "../types.js";
 import {
   createMatrixPlannedEvents,
@@ -57,25 +58,12 @@ export { resolveMatrixRoomId } from "./send/targets.js";
 type MatrixClientResolveOpts = Parameters<typeof withResolvedMatrixControlClient>[0];
 
 function resolvePreviousThreadId(previousEvent: unknown): string | undefined {
-  if (!previousEvent || typeof previousEvent !== "object") {
+  const content = asOptionalObjectRecord(asOptionalObjectRecord(previousEvent)?.content);
+  const relation = asOptionalObjectRecord(content?.["m.relates_to"]);
+  if (relation?.rel_type !== RelationType.Thread || typeof relation.event_id !== "string") {
     return undefined;
   }
-  const content = (previousEvent as { content?: unknown }).content;
-  if (!content || typeof content !== "object") {
-    return undefined;
-  }
-  const relation = (content as Record<string, unknown>)["m.relates_to"];
-  if (!relation || typeof relation !== "object") {
-    return undefined;
-  }
-  const relationRecord = relation as { event_id?: unknown; rel_type?: unknown };
-  if (
-    relationRecord.rel_type !== RelationType.Thread ||
-    typeof relationRecord.event_id !== "string"
-  ) {
-    return undefined;
-  }
-  return normalizeThreadId(relationRecord.event_id) ?? undefined;
+  return normalizeThreadId(relation.event_id) ?? undefined;
 }
 
 function withMatrixExtraContentFields<T extends Record<string, unknown>>(
@@ -145,12 +133,11 @@ export async function sendMessageMatrix(
             wireEventType: wireEventType!,
           })
         : null;
-      let plannedEvents: MatrixPreparedEvent[] | undefined = storedPlan?.events;
+      let plannedEvents: readonly MatrixPreparedEvent[] | undefined = storedPlan?.events;
       if (!plannedEvents) {
         const preparedText = chunkMatrixText(messageText, {
           cfg,
           accountId: opts.accountId,
-          preserveWhitespace: true,
         });
         const { chunks, convertedText, preparedBody, fitsInSingleEvent, tableMode } = preparedText;
         const singleEventBody = fitsInSingleEvent ? preparedBody : undefined;
@@ -405,7 +392,6 @@ export async function sendSingleTextMessageMatrix(
   } = prepareMatrixSingleText(text.trimEnd(), {
     cfg: opts.cfg,
     accountId: opts.accountId,
-    preserveWhitespace: true,
   });
   if (!trimmedText.trim()) {
     throw new Error("Matrix single-message send requires text");
@@ -493,7 +479,6 @@ export async function editMessageMatrix(
       const { convertedText, preparedBody, tableMode } = prepareMatrixSingleText(newText, {
         cfg,
         accountId: opts.accountId,
-        preserveWhitespace: true,
       });
       const newContent = withMatrixExtraContentFields(
         buildTextContent(convertedText, undefined, {

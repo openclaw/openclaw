@@ -4,8 +4,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
   copyFileHandle,
+  flushAndHashFileSync,
   hashFileDescriptorSync,
   hashFileMutationSnapshotSync,
 } from "./file-descriptor.js";
@@ -22,13 +24,32 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe("pinned file descriptors", () => {
-  it.each(["hard link", "restored-mtime rewrite"] as const)(
-    "rechecks a %s between the digest and final path observation",
-    async (change) => {
+  it("closes an owned file when flushing fails", () => {
+    const file = path.join(directory, "flush-failure");
+    fsSync.writeFileSync(file, "fixture");
+    const failure = new Error("flush failed");
+    let descriptor = -1;
+    vi.spyOn(fsSync, "fsyncSync").mockImplementation((fd) => {
+      descriptor = fd;
+      throw failure;
+    });
+    expect(() => flushAndHashFileSync(file)).toThrow(failure);
+    expect(() => fsSync.fstatSync(descriptor)).toThrow(expect.objectContaining({ code: "EBADF" }));
+  });
+
+  it.each(
+    (["native", "linux", "android"] as const).flatMap((platform) =>
+      (["hard link", "restored-mtime rewrite"] as const).map((change) => ({ platform, change })),
+    ),
+  )(
+    "rechecks a $change between digest and final path observation ($platform)",
+    async ({ platform, change }) => {
+      if (platform !== "native") {
+        mockProcessPlatform(platform);
+      }
       const file = path.join(directory, "snapshot");
       await fs.writeFile(file, Buffer.alloc(8192, 0x61));
       await fs.utimes(file, 1_700_000_000, 1_700_000_000);
-      const expected = fsSync.lstatSync(file, { bigint: true });
       const read = fsSync.readSync;
       let hashed = false;
       vi.spyOn(fsSync, "readSync").mockImplementation((...args: Parameters<typeof read>) => {
@@ -38,6 +59,7 @@ describe("pinned file descriptors", () => {
       });
       let mutated = false;
       const advanceCtime = createFileMutationClock({
+        birthtimeFromCtime: platform !== "native",
         beforeLstatSync: (pathname) => {
           if (pathname !== file || !hashed || mutated) {
             return;
@@ -52,6 +74,7 @@ describe("pinned file descriptors", () => {
           advanceCtime(expected);
         },
       });
+      const expected = fsSync.lstatSync(file, { bigint: true });
       if (change === "hard link") {
         expect(hashFileMutationSnapshotSync(file, expected)).toBe(
           createHash("sha256").update(Buffer.alloc(8192, 0x61)).digest("hex"),

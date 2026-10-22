@@ -1,15 +1,19 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { RouteLocation } from "@openclaw/uirouter";
-import { buildControlUiResourcePath } from "../../../../src/gateway/control-ui-resource-routes.js";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
-import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import type {
+  AgentIdentityResult,
+  AgentsListResult,
+  GatewaySessionRow,
+  SessionsListResult,
+} from "../../api/types.ts";
 import {
   ACTIVITY_PERSON_PARAM,
   activityPersonFromPath,
   activityPersonLocation,
   pathForRoute,
 } from "../../app-route-paths.ts";
-import { readAvatarGatewayContext } from "../../lib/identity-avatar-context.ts";
+import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
 import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import { canApplySessionListSnapshot } from "../../lib/sessions/session-list-query.ts";
@@ -111,7 +115,7 @@ export function reconcileSessionActivityRead(
   previous: SessionsListResult | undefined,
   provenance: ActivityRowProvenance,
   revision: number,
-): { result: SessionsListResult; requiresRefresh: boolean } {
+): SessionsListResult {
   const held = new Map(
     (previous?.sessions ?? []).flatMap((row) => {
       const identity = provenance.identity(row);
@@ -128,11 +132,8 @@ export function reconcileSessionActivityRead(
     return merged;
   });
   return {
-    result: {
-      ...incoming,
-      sessions: orderChanged ? sessions.toSorted(compareSessionActivity) : sessions,
-    },
-    requiresRefresh: false,
+    ...incoming,
+    sessions: orderChanged ? sessions.toSorted(compareSessionActivity) : sessions,
   };
 }
 
@@ -178,18 +179,22 @@ export function reconcileSessionActivity(
   return { result: nextResult, requiresRefresh };
 }
 
-export function sessionActivityOwner(row: GatewaySessionRow): PresenceViewer {
+export function sessionActivityOwner(
+  row: GatewaySessionRow,
+  agentsList: AgentsListResult | null | undefined,
+  agentIdentity?: AgentIdentityResult | null,
+): PresenceViewer {
   const actor = row.owner?.actor ?? row.createdActor;
   const agentId = normalizeOptionalString(row.agentId);
-  const { resourceBasePath } = readAvatarGatewayContext();
   return {
     id: normalizeOptionalString(actor?.id) ?? agentId ?? "system",
     name: normalizeOptionalString(actor?.label) ?? agentId,
     avatarUrl: actor
       ? normalizeOptionalString(actor.avatarUrl)
-      : agentId
-        ? buildControlUiResourcePath("agentAvatar", resourceBasePath, agentId)
-        : undefined,
+      : (resolveAgentAvatarUrl(
+          agentsList?.agents.find((agent) => agent.id === agentId) ?? {},
+          agentIdentity,
+        ) ?? undefined),
     watchedSessions: [],
   };
 }

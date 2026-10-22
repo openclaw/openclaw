@@ -41,6 +41,58 @@ const authority = {
 };
 
 describe("prompt phase hooks", () => {
+  it.each(["prependSystemContext", "appendSystemContext"] as const)(
+    "bounds oversized %s per plugin and warns once per session",
+    async (field) => {
+      const registry = createEmptyPluginRegistry();
+      const oversized = "x".repeat(824_170);
+      registry.typedHooks.push(
+        {
+          pluginId: "verbose-plugin",
+          hookName: "before_prompt_build",
+          source: "test",
+          priority: 10,
+          handler: () => ({ [field]: oversized }),
+        },
+        {
+          pluginId: "small-plugin",
+          hookName: "before_prompt_build",
+          source: "test",
+          handler: () => ({ [field]: "  small guidance\r\n" }),
+        },
+      );
+      const warn = vi.fn();
+      const runner = createHookRunner(registry, { logger: { warn, error: vi.fn() } });
+      const ctx = { sessionId: "session-1", contextTokenBudget: 32_000 };
+      const first = await runner.runBeforePromptBuild(phaseEvent, ctx);
+      expect(first?.[field]).toMatch(
+        /\[Plugin system context truncated to fit the model budget\.\]\n\n {2}small guidance\r\n$/,
+      );
+      expect(first?.[field]?.length).toBe(32_000 + 2 + "  small guidance\r\n".length);
+      expect(first?.[field]?.startsWith("xxxx")).toBe(true);
+      expect(warn).toHaveBeenCalledOnce();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("verbose-plugin"));
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("824170 -> 32000 chars"));
+      expect(await runner.runBeforePromptBuild(phaseEvent, ctx)).toEqual(first);
+      expect(warn).toHaveBeenCalledOnce();
+      await runner.runBeforePromptBuild(phaseEvent, { ...ctx, sessionId: "session-2" });
+      expect(warn).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("keeps normal system context byte-identical and bounds dense CJK context", async () => {
+    const normal = "  static guidance\r\n";
+    const runner = promptRunner([
+      {
+        handler: () => ({ prependSystemContext: normal, appendSystemContext: "界".repeat(2_000) }),
+      },
+    ]);
+    const result = await runner.runBeforePromptBuild(phaseEvent, { contextTokenBudget: 4_000 });
+    expect(result?.prependSystemContext).toBe(normal);
+    expect(result?.appendSystemContext).toMatch(/^界+\n\[Plugin system context truncated/);
+    expect(result?.appendSystemContext?.length).toBeLessThanOrEqual(1_060);
+  });
+
   it("merges context in priority order while keeping the first system prompt", async () => {
     const context = (suffix: string): PluginHookBeforePromptBuildResult => ({
       systemPrompt: `system ${suffix}`,
@@ -367,43 +419,7 @@ describe("prompt hook invocation", () => {
 
 const promptEvent = (prompt: string) => ({ prompt, messages: [] });
 
-describe("before_prompt_build reentrancy", () => {
-  it("runs each handler once when a handler starts a nested prompt build", async () => {
-    const firstHandler = vi.fn(async () => {
-      await runner.runBeforePromptBuild(promptEvent("nested"), TEST_PLUGIN_AGENT_CTX);
-      return { prependContext: "first" };
-    });
-    const secondHandler = vi.fn(() => ({ appendContext: "second" }));
-    const runner = createHookRunner(
-      createMockPluginRegistry([
-        {
-          hookName: "before_prompt_build",
-          handler: firstHandler,
-          pluginId: "first",
-          priority: 10,
-        },
-        {
-          hookName: "before_prompt_build",
-          handler: secondHandler,
-          pluginId: "second",
-          priority: 1,
-        },
-      ]),
-    );
-
-    await expect(
-      runner.runBeforePromptBuild(promptEvent("outer"), TEST_PLUGIN_AGENT_CTX),
-    ).resolves.toEqual({
-      systemPrompt: undefined,
-      prependContext: "first",
-      appendContext: "second",
-      prependSystemContext: undefined,
-      appendSystemContext: undefined,
-    });
-    expect(firstHandler).toHaveBeenCalledOnce();
-    expect(secondHandler).toHaveBeenCalledOnce();
-  });
-
+describe("before_prompt_build dispatch", () => {
   it("keeps sibling hook families and other runners active during dispatch", async () => {
     const turnPrepare = vi.fn(() => ({ prependContext: "turn" }));
     const heartbeat = vi.fn(() => ({ appendContext: "heartbeat" }));

@@ -366,7 +366,6 @@ export function createFeishuMessageReceiveHandler({
     if (botOpenId && senderOpenId === botOpenId) {
       // Feishu bot receive events identify their sender by open_id. Drop this
       // account's bot before it can consume a claim or debounce slot.
-      log(`feishu[${accountId}]: dropping self-authored message ${messageId ?? "unknown"}`);
       await completeSuppressedIngress();
       return undefined;
     }
@@ -380,7 +379,6 @@ export function createFeishuMessageReceiveHandler({
       parsePostContent(event.message.content, { includeTopLevelFiles: false }).attachments
         .length === 0
     ) {
-      log(`feishu[${accountId}]: dropping duplicate event for message ${messageId}`);
       await completeSuppressedIngress();
       return undefined;
     }
@@ -398,7 +396,6 @@ export function createFeishuMessageReceiveHandler({
       return { kind: "failed-retryable", error: stoppedError };
     }
     if (claim.kind === "duplicate" || claim.kind === "inflight") {
-      log(`feishu[${accountId}]: dropping ${claim.kind} event for message ${messageId}`);
       await completeSuppressedIngress();
       return undefined;
     }
@@ -411,10 +408,10 @@ export function createFeishuMessageReceiveHandler({
     if (claim.kind === "claimed" && turnAdoptionLifecycle) {
       // The durable drain can abandon before the debounce timer flushes. Tie
       // the logical claim and queued entry to that earlier lifecycle.
-      turnAdoptionLifecycle.registerAbandonHandler?.(() => {
+      turnAdoptionLifecycle.onBeforeAbandon = () => {
         debounceEntry.abandoned = true;
         claim.handle.release({ error: new Error("feishu-ingress-abandoned-before-flush") });
-      });
+      };
     }
     if (turnAdoptionLifecycle) {
       try {

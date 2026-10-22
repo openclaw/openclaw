@@ -69,21 +69,42 @@ keep the existing synchronous fallback.
     System-level utilities.
 
     ```typescript
-    const accepted = api.runtime.system.enqueueSystemEvent(text, options);
-    api.runtime.system.requestHeartbeat({
-      source: "other",
-      intent: "event",
-      reason: "plugin-event",
+    const expectedTarget = await api.runtime.system.captureSessionEventTarget(agentId, sessionKey);
+    // Capture before asynchronous work so its completion keeps the original target.
+    const text = await preparePluginEvent();
+    const receipt = api.runtime.system.enqueueSessionEvent(text, {
+      agentId,
+      sessionKey,
+      expectedTarget,
     });
-    api.runtime.system.requestHeartbeatNow({ reason: "plugin-event" }); // Deprecated compatibility alias.
-    const heartbeatResult = await api.runtime.system.runHeartbeatOnce({
-      reason: "plugin-triggered-check",
-    });
+    const admission = await receipt.accepted;
+    if (!admission.ok) throw new Error(admission.error);
+    const outcome = await receipt.settled;
+    if (outcome.status !== "completed") throw new Error(outcome.error ?? outcome.status);
     const output = await api.runtime.system.runCommandWithTimeout(cmd, args, opts);
     const hint = api.runtime.system.formatNativeDependencyHint(pkg);
     ```
 
-    `requestHeartbeatNow(...)` is tracked as `plugin-runtime-api-compat-aliases` in the [compatibility registry](/plugins/compatibility#current-compatibility-areas) with a `removeAfter` date of 2026-10-01; use `requestHeartbeat({ source, intent, reason })` in new code.
+    `enqueueSystemEvent(...)` is passive: it queues context without starting a
+    turn. `enqueueSessionEvent(...)` admits immediate work through the ordinary
+    session controller and returns a receipt. Acceptance confirms admission;
+    settlement reports `completed`, `failed`, or `cancelled`, separately from
+    whether a reply was delivered. Commit producer bookkeeping only after
+    acceptance and inspect settlement before reporting completion.
+
+    `captureSessionEventTarget(agentId, sessionKey)` returns an opaque handle
+    bound to the original session generation and captured authority. Capture it
+    before asynchronous work and pass it as `expectedTarget`; copied or
+    fabricated handles are rejected. The runtime rechecks plugin and Gateway
+    ownership across admission and effects. A reset or revoked target cannot be
+    replaced silently with a new conversation.
+
+    Event options require `agentId` and `sessionKey`; optional fields are
+    `contextKey`, `deliveryContext`, `abortSignal`, `expectedTarget`, and
+    `createIfMissing: true`. Use `createIfMissing` only for authorized fresh
+    ingress, not a completion bound to an earlier target. The runtime fixes the
+    source to the plugin; callers cannot supply internal automation or operator
+    authority. `receipt.cancel()` requests cancellation through the same owner.
 
     The `openclaw/plugin-sdk/system-event-runtime` helpers resolve legacy session
     aliases at the SDK boundary. Pass a resolved `agentId` alongside `sessionKey`
@@ -95,7 +116,9 @@ keep the existing synchronous fallback.
     configured-owner alias resolution and reject ambiguous agent selection.
     Explicit owners that cannot normalize to an agent ID are rejected.
 
-    `runHeartbeatOnce(...)` runs a single heartbeat cycle immediately, bypassing the normal coalesce timer. Delivery defaults to the configured operator DM (`commands.ownerAllowFrom`, then channel `allowFrom`); pass `{ heartbeat: { target: "none" } }` for an internal-only run.
+    Heartbeat wake/run methods have been removed. Use ordinary
+    [automation jobs](/automation/cron-jobs) for periodic work; see the
+    [SDK removal mappings](/plugins/sdk-migration/removed-surfaces#heartbeat-executor-and-wake-helpers).
 
     `runCommandWithTimeout(...)` returns captured `stdout` and `stderr`, optional
     truncation counts, `code`, `signal`, `killed`, `termination`, and
@@ -135,7 +158,7 @@ keep the existing synchronous fallback.
 
   </Accordion>
   <Accordion title="api.runtime.state">
-    State directory resolution and SQLite-backed keyed storage.
+    State directory resolution and engine-aware keyed storage.
 
     ```typescript
     const stateDir = api.runtime.state.resolveStateDir(process.env);
@@ -165,6 +188,14 @@ keep the existing synchronous fallback.
     );
     const blob = await blobs.lookup("artifact-1");
     ```
+
+    Keyed stores use the boot-selected `state` family engine. To open an additional
+    physical state root, pass `env: { ...process.env, OPENCLAW_STATE_DIR: root }`
+    in the store options. Every root retains the same keyed-store contract and,
+    on PostgreSQL, gets its own anchor UUID and namespace from the engine owner.
+    Declare the root through [`backupResources`](/plugins/manifest/surfaces#backupresources-reference)
+    with `databaseFamily: "state"` so port, backup, update, and Doctor can discover
+    it after the account is disabled. Never allocate PostgreSQL schemas in a plugin.
 
     For command-owned writes, `store.register(key, value, { assertCurrent })`
     and `store.delete(key, { assertCurrent })` carry the captured owner assertion
@@ -213,6 +244,8 @@ keep the existing synchronous fallback.
 
     `openBlobStore<TMetadata>(...)` stores bounded binary payloads in shared SQLite without base64 or file sidecars. It requires per-entry, per-namespace byte, and row limits; copies byte arrays at the API boundary; and lists metadata without loading every BLOB. `register(...)` is an explicit upsert, including for expired keys. `registerIfAbsent(...)` provides collision-safe creation: an expired key remains occupied until its owner claims it with `deleteExpiredKey(key)` or `deleteExpired()`, preserving metadata needed to remove related named artifacts after the SQLite commit. Any row with a TTL is transient and excluded from backup/restore even before it expires; omit TTL for durable, restorable state. Host fuses cap each BLOB at 100 MiB, each plugin at 512 MiB of physically stored BLOBs, and each plugin at 50,000 physically stored rows, including expired rows awaiting owner cleanup. Use `registerIfAbsent(...)` with `overflowPolicy: "reject-new"` when external materializations must not be silently orphaned by replacement or eviction.
 
+    Current host blob stores return `PluginBlobStoreWithReceipts<TMetadata>`. Its `registerIfAbsentWithReceipt(...)` method returns the committed `{ createdAt, expiresAt? }` timestamps, or `undefined` when the key is occupied. Use this receipt to publish artifact timestamps without reading back the payload. `PluginBlobStore<TMetadata>` remains unchanged for existing adapters, and `registerIfAbsent(...)` still returns a boolean.
+
     Blob mutations use the shared SQLite worker and keep quota checks and changes in one transaction. `lookup` and `entries` use the retained read-only worker path. Missing stores stay absent. Ordinary unselected reads observe independently committed data; an unrelated cached native cursor can retain an older view. An explicitly selected snapshot keeps its private source through completion. Await all methods before publishing dependent artifacts or removing their storage. Shared reader admission is bounded: process inventories sequentially or with bounded concurrency, and join every started operation before reporting a batch failure or completing shutdown. Worker errors preserve `PluginBlobStoreError` classification, operation, path, and causal errors. Byte copying, metadata serialization, and complete result materialization still use caller memory; this is not a streaming BLOB API.
 
     `openChannelIngressQueue<TPayload>(...)` opens a persisted ingress queue scoped to the calling plugin, for buffering inbound events that need at-least-once processing across restarts. When stale-claim recovery uses `shouldRecover`, also provide `shouldRecoverCorrupt` if corrupt claimed payloads should be quarantined: its payload-independent claim identity lets the plugin preserve live owner and lane policy before the queue tombstones the row.
@@ -247,7 +280,10 @@ Preparation uses the state worker when the owner has no published row or absence
 The final read uses memory, follows committed replacements and deletions, and
 honors expiry and runtime retirement.
 
-Queued mutations deny these reads before commit. Known rollback preserves the
+Queued mutations deny reads of affected entries before commit. A write that can
+evict other live entries denies the namespace; native and compound writes without
+a captured scope retain database-wide denial. Independent keyed writes do not
+deny unrelated binding reads. Known rollback preserves the
 prior facts; compound binding cleanup publishes deletion or compensation before
 releasing denial. An unknown outcome keeps effect guards denied for that database
 identity until the Gateway restarts. Ordinary descriptive reads remain available.

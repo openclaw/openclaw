@@ -1,7 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import {
-  resolveDatabaseEngineInput,
+  getDatabaseEngineInput,
   openEngineWorkerStore,
   runEngineStoreOperation,
 } from "openclaw/plugin-sdk/database-engine-runtime";
@@ -22,23 +22,20 @@ type WorkboardSqliteStores = WorkboardPersistence & {
 };
 
 export function createWorkboardSqliteStores(options: {
-  config?: Parameters<typeof resolveDatabaseEngineInput>[0];
   dbPath?: string;
   workerModuleUrl: URL;
 }): WorkboardSqliteStores {
   const databasePath = path.resolve(
     options.dbPath ?? path.join(resolveStateDir(), "plugins", "workboard", "workboard.sqlite"),
   );
-  const selectedDatabase = resolveDatabaseEngineInput(options.config ?? {});
-  const worker = selectedDatabase.then((input) =>
-    openEngineWorkerStore<WorkboardSqliteWorkerOperations>(
-      {
-        moduleUrl: options.workerModuleUrl,
-        databasePath,
-        input,
-      },
-      input,
-    ),
+  const selectedDatabase = getDatabaseEngineInput("workboard");
+  const worker = openEngineWorkerStore<WorkboardSqliteWorkerOperations>(
+    {
+      moduleUrl: options.workerModuleUrl,
+      databasePath,
+      input: selectedDatabase,
+    },
+    selectedDatabase,
   );
   let sealed = false;
   let closing: Promise<void> | undefined;
@@ -56,7 +53,7 @@ export function createWorkboardSqliteStores(options: {
     const result = unwrapWorkboardSqliteResult(
       await runEngineStoreOperation(
         store,
-        await selectedDatabase,
+        selectedDatabase,
         writes,
         (scope) => scope.execute({ type, input }),
         authority

@@ -175,6 +175,7 @@ export function buildCodexThreadConfiguration(
       options.developerInstructions ??
         buildDeveloperInstructions(params, {
           dynamicTools: options.dynamicTools,
+          nativeCodeModeEnabled: options.nativeCodeModeEnabled !== false,
           nativeCodeModeOnlyEnabled: config["features.code_mode_only"] === true,
         }),
       options.refreshableInstructions,
@@ -350,6 +351,7 @@ export function isCodexNativeDelegationDisabledForRun(
   return (
     isCodexResponsesOAuthRun(params) ||
     params.delegationCapability === "report_only" ||
+    params.delegationCapability === "host_only" ||
     params.requireWorkspaceOnly === true ||
     params.pluginHarnessToolPolicyRestricted === true ||
     isMessageOnlyCodexSourceReply(params) ||

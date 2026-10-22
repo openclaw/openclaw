@@ -1,6 +1,4 @@
-// Gh Read tests cover gh read script behavior.
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import os from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -14,11 +12,21 @@ import {
   resolveGitHubFetchTimeoutMs,
 } from "../../scripts/gh-read.js";
 import { normalizeGitHubRepo as normalizeRepo } from "../../scripts/lib/github-repo.js";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const oversizedError = { code: "ETOOBIG", message: "GitHub API response body exceeded 1024 bytes" };
+function streamed(source: UnderlyingSource<Uint8Array>, init?: ResponseInit) {
+  return new Response(new ReadableStream(source), init);
+}
+async function expectTimeout(request: Promise<unknown>, message: RegExp) {
+  const rejection = expect(request).rejects.toThrow(message);
+  await vi.advanceTimersByTimeAsync(5);
+  await rejection;
+}
 
 describe("gh-read helpers", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  afterEach(() => vi.useRealTimers());
 
   it("finds repo from gh args", () => {
     expect(parseRepoArg(["pr", "view", "42", "-R", "openclaw/openclaw"])).toBe("openclaw/openclaw");
@@ -37,18 +45,14 @@ describe("gh-read helpers", () => {
   });
 
   it("builds a read-only permission subset from granted permissions", () => {
-    expect(
-      buildReadPermissions(
-        {
-          actions: "write",
-          issues: "read",
-          administration: "write",
-          metadata: "read",
-          statuses: null,
-        },
-        ["actions", "issues", "metadata", "statuses", "administration"],
-      ),
-    ).toEqual({
+    const permissions = {
+      actions: "write",
+      issues: "read",
+      administration: "write",
+      metadata: "read",
+      statuses: null,
+    } as const;
+    expect(buildReadPermissions(permissions, Object.keys(permissions))).toEqual({
       administration: "read",
       actions: "read",
       issues: "read",
@@ -66,27 +70,17 @@ describe("gh-read helpers", () => {
   });
 
   it("bounds GitHub App private key files", () => {
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-gh-read-key-"));
-    const privateKeyPath = path.join(tempDir, "app.pem");
-    try {
-      writeFileSync(privateKeyPath, "x".repeat(64 * 1024));
-      expect(readGitHubAppPrivateKey(privateKeyPath)).toHaveLength(64 * 1024);
-
-      writeFileSync(privateKeyPath, "x".repeat(64 * 1024 + 1));
-      let readError: unknown;
-      try {
-        readGitHubAppPrivateKey(privateKeyPath);
-      } catch (error) {
-        readError = error;
-      }
-      expect(readError).toMatchObject({
+    const privateKeyPath = path.join(tempDirs.make("openclaw-gh-read-key-"), "app.pem");
+    writeFileSync(privateKeyPath, "x".repeat(64 * 1024));
+    expect(readGitHubAppPrivateKey(privateKeyPath)).toHaveLength(64 * 1024);
+    writeFileSync(privateKeyPath, "x".repeat(64 * 1024 + 1));
+    expect(() => readGitHubAppPrivateKey(privateKeyPath)).toThrowError(
+      expect.objectContaining({
         name: "FsSafeError",
         code: "too-large",
         message: `GitHub App private key file at ${privateKeyPath} exceeds 65536 bytes.`,
-      });
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
+      }),
+    );
   });
 
   it("aborts stalled GitHub API fetches at the request timeout", async () => {
@@ -105,58 +99,30 @@ describe("gh-read helpers", () => {
         return new Promise(() => {});
       }) as typeof fetch,
     });
-    const rejection = expect(request).rejects.toThrow(/GitHub API GET \/app exceeded timeout/u);
-
     await fetchStarted;
-    await vi.advanceTimersByTimeAsync(5);
-
-    await rejection;
+    await expectTimeout(request, /GitHub API GET \/app exceeded timeout/u);
     expect(signal?.aborted).toBe(true);
   });
 
   it("times out stalled GitHub API response body reads", async () => {
-    let canceled = false;
+    const cancel = vi.fn();
     vi.useFakeTimers();
-    const response = new Response(
-      new ReadableStream({
-        pull() {
-          return new Promise(() => {});
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
-      { status: 200 },
-    );
+    const response = streamed({ pull: () => new Promise(() => {}), cancel });
     const request = githubJson("/app/installations", "token", undefined, {
       timeoutMs: 5,
       fetchImpl: (() => Promise.resolve(response)) as typeof fetch,
     });
-    const rejection = expect(request).rejects.toThrow(
-      /GitHub API GET \/app\/installations exceeded timeout/u,
-    );
-
-    await vi.advanceTimersByTimeAsync(5);
-
-    await rejection;
+    await expectTimeout(request, /GitHub API GET \/app\/installations exceeded timeout/u);
     await Promise.resolve();
-    expect(canceled).toBe(true);
+    expect(cancel).toHaveBeenCalled();
   });
 
   it.each([
-    {
-      caseName: "drops a split surrogate pair",
-      responseBody: `abc\u{1f600}tail`,
-      expectedText: "abc\n[truncated]",
-    },
-    {
-      caseName: "preserves a complete surrogate pair",
-      responseBody: `ab\u{1f600}tail`,
-      expectedText: `ab\u{1f600}\n[truncated]`,
-    },
+    ["drops a split surrogate pair", `abc\u{1f600}tail`, "abc\n[truncated]"],
+    ["preserves a complete surrogate pair", `ab\u{1f600}tail`, `ab\u{1f600}\n[truncated]`],
   ])(
-    "keeps GitHub API error truncation UTF-16 safe: $caseName",
-    async ({ responseBody, expectedText }) => {
+    "keeps GitHub API error truncation UTF-16 safe: %s",
+    async (_name, responseBody, expectedText) => {
       const response = new Response(responseBody, { status: 500 });
 
       await expect(readBoundedGitHubErrorText(response, 4)).resolves.toBe(expectedText);
@@ -164,50 +130,29 @@ describe("gh-read helpers", () => {
   );
 
   it("reads bounded GitHub API JSON responses", async () => {
-    await expect(readBoundedGitHubJson(new Response('{"id":123}'), 1024)).resolves.toEqual({
-      id: 123,
-    });
+    const response = new Response('{"id":123}');
+    await expect(readBoundedGitHubJson(response, 1024)).resolves.toEqual({ id: 123 });
   });
 
   it("rejects oversized GitHub API JSON responses by content length", async () => {
-    let canceled = false;
-    const response = new Response(
-      new ReadableStream({
-        cancel() {
-          canceled = true;
-        },
-      }),
-      {
-        headers: {
-          "content-length": "1025",
-        },
-      },
-    );
-
-    await expect(readBoundedGitHubJson(response, 1024)).rejects.toMatchObject({
-      code: "ETOOBIG",
-      message: "GitHub API response body exceeded 1024 bytes",
-    });
-    expect(canceled).toBe(true);
+    const cancel = vi.fn();
+    const response = streamed({ cancel }, { headers: { "content-length": "1025" } });
+    await expect(readBoundedGitHubJson(response, 1024)).rejects.toMatchObject(oversizedError);
+    expect(cancel).toHaveBeenCalled();
   });
 
   it("rejects oversized streamed GitHub API JSON responses", async () => {
     const encoder = new TextEncoder();
-    const response = new Response(
-      new ReadableStream({
-        start(controller) {
-          controller.enqueue(encoder.encode('{"body":"'));
-          controller.enqueue(encoder.encode("x".repeat(1024)));
-          controller.enqueue(encoder.encode('"}'));
-          controller.close();
-        },
-      }),
-    );
-
-    await expect(readBoundedGitHubJson(response, 1024)).rejects.toMatchObject({
-      code: "ETOOBIG",
-      message: "GitHub API response body exceeded 1024 bytes",
+    const response = streamed({
+      start(controller) {
+        controller.enqueue(encoder.encode('{"body":"'));
+        controller.enqueue(encoder.encode("x".repeat(1024)));
+        controller.enqueue(encoder.encode('"}'));
+        controller.close();
+      },
     });
+
+    await expect(readBoundedGitHubJson(response, 1024)).rejects.toMatchObject(oversizedError);
   });
 
   it("rejects invalid GitHub API timeout values", () => {

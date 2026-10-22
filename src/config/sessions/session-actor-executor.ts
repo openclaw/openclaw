@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { wrapSqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import { freezeJsonSnapshot } from "../../shared/immutable-data.js";
 import type {
   SessionActor,
@@ -43,7 +43,7 @@ type PhaseState = {
   active: boolean;
   reducers: SessionActorReducer[];
   pending: Set<Promise<unknown>>;
-  uncertain: boolean;
+  uncertain: Extract<SessionActorOutcome<unknown>, { kind: "unknown" }>["error"] | undefined;
 };
 
 /** Shared admission, accepted-work drainage, and phase batching for every backend. */
@@ -91,6 +91,8 @@ export function createSessionActorWithExecutor(params: {
       phase?.pending.delete(promise);
     };
     void promise.then(settled, settled);
+    // Keep dispatch in this try and convert operation() throws to rejections:
+    // adoptRun restores cleanup custody on synchronous throws because no write has started.
     try {
       const work = executor.retain ? executor.retain(operation) : operation();
       void work.then(retained.resolve, retained.reject);
@@ -115,7 +117,7 @@ export function createSessionActorWithExecutor(params: {
       captured.reducers = [...reducers, ...(captured.reducers ?? [])];
       const outcome = await executor.command(name, captured, authority, observer);
       if (phase && outcome.kind === "unknown") {
-        phase.uncertain = true;
+        phase.uncertain ??= outcome.error;
       } else if (phase && (outcome.kind === "rolled-back" || outcome.kind === "stale-version")) {
         phase.reducers.unshift(...reducers);
       }
@@ -183,7 +185,7 @@ export function createSessionActorWithExecutor(params: {
           active: true,
           reducers: [],
           pending: new Set(),
-          uncertain: false,
+          uncertain: undefined,
         };
         const actor = bind(held);
         const failures: unknown[] = [];
@@ -210,9 +212,10 @@ export function createSessionActorWithExecutor(params: {
             await Promise.allSettled(held.pending);
           }
           if (held.uncertain) {
-            throw new SqliteWorkerError(
+            throw wrapSqliteWorkerError(
               "Session actor phase has an unknown outcome; reconcile without replay",
               "outcome-unknown",
+              held.uncertain,
             );
           }
           while (held.reducers.length) {
@@ -228,9 +231,10 @@ export function createSessionActorWithExecutor(params: {
               held,
             );
             if (settled.kind !== "committed") {
-              throw new SqliteWorkerError(
+              throw wrapSqliteWorkerError(
                 settled.error.message,
                 settled.kind === "unknown" ? "outcome-unknown" : "unavailable",
+                settled.error,
               );
             }
           }

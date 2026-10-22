@@ -30,6 +30,7 @@ export async function runMemorySessionBackfillCli(
         ...(operationOwnerId ? { operationOwnerId } : {}),
       },
       target: "memory session backfill",
+      databaseEngine: "configured",
       recoveryCommand: "openclaw memory session-backfill --json",
       ...(opts.rem || opts.archiveFiles?.length ? { onForeignOwner: "refuse" as const } : {}),
       runLocal: async () => {

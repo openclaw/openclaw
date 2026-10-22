@@ -21,7 +21,6 @@
   border-radius: calc(20px * var(--openclaw-corner-radius-scale));
   corner-shape: superellipse(1.5);
   background: var(--composer-attached-surface, var(--chat-composer-surface));
-  -webkit-backdrop-filter: blur(8px);
   backdrop-filter: blur(8px);
 }
 

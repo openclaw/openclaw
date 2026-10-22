@@ -18,6 +18,7 @@ it("preserves a native first-use role in avatar publication after warming a lega
     prefix: "avatar-legacy-role-",
   });
   let release = () => {};
+  const fetchSpy = vi.spyOn(globalThis, "fetch");
   try {
     const { db } = openOpenClawStateDatabase();
     db.exec(`CREATE TABLE user_profiles (
@@ -32,24 +33,19 @@ it("preserves a native first-use role in avatar publication after warming a lega
     setUserProfileRole(profile.id, "reader");
     release = (await prepareUserProfileCatalog()).release;
     const bytes = readFileSync(join(process.cwd(), "ui/public/favicon-32.png"));
-    const adopted = await adoptTailscaleProfileAvatar(
-      profile.id,
-      "https://avatars.example.test/p",
-      {},
-      {
-        fetchImpl: vi.fn(
-          async () =>
-            new Response(Uint8Array.from(bytes).buffer, {
-              headers: { "content-type": "image/png" },
-            }),
-        ),
-      },
+    fetchSpy.mockImplementation(
+      async () =>
+        new Response(Uint8Array.from(bytes).buffer, {
+          headers: { "content-type": "image/png" },
+        }),
     );
+    const adopted = await adoptTailscaleProfileAvatar(profile.id, "https://avatars.example.test/p");
     expect(adopted.role).toBe("reader");
     expect(readResidentUserProfileIdentity(profile.id)?.role).toBe("reader");
     expect(getUserProfileDisplay(profile.id).hasAvatar).toBe(true);
     expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
   } finally {
+    fetchSpy.mockRestore();
     release();
     await state.cleanup();
   }
