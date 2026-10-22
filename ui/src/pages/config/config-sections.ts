@@ -78,10 +78,8 @@ export function configSelectionFromSearch(pageId: ConfigPageId, search: string):
   return normalizeConfigSelection(pageId, section, null);
 }
 
-// Config leaf paths a curated settings control owns. The generic schema form and settings
-// search must skip them, or the setting gets a second, unexplained home: Settings →
-// Appearance → Language owns `ui.prefs.locale`, whose raw string schema would otherwise
-// render as a bare empty "Locale" text box (and produce a dead-end search hit).
+// Appearance's Language picker owns this leaf; generic forms and search must
+// not expose a second control for it.
 const CURATED_SETTINGS_OWNED_LEAF_PATHS: readonly string[] = ["ui.prefs.locale"];
 
 function omitLeafPath(schema: JsonSchema, segments: readonly string[]): JsonSchema {
@@ -100,10 +98,7 @@ function omitLeafPath(schema: JsonSchema, segments: readonly string[]): JsonSche
   return { ...schema, properties: nextProperties, ...(required ? { required } : {}) };
 }
 
-/**
- * Removes curated-owner leaf paths from a schema. `prefix` is the config path of the schema
- * root: `""` for the whole config, or a section key such as `"ui"` for a section schema.
- */
+// Prefix is the mounted section path, or empty for a whole-config schema.
 export function omitCuratedOwnedConfigLeaves(schema: JsonSchema, prefix = ""): JsonSchema {
   let next = schema;
   for (const path of CURATED_SETTINGS_OWNED_LEAF_PATHS) {

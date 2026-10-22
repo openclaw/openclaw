@@ -136,7 +136,7 @@ it("hides the curated locale search leaf without mutating the source schema or s
     "ui.prefs.locale": { advanced: false },
     "ui.prefs.chatShowToolCalls": { advanced: false },
   };
-  const params = { schema, value: {}, uiHints };
+  const params = { schema, value: { ui: { prefs: { locale: "en" } } }, uiHints };
 
   expect(
     search("interface language", params).some((block) => block.hash === "#config-section-ui"),

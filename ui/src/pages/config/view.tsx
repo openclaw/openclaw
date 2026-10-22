@@ -180,7 +180,6 @@ export function Config(props: ConfigProps) {
           ),
         }
       : formSchema;
-    // Curated settings controls own some schema leaves; keep them out of the generic form.
     const editorSchema = editorSchemaBase
       ? omitCuratedOwnedConfigLeaves(editorSchemaBase)
       : editorSchemaBase;

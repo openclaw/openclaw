@@ -5,6 +5,8 @@ import { computeBaseConfigSchemaResponse } from "./schema-base.js";
 import { buildBaseHints } from "./schema.hints.js";
 
 type JsonSchemaNode = {
+  title?: string;
+  description?: string;
   properties?: Record<string, JsonSchemaNode>;
   additionalProperties?: JsonSchemaNode | boolean;
   items?: JsonSchemaNode | JsonSchemaNode[];
@@ -91,13 +93,7 @@ describe("config tier coverage", () => {
   });
 
   it("documents the Appearance-owned interface language preference", () => {
-    type DocumentedNode = {
-      title?: string;
-      description?: string;
-      properties?: Record<string, DocumentedNode>;
-    };
-    const root = schema as unknown as DocumentedNode;
-    const locale = root.properties?.ui?.properties?.prefs?.properties?.locale;
+    const locale = schema.properties?.ui?.properties?.prefs?.properties?.locale;
     expect(locale?.title).toBe("Interface language");
     expect(locale?.description).toContain("browser or system language");
     expect(locale?.description).toContain("agents.defaults.userTimezone");
