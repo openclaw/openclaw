@@ -32,8 +32,7 @@ const discover = vi.hoisted(() => vi.fn());
 const imagePolicy = vi.hoisted(() => vi.fn<() => Promise<ImageCompressionModelPolicy>>());
 const selectionAuth = vi.mocked(checkAvailableAuth);
 
-// mock-isolation: Routing uses no compression; resize cases set a fixed model policy
-// without bootstrapping provider runtimes.
+// mock-isolation: Routing and resize cases use fixed policy without provider runtime bootstrap.
 vi.mock("../agents/image-compression-policy.js", () => ({
   resolveImageCompressionModelPolicy: imagePolicy,
 }));
