@@ -5,9 +5,10 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resetServerUiPrefsSync } from "../../app/server-prefs.ts";
-import { createGatewayHarness } from "../../lib/config/config-test-harness.ts";
 import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -59,7 +60,17 @@ it("retains a schema failure until Retry and keeps loaded fields during revalida
     }
     return Promise.resolve({});
   });
-  const { gateway } = createGatewayHarness(createTestGatewayClient(request));
+  const { gateway } = createApplicationGateway({
+    client: createTestGatewayClient(request),
+    phase: "connected",
+    offlineStable: false,
+    hello: gatewayHelloForMethods(["config.schema", "config.set", "config.apply", "config.patch"]),
+    canvasPluginSurfaceUrl: null,
+    assistantAgentId: "main",
+    sessionKey: "main",
+    lastError: null,
+    lastErrorCode: null,
+  });
   const runtimeConfig = createRuntimeConfigCapability(gateway);
   // SAFETY: the mount helper fills unrelated page capabilities; these Gateway and Config owners are real.
   const context = { gateway, runtimeConfig } as ApplicationContext;
