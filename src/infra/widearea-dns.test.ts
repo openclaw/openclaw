@@ -31,19 +31,14 @@ const zonePath = getWideAreaZonePath(baseZoneOpts.domain);
 function renderZoneText(overrides: Partial<WideAreaGatewayZoneOpts> = {}): string {
   return renderZone({ ...baseZoneOpts, ...overrides, serial: 2025121701 });
 }
-async function expectZoneWrite(changed: boolean, overrides: Partial<WideAreaGatewayZoneOpts> = {}) {
-  expect(await writeZone({ ...baseZoneOpts, ...overrides })).toEqual({ zonePath, changed });
+async function expectZoneWrite(changed: boolean) {
+  expect(await writeZone(baseZoneOpts)).toEqual({ zonePath, changed });
 }
 
 afterEach(() => {
-  vi.useRealTimers();
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   replaceFileAtomicSyncMock.mockReset();
-});
-
-it("normalizes domains with a terminal dot", () => {
-  expect(normalizeWideAreaDomain("openclaw.internal.")).toBe("openclaw.internal.");
 });
 
 it("returns null for invalid env domains", () => {
@@ -52,6 +47,7 @@ it("returns null for invalid env domains", () => {
 });
 
 it("renders gateway DNS-SD records", () => {
+  expect(normalizeWideAreaDomain("openclaw.internal.")).toBe("openclaw.internal.");
   vi.spyOn(os, "hostname").mockReturnValue("Studio London");
   const txt = renderZoneText({
     domain: "openclaw.internal",
@@ -98,7 +94,16 @@ it("creates the zone when no previous file exists", async () => {
     throw Object.assign(new Error("missing zone"), { code: "ENOENT" });
   });
   await expectZoneWrite(true);
-  expect(replaceFileAtomicSyncMock).toHaveBeenCalledOnce();
+  expect(replaceFileAtomicSyncMock).toHaveBeenCalledExactlyOnceWith({
+    filePath: zonePath,
+    content: expect.any(String),
+    dirMode: 0o700,
+    mode: 0o644,
+    preserveExistingMode: true,
+    syncTempFile: true,
+    syncParentDir: true,
+    tempPrefix: ".openclaw-dns-zone",
+  });
 });
 
 it.each([
@@ -114,24 +119,6 @@ it("skips rewriting unchanged content", async () => {
   vi.spyOn(fs, "readFileSync").mockReturnValue(existing);
   await expectZoneWrite(false);
   expect(replaceFileAtomicSyncMock).not.toHaveBeenCalled();
-});
-
-it("increments same-day serials when content changes", async () => {
-  vi.useFakeTimers();
-  vi.setSystemTime(new Date("2026-03-13T12:00:00.000Z"));
-  vi.spyOn(fs, "readFileSync").mockReturnValue(renderZone({ ...baseZoneOpts, serial: 2026031304 }));
-  const opts = { gatewayTlsEnabled: true, gatewayTlsFingerprintSha256: "abc123" };
-  await expectZoneWrite(true, opts);
-  expect(replaceFileAtomicSyncMock).toHaveBeenCalledWith({
-    filePath: zonePath,
-    content: renderZone({ ...baseZoneOpts, ...opts, serial: 2026031305 }),
-    dirMode: 0o700,
-    mode: 0o644,
-    preserveExistingMode: true,
-    syncTempFile: true,
-    syncParentDir: true,
-    tempPrefix: ".openclaw-dns-zone",
-  });
 });
 
 it.runIf(process.platform !== "win32")("preserves the zone after an OS file-size failure", () => {

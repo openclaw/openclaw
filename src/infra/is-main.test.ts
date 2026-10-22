@@ -15,38 +15,18 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-it.each<[string, Partial<Parameters<typeof isMainModule>[0]>, boolean]>([
-  ["direct entry", { argv: ["node", "/repo/dist/index.js"] }, true],
-  [
-    "relative PM2 entry",
-    {
-      env: { pm_exec_path: "./dist/index.js", pm_id: "0" },
-      argv: ["node", "/pm2/lib/ProcessContainerFork.js"],
-    },
-    true,
-  ],
-  ["configured wrapper", { currentFile: "/repo/dist/entry.js", wrapperEntryPairs }, true],
-  ["unconfigured wrapper", { currentFile: "/repo/dist/entry.js" }, false],
-  ["wrong wrapper entry", { wrapperEntryPairs }, false],
-  [
-    "PM2 import",
-    {
-      currentFile: "/repo/node_modules/openclaw/dist/index.js",
-      argv: ["node", "/repo/app.js"],
-      env: { pm_exec_path: "/repo/app.js", pm_id: "0" },
-    },
-    false,
-  ],
-  [
-    "same basename",
-    {
-      currentFile: "/repo/node_modules/openclaw/dist/index.js",
-      argv: ["node", "/repo/dist/index.js"],
-    },
-    false,
-  ],
-  ["no entry", { argv: ["node"] }, false],
-])("detects main module: %s", (_name, options, expected) => {
+type EntryCase = { options: Partial<Parameters<typeof isMainModule>[0]>; expected: boolean };
+it.each`
+  name                      | options                                                                                                                                            | expected
+  ${"direct entry"}         | ${{ argv: ["node", "/repo/dist/index.js"] }}                                                                                                       | ${true}
+  ${"relative PM2 entry"}   | ${{ env: { pm_exec_path: "./dist/index.js", pm_id: "0" }, argv: ["node", "/pm2/lib/ProcessContainerFork.js"] }}                                    | ${true}
+  ${"configured wrapper"}   | ${{ currentFile: "/repo/dist/entry.js", wrapperEntryPairs }}                                                                                       | ${true}
+  ${"unconfigured wrapper"} | ${{ currentFile: "/repo/dist/entry.js" }}                                                                                                          | ${false}
+  ${"wrong wrapper entry"}  | ${{ wrapperEntryPairs }}                                                                                                                           | ${false}
+  ${"PM2 import"}           | ${{ currentFile: "/repo/node_modules/openclaw/dist/index.js", argv: ["node", "/repo/app.js"], env: { pm_exec_path: "/repo/app.js", pm_id: "0" } }} | ${false}
+  ${"same basename"}        | ${{ currentFile: "/repo/node_modules/openclaw/dist/index.js", argv: ["node", "/repo/dist/index.js"] }}                                             | ${false}
+  ${"no entry"}             | ${{ argv: ["node"] }}                                                                                                                              | ${false}
+`("detects main module: $name", ({ options, expected }: EntryCase) => {
   expect(detect(options)).toBe(expected);
 });
 
