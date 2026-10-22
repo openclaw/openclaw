@@ -25,7 +25,7 @@ import {
   type LogEntry,
   type LogLevel,
 } from "./log-lines.ts";
-import { LogsView } from "./view.tsx";
+import { LogsView, type LogsReadCompletion } from "./view.tsx";
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -57,19 +57,25 @@ function LogsPage() {
   });
   const [autoFollow, setAutoFollow] = createSignal(true);
   const [truncated, setTruncated] = createSignal(false, { ownedWrite: true });
-  const [requestState, setRequestState] = createSignal<"idle" | "quiet" | "visible">("idle", {
+  const [completion, setCompletion] = createSignal<LogsReadCompletion | null>(null, {
     ownedWrite: true,
   });
   let cursor: number | null = null;
   let cursorBootId: string | undefined;
-  let request: AbortController | null = null;
+  let request:
+    | (LogsReadCompletion & {
+        controller: AbortController;
+        resolve: (status: ReturnType<typeof createPanelRefreshStatus> | null) => void;
+      })
+    | null = null;
   let disposed = false;
   let stream: HTMLElement | undefined;
 
   const cancelRequest = () => {
-    request?.abort();
+    request?.controller.abort();
+    request?.resolve(null);
     request = null;
-    setRequestState("idle");
+    setCompletion(null);
   };
   const polling = useVisiblePoll(LOGS_POLL_INTERVAL_MS, () => void loadLogs({ quiet: true }));
   const gateway = useGatewayPage({
@@ -110,9 +116,10 @@ function LogsPage() {
       return false;
     }
     cancelRequest();
-    const current = new AbortController();
+    const result = Promise.withResolvers<ReturnType<typeof createPanelRefreshStatus> | null>();
+    const current = { controller: new AbortController(), quiet: Boolean(options.quiet), ...result };
     request = current;
-    setRequestState(options.quiet ? "quiet" : "visible");
+    setCompletion(current);
     setStatus((previous) => beginPanelRefresh(previous, { clearError: !options.quiet }));
     const bootId = gateway.snapshot?.hello?.server?.bootId;
     const resetCursor = options.reset || bootId !== cursorBootId;
@@ -120,12 +127,13 @@ function LogsPage() {
     const previousFile = file();
     const isCurrent = () =>
       !disposed && request === current && context.gateway === source && gateway.isCurrent(scope);
+    let accepted: ReturnType<typeof createPanelRefreshStatus> | null = null;
     try {
       const tail = (nextCursor?: number) =>
         scope.client.request<LogsTailResult>(
           "logs.tail",
           { cursor: nextCursor, limit: 500, maxBytes: 250_000 },
-          { signal: current.signal },
+          { signal: current.controller.signal },
         );
       let payload = await tail(previousCursor ?? undefined);
       if (!isCurrent()) {
@@ -157,7 +165,8 @@ function LogsPage() {
       cursor = payload.cursor;
       cursorBootId = bootId;
       setFile(payload.file);
-      setStatus(completePanelRefresh());
+      accepted = completePanelRefresh();
+      setStatus(accepted);
       follow.schedule();
       return true;
     } catch (error) {
@@ -168,19 +177,18 @@ function LogsPage() {
         setEntries(() => []);
         setTruncated(false);
         const failed = failPanelRefresh(createPanelRefreshStatus(), error, gateway.snapshot);
-        setStatus(
-          failed.error
-            ? { ...failed, error: formatMissingOperatorReadScopeMessage("logs") }
-            : failed,
-        );
+        accepted = failed.error
+          ? { ...failed, error: formatMissingOperatorReadScopeMessage("logs") }
+          : failed;
       } else {
-        setStatus((previous) => failPanelRefresh(previous, error, gateway.snapshot));
+        accepted = failPanelRefresh(status(), error, gateway.snapshot);
       }
+      setStatus(accepted);
       return false;
     } finally {
       if (request === current) {
+        current.resolve(accepted);
         request = null;
-        setRequestState("idle");
       }
     }
   }
@@ -202,7 +210,8 @@ function LogsPage() {
     const frame = requestAnimationFrame(resetContentScroll);
     return () => {
       disposed = true;
-      request?.abort();
+      request?.controller.abort();
+      request?.resolve(null);
       request = null;
       cancelAnimationFrame(frame);
     };
@@ -218,8 +227,8 @@ function LogsPage() {
         </section>
         <SettingsWorkspace fillHeight>
           <LogsView
-            loading={requestState() === "visible"}
-            refreshDisabled={!gateway.connected || requestState() !== "idle"}
+            completion={completion()}
+            refreshDisabled={!gateway.connected}
             status={status()}
             file={file()}
             entries={entries}

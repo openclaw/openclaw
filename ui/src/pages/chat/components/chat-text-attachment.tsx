@@ -10,25 +10,23 @@ import {
   onSettled,
   Show,
 } from "solid-js";
-import { createLazyCustomElementRequests } from "../../../app/lazy-custom-element.ts";
 import { MarkdownBlocks } from "../../../components/markdown-blocks-owner.ts";
 import { createMarkdownRef } from "../../../components/markdown-dom-ref.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { LazyViewError } from "../../../components/solid/lazy-view-error.tsx";
 import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerFilePreviewEnglish } from "../../../i18n/locales/en-file-preview.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { EmbedSandboxMode } from "../../../lib/chat/tool-display.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
-import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { AttachmentPreviewSkeleton } from "./chat-attachment-card-solid.tsx";
 import { readAttachmentText } from "./chat-attachment-text-reader.ts";
-import { htmlPreviewElement, isHtmlDocument } from "./chat-html-preview.ts";
+import { HtmlPreview } from "./chat-html-preview-view.tsx";
+import { isHtmlDocument } from "./chat-html-preview.ts";
 
 registerEnglishCatalog(registerChatSessionEnglish);
 
@@ -88,12 +86,6 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
     return false;
   });
   const [retry, setRetry] = createSignal(0);
-  const htmlPreviewLoader = createLazyCustomElementRequests({
-    get updateComplete() {
-      return host.updateComplete;
-    },
-  });
-  const previewState = projectOwner(htmlPreviewLoader, (owner) => owner.visibleState);
   const htmlDocument = () => !props.plainText && isHtmlDocument(props.mimeType, props.label);
   const markdown = () => {
     const mimeType = props.mimeType.split(";", 1)[0]?.trim().toLowerCase();
@@ -127,18 +119,6 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
         (after.identity ? Boolean(before.src) === Boolean(after.src) : before.src === after.src),
     },
   );
-  const htmlLoadState = () => {
-    const state = previewState.read();
-    return state?.status === "error" ? (
-      <LazyViewError
-        error={state.error}
-        stale={state.stale}
-        onRetry={() => htmlPreviewLoader.retry()}
-      />
-    ) : state ? (
-      <div role="status">{t("common.loading")}</div>
-    ) : null;
-  };
   // Keep one pending presentation through metadata resolution and the first body read.
   const skeleton = <AttachmentPreviewSkeleton />;
   const readSource = (scope: ReturnType<typeof readScope>) => {
@@ -260,23 +240,14 @@ function TextAttachment(props: TextAttachmentProps, host: SolidBridgeElement<Tex
             {(content) => (
               <>
                 <Show when={htmlDocument()}>
-                  {(_html) => {
-                    onSettled(() => {
-                      htmlPreviewLoader.requestWhileActive(htmlPreviewElement, true);
-                      return () => htmlPreviewLoader.requestWhileActive(htmlPreviewElement, false);
-                    });
-                    return (
-                      <div class="chat-html-preview" hidden={source()}>
-                        {htmlLoadState()}
-                        <openclaw-chat-html-preview
-                          prop:html={content.text}
-                          prop:sourceIdentity={props.sourceIdentity || props.src}
-                          title={props.label}
-                          prop:embedSandboxMode={props.embedSandboxMode}
-                        />
-                      </div>
-                    );
-                  }}
+                  <div class="chat-html-preview" hidden={source()}>
+                    <HtmlPreview
+                      content={content.text}
+                      sourceIdentity={props.sourceIdentity || props.src}
+                      title={props.label}
+                      embedSandboxMode={props.embedSandboxMode}
+                    />
+                  </div>
                 </Show>
                 {markdown() && !htmlDocument() && !source() ? (
                   <MarkdownAttachment text={content.text} label={props.label} />

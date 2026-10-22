@@ -44,6 +44,7 @@ export type TalkCatalogState =
     };
 
 type TalkViewProps = {
+  presentationRetired: () => Promise<void>;
   nativeDeviceSettings?: NativeDeviceSettingsCapability | null;
   nativeDeviceSnapshot?: NativeDeviceSettingsSnapshot | null;
   voiceWake?: {
@@ -353,7 +354,11 @@ export function Talk(props: TalkViewProps) {
   return (
     <section class="talk-page">
       <SettingsPage>
-        <DeviceTalk capability={props.nativeDeviceSettings} snapshot={props.nativeDeviceSnapshot} />
+        <DeviceTalk
+          capability={props.nativeDeviceSettings}
+          snapshot={props.nativeDeviceSnapshot}
+          presentationRetired={props.presentationRetired}
+        />
         {props.voiceWake && (
           <VoiceWakeEditor
             readState={props.voiceWake.readState}

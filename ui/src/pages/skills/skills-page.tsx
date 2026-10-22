@@ -11,9 +11,8 @@ import {
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
-import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
-import { createPageRequest } from "../../lib/page-request.ts";
+import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
@@ -56,8 +55,6 @@ function createSkillsData(): Omit<SkillsState, "client" | "connected" | "runtime
     skillEdits: {},
     skillMessages: {},
     clawhubSearchResults: null,
-    clawhubSearchLoading: false,
-    clawhubSearchError: null,
     clawhubDetail: null,
     clawhubDetailRef: null,
     clawhubDetailError: null,
@@ -110,7 +107,10 @@ export function SkillsPage(props: SkillsPageProps) {
     clawhubSearchQuery: "",
   });
   let active = true;
-  let clawhubSearchTimer: ReturnType<typeof setTimeout> | null = null;
+  let clawhubSearchTimer: {
+    timeout: ReturnType<typeof setTimeout>;
+    resolve: (result: PageReadResult) => void;
+  } | null = null;
   let routeDataInitialized = false;
   let routeDataEnabled = true;
   let accessSignature = "";
@@ -135,21 +135,27 @@ export function SkillsPage(props: SkillsPageProps) {
     ref: string;
     completion: ReturnType<typeof loadClawHubDetail>;
   } | null>(null);
-  const searchRequest = createPageRequest(
-    () => {
-      data.clawhubSearchLoading = searchRequest.pending;
-    },
-    {
-      task: ({ client, query }: { client: GatewayBrowserClient; query: string }, { signal }) =>
-        searchClawHub(client, query, signal),
-      onComplete: (results) => {
-        data.clawhubSearchResults = results;
-      },
-      onError: (error) => {
-        data.clawhubSearchError = formatUiError(error);
-      },
-    },
+  const [searchCompletion, setSearchCompletion] = createSignal<Promise<PageReadResult> | null>(
+    null,
   );
+  const searchRequest = createPageRequest(() => {}, {
+    task: ({ client, query }: { client: GatewayBrowserClient; query: string }, { signal }) =>
+      searchClawHub(client, query, signal),
+    onComplete: (results) => {
+      data.clawhubSearchResults = results;
+    },
+    onError: () => {},
+  });
+  const readClawHubSearch = createMemo(() => {
+    const completion = searchCompletion();
+    // First readiness belongs to Loading too, before request admission publishes its receipt.
+    return (completion ?? Promise.resolve(null)).then((result) => {
+      if (result) {
+        throw result.error;
+      }
+      return true;
+    });
+  });
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
     onIdentityChange: resetLoadedSkillState,
@@ -332,22 +338,25 @@ export function SkillsPage(props: SkillsPageProps) {
       return;
     }
     lastSearchScope = scope;
-    if (scope[1]) {
-      void runSearch(query);
+    if (scope[1] && !clawhubSearchTimer) {
+      void setSearchCompletion(performSearch(query));
     }
   }
 
-  async function runSearch(query: string) {
-    searchRequest.cancel();
-    data.clawhubSearchError = null;
+  function performSearch(query: string): Promise<PageReadResult> {
+    searchRequest.reset();
     const snapshot = context.gateway.snapshot;
-    data.clawhubSearchLoading =
-      snapshot.phase === "connected" && canReadSkills() && admittedSurface === "discovery";
     const client = snapshot.client;
-    if (!data.clawhubSearchLoading || !client || clawhubSearchTimer) {
-      return;
+    if (
+      snapshot.phase !== "connected" ||
+      !canReadSkills() ||
+      admittedSurface !== "discovery" ||
+      !client
+    ) {
+      return Promise.resolve(null);
     }
-    await searchRequest.run({ client, query });
+    void searchRequest.run({ client, query });
+    return searchRequest.read!;
   }
 
   function agentSelection() {
@@ -374,8 +383,8 @@ export function SkillsPage(props: SkillsPageProps) {
     data.skillOperation = null;
     data.clawhubVerdictsLoading = false;
     data.skillCardLoadingKey = null;
-    data.clawhubSearchLoading = false;
-    searchRequest.cancel();
+    setSearchCompletion(null);
+    searchRequest.reset();
     clearClawHubSearchTimer();
     clawhubIcons.reconcileKeys(new Set(Object.keys(data.clawhubIconUrls)));
     library.invalidateRequests();
@@ -384,7 +393,8 @@ export function SkillsPage(props: SkillsPageProps) {
   function resetLoadedSkillState() {
     setDetailReceipt(null);
     library.reset();
-    searchRequest.cancel();
+    setSearchCompletion(null);
+    searchRequest.reset();
     clearClawHubSearchTimer();
     if (routeDataInitialized) {
       routeDataEnabled = false;
@@ -482,20 +492,24 @@ export function SkillsPage(props: SkillsPageProps) {
       state.clawhubSearchQuery = query;
     });
     data.clawhubSearchResults = null;
-    data.clawhubSearchError = null;
-    data.clawhubSearchLoading = true;
     data.clawhubInstallMessage = null;
     clearClawHubSearchTimer();
-    searchRequest.cancel();
-    clawhubSearchTimer = setTimeout(() => {
-      clawhubSearchTimer = null;
-      void runSearch(query);
-    }, 300);
+    searchRequest.reset();
+    void setSearchCompletion(
+      new Promise<PageReadResult>((resolve) => {
+        const timeout = setTimeout(() => {
+          clawhubSearchTimer = null;
+          void performSearch(query).then(resolve);
+        }, 300);
+        clawhubSearchTimer = { timeout, resolve };
+      }),
+    );
   }
 
   function clearClawHubSearchTimer() {
     if (clawhubSearchTimer) {
-      clearTimeout(clawhubSearchTimer);
+      clearTimeout(clawhubSearchTimer.timeout);
+      clawhubSearchTimer.resolve(null);
       clawhubSearchTimer = null;
     }
   }
@@ -584,6 +598,8 @@ export function SkillsPage(props: SkillsPageProps) {
           <Skills
             state={viewState()}
             readClawHubDetail={readClawHubDetail}
+            readClawHubSearch={readClawHubSearch}
+            clawhubSearchEpoch={gateway.epoch}
             surface={surface()}
             libraryEntries={library.state.list?.entries ?? []}
             onLibraryOpen={(skillId) => void library.open(skillId)}
