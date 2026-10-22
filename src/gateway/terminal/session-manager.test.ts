@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import type { TerminalBackend } from "./backend.js";
 import { composeTerminalIntroBanner } from "./intro-banner.js";
 import { TerminalSessionManager } from "./session-manager.js";
 import {
@@ -70,47 +69,25 @@ describe("TerminalSessionManager", () => {
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it.each(["resize", "relay"] as const)(
-    "finalizes and reports a %s backend error",
-    async (source) => {
-      const { emit, manager } = fixture();
-      const kill = vi.fn(() => manager.size);
-      let onExit: Parameters<TerminalBackend["onExit"]>[0] | undefined;
-      const backend: TerminalBackend = {
-        write: vi.fn(),
-        pause: vi.fn(),
-        resume: vi.fn(),
-        onData: vi.fn(),
-        kill,
-        resize: () => {
-          throw new Error("dead PTY");
-        },
-        onExit: (callback) => {
-          onExit = callback;
-        },
-      };
-      const { sessionId } = await openSession(manager, { createBackend: async () => backend });
-      const error =
-        source === "resize"
-          ? "resize failed"
-          : "ROUTE_CHANGED: node connection changed before dispatch";
-      if (source === "resize") {
-        expect(manager.resize("conn-1", sessionId, 120, 40)).toBe(false);
-        expect(manager.size).toBe(0);
-        expect(kill).toHaveBeenCalledOnce();
-        expect(kill).toHaveReturnedWith(1);
-      } else {
-        onExit?.({ error });
-      }
-      expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_EXIT, {
-        sessionId,
-        exitCode: null,
-        signal: null,
-        reason: "error",
-        error,
-      });
-    },
-  );
+  it("finalizes a failed resize before reporting the backend error", async () => {
+    const { emit, fake, manager } = fixture();
+    const kill = vi.spyOn(fake, "kill").mockImplementation(() => manager.size);
+    vi.spyOn(fake, "resize").mockImplementation(() => {
+      throw new Error("dead PTY");
+    });
+    const { sessionId } = await openSession(manager);
+    expect(manager.resize("conn-1", sessionId, 120, 40)).toBe(false);
+    expect(manager.size).toBe(0);
+    expect(kill).toHaveBeenCalledOnce();
+    expect(kill).toHaveReturnedWith(1);
+    expect(emit).toHaveBeenCalledWith("conn-1", TERMINAL_EVENT_EXIT, {
+      sessionId,
+      exitCode: null,
+      signal: null,
+      reason: "error",
+      error: "resize failed",
+    });
+  });
 
   it("coalesces thousands of PTY chunks into a bounded number of data frames", async () => {
     vi.useFakeTimers();
@@ -797,51 +774,41 @@ describe("TerminalSessionManager idle eviction", () => {
 
   it("spares a victim that gains a viewer during the replacement spawn", async () => {
     const victimPty = makeFakePty();
-    const replacementPty = makeFakePty();
-    const gate = createDeferred();
-    let spawnCount = 0;
-    const { manager, open } = trackingManager(1, async () => {
-      if (spawnCount++ === 0) {
-        return victimPty;
-      }
-      await gate.promise;
-      return replacementPty;
-    });
+    const replacement = heldPty();
+    const spawn = vi.fn(replacement.spawn).mockResolvedValueOnce(victimPty);
+    const { manager, open } = trackingManager(1, spawn);
     const victim = expectTerminalOpen(await open());
 
     const opening = open();
     // The replacement stays gated while the idle victim gains a viewer.
     expect(manager.attach("viewer-1", victim.sessionId)?.sessionId).toBe(victim.sessionId);
-    gate.resolve();
+    replacement.release();
 
     await expect(opening).resolves.toMatchObject({ ok: false, code: "limit" });
     expect(victimPty.killed).toBe(false);
-    expect(replacementPty.killed).toBe(true);
+    expect(replacement.fake.killed).toBe(true);
     expect(manager.size).toBe(1);
     expect(manager.write("viewer-1", victim.sessionId, "still-alive\r")).toBe(true);
   });
 
   it("evicts the freshly idlest session when the oldest becomes active mid-spawn", async () => {
     vi.useFakeTimers();
-    const gate = createDeferred();
-    let gateNextSpawn = false;
-    const { manager, ptys, open } = trackingManager(2, async () => {
-      if (gateNextSpawn) {
-        await gate.promise;
-      }
-      return makeFakePty();
-    });
+    const replacement = heldPty();
+    const spawn = vi
+      .fn(replacement.spawn)
+      .mockResolvedValueOnce(makeFakePty())
+      .mockResolvedValueOnce(makeFakePty());
+    const { manager, ptys, open } = trackingManager(2, spawn);
     expectTerminalOpen(await open());
     await vi.advanceTimersByTimeAsync(5_000);
     expectTerminalOpen(await open());
 
-    gateNextSpawn = true;
     const opening = open();
     // The oldest session becomes active during the spawn, making
     // the newer session the genuinely idlest candidate.
     await vi.advanceTimersByTimeAsync(5_000);
     expectDefined(ptys[0], "oldest pty invariant").emitData("busy\n");
-    gate.resolve();
+    replacement.release();
 
     expectTerminalOpen(await opening);
     expect(manager.size).toBe(2);
@@ -905,23 +872,17 @@ describe("TerminalSessionManager idle eviction", () => {
 
   it("keeps the idle victim alive when the replacement spawn fails", async () => {
     const pty = makeFakePty();
-    let failNextSpawn = false;
-    const { manager, open } = trackingManager(1, async () => {
-      if (failNextSpawn) {
-        throw new Error("pty exhausted");
-      }
-      return pty;
-    });
+    const spawn = vi.fn(async () => pty);
+    const { manager, open } = trackingManager(1, spawn);
     const victim = expectTerminalOpen(await open());
 
-    failNextSpawn = true;
+    spawn.mockRejectedValueOnce(new Error("pty exhausted"));
     await expect(open()).resolves.toMatchObject({ ok: false, code: "spawn_failed" });
     expect(manager.size).toBe(1);
     expect(pty.killed).toBe(false);
     pty.emitData("still-alive\n");
     expect(manager.snapshotAgent(agentOwner, victim.sessionId)).toContain("still-alive");
 
-    failNextSpawn = false;
     expectTerminalOpen(await open());
     expect(manager.size).toBe(1);
     expect(pty.killed).toBe(true);

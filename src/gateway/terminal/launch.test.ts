@@ -106,36 +106,15 @@ describe("createTerminalLaunchPolicy", () => {
     expectDisabled(disabledPolicy);
   });
 
-  it("preserves sandbox revocations across later restart-bound updates", () => {
-    const workspace = tempDirs.make("term-policy-agent-");
-    const baseConfig: OpenClawConfig = {
-      ...enabled,
-      agents: { defaults: { workspace }, entries: { ops: {} } },
-    };
-    const policy = createTerminalLaunchPolicy(baseConfig);
-    policy.prepareConfig(
-      {
-        ...baseConfig,
-        agents: {
-          defaults: { workspace },
-          entries: { ops: { sandbox: { mode: "all" } } },
-        },
-      },
-      restart,
-    );
-    policy.prepareConfig(baseConfig, { restartPending: true });
-
-    expect(policy.resolve("ops")).toMatchObject({ ok: false, block: { kind: "sandboxed" } });
-  });
-
-  it("keeps restart and commit restrictions isolated across agents", () => {
+  it("preserves restart revocations across updates and isolates hot restrictions by agent", () => {
     const baseConfig: OpenClawConfig = fleetConfig();
     const policy = createTerminalLaunchPolicy(baseConfig);
 
     policy.prepareConfig(fleetConfig("alpha"), restart);
+    policy.prepareConfig(baseConfig, restart);
     policy.prepareConfig(fleetConfig("beta"), hot);
 
-    expect(policy.resolve("alpha").ok).toBe(false);
+    expect(policy.resolve("alpha")).toMatchObject({ ok: false, block: { kind: "sandboxed" } });
     expect(policy.resolve("beta").ok).toBe(false);
 
     policy.acceptConfig(acceptHot);
@@ -328,14 +307,26 @@ describe("createTerminalLaunchPolicy", () => {
 });
 
 describe("buildTerminalEnv", () => {
-  it("carries the base env, defaults TERM, and marks the terminal", () => {
-    expect(buildTerminalEnv({ PATH: "/usr/bin", FOO: "bar" })).toMatchObject({
-      PATH: "/usr/bin",
-      FOO: "bar",
-      TERM: "xterm-256color",
-      COLORTERM: "truecolor",
-      OPENCLAW_TERMINAL: "1",
-    });
+  it.each([
+    [
+      { PATH: "/usr/bin", FOO: "bar" },
+      {
+        PATH: "/usr/bin",
+        FOO: "bar",
+        TERM: "xterm-256color",
+        COLORTERM: "truecolor",
+        OPENCLAW_TERMINAL: "1",
+      },
+    ],
+    [
+      { FORCE_COLOR: "0", NO_COLOR: "1", COLORTERM: undefined },
+      { FORCE_COLOR: "0", NO_COLOR: "1", COLORTERM: "truecolor" },
+    ],
+    [{ TERM: "screen-256color" }, { TERM: "screen-256color" }],
+  ])("preserves environment controls and supplies terminal defaults %#", (baseEnv, expected) => {
+    const original = { ...baseEnv };
+    expect(buildTerminalEnv(baseEnv)).toMatchObject(expected);
+    expect(baseEnv).toEqual(original);
   });
 
   it.each(["truecolor", "24bit", ""])("preserves explicit COLORTERM=%j", (colorterm) => {
@@ -366,21 +357,6 @@ describe("buildTerminalEnv", () => {
     expect(resolveEnvironmentValue(env, "COLORTERM", "win32")).toBe("24bit");
     const merged = mergeProcessEnv([env, { colorterm: "" }], "win32");
     expect(resolveEnvironmentValue(merged, "COLORTERM", "win32")).toBe("");
-  });
-
-  it("preserves color controls without mutating the base env", () => {
-    const baseEnv = { FORCE_COLOR: "0", NO_COLOR: "1", COLORTERM: undefined };
-    expect(buildTerminalEnv(baseEnv)).toMatchObject({
-      FORCE_COLOR: "0",
-      NO_COLOR: "1",
-      COLORTERM: "truecolor",
-    });
-    expect(baseEnv).toEqual({ FORCE_COLOR: "0", NO_COLOR: "1", COLORTERM: undefined });
-  });
-
-  it("preserves an existing TERM", () => {
-    const env = buildTerminalEnv({ TERM: "screen-256color" });
-    expect(env.TERM).toBe("screen-256color");
   });
 });
 
