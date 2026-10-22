@@ -6867,7 +6867,6 @@
 ["src/projects/project-source-env.test.ts","../state/openclaw-state-worker-store.js","b7d1121ef6ce8cd0b2398310f9c98570eb32101244e44f49591e4f3577a44615",1]
 ["src/projects/project-source-env.test.ts","./project-checkout.js","cd9b5f60a5eecf5f815d72db178c8b2137d983e910b7446435610a4ebc9fc3c2",1]
 ["src/projects/project-source-env.test.ts","./project-registry.kernel.js","ee29ccfee60eac8a9ebe0cd0bf8bf8403b0d3b4a1d5a1b7ece3d3a15722d7ea1",1]
-["src/proxy-capture/proxy-server.managed-proxy.test.ts","./ca.js","b34ca81edafff73599ab21063a587b4c118aedca156f238e010ad916c1756fd4",1]
 ["src/proxy-capture/proxy-server.test.ts","./ca.js","b34ca81edafff73599ab21063a587b4c118aedca156f238e010ad916c1756fd4",1]
 ["src/proxy-capture/runtime.retirement.test.ts","../state/openclaw-state-db-async-lifecycle.js","91f5d03448d3c4341856f6ff310c9b40f7494f8a443b804a661e0207afd6c79e",1]
 ["src/proxy-capture/runtime.retirement.test.ts","../state/openclaw-state-worker-context.js","836f863ba19426b5d1097c675e20bf53b0a2a39258098facd5983974ef997138",1]

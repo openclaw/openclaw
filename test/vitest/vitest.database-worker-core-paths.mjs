@@ -1298,7 +1298,6 @@ export const databaseWorkerCoreTestFiles = [
   "src/state/openclaw-state-db-schema-policy.test.ts",
   "src/agents/provider-transport-fetch.capture.test.ts",
   "src/proxy-capture/proxy-server.test.ts",
-  "src/proxy-capture/proxy-server.managed-proxy.test.ts",
   "src/proxy-capture/runtime.guarded-fetch.test.ts",
   "src/proxy-capture/runtime.lifecycle.test.ts",
   "src/proxy-capture/runtime.input-admission.test.ts",

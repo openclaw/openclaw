@@ -151,81 +151,20 @@ describe("createDebugProxyCaptureReader", () => {
     const databasePath = createCaptureDatabase(env, 3);
     const writer = new DatabaseSync(databasePath);
     try {
-      const insert = writer.prepare(
+      writer.exec(
         `INSERT INTO capture_events (
            id, session_id, ts, source_scope, source_process, protocol, direction, kind, flow_id,
            method, host, path, status, close_code, content_type, headers_json, data_text,
            data_blob_id, data_sha256, error_text, meta_json
-         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      );
-      insert.run(
-        2,
-        "session-1",
-        5,
-        "openclaw",
-        "candidate",
-        "https",
-        "outbound",
-        "request",
-        "flow-2",
-        "POST",
-        "slack.com",
-        "/api/chat.postMessage",
-        200,
-        1000,
-        "application/json",
-        '{"authorization":"redacted"}',
-        '{"text":"older"}',
-        "blob-1",
-        "sha-2",
-        "error-2",
-        '{"attempt":2}',
-      );
-      insert.run(
-        3,
-        "session-1",
-        5,
-        "openclaw",
-        "candidate",
-        "https",
-        "inbound",
-        "response",
-        "flow-3",
-        "GET",
-        "slack.com",
-        "/api/conversations.history",
-        201,
-        1001,
-        "application/json",
-        '{"accept":"application/json"}',
-        '{"text":"newer"}',
-        "blob-1",
-        "sha-3",
-        "error-3",
-        '{"attempt":3}',
-      );
-      insert.run(
-        4,
-        "session-1",
-        6,
-        "openclaw",
-        "candidate",
-        "https",
-        "inbound",
-        "response",
-        "flow-4",
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
+         ) VALUES
+           (2, 'session-1', 5, 'openclaw', 'candidate', 'https', 'outbound', 'request', 'flow-2',
+            'POST', 'slack.com', '/api/chat.postMessage', 200, 1000, 'application/json',
+            '{"authorization":"redacted"}', '{"text":"older"}', 'blob-1', 'sha-2', 'error-2', '{"attempt":2}'),
+           (3, 'session-1', 5, 'openclaw', 'candidate', 'https', 'inbound', 'response', 'flow-3',
+            'GET', 'slack.com', '/api/conversations.history', 201, 1001, 'application/json',
+            '{"accept":"application/json"}', '{"text":"newer"}', 'blob-1', 'sha-3', 'error-3', '{"attempt":3}'),
+           (4, 'session-1', 6, 'openclaw', 'candidate', 'https', 'inbound', 'response', 'flow-4',
+            NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL)`,
       );
     } finally {
       writer.close();
@@ -259,16 +198,25 @@ describe("createDebugProxyCaptureReader", () => {
     });
   });
 
-  it("propagates newer schema errors", () => {
-    const env = makeStateEnv("openclaw-proxy-reader-newer-");
+  it.each([
+    [
+      "newer schema",
+      `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`,
+      `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+    ],
+    ["missing capture table", "PRAGMA user_version = 3;", /no such table: capture_events/u],
+  ] as const)("propagates %s errors", (_name, sql, error) => {
+    const env = makeStateEnv("openclaw-proxy-reader-invalid-schema-");
     const databasePath = resolveOpenClawStateSqlitePath(env);
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     const db = new DatabaseSync(databasePath);
-    db.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};`);
-    db.close();
-
+    try {
+      db.exec(sql);
+    } finally {
+      db.close();
+    }
     expect(() => createDebugProxyCaptureReader({ env }).getSessionEvents("session-1")).toThrow(
-      `uses newer schema version ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`,
+      error,
     );
   });
 
@@ -277,20 +225,6 @@ describe("createDebugProxyCaptureReader", () => {
     const databasePath = resolveOpenClawStateSqlitePath(env);
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
     fs.writeFileSync(databasePath, "not a sqlite database");
-
     expect(() => createDebugProxyCaptureReader({ env }).readBlob("blob-1")).toThrow();
-  });
-
-  it("propagates capture query failures", () => {
-    const env = makeStateEnv("openclaw-proxy-reader-sql-");
-    const databasePath = resolveOpenClawStateSqlitePath(env);
-    fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    const db = new DatabaseSync(databasePath);
-    db.exec("PRAGMA user_version = 3;");
-    db.close();
-
-    expect(() => createDebugProxyCaptureReader({ env }).getSessionEvents("session-1")).toThrow(
-      /no such table: capture_events/u,
-    );
   });
 });
