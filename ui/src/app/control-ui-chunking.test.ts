@@ -141,9 +141,8 @@ describe("Control UI build chunking", () => {
                   ? {
                       // Fixture sharing is independent of changing production captures.
                       test: (id: string) =>
-                        [devices, sharedUi, pluginActions, sharedStyle, sidebarStyle].includes(
-                          id,
-                        ) || group.test(id),
+                        [devices, sharedUi, sharedStyle, sidebarStyle].includes(id) ||
+                        group.test(id),
                     }
                   : {}),
                 ...(group.name === "control-ui-boot-shared-styles"
