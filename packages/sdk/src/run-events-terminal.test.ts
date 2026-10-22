@@ -1,7 +1,6 @@
 import { expect, it } from "vitest";
-import { createAgentEvent } from "./client.test-support.js";
-import { EventHub, OpenClaw } from "./index.js";
-import type { GatewayEvent, OpenClawEvent, OpenClawTransport } from "./types.js";
+import { createAgentEvent, createClientFixture } from "./client.test-support.js";
+import type { GatewayEvent, OpenClawEvent } from "./types.js";
 
 const runId = "sdk-observed-run";
 
@@ -21,46 +20,34 @@ async function collectSdkRunFixture(
   frames: readonly [GatewayEvent, ...GatewayEvent[]],
 ) {
   const expectedRaw = structuredClone(frames);
-  const hub = new EventHub<GatewayEvent>({ replayLimit: 10 });
-  const transport: OpenClawTransport = {
-    request: async () => {
-      throw new Error("This stream test must not issue RPC requests");
-    },
-    events: (filter) => hub.stream(filter, { replay: true }),
-    close: () => hub.close(),
+  const { oc, transport } = createClientFixture();
+  transport.request = async () => {
+    throw new Error("This stream test must not issue RPC requests");
   };
-  const oc = new OpenClaw({ transport });
   const iterator = oc.runEvents(runId)[Symbol.asyncIterator]();
+  const isMarker = (event: { raw?: GatewayEvent }) => event.raw?.event === "custom.debug";
   const observed: OpenClawEvent[] = [];
-  const collectRun = () =>
-    collect(
-      { [Symbol.asyncIterator]: () => iterator },
-      (event) => event.raw?.event === "custom.debug",
-    );
 
   try {
     await oc.connect();
-    if (mode === "live") {
+    if (mode === "replay") {
+      const drained = collect(oc.events(), isMarker);
+      frames.forEach(transport.emit);
+      await drained;
+    } else {
       const firstEvent = iterator.next();
-      hub.publish(frames[0]);
+      transport.emit(frames[0]);
       const first = await firstEvent;
       if (first.done) {
         throw new Error("SDK stream closed before its start event");
       }
       observed.push(first.value);
-      const pending = collectRun();
-      for (const frame of frames.slice(1)) {
-        hub.publish(frame);
-      }
-      observed.push(...(await pending));
-    } else {
-      const drained = collect(oc.events(), (event) => event.raw?.event === "custom.debug");
-      for (const frame of frames) {
-        hub.publish(frame);
-      }
-      await drained;
-      observed.push(...(await collectRun()));
     }
+    const pending = collect({ [Symbol.asyncIterator]: () => iterator }, isMarker);
+    if (mode === "live") {
+      frames.slice(1).forEach(transport.emit);
+    }
+    observed.push(...(await pending));
 
     const raw = await collect(oc.rawEvents(), (event) => event.event === "custom.debug");
     expect(raw).toEqual(expectedRaw);

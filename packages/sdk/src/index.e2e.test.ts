@@ -1,8 +1,6 @@
 import type { AddressInfo } from "node:net";
 import net from "node:net";
-import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it } from "vitest";
-import { WebSocketServer } from "ws";
 import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
 import { emitAgentEvent } from "../../../src/infra/agent-events.js";
 import {
@@ -11,6 +9,7 @@ import {
 } from "../../../src/infra/agent-run-registry.js";
 import { withTimeout } from "../../../src/infra/fs-safe.js";
 import { GatewayClientTransport, OpenClaw, type OpenClawEvent } from "./index.js";
+import { createSdkWebSocketServer } from "./transport.websocket.test-support.js";
 
 type JsonObject = Record<string, unknown>;
 type FakeGatewayRequest = {
@@ -81,132 +80,96 @@ async function reservePort(): Promise<number> {
 }
 
 async function createFakeGateway(port = 0): Promise<FakeGateway> {
-  const server = new WebSocketServer({ host: "127.0.0.1", port });
-  await new Promise<void>((resolve) => {
-    server.once("listening", resolve);
-  });
-  let seq = 1;
+  const server = await createSdkWebSocketServer(port);
   const requests: FakeGatewayRequest[] = [];
-  server.on("connection", (socket) => {
-    const send = (frame: JsonObject) => socket.send(JSON.stringify(frame));
-    send({
-      type: "event",
-      event: "connect.challenge",
-      seq: seq++,
-      payload: { nonce: "sdk-e2e-nonce", ts: Date.now() },
-    });
-    socket.on("message", (raw) => {
-      const frame = JSON.parse(rawDataToString(raw)) as FakeGatewayRequest;
-      requests.push(frame);
-      const reply = (payload: JsonObject): void => {
-        send({ type: "res", id: frame.id, ok: true, payload });
-      };
-      if (frame.method === "connect") {
-        reply({
-          type: "hello-ok",
-          protocol: 1,
-          policy: { tickIntervalMs: 30000 },
-        });
-        return;
-      }
+  server.setRequestHandler((socket, frame) => {
+    requests.push(frame);
+    const reply = (payload: JsonObject) => server.reply(socket, frame.id, payload);
+    if (frame.method === "agent") {
+      const params = frame.params as { sessionKey?: string } | undefined;
+      reply({
+        status: "accepted",
+        runId: "run-sdk-e2e",
+        sessionKey: params?.sessionKey,
+      });
+      setTimeout(() => {
+        for (const [stream, data] of [
+          ["lifecycle", { phase: "start" }],
+          ["assistant", { delta: "hello from fake gateway" }],
+          ["lifecycle", { phase: "end" }],
+        ] as const) {
+          server.sendEvent(socket, "agent", {
+            runId: "run-sdk-e2e",
+            sessionKey: params?.sessionKey,
+            stream,
+            ts: Date.now(),
+            data,
+          });
+        }
+      }, 50);
+      return;
+    }
 
-      if (frame.method === "agent") {
-        const params = frame.params as { sessionKey?: string } | undefined;
-        reply({
-          status: "accepted",
-          runId: "run-sdk-e2e",
-          sessionKey: params?.sessionKey,
-        });
-        setTimeout(() => {
-          for (const [stream, data] of [
-            ["lifecycle", { phase: "start" }],
-            ["assistant", { delta: "hello from fake gateway" }],
-            ["lifecycle", { phase: "end" }],
-          ] as const) {
-            send({
-              type: "event",
-              event: "agent",
-              seq: seq++,
-              payload: {
-                runId: "run-sdk-e2e",
-                sessionKey: params?.sessionKey,
-                stream,
-                ts: Date.now(),
-                data,
-              },
-            });
-          }
-        }, 50);
-        return;
-      }
+    const params = frame.params as JsonObject | undefined;
+    const echo = { ok: true, method: frame.method, params };
+    const responses: Record<string, JsonObject> = {
+      "agents.list": { agents: [{ id: "main" }] },
+      "agent.identity.get": { agentId: "main", ...params },
+      "agents.create": echo,
+      "agents.update": echo,
+      "agents.delete": echo,
+      "agent.wait": {
+        status: "ok",
+        runId: "run-sdk-e2e",
+        sessionKey: "main",
+        startedAt: 123,
+        endedAt: 456,
+      },
+      "sessions.list": { sessions: [{ key: "sdk-session" }] },
+      "sessions.create": { key: params?.key ?? "sdk-session" },
+      "sessions.resolve": { key: "sdk-session", params },
+      "sessions.send": { status: "ok", runId: "run-session-e2e", sessionKey: params?.key },
+      "sessions.abort": {
+        ok: true,
+        abortedRunId: params?.runId ?? "run-sdk-e2e",
+        status: "aborted",
+      },
+      "sessions.patch": echo,
+      "sessions.compact": echo,
+      "models.list": { models: [{ id: "gpt-5.4" }] },
+      "models.authStatus": { providers: [] },
+      "tools.catalog": { tools: [{ name: "shell" }] },
+      "tools.effective": { tools: [{ name: "shell", enabled: true }] },
+      "tools.invoke": { ok: true, toolName: "shell", output: { ok: true } },
+      "exec.approval.list": { approvals: [] },
+    };
+    const response = Object.hasOwn(responses, frame.method) && responses[frame.method];
+    if (response) {
+      reply(response);
+      return;
+    }
 
-      const params = frame.params as JsonObject | undefined;
-      const echo = { ok: true, method: frame.method, params };
-      const responses: Record<string, JsonObject> = {
-        "agents.list": { agents: [{ id: "main" }] },
-        "agent.identity.get": { agentId: "main", ...params },
-        "agents.create": echo,
-        "agents.update": echo,
-        "agents.delete": echo,
-        "agent.wait": {
-          status: "ok",
-          runId: "run-sdk-e2e",
-          sessionKey: "main",
-          startedAt: 123,
-          endedAt: 456,
-        },
-        "sessions.list": { sessions: [{ key: "sdk-session" }] },
-        "sessions.create": { key: params?.key ?? "sdk-session" },
-        "sessions.resolve": { key: "sdk-session", params },
-        "sessions.send": { status: "ok", runId: "run-session-e2e", sessionKey: params?.key },
-        "sessions.abort": {
-          ok: true,
-          abortedRunId: params?.runId ?? "run-sdk-e2e",
-          status: "aborted",
-        },
-        "sessions.patch": echo,
-        "sessions.compact": echo,
-        "models.list": { models: [{ id: "gpt-5.4" }] },
-        "models.authStatus": { providers: [] },
-        "tools.catalog": { tools: [{ name: "shell" }] },
-        "tools.effective": { tools: [{ name: "shell", enabled: true }] },
-        "tools.invoke": { ok: true, toolName: "shell", output: { ok: true } },
-        "exec.approval.list": { approvals: [] },
-      };
-      const response = Object.hasOwn(responses, frame.method) && responses[frame.method];
-      if (response) {
-        reply(response);
-        return;
-      }
+    if (frame.method === "exec.approval.resolve") {
+      expect(frame.params).toMatchObject({ id: "approval-1", decision: "allow-once" });
+      reply({ ok: true, params: frame.params as JsonObject | undefined });
+      return;
+    }
 
-      if (frame.method === "exec.approval.resolve") {
-        expect(frame.params).toMatchObject({ id: "approval-1", decision: "allow-once" });
-        reply({ ok: true, params: frame.params as JsonObject | undefined });
-        return;
-      }
-
-      send({
+    socket.send(
+      JSON.stringify({
         type: "res",
         id: frame.id,
         ok: false,
-        error: {
-          code: "UNKNOWN_METHOD",
-          message: `unhandled fake Gateway method ${frame.method}`,
-        },
-      });
-    });
+        error: { code: "UNKNOWN_METHOD", message: `unhandled fake Gateway method ${frame.method}` },
+      }),
+    );
   });
   const gateway: FakeGateway = {
-    url: `ws://127.0.0.1:${(server.address() as AddressInfo).port}`,
+    url: server.url,
     requests,
     close: async () => {
       gateways.delete(gateway);
-      for (const socket of server.clients) {
-        socket.terminate();
-      }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server.close();
     },
   };
   gateways.add(gateway);
@@ -217,10 +180,12 @@ describe("OpenClaw SDK websocket e2e", () => {
   afterEach(() => Promise.all([...gateways].map((gateway) => gateway.close())));
 
   it("runs an agent and streams normalized events over a Gateway websocket", async () => {
-    await withGateway(async (oc) => {
+    await withGateway(async (oc, gateway) => {
       const agent = await oc.agents.get("main");
       const run = await agent.run({
         input: "say hello",
+        model: "sonnet-4.6",
+        timeoutMs: 30_000,
         sessionKey: "main",
         idempotencyKey: "sdk-e2e",
       });
@@ -230,6 +195,14 @@ describe("OpenClaw SDK websocket e2e", () => {
         run.wait({ timeoutMs: 2_000 }),
       ]);
       expect(run.id).toBe("run-sdk-e2e");
+      expect(gateway.requests.find(({ method }) => method === "agent")?.params).toEqual({
+        agentId: "main",
+        message: "say hello",
+        model: "sonnet-4.6",
+        timeout: 30,
+        sessionKey: "main",
+        idempotencyKey: "sdk-e2e",
+      });
       expect(seen.map((event) => event.type)).toEqual([
         "run.started",
         "assistant.delta",
@@ -290,35 +263,12 @@ describe("OpenClaw SDK websocket e2e", () => {
         { ok: true, toolName: "shell", output: { ok: true } },
       );
       await expectResponse(oc.approvals.list(), { approvals: [] });
-      await expectResponse(oc.approvals.respond("approval-1", { decision: "allow-once" }), {
-        ok: true,
-      });
-      expect(gateway.requests.map((request) => request.method)).toEqual([
-        "connect",
-        "agents.list",
-        "agent.identity.get",
-        "agents.create",
-        "agents.update",
-        "agents.update",
-        "agents.delete",
-        "sessions.list",
-        "sessions.create",
-        "sessions.resolve",
-        "sessions.send",
-        "sessions.abort",
-        "sessions.patch",
-        "sessions.compact",
-        "models.list",
-        "models.authStatus",
-        "tools.catalog",
-        "tools.effective",
-        "tools.invoke",
-        "exec.approval.list",
-        "exec.approval.resolve",
-      ]);
+      const staleDecision = { id: "stale-approval", decision: "allow-once" as const };
+      await expectResponse(oc.approvals.respond("approval-1", staleDecision), { ok: true });
       const requestParams = new Map(
         gateway.requests.map((request) => [request.method, request.params]),
       );
+      expect(requestParams.get("models.authStatus")).toEqual({ probe: false });
       for (const method of [
         "agents.list",
         "sessions.list",
