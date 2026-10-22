@@ -16,7 +16,6 @@ import {
 import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 import { readPresenceEntries } from "../../app/user-profile.ts";
-import { showSecretRevealDialog } from "../../components/secret-reveal-dialog.tsx";
 import { LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
@@ -45,7 +44,8 @@ import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
-import { createDevicesDialogs } from "./devices-dialogs.ts";
+import { createDevicesDialogs, showDeviceRotationOutcome } from "./devices-dialogs.ts";
+import { createInventoryPresentation } from "./devices-inventory-presentation.ts";
 import { DevicesView } from "./view.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
@@ -58,6 +58,13 @@ export type DevicesRouteData = {
   gateway: ApplicationContext["gateway"];
   gatewaySnapshot: ApplicationGatewaySnapshot;
   devices: DevicesPageDataState;
+};
+
+type InventoryReadReceipt = {
+  gateway: ApplicationContext["gateway"];
+  state: DevicesPageDataState;
+  epoch: number;
+  result: Promise<void>;
 };
 
 const DEVICES_ACTIVE_POLL_INTERVAL_MS = 30_000;
@@ -83,6 +90,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   }
   let systemInfoUnavailable = false;
   let dataState = createInitialDevicesState();
+  const [nodesRead, setNodesRead] = createSignal<InventoryReadReceipt | null>(null);
+  const [devicesRead, setDevicesRead] = createSignal<InventoryReadReceipt | null>(null);
   let canManagePairing = false;
   let canAdmin = false;
   let canRead = true;
@@ -106,6 +115,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     gatewayClient: () => gatewayBinding.client,
     gatewayUrl: () => context.gateway.connection.gatewayUrl,
     runPageTask,
+    runInventoryTask,
     setDevicesError: (message) => {
       dataState.devicesError = message;
       publishData();
@@ -169,7 +179,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   const polling = useVisiblePoll(DEVICES_ACTIVE_POLL_INTERVAL_MS, () => {
     refreshNodeInventory(true);
     if (canManagePairing) {
-      void runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+      void refreshDeviceInventory(true);
     }
   });
   const gatewayBinding = useGatewayPage({
@@ -183,11 +193,43 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     onSnapshot: handleGatewaySnapshot,
     ensureInitialData,
   });
+  const inventoryScope = createMemo(
+    () => ({ gateway: context.gateway, state: pageData.read(), epoch: gatewayBinding.epoch }),
+    { equals: (a, b) => a.gateway === b.gateway && a.state === b.state && a.epoch === b.epoch },
+  );
+  const inventoryRead = createMemo(() => {
+    const scope = inventoryScope();
+    const receipts = [nodesRead(), devicesRead()].filter(
+      (receipt): receipt is InventoryReadReceipt =>
+        receipt?.gateway === scope.gateway &&
+        receipt.state === scope.state &&
+        receipt.epoch === scope.epoch,
+    );
+    // The route has already awaited its snapshot; only admitted reads suspend.
+    return receipts.length
+      ? Promise.all(receipts.map((receipt) => receipt.result)).then(() => undefined)
+      : undefined;
+  });
+  const inventoryActions = createInventoryPresentation({
+    scope: inventoryScope,
+    isCurrent: (scope) =>
+      scope.gateway === context.gateway &&
+      scope.state === dataState &&
+      scope.epoch === gatewayBinding.epoch,
+    read: inventoryRead,
+    publish: () => publishData(),
+  });
+  function runInventoryTask(task: (pageState: DevicesPageDataState) => unknown) {
+    return inventoryActions.run(() => runPageTask(task)).presented;
+  }
   onSettled(() => {
     syncConfigCustody();
+    const stopRoute = context.router.subscribe(inventoryActions.retire);
     // Config receipts record which connection owns the accepted policy draft.
     const stopConfig = configProjection.subscribe(syncConfigCustody);
     return () => {
+      inventoryActions.retire();
+      stopRoute();
       stopConfig();
       stopGatewayEvents?.();
       dialogs.cancel();
@@ -235,7 +277,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
           presenceTask.cancel();
           if (updatePresence(entries)) {
             if (canManagePairing) {
-              void runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+              void refreshDeviceInventory(true);
             }
             refreshNodeInventory(true);
           }
@@ -246,7 +288,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
           event.event === "device.pair.resolved"
         ) {
           if (canManagePairing) {
-            void runPageTask((pageState) => loadDevices(pageState, { quiet: true }));
+            void refreshDeviceInventory(true);
           }
         }
         if (
@@ -283,7 +325,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       void presenceTask.run();
       refreshNodeInventory(true);
       if (canManagePairing) {
-        void runPageTask((current) => loadDevices(current, { quiet: true }));
+        void refreshDeviceInventory(true);
       }
     }
     if (change.initial || change.identityChanged || change.connectionChanged) {
@@ -297,6 +339,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   }
 
   function invalidateRequests() {
+    inventoryActions.retire();
     dataState.requestGeneration = gatewayBinding.epoch;
     dataState.nodesLoading = false;
     dataState.nodesQueuedRefresh = "none";
@@ -372,6 +415,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   }
 
   function resetServerState(snapshot: ApplicationGatewaySnapshot) {
+    inventoryActions.retire();
     dialogs.cancel();
     dataState.requestGeneration += 1;
     const next = createInitialDevicesState({
@@ -444,7 +488,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       refreshNodeInventory();
     }
     if (canManagePairing && !pageState.devicesList && !pageState.devicesLoading) {
-      void runPageTask((current) => loadDevices(current));
+      void refreshDeviceInventory();
     }
     const config = context.runtimeConfig.state;
     if (!config.configSnapshot && !config.configLoading) {
@@ -484,6 +528,26 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     }
   }
 
+  function readInventory(kind: "nodes" | "devices", quiet: boolean) {
+    const gateway = context.gateway;
+    const state = dataState;
+    const epoch = gatewayBinding.epoch;
+    const queued = kind === "nodes" ? state.nodesLoading : state.devicesLoading;
+    const result = runPageTask((current) =>
+      kind === "nodes" ? loadNodes(current, { quiet }) : loadDevices(current, { quiet }),
+    );
+    // The first promise includes trailing refreshes; queued callers resolve before that drain.
+    if (!queued) {
+      const receipt = { gateway, state, epoch, result };
+      (kind === "nodes" ? setNodesRead : setDevicesRead)(receipt);
+    }
+    return result;
+  }
+
+  function refreshDeviceInventory(quiet = false) {
+    return readInventory("devices", quiet);
+  }
+
   function refreshNodeInventory(quiet = false) {
     if (!canRead) {
       return;
@@ -492,7 +556,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     if (canLoadDesktopEnvironments() && !environmentsTask.pending) {
       void environmentsTask.run();
     }
-    void runPageTask((pageState) => loadNodes(pageState, { quiet }));
+    void readInventory("nodes", quiet);
   }
 
   function clearInventorySamples() {
@@ -512,34 +576,22 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     if (!canManagePairing) {
       return;
     }
-    const outcome = await runPageTask((pageState) =>
-      rotateDeviceToken(pageState, {
-        deviceId: device.id,
-        gatewayUrl: context.gateway.connection.gatewayUrl,
-        role,
-        scopes,
-      }),
+    const { result } = inventoryActions.run(() =>
+      runPageTask((pageState) =>
+        rotateDeviceToken(pageState, {
+          deviceId: device.id,
+          gatewayUrl: context.gateway.connection.gatewayUrl,
+          role,
+          scopes,
+        }),
+      ),
     );
+    // The sole secret outcome outlives the page presentation and must still be shown.
+    const outcome = await result;
     if (!outcome) {
       return;
     }
-    await (outcome.delivery === "in-band"
-      ? showSecretRevealDialog({
-          title: t("devices.inventory.rotatePromptTitle", { role }),
-          message: t("devices.inventory.rotatePromptBody"),
-          secret: outcome.token,
-          acknowledgeLabel: t("devices.inventory.rotateAcknowledge"),
-          dismissHint: t("devices.inventory.rotateDismissHint"),
-        })
-      : showSecretRevealDialog({
-          // The title names the device; the body reassures about the outcome.
-          title: t("devices.inventory.rotateWithheldTitle", { device: device.name }),
-          status: "success",
-          message: t("devices.inventory.rotateWithheldNext"),
-          callout: t("devices.inventory.rotateWithheldException"),
-          acknowledgeLabel: t("common.close"),
-          note: t("devices.inventory.rotateWithheldNote"),
-        }));
+    await showDeviceRotationOutcome(device.name, role, outcome);
   }
 
   // Confirm before discarding a target's dirty draft. Cancellation retains the target, form,
@@ -575,6 +627,14 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     const gatewayVersion = gatewaySnapshot.hello?.server?.version?.trim() || null;
     return {
       loading: devices.nodesLoading,
+      inventoryRead,
+      inventoryScope: inventoryScope(),
+      onReloadInventory: () => {
+        refreshNodeInventory();
+        if (canManagePairing) {
+          void refreshDeviceInventory();
+        }
+      },
       connected: gatewayBinding.connected,
       nodes: devices.nodes,
       presence: presence(),
@@ -614,13 +674,13 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       },
       onDeviceApprove: (requestId) => {
         if (canManagePairing) {
-          void runPageTask((pageState) => approveDevicePairing(pageState, requestId));
+          void runInventoryTask((pageState) => approveDevicePairing(pageState, requestId));
         }
       },
       onDeviceReject: (requestId) => void dialogs.confirmPairingReject("device", requestId),
       onNodeApprove: (requestId) => {
         if (canManagePairing) {
-          void runPageTask((pageState) => approveNodePairingRequest(pageState, requestId));
+          void runInventoryTask((pageState) => approveNodePairingRequest(pageState, requestId));
         }
       },
       onNodeReject: (requestId) => void dialogs.confirmPairingReject("node", requestId),
@@ -668,7 +728,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
         <section class="content-header">
           <div>
-            <div class="page-title">{titleForRoute("devices", t)}</div>
+            <h1 class="page-title">{titleForRoute("devices", t)}</h1>
             <div class="page-subtitle">
               {subtitleForRoute("devices", t)} <LearnMoreLink url={DEVICES_DOCS_URL} />
             </div>
@@ -676,7 +736,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
         </section>
       </ShellLayoutBoundary>
       <SettingsWorkspace>
-        <DevicesView {...view()} />
+        <DevicesView {...view()} inventorySaving={inventoryActions.saving()} />
       </SettingsWorkspace>
     </openclaw-devices-page>
   );

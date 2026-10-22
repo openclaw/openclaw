@@ -16,14 +16,12 @@ import {
   CODEX_LOCAL_SESSION_HOST_ID,
   commandRpcMocks,
   createCodexSessionCatalogControlFactory,
-  createCodexTestBindingStore,
-  createGatewayApi,
+  createCatalogTestProvider,
   createRuntime,
   fs,
   fsSync,
   idleThread,
   path,
-  registerCodexSessionCatalog,
   type OpenClawConfig,
 } from "./session-catalog.test-helpers.js";
 
@@ -190,17 +188,12 @@ async function fixture(suffix = "default") {
   };
   const control = createCodexSessionCatalogControlFactory(configAccess);
   const { runtime } = createRuntime();
-  const { api, getProvider } = createGatewayApi(runtime, config);
-  registerCodexSessionCatalog({
-    api,
-    bindingStore: createCodexTestBindingStore(),
+  const provider = createCatalogTestProvider({
+    runtime,
+    startupConfig: config,
     control,
     ...configAccess,
   });
-  const provider = getProvider();
-  if (!provider) {
-    throw new Error("catalog provider was not registered");
-  }
   return {
     provider,
     control: control.forRequest("main", (await control.homesForAgent("main"))[0]),
@@ -251,9 +244,8 @@ it("keeps background hydration context separate from list requests", async () =>
     expect(hosts[0]?.sessions).toEqual([expect.objectContaining({ threadId: "visible" })]);
     expect(sourceOwners).toEqual(["background", "background"]);
     const pages = await emitted(PAGE);
-    expect(pages).toHaveLength(2);
+    expect(pages.map((page) => page.trace)).toMatchObject([background, background]);
     for (const page of pages) {
-      expect(page.trace).toMatchObject(background);
       expect(fields(page)).not.toHaveProperty("listOperationId");
     }
     expect(await emitted(LIST)).toEqual([]);
@@ -305,17 +297,17 @@ it("shares one cold hydration across four callers without logging session data",
   const lists = await emitted(LIST);
   expect(pages).toHaveLength(1);
   expect(lists).toHaveLength(4);
-  for (const list of lists) {
-    expect(fields(list)).toMatchObject({
-      outcome: "resolved",
-      elapsedMs: 1_500,
-      controlPageCalls: 1,
-      adoptionCalls: 1,
-    });
-  }
   for (const trace of traces) {
     expect(lists).toContainEqual(
-      expect.objectContaining({ trace: expect.objectContaining(trace) }),
+      expect.objectContaining({
+        trace: expect.objectContaining(trace),
+        attributes: expect.objectContaining({
+          outcome: "resolved",
+          elapsedMs: 1_500,
+          controlPageCalls: 1,
+          adoptionCalls: 1,
+        }),
+      }),
     );
   }
   expect(nativeRequest).toHaveBeenCalledOnce();

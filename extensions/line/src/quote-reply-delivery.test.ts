@@ -2,9 +2,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { chunkMarkdownText as chunkMarkdownTextForLine } from "openclaw/plugin-sdk/reply-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, ReplyPayload } from "../api.js";
-import { deliverLineAutoReply } from "./auto-reply-delivery.js";
-import { baseDeliveryParams, createDeps } from "./auto-reply-delivery.test-helpers.js";
+import { createDeps } from "./auto-reply-delivery.test-helpers.js";
 import { createRuntime } from "./channel.sendPayload.test-support.js";
+import { deliver } from "./delivery.test-support.js";
 import { lineMessageAdapter, lineOutboundAdapter } from "./outbound.js";
 import { recordLineQuoteToken } from "./quote-tokens.js";
 import { setLineRuntime } from "./runtime.js";
@@ -44,17 +44,14 @@ function pushReply(chat: string) {
 }
 
 describe("the reply-token delivery path", () => {
+  const lineData = { flexMessage: { altText: "card", contents: { type: "bubble" as const } } };
   it("quotes once, on the first message LINE accepts a quote on", async () => {
     rememberInboundMessage("inbound-multi", "token-multi");
     const { replyMessageLine } = createDeps({
       chunkMarkdownText: (text) => text.split("|"),
     });
 
-    await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { text: "first|second|third", replyToId: "inbound-multi" },
-      lineData: { flexMessage: { altText: "card", contents: { type: "bubble" } } },
-    });
+    await deliver({ text: "first|second|third", replyToId: "inbound-multi" }, lineData);
 
     const messages = expectDefined(replyMessageLine.mock.calls[0]?.[1], "reply messages");
     expect(messages.map((message) => "quoteToken" in message)).toEqual([true, false, false, false]);
@@ -65,11 +62,7 @@ describe("the reply-token delivery path", () => {
     rememberInboundMessage("inbound-flex", "token-flex");
     const { replyMessageLine } = createDeps();
 
-    await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { replyToId: "inbound-flex" },
-      lineData: { flexMessage: { altText: "card", contents: { type: "bubble" } } },
-    });
+    await deliver({ replyToId: "inbound-flex" }, lineData);
 
     const messages = expectDefined(replyMessageLine.mock.calls[0]?.[1], "reply messages");
     expect(messages.every((message) => !("quoteToken" in message))).toBe(true);
@@ -79,11 +72,7 @@ describe("the reply-token delivery path", () => {
     rememberInboundMessage("inbound-elsewhere", "token-elsewhere", "Celsewhere");
     const { replyMessageLine } = createDeps();
 
-    await deliverLineAutoReply({
-      ...baseDeliveryParams,
-      payload: { text: "answering you", replyToId: "inbound-elsewhere" },
-      lineData: {},
-    });
+    await deliver({ text: "answering you", replyToId: "inbound-elsewhere" });
 
     expect(expectDefined(replyMessageLine.mock.calls[0]?.[1], "reply messages")).toEqual([
       { type: "text", text: "answering you" },

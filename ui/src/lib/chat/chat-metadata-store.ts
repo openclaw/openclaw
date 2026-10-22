@@ -53,6 +53,7 @@ function metadataEntryFor(
       sessionDefaults?: UiSessionDefaultsHost,
       {
         sessionOnly = false,
+        refreshSessionFacts = sessionOnly || !scope?.sessionKey,
         retireCatalog = false,
         matchesCatalog,
         commandsChanged = true,
@@ -89,7 +90,7 @@ function metadataEntryFor(
         notifyChatMetadataListeners(entry, {
           type: "invalidated",
           scope: sessionOnly ? "session" : "full",
-          refreshSessionFacts: sessionOnly || !scope?.sessionKey,
+          refreshSessionFacts,
           ...(retireCatalog ? { retireCatalog: true } : {}),
         });
         entry.release();

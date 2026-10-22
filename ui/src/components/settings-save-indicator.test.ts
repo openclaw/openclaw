@@ -115,6 +115,18 @@ describe("settings save indicator", () => {
     expect(next.onRetry).not.toHaveBeenCalled();
   });
 
+  it("retires the previous failure during a manual save and shows the same error again", async () => {
+    const lastError = "permission denied";
+    await update({ status: "error", lastError });
+    expect(indicator.textContent).toContain("Save failed");
+    await update({ status: "error", saving: true, lastError: null });
+    expect(indicator.textContent?.trim()).toBe("Saving…");
+    expect(indicator.querySelector('[role="status"]')).toMatchObject({ title: "" });
+    await update({ status: "error", lastError });
+    expect(indicator.textContent).toContain("Save failed");
+    expect(indicator.querySelector('[role="status"]')).toMatchObject({ title: lastError });
+  });
+
   it("applies pending changes and reports the in-flight state", async () => {
     const { onApply } = await update({ needsApply: true });
 

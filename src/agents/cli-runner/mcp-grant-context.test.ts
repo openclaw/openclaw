@@ -94,6 +94,22 @@ describe("buildCliMcpGrantContext", () => {
     expect(buildGrant({}, capability)).toMatchObject({ delegationCapability: capability });
   });
 
+  it.each([
+    [{ kind: "internal_system", sourceTool: "exec", runId: "owner-run" }, true],
+    [{ kind: "external_user" }, false],
+    [{ kind: "inter_session", sourceTool: "sessions_send" }, false],
+  ] as const)(
+    "carries policy-neutral internal provenance %j for plugin tools",
+    (input, carried) => {
+      const grant = buildGrant({ inputProvenance: input });
+      if (carried) {
+        expect(grant.inputProvenance).toEqual(input);
+      } else {
+        expect(grant).not.toHaveProperty("inputProvenance");
+      }
+    },
+  );
+
   it("leaves the grant shape untouched for ordinary runs", () => {
     // Full authority must not add a key to ordinary grant contexts.
     expect(buildGrant()).not.toHaveProperty("delegationCapability");

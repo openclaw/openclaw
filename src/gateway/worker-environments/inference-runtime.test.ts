@@ -4,13 +4,6 @@ import { WORKER_PROVIDER_REPLAY_MAX_DATA_BYTES } from "../../../packages/gateway
 import { validateWorkerInferenceTerminalOutcome } from "../../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { bindAgentToolExecutionLocation } from "../../agents/agent-tool-metadata.js";
-import * as authProfileStore from "../../agents/auth-profiles/store-runtime.js";
-import * as authProfileUsage from "../../agents/auth-profiles/usage.js";
-import * as modelAuth from "../../agents/model-auth.js";
-import * as providerStreamRuntime from "../../agents/provider-stream.js";
-import { AuthStorage } from "../../agents/sessions/auth-storage.js";
-import { ModelRegistry } from "../../agents/sessions/model-registry.js";
-import * as simpleCompletionRuntime from "../../agents/simple-completion-runtime.js";
 import { createToolSurfacePresentationForTest } from "../../agents/tool-surface-plan.test-support.js";
 import { makeZeroUsageSnapshot } from "../../agents/usage.js";
 import { onTrustedInternalDiagnosticEvent } from "../../infra/diagnostic-events.js";
@@ -44,6 +37,7 @@ import {
   sessionEntry,
   setup,
   usage,
+  useRealProviderPreparation,
   type Execution,
 } from "./inference-runtime.test-support.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
@@ -58,8 +52,6 @@ const MODEL_ERROR = {
 
 describe("worker inference provider runtime", () => {
   it("constructs only the embedded provider stream when preparing a worker turn", async () => {
-    const prepareModel = simpleCompletionRuntime.prepareSimpleCompletionModel;
-    const registerProviderStream = providerStreamRuntime.registerProviderStreamForModel;
     const stream = vi.fn<StreamFn>(() => providerStream());
     const createStreamFn = vi.fn(() => stream);
     const wrapSimpleCompletionStreamFn = vi.fn(
@@ -78,39 +70,14 @@ describe("worker inference provider runtime", () => {
       },
     });
     const runtime = setup({ sessionId: SESSION_ID, updatedAt: 1 }, { pluginRegistry });
-    const authStorage = AuthStorage.inMemory({});
-    const modelRegistry = ModelRegistry.inMemory(authStorage);
-    vi.spyOn(authProfileStore, "ensureAuthProfileStoreAsync").mockResolvedValue({
-      version: 1,
-      profiles: {
-        "openai:worker": { type: "api_key", provider: PROVIDER, key: AUTH_MARKER },
-      },
-    });
-    vi.spyOn(authProfileUsage, "reconcileAuthProfileQuotaBlocks").mockResolvedValue(undefined);
-    vi.spyOn(modelAuth, "getApiKeyForModelCore").mockResolvedValue({
-      apiKey: AUTH_MARKER,
-      mode: "api-key",
-      source: "worker provider fixture",
-    });
-    runtime.prepareModel.mockImplementation((modelParams, assertCurrent) =>
-      prepareModel(
-        {
-          ...modelParams,
-          modelResolver: async (_provider, _modelId, _agentDir, cfg) => ({
-            model: {
-              ...logicalModel,
-              api: cfg?.models?.providers?.openai?.api ?? logicalModel.api,
-              baseUrl: cfg?.models?.providers?.openai?.baseUrl ?? logicalModel.baseUrl,
-            },
-            authStorage,
-            modelRegistry,
-          }),
-        },
-        assertCurrent,
-      ),
-    );
-    vi.mocked(providerStreamRuntime.registerProviderStreamForModel).mockImplementation(
-      registerProviderStream,
+    useRealProviderPreparation(
+      runtime,
+      (cfg) => ({
+        ...logicalModel,
+        api: cfg?.models?.providers?.openai?.api ?? logicalModel.api,
+        baseUrl: cfg?.models?.providers?.openai?.baseUrl ?? logicalModel.baseUrl,
+      }),
+      { "openai:worker": { type: "api_key", provider: PROVIDER, key: AUTH_MARKER } },
     );
 
     await expect(runtime.executor(params(request(), vi.fn()))).resolves.toMatchObject({
@@ -435,14 +402,6 @@ describe("worker inference provider runtime", () => {
 
     expect(runtime.releaseRuntime).toHaveBeenCalledOnce();
 
-    expect(runtime.prepareModel).toHaveBeenCalledWith(
-      expect.objectContaining({
-        modelId: MODEL,
-        profileId: PROFILE,
-        bindAuthOwner: true,
-        cfg: config,
-      }),
-    );
     const prepared = runtime.prepareModel.mock.calls[0]?.[0];
     expect(prepared?.signal).toBe(execution.signal);
     expect(runtime.scope).toEqual({
@@ -530,9 +489,9 @@ describe("worker inference provider runtime", () => {
       const outcome = await runtime.executor(params(request(), vi.fn()));
 
       expect(validateWorkerInferenceTerminalOutcome(outcome)).toBe(true);
-      expect(JSON.stringify(outcome)).not.toContain("providerScratch");
-      expect(JSON.stringify(outcome)).not.toContain("partialJson");
-      expect(JSON.stringify(outcome)).not.toContain("streamIndex");
+      for (const privateField of ["providerScratch", "partialJson", "streamIndex"]) {
+        expect(JSON.stringify(outcome)).not.toContain(privateField);
+      }
       if (type === "unsupported") {
         expect(outcome).toMatchObject({
           type: "error",

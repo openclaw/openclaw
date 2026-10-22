@@ -475,7 +475,9 @@ export function renderFilePanelPresentation(context: {
       matches,
       query: presentation.fileSearchQuery,
       saveNotice: state.fileSaveNotice,
-      saving: state.fileSaving,
+      get saving() {
+        return state.fileSaving;
+      },
       searchOpen: presentation.fileSearchOpen,
       wrap: presentation.fileWrap,
       onCopy: (action) => {

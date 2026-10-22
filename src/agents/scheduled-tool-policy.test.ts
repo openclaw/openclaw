@@ -56,41 +56,29 @@ describe("resolveScheduledToolPolicyContext", () => {
 
 describe("resolveScheduledToolCallerContext", () => {
   it.each([
-    [
-      "external",
-      { kind: "external", channel: "discord" },
-      "agent:main:discord:group:ops",
-      "telegram",
-      { accountId: "creator", channel: "discord", scheduled: true },
-    ],
-    [
-      "unknown",
-      { kind: "unknown" },
-      "agent:main:main",
-      "telegram",
-      { accountId: "creator", channel: null, scheduled: true },
-    ],
-    [
-      "local",
-      { kind: "local" },
-      "agent:main:main",
-      "discord",
-      { accountId: "creator", channel: undefined, local: true, scheduled: true },
-    ],
+    ["external", "discord", "telegram"],
+    ["unknown", null, "telegram"],
+    ["local", undefined, "discord"],
   ] as const)(
     "preserves %s creator authority independently of delivery",
-    (_name, ownerOrigin, ownerSessionKey, channel, expected) => {
+    (kind, expectedChannel, channel) => {
       expect(
         resolveScheduledToolCallerContext({
           scheduledToolPolicy: {
             ...localAccount,
-            ownerSessionKey,
-            ownerOrigin,
+            ownerSessionKey:
+              kind === "external" ? "agent:main:discord:group:ops" : localAccount.ownerSessionKey,
+            ownerOrigin: kind === "external" ? { kind, channel: "discord" } : { kind },
           },
           accountId: "delivery",
           channel,
         }),
-      ).toEqual(expected);
+      ).toEqual({
+        accountId: "creator",
+        channel: expectedChannel,
+        scheduled: true,
+        ...(kind === "local" ? { local: true } : {}),
+      });
     },
   );
 

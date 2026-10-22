@@ -58,7 +58,9 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
   const agentsTitle = <div class="sidebar-customize-menu__title">{t("agentChip.agents")}</div>;
   const createAgentItem: MenuItem = {
     id: `${COMMAND_VALUE_PREFIX}new-agent`,
-    label: t("agentChip.createAgent"),
+    get label() {
+      return t("agentChip.createAgent");
+    },
     get class() {
       return [
         "sidebar-customize-menu__item sidebar-agent-menu__create",

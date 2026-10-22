@@ -113,17 +113,15 @@ it.each([undefined, "Cannot use SQLite library /opt/broken/libsqlite3.dylib: mis
 );
 
 it.each([false, true])("reports Node capability status (supported=%s)", async (supported) => {
-  const message = supported
-    ? "Vendor Node capability check passed."
-    : "SQLite truncates TEXT at NUL.";
+  const message = "SQLite truncates TEXT at NUL.";
   resolveNodeRuntimeInfoMock.mockResolvedValue({
-    ...runtimeInfo(supported ? "24.15.0" : "26.8.1", "3.53.4", supported),
+    ...runtimeInfo("26.12.1", "3.53.4", supported),
     status: supported ? "supported" : "unsupported",
-    ...(supported ? { note: message } : { capabilityError: message }),
+    ...(!supported ? { capabilityError: message } : {}),
   });
   const result = await audit();
   if (supported) {
-    expect(result.runtimeNote).toBe(message);
+    expect(result.runtimeNote).toBeUndefined();
     expect(hasIssue(result, codes.gatewayRuntimeNode)).toBe(false);
   } else {
     expectIssue(result, codes.gatewayRuntimeNode, { message, detail: "/usr/bin/node" });
@@ -353,14 +351,17 @@ describe("auditGatewayServiceConfig systemd", () => {
   const auditUnit = (timeoutMs?: number) => audit({}, { env: env(), timeoutMs });
   const network = ["After=network-online.target", "Wants=network-online.target", "RestartSec=5"];
   async function writeUnit(lines: string[]) {
+    // systemd reads dependencies only from [Unit]; everything else here is a service directive.
+    const isUnitKey = (line: string) => /^(?:After|Wants)=/.test(line);
     await fs.mkdir(path.dirname(unitPath), { recursive: true });
     await fs.writeFile(
       unitPath,
       [
         "[Unit]",
         "Description=OpenClaw Gateway",
+        ...lines.filter(isUnitKey),
         "[Service]",
-        ...lines,
+        ...lines.filter((line) => !isUnitKey(line)),
         "ExecStart=/usr/bin/node gateway",
         "",
         "[Install]",

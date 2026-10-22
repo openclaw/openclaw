@@ -14,7 +14,10 @@ import { NodeWorkerWorkspaceRuntime } from "../../node-host/node-worker-workspac
 import { captureGitHubPublicationWorkspaceSnapshot } from "../github-publication-git-transport.js";
 import { createNodeWorkerWorkspaceActions } from "./node-worker-workspace-actions.js";
 import { createNodeWorkerWorkspaceFallback } from "./node-worker-workspace-fallback.js";
-import { workspaceFiles } from "./node-workspace-transfer-fixtures.test-support.js";
+import {
+  commitWorkspace,
+  workspaceFiles,
+} from "./node-workspace-transfer-fixtures.test-support.js";
 import { createNodeWorkspaceTransferService } from "./node-workspace-transfer-service.js";
 import {
   startNodeWorkspaceTransferTestServer,
@@ -412,13 +415,9 @@ it("restores node reconciliation after Gateway bootstrap changes without replaci
   const localPath = path.join(root, "gateway-workspace");
   await fs.mkdir(localPath);
   await fs.writeFile(path.join(localPath, "project.txt"), "base project\n");
-  await requireGit(localPath, ["init", "--quiet"]);
-  await requireGit(localPath, ["config", "user.name", "Workspace Test"]);
-  await requireGit(localPath, ["config", "user.email", "workspace@example.invalid"]);
+  await commitWorkspace(localPath, "base before dispatch");
   const sourceOrigin = "git://127.0.0.1:19418/origin.git";
   await requireGit(localPath, ["remote", "add", "origin", sourceOrigin]);
-  await requireGit(localPath, ["add", "."]);
-  await requireGit(localPath, ["commit", "--quiet", "-m", "base before dispatch"]);
   const baseCommit = (await requireGit(localPath, ["rev-parse", "HEAD"])).trim();
   const fixture = await runtimeFixture(root, "restart");
   const { owner, sessionId, ownerEpoch, createActions } = fixture;

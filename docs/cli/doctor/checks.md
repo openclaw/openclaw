@@ -18,6 +18,7 @@ postures and maintenance modes documented on the other pages.
 - Standalone non-interactive mode skips prompts, not full provider-catalog or runtime-tool validation. Update-time optional checks can be [deferred with warnings](/cli/doctor/running#postures). Built checkout runs reuse available compiled plugin entries for these checks; intentional source overrides still execute source. See [Development debugging](</help/debugging#dev-profile-%2B-dev-gateway-(--dev)>).
 - `--lint` is stricter than `--non-interactive`: always read-only, never prompts, never applies safe migrations. Use `doctor --fix` or `doctor --repair` when you want doctor to make changes.
 - Doctor does not execute `exec` SecretRefs while checking secrets by default. Use `--allow-exec` (with or without `--lint`) only when you intentionally want doctor to run those configured secret resolvers.
+- An explicitly empty agent roster produces no workspace suggestions. Config validation still reports that at least one configured agent is required.
 
 ## Config writes and backups
 
@@ -68,6 +69,8 @@ Doctor prepares valid runtime config before inspecting context-engine plugins, s
 - When HTTP(S) proxy environment variables are present but `tools.web.fetch.useTrustedEnvProxy` is disabled, doctor explains that `web_fetch` still uses direct routing, runs a short direct TLS connectivity check, and names the explicit opt-in. It never enables proxy trust automatically.
 
 ## Models and auth
+
+- Doctor resolves primary model aliases, including agent-specific aliases, before checking model schemas and provider tool policies. Cron model comparisons resolve aliases on both sides, so an alias and its target do not produce a false mismatch warning. These checks leave the configured aliases unchanged.
 
 - Doctor rewrites legacy `codex/*` and `openai-codex/*` model refs to current `openai/*` refs across primary models, fallbacks, model allowlists, image/video generation models, heartbeat/subagent/compaction overrides, hooks, channel model overrides, cron payloads, and stale session/transcript route pins. `--fix` also merges legacy `models.providers.codex` and `models.providers.openai-codex` config when safe, migrates legacy `openai-codex:*` auth profiles and `auth.order.openai-codex` entries to `openai:*`, moves Codex intent onto provider/model-scoped `agentRuntime.id: "codex"` entries, removes stale whole-agent/session runtime pins, and keeps repaired OpenAI agent refs on Codex auth routing instead of direct OpenAI API-key auth.
 - Doctor also repairs retired model names in preferred media selections and converts CLI-encoded model references across fallback lists, model maps, media slots, and session provider/model pairs. Migrated agent selections keep per-model runtime choices; explicit current runtimes and session runtime overrides win. Current entries win collisions while missing nested settings are retained. These reference repairs preserve account pins, custom namespaced model IDs, and session bindings.

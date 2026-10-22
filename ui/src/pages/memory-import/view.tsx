@@ -5,7 +5,7 @@ import type {
   MigrationsMemoryApplyResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import "../../components/agent-select-registration.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import {
@@ -375,6 +375,9 @@ function Confirmation(props: { view: MemoryImportViewProps; backfill?: boolean }
             )}
           </div>
           <openclaw-modal-actions class="exec-approval-actions">
+            <button class="btn" disabled={busy()} onClick={cancel}>
+              {t("common.cancel")}
+            </button>
             <button
               class={["btn", { danger: props.backfill, primary: !props.backfill }]}
               data-test-id={
@@ -388,9 +391,6 @@ function Confirmation(props: { view: MemoryImportViewProps; backfill?: boolean }
               }
             >
               {t(props.backfill ? "memoryImport.backfill.rollback" : "memoryImport.confirmImport")}
-            </button>
-            <button class="btn" disabled={busy()} onClick={cancel}>
-              {t("common.cancel")}
             </button>
           </openclaw-modal-actions>
         </div>

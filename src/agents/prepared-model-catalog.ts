@@ -298,9 +298,6 @@ async function resolvePreparedModelCatalogOwnerSnapshotWithPolicy(
   configPolicy: PreparedModelCatalogConfigPolicy,
   preparePublishedOwner = preparePublishedCatalogOwner,
 ): Promise<PreparedModelCatalogOwner> {
-  if (!getPreparedSharedAuthStoreOwnership(params.env ?? process.env)) {
-    await prepareSharedAuthStoreOwnership(params.env);
-  }
   const { activationExact, activationFull, exact } = resolveInputs(params);
   if (params.readOnly) {
     const prepared = await resolveReadOnlyPublishedModelCatalogOwner(

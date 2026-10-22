@@ -50,6 +50,9 @@ function clientEnabled(cfg: OpenClawConfig) {
 function authorized(cfg: OpenClawConfig, ...senderIds: string[]) {
   return senderIds.map((senderId) => isSlackExecApprovalAuthorizedSender({ cfg, senderId }));
 }
+function withOwners(ownerAllowFrom: string[], enabled: true | "auto" = true): OpenClawConfig {
+  return { ...buildConfig({ enabled }), commands: { ownerAllowFrom } };
+}
 
 describe("slack exec approvals", () => {
   it("requires explicit enablement even when owner approvers resolve", () => {
@@ -73,65 +76,46 @@ describe("slack exec approvals", () => {
     },
   );
 
-  it("prefers explicit approvers when configured", () => {
-    const cfg = buildConfig(
-      { approvers: ["U456"] },
-      { allowFrom: ["U123"], defaultTo: "user:U789" },
-    );
-
-    expect(getSlackExecApprovalApprovers({ cfg })).toEqual(["U456"]);
-    expect(authorized(cfg, "U456", "u456", "U123")).toEqual([true, true, false]);
-  });
-
-  it("canonicalizes configured exec approver ids before matching uppercase senders", () => {
-    const explicitCfg = buildConfig({ approvers: ["u456"] });
-    expect(getSlackExecApprovalApprovers({ cfg: explicitCfg })).toEqual(["U456"]);
-    expect(isSlackExecApprovalAuthorizedSender({ cfg: explicitCfg, senderId: "U456" })).toBe(true);
-
-    const ownerFallbackCfg = {
-      ...buildConfig({ enabled: true }),
-      commands: { ownerAllowFrom: ["slack:u123owner"] },
-    } as OpenClawConfig;
-    expect(getSlackExecApprovalApprovers({ cfg: ownerFallbackCfg })).toEqual(["U123OWNER"]);
-    expect(
-      isSlackExecApprovalAuthorizedSender({ cfg: ownerFallbackCfg, senderId: "U123OWNER" }),
-    ).toBe(true);
-  });
-
-  it("does not infer approvers from allowFrom or DM default routes", () => {
-    const cfg = buildConfig(
-      { enabled: true },
-      {
-        allowFrom: ["slack:U123", "<@U456>"],
-        defaultTo: "user:U789",
-      },
-    );
-
-    expect(getSlackExecApprovalApprovers({ cfg })).toStrictEqual([]);
-    expect(authorized(cfg, "U789")).toEqual([false]);
-  });
-
-  it("falls back to commands.ownerAllowFrom for exec approvers", () => {
-    const cfg = {
-      ...buildConfig({ enabled: true }),
-      commands: { ownerAllowFrom: ["slack:U123", "user:U456", "<@U789>"] },
-    } as OpenClawConfig;
-
-    expect(getSlackExecApprovalApprovers({ cfg })).toEqual(["U123", "U456", "U789"]);
-    expect(authorized(cfg, "U456")).toEqual([true]);
-  });
+  it.each([
+    [
+      "explicit over routes",
+      buildConfig({ approvers: ["U456"] }, { allowFrom: ["U123"], defaultTo: "user:U789" }),
+      ["U456"],
+      ["U456", "u456", "U123"],
+      [true, true, false],
+    ],
+    ["lowercase explicit", buildConfig({ approvers: ["u456"] }), ["U456"], ["U456"], [true]],
+    ["lowercase owner", withOwners(["slack:u123owner"]), ["U123OWNER"], ["U123OWNER"], [true]],
+    [
+      "no inferred route owners",
+      buildConfig(
+        { enabled: true },
+        { allowFrom: ["slack:U123", "<@U456>"], defaultTo: "user:U789" },
+      ),
+      [],
+      ["U789"],
+      [false],
+    ],
+    [
+      "command owners",
+      withOwners(["slack:U123", "user:U456", "<@U789>"]),
+      ["U123", "U456", "U789"],
+      ["U456"],
+      [true],
+    ],
+  ] satisfies Array<[string, OpenClawConfig, string[], string[], boolean[]]>)(
+    "resolves and authorizes %s",
+    (_name, cfg, approvers, senders, allowed) => {
+      expect(getSlackExecApprovalApprovers({ cfg })).toStrictEqual(approvers);
+      expect(authorized(cfg, ...senders)).toEqual(allowed);
+    },
+  );
 
   it("accepts typed Slack command owners as exec approvers", () => {
-    const cfg = {
-      ...buildConfig({ enabled: "auto" }),
-      commands: {
-        ownerAllowFrom: [
-          "slack:user:U0123ABCD",
-          "slack:team:T0123:user:U0999ZZZZ",
-          "telegram:user:1",
-        ],
-      },
-    } as OpenClawConfig;
+    const cfg = withOwners(
+      ["slack:user:U0123ABCD", "slack:team:T0123:user:U0999ZZZZ", "telegram:user:1"],
+      "auto",
+    );
 
     expect(getSlackExecApprovalApprovers({ cfg })).toEqual(["U0123ABCD"]);
     expect(isSlackExecApprovalClientEnabled({ cfg })).toBe(true);
