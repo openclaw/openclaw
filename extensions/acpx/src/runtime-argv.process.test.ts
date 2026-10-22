@@ -2,30 +2,23 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   AcpxRuntime as BaseAcpxRuntime,
-  type AcpRuntimeOptions,
   createAgentRegistry,
   createFileSessionStore,
 } from "acpx/runtime";
-import {
-  createPluginStateKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, expect, it, vi } from "vitest";
-import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { splitCommandParts } from "./command-line.js";
 import { resolveAcpxPluginConfig } from "./config.js";
-import {
-  createAcpxProcessLeaseStore,
-  openAcpxProcessLeaseStateStore,
-  readAcpxProcessLeaseIdentity,
-} from "./process-lease.js";
+import { readAcpxProcessLeaseIdentity } from "./process-lease.js";
 import {
   copyNodeExecutable,
   ownerAgentScript as script,
   ownerRuntimeOptions,
   promptJson as prompt,
   fixtureSession,
+  prepareTestWrappers as prepareWrappers,
+  testProcessLeases,
   withProcessRuntime,
 } from "./runtime-process.test-support.js";
 import { AcpxRuntime } from "./runtime.js";
@@ -34,19 +27,6 @@ const samples = ["", "space value", `owner's "choice"`, String.raw`C:\tools\adap
 type Agents = Record<string, { command: string; args: string[] }>;
 const agentConfig = (workspaceDir: string, agents: Agents) =>
   resolveAcpxPluginConfig({ workspaceDir, rawConfig: { agents } });
-
-async function prepareWrappers(
-  root: string,
-  pluginConfig: ReturnType<typeof resolveAcpxPluginConfig>,
-) {
-  const codexHome = path.join(root, "empty-codex-home");
-  await fs.mkdir(codexHome);
-  vi.stubEnv("CODEX_HOME", codexHome);
-  return prepareAcpxCodexAuthConfig({
-    pluginConfig,
-    stateDir: root,
-  });
-}
 
 it("does not reinterpret a legacy command when a workspace file has the same name", async () => {
   await withOpenClawTestState({ label: "acpx-command-source" }, async (state) => {
@@ -102,14 +82,7 @@ it.each([
         config = await prepareWrappers(state.root, config);
       }
       const store = createFileSessionStore({ stateDir: config.stateDir });
-      const leases = createAcpxProcessLeaseStore({
-        store: openAcpxProcessLeaseStateStore((options) =>
-          createPluginStateKeyedStoreForTests("acpx", {
-            ...options,
-            env: state.env,
-          }),
-        ),
-      });
+      const leases = await testProcessLeases(state);
       const createRuntime = () =>
         new AcpxRuntime(
           ownerRuntimeOptions(state.root, {
