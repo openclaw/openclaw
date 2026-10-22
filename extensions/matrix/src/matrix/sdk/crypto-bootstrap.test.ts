@@ -170,8 +170,6 @@ describe("MatrixCryptoBootstrapper", () => {
   });
 
   it("does not mutate secret storage before forced repair fails on password UIA without a password", async () => {
-    const deps = createBootstrapperDeps();
-    deps.getPassword = vi.fn<() => string | undefined>(() => undefined);
     const bootstrapCrossSigning = vi.fn<MatrixCryptoBootstrapApi["bootstrapCrossSigning"]>(
       async ({
         authUploadDeviceSigningKeys,
@@ -187,12 +185,12 @@ describe("MatrixCryptoBootstrapper", () => {
         });
       },
     );
-    const { crypto, bootstrapper } = createBootstrapperHarness(
+    const { deps, crypto, bootstrapper } = createBootstrapperHarness(
       {
         bootstrapCrossSigning,
         getDeviceVerificationStatus: vi.fn(async () => createVerifiedDeviceStatus()),
       },
-      deps,
+      { getPassword: vi.fn<() => string | undefined>(() => undefined) },
     );
 
     await expect(bootstrapper.bootstrap(crypto, forcedReset)).rejects.toThrow(
@@ -204,10 +202,11 @@ describe("MatrixCryptoBootstrapper", () => {
   });
 
   it("rejects forced reset before mutation when the active recovery key is unavailable", async () => {
-    const deps = createBootstrapperDeps();
-    deps.canUnlockSecretStorage = vi.fn(async () => false);
     const bootstrapCrossSigning = vi.fn(async () => {});
-    const { crypto, bootstrapper } = createBootstrapperHarness({ bootstrapCrossSigning }, deps);
+    const { deps, crypto, bootstrapper } = createBootstrapperHarness(
+      { bootstrapCrossSigning },
+      { canUnlockSecretStorage: vi.fn(async () => false) },
+    );
 
     await expect(bootstrapper.bootstrap(crypto, forcedReset)).rejects.toThrow(
       "Forced cross-signing reset requires the active Matrix recovery key; supply it before retrying",
@@ -217,36 +216,29 @@ describe("MatrixCryptoBootstrapper", () => {
     expect(bootstrapCrossSigning).not.toHaveBeenCalled();
   });
 
-  it("fails closed without recreating SSSS when forced reset cannot unlock it", async () => {
-    const bootstrapCrossSigning = vi
-      .fn<() => Promise<void>>()
-      .mockRejectedValueOnce(new Error("getSecretStorageKey callback returned falsey"));
-    const { deps, crypto, bootstrapper } = createForcedResetHarness(bootstrapCrossSigning);
-
-    await expect(bootstrapper.bootstrap(crypto, forcedReset)).rejects.toThrow(
-      "Forced cross-signing reset cannot access secret storage; restore the Matrix recovery key before retrying",
-    );
-
-    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).not.toHaveBeenCalled();
-    expectBootstrapCrossSigningCall(bootstrapCrossSigning, 1, { setupNewCrossSigning: true });
-  });
-
-  it("does not repair SSSS after a non-strict forced reset failure", async () => {
-    const bootstrapCrossSigning = vi.fn(async () => {
-      throw new Error("getSecretStorageKey callback returned falsey");
-    });
-    const { deps, crypto, bootstrapper } = createForcedResetHarness(bootstrapCrossSigning);
-
-    const result = await bootstrapper.bootstrap(crypto, { ...forcedReset, strict: false });
-
-    expect(result).toEqual({
-      crossSigningReady: false,
-      crossSigningPublished: false,
-      ownDeviceVerified: null,
-    });
-    expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).not.toHaveBeenCalled();
-    expect(bootstrapCrossSigning).toHaveBeenCalledOnce();
-  });
+  it.each([true, false])(
+    "never repairs locked SSSS after forced reset (strict=%s)",
+    async (strict) => {
+      const bootstrapCrossSigning = vi
+        .fn<() => Promise<void>>()
+        .mockRejectedValueOnce(new Error("getSecretStorageKey callback returned falsey"));
+      const { deps, crypto, bootstrapper } = createForcedResetHarness(bootstrapCrossSigning);
+      const result = bootstrapper.bootstrap(crypto, { ...forcedReset, strict });
+      if (strict) {
+        await expect(result).rejects.toThrow(
+          "Forced cross-signing reset cannot access secret storage; restore the Matrix recovery key before retrying",
+        );
+      } else {
+        await expect(result).resolves.toEqual({
+          crossSigningReady: false,
+          crossSigningPublished: false,
+          ownDeviceVerified: null,
+        });
+      }
+      expect(deps.recoveryKeyStore.bootstrapSecretStorageWithRecoveryKey).not.toHaveBeenCalled();
+      expectBootstrapCrossSigningCall(bootstrapCrossSigning, 1, { setupNewCrossSigning: true });
+    },
+  );
 
   it("trusts the fresh own identity after a forced cross-signing reset", async () => {
     const identity = createOwnIdentity();

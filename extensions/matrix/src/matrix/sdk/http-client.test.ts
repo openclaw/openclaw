@@ -52,9 +52,7 @@ describe("MatrixAuthedHttpClient", () => {
       endpoint: "https://matrix.example.org/_matrix/client/v3/account/whoami",
       allowAbsoluteEndpoint: true,
     };
-    const result = await configuredClient.requestJson(absoluteRequest);
-
-    expect(result).toEqual({ ok: true });
+    expect(await configuredClient.requestJson(absoluteRequest)).toEqual({ ok: true });
     expect(performMatrixRequestMock).toHaveBeenCalledWith({
       ...auth,
       ...policies,
@@ -68,9 +66,7 @@ describe("MatrixAuthedHttpClient", () => {
     "does not parse a non-JSON media type containing application/json (%s)",
     async (contentType) => {
       mockResponse('{"ok":true}', contentType);
-      const result = await client.requestJson(request);
-
-      expect(result).toBe('{"ok":true}');
+      expect(await client.requestJson(request)).toBe('{"ok":true}');
     },
   );
 
@@ -78,12 +74,9 @@ describe("MatrixAuthedHttpClient", () => {
     const payload = Buffer.from([1, 2, 3, 4]);
     mockResponse(payload);
 
-    const result = await client.requestRaw({
-      ...request,
-      endpoint: "/_matrix/media/v3/download/example/id",
-    });
-
-    expect(result).toEqual(payload);
+    expect(
+      await client.requestRaw({ ...request, endpoint: "/_matrix/media/v3/download/example/id" }),
+    ).toEqual(payload);
   });
 
   it("raises HTTP errors with status code metadata", async () => {

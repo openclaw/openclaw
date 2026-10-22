@@ -1,4 +1,4 @@
-import http from "node:http";
+import { withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
 import { createMatrixGuardedFetch, performMatrixRequest } from "./transport.js";
@@ -30,23 +30,23 @@ function requestMatrix(overrides: Partial<Parameters<typeof performMatrixRequest
   });
 }
 
-async function withServer(handler: http.RequestListener, run: (url: string) => Promise<void>) {
-  const server = http.createServer(handler);
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("expected loopback server address");
-  }
-  try {
-    await run(`http://127.0.0.1:${address.port}`);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
+type RecordedRequest = { url: string | undefined; authorization: string | undefined };
+function withJsonServer(
+  body: object,
+  run: (url: string, requests: RecordedRequest[]) => Promise<void>,
+) {
+  const requests: RecordedRequest[] = [];
+  return withServer(
+    (request, response) => {
+      requests.push({ url: request.url, authorization: request.headers.authorization });
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify(body));
+    },
+    (url) => run(url, requests),
+  );
 }
+
+const guardedFetch = () => createMatrixGuardedFetch({ ssrfPolicy: { allowPrivateNetwork: true } });
 
 function stubResponse(body: BodyInit | null, headers?: HeadersInit) {
   const runtimeFetch = vi.fn(
@@ -57,7 +57,7 @@ function stubResponse(body: BodyInit | null, headers?: HeadersInit) {
   return runtimeFetch;
 }
 
-async function expectIdleTimeout(raw: boolean, message: string) {
+async function expectIdleTimeout(raw: boolean) {
   vi.useFakeTimers();
   try {
     stubResponse(
@@ -74,7 +74,9 @@ async function expectIdleTimeout(raw: boolean, message: string) {
       readIdleTimeoutMs: 50,
       ...(raw ? { endpoint: "/_matrix/media/v3/download/example/id" } : {}),
     });
-    const rejection = expect(request).rejects.toThrow(message);
+    const rejection = expect(request).rejects.toThrow(
+      `${raw ? "Matrix media download" : "Matrix JSON response"} stalled: no data received for 50ms`,
+    );
     await vi.advanceTimersByTimeAsync(60);
     await rejection;
   } finally {
@@ -92,67 +94,51 @@ describe("performMatrixRequest", () => {
   it("loads a profile through the real SDK default guarded fetch and closes the client", async () => {
     const { MatrixClient } = await import("../sdk.js");
     const { resolveRuntimeMatrixClientWithReadiness } = await import("../client-bootstrap.js");
-    const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
     const profile = { displayname: "Matrix loopback fixture" };
-    await withServer(
-      (request, response) => {
-        requests.push({ url: request.url, authorization: request.headers.authorization });
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify(profile));
-      },
-      async (url) => {
-        const client = new MatrixClient(`${url}/matrix-proxy`, "fixture-token", {
-          encryption: false,
-          autoBootstrapCrypto: false,
-          ssrfPolicy: { allowPrivateNetwork: true },
-        });
+    await withJsonServer(profile, async (url, requests) => {
+      const client = new MatrixClient(`${url}/matrix-proxy`, "fixture-token", {
+        encryption: false,
+        autoBootstrapCrypto: false,
+        ssrfPolicy: { allowPrivateNetwork: true },
+      });
 
-        try {
-          const resolved = await resolveRuntimeMatrixClientWithReadiness({
-            client,
-            readiness: "none",
-          });
-          await expect(resolved.client.getUserProfile("@fixture:example.org")).resolves.toEqual(
-            profile,
-          );
-          expect(requests).toEqual([
-            {
-              url: "/matrix-proxy/_matrix/client/v3/profile/%40fixture%3Aexample.org",
-              authorization: "Bearer fixture-token",
-            },
-          ]);
-        } finally {
-          await client.stopWithoutPersist();
-        }
-      },
-    );
+      try {
+        const resolved = await resolveRuntimeMatrixClientWithReadiness({
+          client,
+          readiness: "none",
+        });
+        await expect(resolved.client.getUserProfile("@fixture:example.org")).resolves.toEqual(
+          profile,
+        );
+        expect(requests).toEqual([
+          {
+            url: "/matrix-proxy/_matrix/client/v3/profile/%40fixture%3Aexample.org",
+            authorization: "Bearer fixture-token",
+          },
+        ]);
+      } finally {
+        await client.stopWithoutPersist();
+      }
+    });
   });
 
   it("preserves an encoded nested proxy prefix through the real HTTP transport", async () => {
-    const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
-    await withServer(
-      (request, response) => {
-        requests.push({ url: request.url, authorization: request.headers.authorization });
-        response.writeHead(200, { "content-type": "application/json" });
-        response.end(JSON.stringify({ user_id: "@bot:example.org" }));
-      },
-      async (url) => {
-        const result = await requestMatrix({
-          homeserver: `${url}/proxy%20base/tenant/`,
-          accessToken: "test-token",
-          qs: { via: "proxy path" },
-        });
+    await withJsonServer({ user_id: "@bot:example.org" }, async (url, requests) => {
+      const result = await requestMatrix({
+        homeserver: `${url}/proxy%20base/tenant/`,
+        accessToken: "test-token",
+        qs: { via: "proxy path" },
+      });
 
-        expect(result.response.status).toBe(200);
-        expect(JSON.parse(result.text)).toEqual({ user_id: "@bot:example.org" });
-        expect(requests).toEqual([
-          {
-            url: "/proxy%20base/tenant/_matrix/client/v3/account/whoami?via=proxy+path",
-            authorization: "Bearer test-token",
-          },
-        ]);
-      },
-    );
+      expect(result.response.status).toBe(200);
+      expect(JSON.parse(result.text)).toEqual({ user_id: "@bot:example.org" });
+      expect(requests).toEqual([
+        {
+          url: "/proxy%20base/tenant/_matrix/client/v3/account/whoami?via=proxy+path",
+          authorization: "Bearer test-token",
+        },
+      ]);
+    });
   });
 
   it("rejects malformed raw content-length before buffering the body", async () => {
@@ -170,9 +156,11 @@ describe("performMatrixRequest", () => {
     expect(arrayBuffer).not.toHaveBeenCalled();
   });
 
-  it("uses the matrix-specific idle-timeout error for stalled raw downloads", async () => {
-    await expectIdleTimeout(true, "Matrix media download stalled: no data received for 50ms");
-  }, 5_000);
+  it.each([true, false])(
+    "uses the correct idle-timeout error for raw=%s",
+    expectIdleTimeout,
+    5_000,
+  );
 
   it("uses undici runtime fetch for pinned Matrix requests so the dispatcher stays bound", async () => {
     let ambientFetchCalls = 0;
@@ -209,10 +197,6 @@ describe("performMatrixRequest", () => {
     expect(cancel).toHaveBeenCalledOnce();
   });
 
-  it("uses the JSON-specific idle-timeout error for stalled JSON downloads", async () => {
-    await expectIdleTimeout(false, "Matrix JSON response stalled: no data received for 50ms");
-  }, 5_000);
-
   it("real HTTP server: rejects with MatrixMediaSizeLimitError when server declares over-cap Content-Length and maxBytes is omitted", async () => {
     const overCapBytes = 64 * 1024 * 1024 + 1;
 
@@ -241,9 +225,7 @@ describe("createMatrixGuardedFetch", () => {
   it.each(["not-a-url", ""])("rejects malformed URL %j before fetching", async (url) => {
     const runtimeFetch = vi.fn<typeof fetch>();
     stubRuntimeFetch(runtimeFetch);
-    const guardedFetch = createMatrixGuardedFetch({});
-
-    await expect(guardedFetch(url)).rejects.toBeInstanceOf(TypeError);
+    await expect(createMatrixGuardedFetch({})(url)).rejects.toBeInstanceOf(TypeError);
     expect(runtimeFetch).not.toHaveBeenCalled();
   });
 
@@ -268,10 +250,7 @@ describe("createMatrixGuardedFetch", () => {
     process.on("unhandledRejection", onUnhandledRejection);
 
     try {
-      const guardedFetch = createMatrixGuardedFetch({
-        ssrfPolicy: { allowPrivateNetwork: true },
-      });
-      const response = await guardedFetch("http://127.0.0.1:8008/start");
+      const response = await guardedFetch()("http://127.0.0.1:8008/start");
 
       await expect(response.json()).resolves.toEqual({});
       expect(runtimeFetch).toHaveBeenCalledTimes(2);
@@ -291,11 +270,7 @@ describe("createMatrixGuardedFetch", () => {
     const stream = new ReadableStream<Uint8Array>({ cancel });
     stubResponse(stream, { "content-length": String(64 * 1024 * 1024 + 1) });
 
-    const guardedFetch = createMatrixGuardedFetch({
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
-
-    await expect(guardedFetch("http://127.0.0.1:8008/_matrix/client/v3/sync")).rejects.toThrow(
+    await expect(guardedFetch()("http://127.0.0.1:8008/_matrix/client/v3/sync")).rejects.toThrow(
       "Matrix SDK response exceeds size limit (67108865 bytes > 67108864 bytes)",
     );
     expect(cancel).toHaveBeenCalledOnce();
@@ -304,11 +279,7 @@ describe("createMatrixGuardedFetch", () => {
   it("strips matrix-js-sdk state_after sync opt-in from /sync requests", async () => {
     const runtimeFetch = stubResponse("{}", { "content-type": "application/json" });
 
-    const guardedFetch = createMatrixGuardedFetch({
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
-
-    const response = await guardedFetch(
+    const response = await guardedFetch()(
       "http://127.0.0.1:8008/_matrix/client/v3/sync?filter=abc&org.matrix.msc4222.use_state_after=true&timeout=30000",
     );
 

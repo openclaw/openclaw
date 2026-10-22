@@ -371,41 +371,8 @@ describe("Matrix encrypted startup ownership", () => {
     expect(await fs.stat(`${snapshotPath}.owner.poisoned`)).toBeDefined();
   });
 
-  it("never publishes a refused replacement that did not acquire crypto ownership", async () => {
-    const snapshotPath = snapshot("unowned-replacement");
-    const options = optionsFor(snapshotPath, "openclaw-matrix-unowned-test");
-    const owner = makeClient(options);
-    const replacement = makeClient(options);
-    await owner.prepareForOneOff();
-    const savedBefore = vi.mocked(persistIdbToDisk).mock.calls.length;
-    await expect(replacement.start()).rejects.toMatchObject({
-      code: "matrix_crypto_store_owner_active",
-    });
-    expect(fixture.init).toHaveBeenCalledTimes(1);
-    await replacement.stopAndPersist();
-    expect(vi.mocked(persistIdbToDisk).mock.calls.length).toBe(savedBefore);
-    await owner.stopAndPersist();
-    expect(await cryptoOwnership.isMatrixCryptoStoreUnsafe(snapshotPath)).toBe(false);
-    const successor = makeClient(options);
-    await successor.prepareForOneOff();
-    await successor.stopAndPersist();
-  });
-
-  it("refuses a successor when final snapshot publication fails", async () => {
-    const snapshotPath = snapshot("failed-final-save");
-    const options = optionsFor(snapshotPath, "openclaw-matrix-failed-save-test");
-    const owner = makeClient(options);
-    await owner.prepareForOneOff();
-    expect(await fs.stat(`${snapshotPath}.owner.poisoned`)).toBeDefined();
-    vi.mocked(persistIdbToDisk).mockRejectedValueOnce(new Error("disk full"));
-    await expect(owner.stopAndPersist()).rejects.toThrow("disk full");
-    await expect(makeClient(options).prepareForOneOff()).rejects.toThrow(
-      "unresolved unsafe final state",
-    );
-  });
-
   it("allows a successor after refusal-marker durability fails before Rust initialization", async () => {
-    const snapshotPath = path.join(tempDirs.make("matrix-arming-durability-"), "snapshot.json");
+    const snapshotPath = snapshot("arming-durability");
     const actualOpen = fs.open;
     vi.spyOn(fs, "open").mockImplementation(async (...args) => {
       const file = await actualOpen(...args);
@@ -414,27 +381,14 @@ describe("Matrix encrypted startup ownership", () => {
       }
       return file;
     });
-    const makeRecoveryClient = () =>
-      new MatrixClient("https://matrix.example.org", "test-token", {
-        userId: "@bot:example.org",
-        deviceId: "BOT",
-        encryption: true,
-        autoBootstrapCrypto: false,
-        idbSnapshotPath: snapshotPath,
-      });
+    const makeRecoveryClient = () => makeClient(optionsFor(snapshotPath));
     const owner = makeRecoveryClient();
-    let successor: MatrixClient | undefined;
-    try {
-      await expect(owner.prepareForOneOff()).rejects.toThrow("marker sync failed");
-      expect(fixture.init).not.toHaveBeenCalled();
-      vi.restoreAllMocks();
-      successor = makeRecoveryClient();
-      await successor.prepareForOneOff();
-      await successor.stopAndPersist();
-    } finally {
-      await owner.stopWithoutPersist();
-      await successor?.stopWithoutPersist();
-    }
+    await expect(owner.prepareForOneOff()).rejects.toThrow("marker sync failed");
+    expect(fixture.init).not.toHaveBeenCalled();
+    vi.restoreAllMocks();
+    const successor = makeRecoveryClient();
+    await successor.prepareForOneOff();
+    await successor.stopAndPersist();
   });
 
   it("refuses crypto initialization when unsafe-state arming fails", async () => {

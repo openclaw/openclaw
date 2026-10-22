@@ -200,7 +200,8 @@ describe("Matrix client custody at the real SQLite snapshot boundary", () => {
     });
     expect(snapshotOpens).toBe(beforeContender);
     expect(sdk.init).toHaveBeenCalledTimes(1);
-    await contender.stopWithoutPersist();
+    await contender.stopAndPersist();
+    expect(snapshotOpens).toBe(beforeContender);
 
     await owner.stopAndPersist();
     expect(await fs.readFile(`${snapshotPath}.owner.poisoned`, "utf8")).toMatch(/^[a-f0-9]{32}\n$/);

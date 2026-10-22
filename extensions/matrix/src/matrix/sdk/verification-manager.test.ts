@@ -67,6 +67,19 @@ describe("MatrixVerificationManager", () => {
     const request = new MockVerificationRequest({ ...requestOptions, verifier: fixture.verifier });
     return { ...fixture, request, tracked: manager.trackVerificationRequest(request) };
   }
+  function trackPair(
+    firstOptions: Partial<MockVerificationRequest>,
+    secondOptions: Partial<MockVerificationRequest>,
+  ) {
+    const first = new MockVerificationRequest(firstOptions);
+    const second = new MockVerificationRequest({ ...firstOptions, ...secondOptions });
+    return {
+      first,
+      second,
+      firstSummary: manager.trackVerificationRequest(first),
+      secondSummary: manager.trackVerificationRequest(second),
+    };
+  }
   it("handles rust verification requests whose methods getter throws", () => {
     const request = new MockVerificationRequest({
       transactionId: "txn-rust-methods",
@@ -87,20 +100,15 @@ describe("MatrixVerificationManager", () => {
   });
 
   it("reuses the tracked id when the other device id is populated later", () => {
-    const first = new MockVerificationRequest({
-      transactionId: "txn-device-later",
-      phase: VerificationPhase.Requested,
-    });
-    const second = new MockVerificationRequest({
-      transactionId: "txn-device-later",
-      phase: VerificationPhase.Ready,
-      otherDeviceId: "DEVICE_LATER",
-      pending: false,
-      chosenMethod: "m.sas.v1",
-    });
-
-    const firstSummary = manager.trackVerificationRequest(first);
-    const secondSummary = manager.trackVerificationRequest(second);
+    const { firstSummary, secondSummary } = trackPair(
+      { transactionId: "txn-device-later", phase: VerificationPhase.Requested },
+      {
+        phase: VerificationPhase.Ready,
+        otherDeviceId: "DEVICE_LATER",
+        pending: false,
+        chosenMethod: "m.sas.v1",
+      },
+    );
 
     expect(secondSummary).toMatchObject({
       id: firstSummary.id,
@@ -113,38 +121,25 @@ describe("MatrixVerificationManager", () => {
   });
 
   it("keeps separate sessions when stable other device ids differ", () => {
-    const first = new MockVerificationRequest({
-      transactionId: "txn-different-devices",
-      otherDeviceId: "DEVICE_A",
-    });
-    const second = new MockVerificationRequest({
-      transactionId: "txn-different-devices",
-      otherDeviceId: "DEVICE_B",
-    });
-
-    const firstSummary = manager.trackVerificationRequest(first);
-    const secondSummary = manager.trackVerificationRequest(second);
+    const { firstSummary, secondSummary } = trackPair(
+      { transactionId: "txn-different-devices", otherDeviceId: "DEVICE_A" },
+      { otherDeviceId: "DEVICE_B" },
+    );
 
     expect(secondSummary.id).not.toBe(firstSummary.id);
     expect(manager.listVerifications()).toHaveLength(2);
   });
 
   it("does not overwrite a different verification request with a colliding transaction ID", async () => {
-    const first = new MockVerificationRequest({
-      transactionId: "txn-collision",
-      initiatedByMe: true,
-      otherUserId: "@alice:example.org",
-      otherDeviceId: "ALICE1",
-    });
-    const second = new MockVerificationRequest({
-      transactionId: "txn-collision",
-      initiatedByMe: true,
-      otherUserId: "@mallory:example.org",
-      otherDeviceId: "MALLORY1",
-    });
-
-    const firstSummary = manager.trackVerificationRequest(first);
-    const secondSummary = manager.trackVerificationRequest(second);
+    const { first, second, firstSummary, secondSummary } = trackPair(
+      {
+        transactionId: "txn-collision",
+        initiatedByMe: true,
+        otherUserId: "@alice:example.org",
+        otherDeviceId: "ALICE1",
+      },
+      { otherUserId: "@mallory:example.org", otherDeviceId: "MALLORY1" },
+    );
 
     expect(secondSummary.id).not.toBe(firstSummary.id);
     expect(manager.listVerifications()).toHaveLength(2);
@@ -165,8 +160,7 @@ describe("MatrixVerificationManager", () => {
     });
 
     const started = await manager.startVerification(tracked.id, "sas");
-    expect(started.hasSas).toBe(true);
-    expect(started.sas?.decimal).toEqual([111, 222, 333]);
+    expect(started).toMatchObject({ hasSas: true, sas: { decimal: [111, 222, 333] } });
     expect(started.sas?.emoji?.length).toBe(3);
 
     const sas = manager.getVerificationSas(tracked.id);

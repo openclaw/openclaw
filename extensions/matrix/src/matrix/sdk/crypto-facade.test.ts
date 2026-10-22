@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createMatrixCryptoFacade } from "./crypto-facade.js";
 import { createMatrixCryptoApi, MockVerificationRequest } from "./crypto.test-support.js";
 import type { MatrixRecoveryKeyStore } from "./recovery-key-store.js";
-import type { MatrixVerificationManager } from "./verification-manager.js";
+import { MatrixVerificationManager } from "./verification-manager.js";
 
 type MatrixCryptoFacadeDeps = Parameters<typeof createMatrixCryptoFacade>[0];
 type VerificationSummary = ReturnType<MatrixVerificationManager["trackVerificationRequest"]>;
@@ -27,25 +27,6 @@ function makeSummary(overrides: Partial<VerificationSummary> = {}): Verification
   };
 }
 
-function createVerificationManagerMock(
-  overrides: Partial<MatrixVerificationManager> = {},
-): MatrixVerificationManager {
-  return {
-    listVerifications: vi.fn(async () => []),
-    requestVerification: vi.fn(),
-    acceptVerification: vi.fn(),
-    cancelVerification: vi.fn(),
-    startVerification: vi.fn(),
-    generateVerificationQr: vi.fn(),
-    scanVerificationQr: vi.fn(),
-    confirmVerificationSas: vi.fn(),
-    mismatchVerificationSas: vi.fn(),
-    confirmVerificationReciprocateQr: vi.fn(),
-    getVerificationSas: vi.fn(),
-    ...overrides,
-  } as unknown as MatrixVerificationManager;
-}
-
 function createFacadeHarness(params?: {
   crypto?: ReturnType<MatrixCryptoFacadeDeps["client"]["getCrypto"]>;
   verificationManager?: Partial<MatrixVerificationManager>;
@@ -56,7 +37,10 @@ function createFacadeHarness(params?: {
       getCrypto: () => params?.crypto,
       getUserId: () => "@bot:example.org",
     },
-    verificationManager: createVerificationManagerMock(params?.verificationManager),
+    verificationManager: Object.assign(
+      new MatrixVerificationManager(),
+      params?.verificationManager,
+    ),
     recoveryKeyStore: {
       getRecoveryKeySummary: vi.fn(async () => params?.recoveryKeySummary ?? null),
     } as unknown as MatrixRecoveryKeyStore,
@@ -71,9 +55,7 @@ describe("createMatrixCryptoFacade", () => {
     const requestVerification = vi.fn(async () => makeSummary());
     const facade = createFacadeHarness({
       crypto,
-      verificationManager: {
-        requestVerification,
-      },
+      verificationManager: { requestVerification },
       recoveryKeySummary: { keyId: "KEY" },
     });
 
@@ -110,9 +92,7 @@ describe("createMatrixCryptoFacade", () => {
     });
     const facade = createFacadeHarness({
       crypto,
-      verificationManager: {
-        trackVerificationRequest,
-      },
+      verificationManager: { trackVerificationRequest },
     });
 
     const summary = await facade.ensureVerificationDmTracked({

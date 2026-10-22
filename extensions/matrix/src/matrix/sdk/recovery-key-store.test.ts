@@ -49,6 +49,12 @@ function createStore(
   return { recoveryKeyPath, store, callbacks: store.buildCryptoCallbacks() };
 }
 
+async function createStoredKey(keyId: string, bytes: number[], encodedPrivateKey?: string) {
+  const recoveryKeyPath = createTempRecoveryKeyPath();
+  await writeStoredRecoveryKey(recoveryKeyPath, keyId, bytes, encodedPrivateKey);
+  return createStore(undefined, recoveryKeyPath);
+}
+
 function createReleaseGate() {
   const gate = createDeferred<void>();
   releases.push(() => gate.resolve());
@@ -422,10 +428,7 @@ describe("MatrixRecoveryKeyStore", () => {
   );
 
   it("loads a stored recovery key for requested secret-storage keys", async () => {
-    const recoveryKeyPath = createTempRecoveryKeyPath();
-    await writeStoredRecoveryKey(recoveryKeyPath, "SSSS", [1, 2, 3, 4]);
-
-    const { store } = createStore(undefined, recoveryKeyPath);
+    const { store, recoveryKeyPath } = await createStoredKey("SSSS", [1, 2, 3, 4]);
     await store.drainPendingPersistence();
     expect(fs.existsSync(recoveryKeyPath)).toBe(false);
     expect(await store.getSecretStorageKeyCandidate("SSSS")).toEqual(new Uint8Array([1, 2, 3, 4]));
@@ -495,26 +498,17 @@ describe("MatrixRecoveryKeyStore", () => {
   });
 
   it("rebinds stored recovery key to server default key id when it changes", async () => {
-    const recoveryKeyPath = createTempRecoveryKeyPath();
-    await writeStoredRecoveryKey(recoveryKeyPath, "OLD", [1, 2, 3, 4]);
-    const { store } = createStore(undefined, recoveryKeyPath);
-
+    const { store } = await createStoredKey("OLD", [1, 2, 3, 4]);
     const crypto = createRecoveryKeyCrypto({ status: { ready: true, defaultKeyId: "NEW" } });
-
     await store.bootstrapSecretStorageWithRecoveryKey(crypto);
-
     expect(crypto.createRecoveryKeyFromPassphrase).not.toHaveBeenCalled();
     await expect(store.getRecoveryKeySummary()).resolves.toMatchObject({ keyId: "NEW" });
   });
 
   it("recreates secret storage during explicit bootstrap when the server key exists but no local recovery key is available", async () => {
     const { store } = createStore();
-    const createRecoveryKeyFromPassphrase = vi.fn(async () =>
-      createGeneratedRecoveryKey(
-        "REPAIRED",
-        [7, 7, 8, 9],
-        "encoded-repaired-key", // pragma: allowlist secret
-      ),
+    const createRecoveryKeyFromPassphrase = vi.fn(
+      async () => createGeneratedRecoveryKey("REPAIRED", [7, 7, 8, 9], "encoded-repaired-key"), // pragma: allowlist secret
     );
     const bootstrapSecretStorage = createBootstrapSecretStorageMock(
       "getSecretStorageKey callback returned falsey",
@@ -549,10 +543,7 @@ describe("MatrixRecoveryKeyStore", () => {
     const { encoded } = encodedKey(11);
     expect(encoded).toBeTypeOf("string");
 
-    await store.stageEncodedRecoveryKey({
-      encodedPrivateKey: encoded,
-      keyId: "SSSSKEY",
-    });
+    await store.stageEncodedRecoveryKey({ encodedPrivateKey: encoded, keyId: "SSSSKEY" });
 
     expect(fs.existsSync(recoveryKeyPath)).toBe(false);
     expect((await readKey(store, "SSSSKEY"))?.[0]).toBe("SSSSKEY");
@@ -566,30 +557,21 @@ describe("MatrixRecoveryKeyStore", () => {
   });
 
   it("does not overwrite the stored recovery key while a staged key is only being validated", async () => {
-    const recoveryKeyPath = createTempRecoveryKeyPath();
     const { bytes, encoded: storedEncoded } = encodedKey(1);
-    await writeStoredRecoveryKey(recoveryKeyPath, "OLD", bytes, storedEncoded);
-
-    const { store } = createStore(undefined, recoveryKeyPath);
+    const { store, recoveryKeyPath } = await createStoredKey("OLD", bytes, storedEncoded);
     const { encoded: stagedEncoded } = encodedKey(101);
-    await store.stageEncodedRecoveryKey({
-      encodedPrivateKey: stagedEncoded,
-      keyId: "NEW",
-    });
-
+    await store.stageEncodedRecoveryKey({ encodedPrivateKey: stagedEncoded, keyId: "NEW" });
     const crypto = createRecoveryKeyCrypto({ status: { ready: true, defaultKeyId: "NEW" } });
-
     await store.bootstrapSecretStorageWithRecoveryKey(crypto);
-
-    const persisted = await readStoredRecoveryKey(recoveryKeyPath);
-    expect(persisted).toMatchObject({ keyId: "OLD", encodedPrivateKey: storedEncoded });
+    expect(await readStoredRecoveryKey(recoveryKeyPath)).toMatchObject({
+      keyId: "OLD",
+      encodedPrivateKey: storedEncoded,
+    });
   });
 
   it("generates a fresh recovery key when secret storage is explicitly rotated", async () => {
-    const recoveryKeyPath = createTempRecoveryKeyPath();
     const oldKey = encodedKey(1);
-    await writeStoredRecoveryKey(recoveryKeyPath, "OLD", oldKey.bytes, oldKey.encoded);
-
+    const { store, recoveryKeyPath } = await createStoredKey("OLD", oldKey.bytes, oldKey.encoded);
     const freshKey = encodedKey(101);
     const bootstrapSecretStorage = createBootstrapSecretStorageMock();
     const createRecoveryKeyFromPassphrase = vi.fn(async () =>
@@ -600,8 +582,6 @@ describe("MatrixRecoveryKeyStore", () => {
       createRecoveryKeyFromPassphrase,
       status: { ready: true, defaultKeyId: "OLD" },
     });
-    const { store } = createStore(undefined, recoveryKeyPath);
-
     await store.bootstrapSecretStorageWithRecoveryKey(crypto, {
       forceNewRecoveryKey: true,
       forceNewSecretStorage: true,
