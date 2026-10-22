@@ -1,3 +1,4 @@
+import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
 import { applyVercelAiGatewayConfig, VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -23,9 +24,21 @@ export default defineSingleProviderPluginEntry({
       applyConfig: applyVercelAiGatewayConfig,
     },
     catalog: {
-      discoveryMode: "strict",
-      buildProvider: () => buildVercelAiGatewayProvider({ discoveryMode: "strict" }),
-      buildStaticProvider: buildStaticVercelAiGatewayProvider,
+      run: async (ctx) => {
+        const { apiKey, discoveryApiKey, profileId } = ctx.resolveProviderApiKey(PROVIDER_ID);
+        if (!apiKey) {
+          return null;
+        }
+        // The keyed list is account-scoped: a Token Pass key lists only its models.
+        const run = async () => ({
+          provider: {
+            ...(await buildVercelAiGatewayProvider({ discoveryMode: "strict", discoveryApiKey })),
+            apiKey,
+          },
+        });
+        return await runLiveProviderCatalog({ providerId: PROVIDER_ID, profileId, run });
+      },
+      staticRun: async () => ({ provider: buildStaticVercelAiGatewayProvider() }),
     },
     resolveDynamicModel: ({ modelId }) => resolveVercelAiGatewayModel(modelId),
     resolveThinkingProfile: ({ modelId }) => resolveVercelAiGatewayThinkingProfile(modelId),
