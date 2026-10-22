@@ -921,6 +921,34 @@ describe("delivery-queue recovery", () => {
       lastError: expect.stringContaining("provider lookup timed out"),
     });
   });
+  it("terminalizes permanent reconciliation errors without replaying", async () => {
+    const id = await enqueueUnknown({ text: "permanent failure" });
+    const reconcileUnknownSend = vi.fn().mockRejectedValue(new Error("Slack chat not found"));
+    installReconciler(reconcileUnknownSend);
+    const log = createRecoveryLog();
+    const { result } = await recover({ deliver, log });
+    expect(deliver).not.toHaveBeenCalled();
+    expect(reconcileUnknownSend).toHaveBeenCalledOnce();
+    expect(result).toEqual(RECOVERY_SUMMARY.failed);
+    await expectRemoved(id);
+    expectMockMessageContaining(
+      log.warn,
+      "unknown-send reconciliation failed: Slack chat not found",
+    );
+  });
+  it("keeps transient reconciliation errors on the retry path", async () => {
+    const id = await enqueueUnknown({ text: "transient failure" });
+    installReconciler(vi.fn().mockRejectedValue(new Error("provider lookup timed out")));
+    const { result } = await recover({ deliver });
+    expect(deliver).not.toHaveBeenCalled();
+    expect(result.failed).toBe(1);
+    await expectPending({
+      id,
+      retryCount: 1,
+      recoveryState: "unknown_after_send",
+      lastError: expect.stringContaining("provider lookup timed out"),
+    });
+  });
 
   it.each(["recovered", "exhausted", "untyped"] as const)(
     "preserves bounded final-text recovery across storage restart: %s",

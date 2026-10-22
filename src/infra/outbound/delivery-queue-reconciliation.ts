@@ -7,6 +7,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
 import type { OutboundDeliveryResult } from "./deliver-types.js";
+import { isPermanentDeliveryError } from "./delivery-queue-recovery-policy.js";
 import type { QueuedDelivery } from "./delivery-queue-types.js";
 
 export function buildReconciledSentResult(
@@ -105,6 +106,6 @@ export async function reconcileUnknownQueuedDelivery(params: {
   } catch (error) {
     const message = formatErrorMessage(error);
     params.warn(`Delivery entry ${entry.id} unknown-send reconciliation failed: ${message}`);
-    return { status: "unresolved", error: message, retryable: true };
+    return { status: "unresolved", error: message, retryable: !isPermanentDeliveryError(message) };
   }
 }
