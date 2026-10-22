@@ -203,22 +203,6 @@ it.each([
   },
 );
 
-it("waits for the initial gateway snapshot before choosing its expanded state", async () => {
-  const sessionKey = "agent:main:delayed";
-  const pending = createDeferred<ReturnType<typeof snapshot>>();
-  const { client, request } = createClient([], () => pending.promise);
-  const element = await mountDashboard({ sessionKey }, client);
-
-  await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
-  expect(expanded(element)).toBe("false");
-  expect(emptyLabel(element)).toBeNull();
-
-  pending.resolve(snapshot(sessionKey, [widget()]));
-
-  await vi.waitFor(() => expect(expanded(element)).toBe("true"));
-  expect(element.querySelector("openclaw-board-view")).not.toBeNull();
-});
-
 it("updates mounted dashboard controls immediately when gateway permissions or connectivity change", async () => {
   const { client, request } = createClient([widget({ grantState: "pending" })]);
   const element = await mountDashboard({ sessionKey: "agent:main:workboard-live-scopes" }, client, {
@@ -296,21 +280,10 @@ it.each([
   },
 );
 
-it("pauses the board while the dashboard is collapsed", async () => {
-  const { client } = createClient([widget({ viewTicket: "ticket", viewTicketTtlMs: 1_200_000 })]);
-  const element = await mountDashboard({ sessionKey: "agent:main:workboard-collapse" }, client);
-  const board = await boardView(element);
-  expect(board.active).toBe(true);
-
-  for (const active of [false, true]) {
-    toggle(element).click();
-    await settle(element);
-    expect(board.active).toBe(active);
-  }
-});
-
 it("retains local choices across refreshes and initializes each replacement after its snapshot", async () => {
   const sessionKey = "agent:main:dashboard-local-choices";
+  const initial = createDeferred<ReturnType<typeof snapshot>>();
+  let loadingInitial = true;
   const pending = createDeferred<ReturnType<typeof snapshot>>();
   const nextPending = createDeferred<ReturnType<typeof snapshot>>();
   let current = snapshot(
@@ -323,10 +296,20 @@ it("retains local choices across refreshes and initializes each replacement afte
       ? pending.promise
       : target?.sessionKey === `${sessionKey}-next`
         ? nextPending.promise
-        : current,
+        : loadingInitial
+          ? initial.promise
+          : current,
   );
   const element = await mountDashboard({ sessionKey }, client);
+  await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+  expect(expanded(element)).toBe("false");
+  expect(emptyLabel(element)).toBeNull();
+  loadingInitial = false;
+  initial.resolve(current);
+  await vi.waitFor(() => expect(expanded(element)).toBe("true"));
   await vi.waitFor(() => expect(tab(element, "research")).not.toBeNull());
+  const board = await boardView(element);
+  expect(board.active).toBe(true);
   tab(element, "research").click();
   await vi.waitFor(() =>
     expect(tab(element, "research").getAttribute("aria-selected")).toBe("true"),
@@ -337,8 +320,11 @@ it("retains local choices across refreshes and initializes each replacement afte
       .querySelector(`[data-widget-name="${name}"]`)
       ?.closest<HTMLElement>("openclaw-board-widget-cell")?.hidden;
   expect([hidden("research"), hidden("status")]).toEqual([false, true]);
-  toggle(element).click();
-  await element.updateComplete;
+  for (const active of [false, true, false]) {
+    toggle(element).click();
+    await settle(element);
+    expect(board.active).toBe(active);
+  }
 
   current = { ...current, revision: 2 };
   changed(sessionKey, 2);

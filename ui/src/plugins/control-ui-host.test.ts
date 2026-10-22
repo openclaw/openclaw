@@ -33,6 +33,13 @@ const sessionList = (
   ts = 1,
   fields: Partial<ReturnType<typeof sessionsResult>["sessions"][number]> = {},
 ) => sessionsResult([{ key, kind: "direct", updatedAt: ts, ...fields }], ts);
+const requestResults = (...results: unknown[]) =>
+  results.reduce((request, result) => request.mockResolvedValueOnce(result), vi.fn());
+const expectSnapshot = (
+  listener: ReturnType<typeof sessionListener>,
+  result: ReturnType<typeof sessionsResult> | null,
+  error: string | null = null,
+) => expect(listener).toHaveBeenLastCalledWith(sessionSnapshot(result, error));
 
 function createHost(
   context: ApplicationContext,
@@ -177,11 +184,7 @@ describe("native UI roster refresh", () => {
       nextOffset: null,
       totalCount: 1,
     };
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(primary)
-      .mockResolvedValueOnce(found)
-      .mockResolvedValueOnce(research);
+    const request = requestResults(primary, found, research);
     const fixture = createRosterHost(request);
     const linkedListener = sessionListener();
     const researchListener = sessionListener();
@@ -195,8 +198,8 @@ describe("native UI roster refresh", () => {
     fixture.host.sessions.observe(query, linkedListener);
     fixture.host.sessions.observe({ agentId: "research", limit: 2 }, researchListener);
     await vi.waitFor(() => {
-      expect(linkedListener).toHaveBeenLastCalledWith(sessionSnapshot(found));
-      expect(researchListener).toHaveBeenLastCalledWith(sessionSnapshot(research));
+      expectSnapshot(linkedListener, found);
+      expectSnapshot(researchListener, research);
     });
     expect(fixture.host.sessions.rows).toEqual(primary.sessions);
     expect(fixture.sessions.state.agentId).toBe("main");
@@ -231,7 +234,7 @@ describe("native UI roster refresh", () => {
     const listener = sessionListener();
     const observer = fixture.host.sessions.observe({ search: "linked" }, listener);
     await vi.waitFor(() => {
-      expect(listener).toHaveBeenLastCalledWith(sessionSnapshot(null, "Query unavailable"));
+      expectSnapshot(listener, null, "Query unavailable");
       expect(fixture.runtime.errors).toContainEqual({
         pluginId: "review",
         message: "Query unavailable",
@@ -239,10 +242,10 @@ describe("native UI roster refresh", () => {
     });
     request.mockResolvedValueOnce(found);
     await observer.refresh();
-    expect(listener).toHaveBeenLastCalledWith(sessionSnapshot(found));
+    expectSnapshot(listener, found);
     request.mockRejectedValueOnce(new Error("Refresh unavailable"));
     await expect(observer.refresh()).rejects.toThrow("Refresh unavailable");
-    expect(listener).toHaveBeenLastCalledWith(sessionSnapshot(found, "Refresh unavailable"));
+    expectSnapshot(listener, found, "Refresh unavailable");
     expect(fixture.sessions.state).toMatchObject({ result: null, error: null });
   });
 
@@ -250,19 +253,13 @@ describe("native UI roster refresh", () => {
     const first = sessionList("agent:writer:first", 1);
     const next = sessionList("agent:writer:next", 2);
     const pending = createDeferred<typeof next>();
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(first)
-      .mockImplementationOnce(() => pending.promise);
+    const request = requestResults(first).mockImplementationOnce(() => pending.promise);
     const fixture = createRosterHost(request);
     const { view, host } = scopedHost(fixture.host);
     const listener = sessionListener();
     onTestFinished(() => pending.resolve(next));
     const observer = host.sessions.observe({ agentId: "writer", limit: 1 }, listener);
-    await vi.waitFor(() => {
-      expect(listener.mock.lastCall?.[0].result?.sessions).toEqual(first.sessions);
-      expect(listener.mock.lastCall?.[0].loading).toBe(false);
-    });
+    await vi.waitFor(() => expectSnapshot(listener, first));
     const refresh = observer.refresh;
     const refreshing = expect(refresh()).rejects.toThrow();
     expect(request).toHaveBeenCalledTimes(2);
@@ -305,10 +302,10 @@ describe("native UI roster refresh", () => {
       };
       const firstSessions = sessionList("agent:research:old", 1);
       const nextSessions = sessionList("agent:research:new", 2);
-      const request = vi
-        .fn()
-        .mockResolvedValueOnce(surface === "agents" ? firstAgents : firstSessions)
-        .mockResolvedValueOnce(surface === "agents" ? nextAgents : nextSessions);
+      const request = requestResults(
+        surface === "agents" ? firstAgents : firstSessions,
+        surface === "agents" ? nextAgents : nextSessions,
+      );
       const fixture = createRosterHost(request);
       if (surface === "agents") {
         await fixture.agents.ensureList();
@@ -343,10 +340,7 @@ describe("native UI session mutations", () => {
     const primary = globalList("main", 1, { model: "main-model" });
     const queried = globalList("writer", 2, { model: "writer-model" });
     const patch = createDeferred<unknown>();
-    const request = vi
-      .fn()
-      .mockResolvedValueOnce(primary)
-      .mockResolvedValueOnce(queried)
+    const request = requestResults(primary, queried)
       .mockImplementationOnce(() => patch.promise)
       .mockResolvedValueOnce(primary);
     const fixture = createRosterHost(request);
@@ -366,11 +360,7 @@ describe("native UI session mutations", () => {
     });
     expect(request).toHaveBeenLastCalledWith(
       "sessions.list",
-      expect.objectContaining({
-        agentId: "main",
-        search: "current",
-        limit: 7,
-      }),
+      expect.objectContaining({ agentId: "main", search: "current", limit: 7 }),
     );
     expect(fixture.sessions.state.agentId).toBe("main");
     expect(fixture.sessions.state.modelOverrides).toEqual({});
@@ -466,7 +456,7 @@ describe("native UI page navigation", () => {
   it("opens a queried global session with its owner before changing the selected key", async () => {
     const primary = globalList("main", 1, { boardFace: "dashboard" });
     const queried = globalList("writer", 2, { boardFace: "chat" });
-    const request = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(queried);
+    const request = requestResults(primary, queried);
     const fixture = createRosterHost(request);
     const selection = createAgentSelectionCapability(
       {
@@ -493,17 +483,15 @@ describe("native UI page navigation", () => {
   });
 
   it.each([
-    ["native", { placement: "route:workboard" }, "/console/workboard/Team%20%2F%20One"],
-    ["generic", null, "/console/plugin"],
-    ["slug", { slug: "reports" }, "/console/reports"],
+    ["native", { placement: "route:workboard" }, "/console/workboard/Team%20%2F%20One", {}],
+    ["generic", null, "/console/plugin", { plugin: "review", id: "board" }],
+    ["slug", { slug: "reports" }, "/console/reports", {}],
   ] as const)(
     "preserves scoped filters during replacement navigation (%s route)",
-    (kind, tab, pathname) => {
+    (kind, tab, pathname, query) => {
       const originalUrl = window.location.href;
       onTestFinished(() => window.history.replaceState(null, "", originalUrl));
       window.history.replaceState(null, "", "/?agent=main&p.filter=ready");
-      const navigate = vi.fn();
-      const replace = vi.fn();
       const context = {
         basePath: "/console",
         gateway: {
@@ -513,8 +501,8 @@ describe("native UI page navigation", () => {
             },
           },
         },
-        navigate,
-        replace,
+        navigate: vi.fn(),
+        replace: vi.fn(),
       } as unknown as ApplicationContext;
       const { host, abort } = createHost(context);
       const target = { id: "board", path: ["Team / One"], params: { filter: "done" } };
@@ -523,27 +511,17 @@ describe("native UI page navigation", () => {
         window.location.origin,
       );
       expect(location.pathname).toBe(pathname);
-      expect(Object.fromEntries(location.searchParams)).toMatchObject({
+      expect(Object.fromEntries(location.searchParams)).toEqual({
         agent: "main",
         "p.filter": "done",
+        ...query,
       });
-      if (kind === "generic") {
-        expect(Object.fromEntries(location.searchParams)).toMatchObject({
-          plugin: "review",
-          id: "board",
-        });
-      } else if (kind === "slug") {
-        expect([location.searchParams.has("plugin"), location.searchParams.has("id")]).toEqual([
-          false,
-          false,
-        ]);
-      }
       host.navigation.openPage(target, { replace: true, preserveSearch: true });
-      expect(replace).toHaveBeenCalledWith(
+      expect(context.replace).toHaveBeenCalledWith(
         kind === "native" ? "workboard" : "plugin",
         expect.objectContaining({ pathname, search: location.search }),
       );
-      expect(navigate).not.toHaveBeenCalled();
+      expect(context.navigate).not.toHaveBeenCalled();
       expect(
         new URL(host.navigation.pageHref(target), window.location.origin).searchParams.has("agent"),
       ).toBe(false);
@@ -570,40 +548,31 @@ it("opens only owned panels and retires retained view and activation handles", (
   });
   const listener = vi.fn();
   window.addEventListener(PLUGIN_PANEL_TOGGLE_EVENT, listener);
-  onTestFinished(() => {
-    window.removeEventListener(PLUGIN_PANEL_TOGGLE_EVENT, listener);
-    abort.abort();
-  });
+  onTestFinished(() => window.removeEventListener(PLUGIN_PANEL_TOGGLE_EVENT, listener));
   expect(() => host.ui.openPanel("foreign/document")).toThrow("own registered panel");
   const { view, host: scoped } = scopedHost(host);
   const open = scoped.ui.openPanel;
-  open("document", { sessionKey: "global", agentId: "writer" });
-  expect(navigate).toHaveBeenCalledWith("chat", chatPath("/chat/writer"));
-  expect(listener).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({
-      detail: {
-        pluginId: "review",
-        panelId: "document",
-        sessionKey: "global",
-        agentId: "writer",
-        open: true,
-      },
-    }),
-  );
-  expect(takeSessionPanelToggle("plugin:review/document", "global", "writer")).not.toBeNull();
-  const documentKey = "agent:writer:document";
-  open("document", { sessionKey: documentKey });
-  expect(navigate).toHaveBeenLastCalledWith("chat", chatPath("/chat/writer/document"));
-  expect(context.agentSelection.set).toHaveBeenLastCalledWith("writer");
-  expect(listener).toHaveBeenLastCalledWith(
-    expect.objectContaining({
-      detail: expect.objectContaining({
-        sessionKey: documentKey,
-        agentId: "writer",
+  for (const [sessionKey, agentId, pathname] of [
+    ["global", "writer", "/chat/writer"],
+    ["agent:writer:document", undefined, "/chat/writer/document"],
+  ] as const) {
+    open("document", { sessionKey, agentId });
+    expect(navigate).toHaveBeenLastCalledWith("chat", chatPath(pathname));
+    expect(listener).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        detail: {
+          pluginId: "review",
+          panelId: "document",
+          sessionKey,
+          agentId: "writer",
+          open: true,
+        },
       }),
-    }),
-  );
-  expect(takeSessionPanelToggle("plugin:review/document", documentKey, "writer")).not.toBeNull();
+    );
+    expect(takeSessionPanelToggle("plugin:review/document", sessionKey, "writer")).not.toBeNull();
+  }
+  expect(listener).toHaveBeenCalledTimes(2);
+  expect(context.agentSelection.set).toHaveBeenLastCalledWith("writer");
   view.abort();
   expect(() => open("document")).toThrow("view has ended");
   abort.abort();

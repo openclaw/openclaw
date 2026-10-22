@@ -79,6 +79,7 @@ async function transportFixture(scopes: string[], signal: AbortSignal) {
     const connected = await withinTest(hello.promise, signal);
     const runtime = new AbortController();
     const context = createDeferred<ControlUiSettingsContext>();
+    const navigate = vi.fn();
     const gateway = { snapshot: { phase: "connected" as string, hello: connected, client } };
     const application = {
       gateway,
@@ -101,9 +102,11 @@ async function transportFixture(scopes: string[], signal: AbortSignal) {
         },
       },
     } as unknown as ApplicationContext;
-    const presentation = mountSettingsPresentation(application, {
-      advertisedMethods: connected.features?.methods,
-    });
+    const presentation = mountSettingsPresentation(
+      application,
+      { advertisedMethods: connected.features?.methods },
+      navigate,
+    );
     mounted = presentation;
     const loadedContext = await withinTest(context.promise, signal);
     cleanups.push(close);
@@ -111,6 +114,7 @@ async function transportFixture(scopes: string[], signal: AbortSignal) {
       client,
       frames,
       held,
+      navigate,
       context: loadedContext,
       reconnect(phase: "reconnecting" | "connected", connectionEpoch: number) {
         gateway.snapshot.phase = phase;
@@ -130,7 +134,13 @@ async function transportFixture(scopes: string[], signal: AbortSignal) {
           };
         } else {
           presentation.change(
-            cause === "agent" ? { agentId: "writer" } : { advertisedMethods: ["health"] },
+            cause === "agent"
+              ? { agentId: "writer" }
+              : cause === "engine"
+                ? { engine: { kind: "pinned", id: "custom-memory", availability: "unknown" } }
+                : cause === "route"
+                  ? { routeIntent: "overview?agent=writer" }
+                  : { advertisedMethods: ["health"] },
           );
           return;
         }
@@ -145,31 +155,38 @@ async function transportFixture(scopes: string[], signal: AbortSignal) {
   }
 }
 
-it.for(["agent", "runtime", "method catalog", "account reassignment", "access revocation"])(
-  "fences real transport dispatch and replies after %s retirement",
-  async (cause, { signal }) => {
-    const method = cause === "method catalog" ? "memory.search" : "doctor.memory.status";
-    const f = await transportFixture(["operator.read"], signal);
-    await expect(f.context.request(method, { agentId: "main" })).resolves.toEqual({
-      marker: method,
-    });
-    expect(f.frames.filter((frame) => frame.method === method).map(({ params }) => params)).toEqual(
-      [{ agentId: "main" }],
-    );
-    const pending = f.context.request(method, { agentId: "main", hold: true });
-    const reply = await withinTest(f.held.promise, signal);
-    f.retire(cause);
-    expect(f.context.signal.aborted).toBe(true);
-    await expect(f.context.request(method, { agentId: "main", probe: true })).rejects.toThrow();
-    // An acknowledged frame on the still-connected socket orders the server ledger
-    // after the rejected callback; no delay or mocked client can hide a dispatch.
-    await f.client.request("health", { barrier: true });
-    expect(f.frames.filter((frame) => frame.method === method)).toHaveLength(2);
-    const rejected = expect(pending).rejects.toThrow();
-    sendMinimalGatewayResponse(reply.socket, reply.id, { marker: "retired response" });
-    await rejected;
-  },
-);
+it.for([
+  "agent",
+  "engine",
+  "route",
+  "runtime",
+  "method catalog",
+  "account reassignment",
+  "access revocation",
+])("fences real transport dispatch and replies after %s retirement", async (cause, { signal }) => {
+  const method = cause === "method catalog" ? "memory.search" : "doctor.memory.status";
+  const f = await transportFixture(["operator.read"], signal);
+  await expect(f.context.request(method, { agentId: "main" })).resolves.toEqual({
+    marker: method,
+  });
+  expect(f.frames.filter((frame) => frame.method === method).map(({ params }) => params)).toEqual([
+    { agentId: "main" },
+  ]);
+  const pending = f.context.request(method, { agentId: "main", hold: true });
+  const reply = await withinTest(f.held.promise, signal);
+  f.retire(cause);
+  expect(f.context.signal.aborted).toBe(true);
+  expect(() => f.context.navigate("settings")).toThrow();
+  expect(f.navigate).not.toHaveBeenCalled();
+  await expect(f.context.request(method, { agentId: "main", probe: true })).rejects.toThrow();
+  // An acknowledged frame on the still-connected socket orders the server ledger
+  // after the rejected callback; no delay or mocked client can hide a dispatch.
+  await f.client.request("health", { barrier: true });
+  expect(f.frames.filter((frame) => frame.method === method)).toHaveLength(2);
+  const rejected = expect(pending).rejects.toThrow();
+  sendMinimalGatewayResponse(reply.socket, reply.id, { marker: "retired response" });
+  await rejected;
+});
 
 it("keeps the view through a same-client reconnect but rejects the earlier reply", async ({
   signal,

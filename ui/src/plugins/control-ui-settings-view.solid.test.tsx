@@ -1,8 +1,5 @@
 import { expect, it, vi } from "vitest";
-import type {
-  ControlUiSettingsContext,
-  ControlUiSettingsSnapshot,
-} from "../../../src/plugin-sdk/control-ui-settings.js";
+import type { ControlUiSettingsContext } from "../../../src/plugin-sdk/control-ui-settings.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { mountSettingsPresentation } from "./control-ui-settings.test-support.tsx";
@@ -18,9 +15,11 @@ function fixture(
 ) {
   const runtime = new AbortController();
   const contexts: ControlUiSettingsContext[] = [];
-  const viewDisposers: ReturnType<typeof vi.fn>[] = [];
-  const viewUpdates: ReturnType<typeof vi.fn>[] = [];
-  const assetDisposers: ReturnType<typeof vi.fn>[] = [];
+  const views: Array<{
+    dispose: ReturnType<typeof vi.fn>;
+    update: ReturnType<typeof vi.fn>;
+    assets: ReturnType<typeof vi.fn>;
+  }> = [];
   const request = vi.fn(async () => "current");
   const navigate = vi.fn();
   const gateway = {
@@ -39,7 +38,6 @@ function fixture(
       reportError: vi.fn(),
       async loadSettingsView(_placement: unknown, signal: AbortSignal) {
         const dispose = vi.fn();
-        assetDisposers.push(dispose);
         const lifetime = AbortSignal.any([signal, runtime.signal]);
         lifetime.addEventListener("abort", dispose, { once: true });
         return {
@@ -54,7 +52,6 @@ function fixture(
                   throw new Error("dispose failed");
                 }
               });
-              viewDisposers.push(stop);
               if (options.retireDuringMount && contexts.length === 1) {
                 mounted.change({ agentId: "writer" });
               }
@@ -63,7 +60,7 @@ function fixture(
                   throw new Error("update failed");
                 }
               });
-              viewUpdates.push(update);
+              views.push({ dispose: stop, update, assets: dispose });
               return { update, dispose: stop };
             },
           },
@@ -75,9 +72,7 @@ function fixture(
   return {
     ...mounted,
     contexts,
-    viewDisposers,
-    viewUpdates,
-    assetDisposers,
+    views,
     request,
     navigate,
     runtime,
@@ -85,74 +80,59 @@ function fixture(
   };
 }
 
+async function mountedFixture(options: Parameters<typeof fixture>[0] = {}) {
+  const f = fixture(options);
+  await waitForSolid(() => expect(f.views).toHaveLength(options.retireDuringMount ? 2 : 1));
+  return f;
+}
+
+function expectDisposed(f: ReturnType<typeof fixture>) {
+  expect(f.views[0]!.dispose).toHaveBeenCalledOnce();
+  expect(f.views[0]!.assets).toHaveBeenCalledOnce();
+}
+
+async function expectRetired(f: ReturnType<typeof fixture>, context = f.contexts[0]!) {
+  expect(context.signal.aborted).toBe(true);
+  await expect(context.request("doctor.memory.status")).rejects.toThrow();
+  expect(() => context.navigate("settings")).toThrow();
+  expect(f.navigate).not.toHaveBeenCalled();
+}
+
 it("cleans mounted views and assets when the first update throws", async () => {
-  const f = fixture({ updateThrows: true, disposeThrows: true });
-  await waitForSolid(() => expect(f.assetDisposers[0]).toHaveBeenCalledTimes(1));
-  expect(f.viewDisposers[0]).toHaveBeenCalledTimes(1);
+  const f = await mountedFixture({ updateThrows: true, disposeThrows: true });
+  await waitForSolid(() => expectDisposed(f));
 });
 it("retires a later failed update before callbacks or pending replies can escape", async () => {
-  const f = fixture();
-  await waitForSolid(() => expect(f.viewUpdates[0]).toHaveBeenCalledTimes(1));
+  const f = await mountedFixture();
+  expect(f.views[0]!.update).toHaveBeenCalledOnce();
   const old = f.contexts[0]!;
   const pending = old.request("doctor.memory.status");
-  f.viewUpdates[0]!.mockImplementationOnce(() => {
+  f.views[0]!.update.mockImplementationOnce(() => {
     throw new Error("later update failed");
   });
   expect(() => f.change({ locale: "fr" })).not.toThrow();
-  expect(old.signal.aborted).toBe(true);
   expect(f.container.textContent).toBe("later update failed");
   await expect(pending).rejects.toThrow();
-  await expect(old.request("doctor.memory.status")).rejects.toThrow();
-  expect(() => old.navigate("settings")).toThrow();
+  await expectRetired(f, old);
   expect(f.request).toHaveBeenCalledTimes(1);
-  expect(f.navigate).not.toHaveBeenCalled();
   f.unmount();
-  expect(f.viewDisposers[0]).toHaveBeenCalledTimes(1);
-  expect(f.assetDisposers[0]).toHaveBeenCalledTimes(1);
+  expectDisposed(f);
 });
 it("retires retained callbacks and disposes exactly once on runtime shutdown", async () => {
-  const f = fixture();
-  await waitForSolid(() => expect(f.contexts).toHaveLength(1));
-  const old = f.contexts[0]!;
+  const f = await mountedFixture();
   f.runtime.abort();
-  expect(old.signal.aborted).toBe(true);
-  expect(f.viewDisposers[0]).toHaveBeenCalledTimes(1);
-  expect(f.assetDisposers[0]).toHaveBeenCalledTimes(1);
-  await expect(old.request("doctor.memory.status")).rejects.toThrow();
-  expect(() => old.navigate("settings")).toThrow();
+  expectDisposed(f);
+  await expectRetired(f);
   expect(f.request).not.toHaveBeenCalled();
-  expect(f.navigate).not.toHaveBeenCalled();
 });
-const snapshotChanges: Record<string, Partial<ControlUiSettingsSnapshot>> = {
-  agent: { agentId: "writer" },
-  engine: { engine: { kind: "pinned", id: "custom-memory", availability: "unknown" } },
-  route: { routeIntent: "overview?agent=writer" },
-};
-it.each(Object.entries(snapshotChanges))(
-  "rejects a retained callback after %s changes",
-  async (_kind, change) => {
-    const f = fixture();
-    await waitForSolid(() => expect(f.contexts).toHaveLength(1));
-    const old = f.contexts[0]!;
-    f.change(change);
-    await expect(old.request("doctor.memory.status")).rejects.toThrow();
-    expect(() => old.navigate("settings")).toThrow();
-    expect(f.viewDisposers[0]).toHaveBeenCalledTimes(1);
-  },
-);
 it("disposes a view that synchronously retires its authority while mounting", async () => {
-  const f = fixture({ retireDuringMount: true });
-  await waitForSolid(() => expect(f.contexts).toHaveLength(2));
-  expect(f.viewDisposers[0]).toHaveBeenCalledTimes(1);
-  expect(f.assetDisposers[0]).toHaveBeenCalledTimes(1);
+  const f = await mountedFixture({ retireDuringMount: true });
+  expectDisposed(f);
   expect(f.contexts[0]!.signal.aborted).toBe(true);
 });
 const gatewayChanges: Record<string, (gateway: ReturnType<typeof fixture>["gateway"]) => void> = {
   "client replacement": (gateway) => {
     gateway.snapshot.client = { ...gateway.snapshot.client };
-  },
-  "recovery-scope change": (gateway) => {
-    gateway.snapshot.hello!.auth.recoveryScope = "account-b";
   },
   "retired offline recovery": (gateway) => {
     gateway.snapshot.client.offlineRecoveryRetired = true;
@@ -165,12 +145,11 @@ const gatewayChanges: Record<string, (gateway: ReturnType<typeof fixture>["gatew
 it.each(Object.entries(gatewayChanges))(
   "disposes the mounted view after %s",
   async (_cause, change) => {
-    const f = fixture();
-    await waitForSolid(() => expect(f.contexts).toHaveLength(1));
+    const f = await mountedFixture();
     const old = f.contexts[0]!;
     f.change({}, () => change(f.gateway));
     expect(old.signal.aborted).toBe(true);
-    expect(f.viewDisposers[0]).toHaveBeenCalledTimes(1);
+    expect(f.views[0]!.dispose).toHaveBeenCalledOnce();
     await expect(old.request("memory.search")).rejects.toThrow();
     await waitForSolid(() => expect(f.contexts).toHaveLength(2));
   },
