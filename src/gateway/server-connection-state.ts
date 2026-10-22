@@ -289,7 +289,7 @@ export function createGatewayConnectionState(params: {
           : sharing.authorizeTarget(target)
             ? ("read-only" as const)
             : ("read-write" as const);
-        return { access, cacheKey: sharing.cacheKey };
+        return { access, cacheKey: sharing.getCacheKey() };
       } catch {
         // Unavailable facts are not an observed revocation.
         return undefined;

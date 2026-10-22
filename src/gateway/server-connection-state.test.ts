@@ -283,6 +283,75 @@ describe("gateway connection state", () => {
     });
   });
 
+  it.each(["identity", "scopes"] as const)(
+    "suppresses access changes when recipient %s drift before publication",
+    async (drift) => {
+      await withOpenClawTestState(
+        { scenario: "minimal", prepareProfileCatalog: true },
+        async () => {
+          const cfg: OpenClawConfig = {};
+          setRuntimeConfigSnapshot(cfg);
+          const owner = ensureProfileForEmail("drift-owner@example.test");
+          const viewer = ensureProfileForEmail("drift-viewer@example.test");
+          const replacement = ensureProfileForEmail("drift-replacement@example.test");
+          const scope = { agentId: "main", sessionKey: "agent:main:access-drift" };
+          await upsertSessionEntryCore(scope, humanEntry("access-drift", "shared", owner.id));
+          await using state = makeState("access-drift", cfg);
+          using projection = await project({ cfg, modelCatalog: [] }, state);
+          await projection.ensureMaterialized();
+          const ownerPeer = makeClient("drift-owner");
+          const viewerPeer = makeClient("drift-viewer");
+          for (const [peer, profile] of [
+            [ownerPeer, owner],
+            [viewerPeer, viewer],
+          ] as const) {
+            identify(peer.client, profile.id);
+            peer.client.connect.scopes = ["operator.read", "operator.write"];
+            controlUi(peer.client);
+            prepareGatewayRecipientProfile(peer.client);
+            state.clients.add(peer.client);
+          }
+          const context = createGatewayRequestContext(makeContextParams(state));
+          const publish = vi.fn<() => void>();
+          const prepare = vi.fn(
+            (target: Parameters<typeof state.prepareSessionAccessChange>[0]) => {
+              const publishAccessChange = state.prepareSessionAccessChange(target);
+              publish.mockImplementation(() => {
+                if (drift === "identity") {
+                  identify(viewerPeer.client, replacement.id);
+                  prepareGatewayRecipientProfile(viewerPeer.client);
+                } else {
+                  viewerPeer.client.connect.scopes = ["operator.read"];
+                }
+                publishAccessChange();
+              });
+              return publish;
+            },
+          );
+          context.prepareSessionAccessChange = prepare;
+          const responses = await callSessionSharingHandler(
+            "session.visibility.set",
+            { ...scope, visibility: "read-only" },
+            context,
+            ownerPeer.client,
+          );
+          expect(responses[0]?.[0]).toBe(true);
+          expect(
+            projection.sharingTarget({ agentId: scope.agentId, key: scope.sessionKey })?.entry
+              .visibility,
+          ).toBe("read-only");
+          expect(prepare).toHaveBeenCalledTimes(1);
+          expect(publish).toHaveBeenCalledTimes(1);
+          expect(
+            viewerPeer.send.mock.calls
+              .map(([frame]) => JSON.parse(String(frame)))
+              .filter((frame) => frame.event === "session.access.changed"),
+          ).toEqual([]);
+        },
+      );
+    },
+  );
+
   it("rejects access events not minted for their current connection", async () => {
     await using state = makeState("forged-access");
     const peer = makeClient("forged-access");
