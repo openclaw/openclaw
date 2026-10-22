@@ -356,6 +356,80 @@ it("lets a writer choose a retained account for new chats and clear the default 
   ).toBe(false);
 });
 
+it("shows a pending default selection and restores the accepted account after rejection", async () => {
+  const pending = createDeferred<UsersListAuthLinksResult>();
+  const work = {
+    ...connectedAccount,
+    authProfileId: "openai:work",
+    label: "Ada · Work",
+    selected: false,
+  };
+  const harness = await mountAccounts(async () => pending.promise, {
+    accounts: [connectedAccount, work],
+  });
+  button(harness.accounts, '[data-auth-profile-id="openai:work"]').click();
+  await waitForSolid(() => {
+    expect(
+      harness.accounts.querySelector("openclaw-model-accounts")?.getAttribute("aria-busy"),
+    ).toBe("true");
+    expect(
+      button(harness.accounts, ".profile-auth-link-unlink").getAttribute("aria-label"),
+    ).toContain(work.label);
+  });
+  pending.reject(new Error("Default selection rejected"));
+  await waitForSolid(() => {
+    expect(
+      harness.accounts.querySelector("openclaw-model-accounts")?.getAttribute("aria-busy"),
+    ).toBe("false");
+    expect(
+      button(harness.accounts, ".profile-auth-link-unlink").getAttribute("aria-label"),
+    ).toContain(connectedAccount.label);
+    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
+      "Default selection rejected",
+    );
+  });
+  expect(
+    harness.request.mock.calls.filter(([method]) => method === "users.selectModelAccount"),
+  ).toHaveLength(1);
+});
+
+it("releases an old selection presentation when the connection is replaced", async () => {
+  const pending = createDeferred<UsersListAuthLinksResult>();
+  const work = {
+    ...connectedAccount,
+    authProfileId: "openai:work",
+    label: "Ada · Work",
+    selected: false,
+  };
+  const harness = await mountAccounts(async () => pending.promise, {
+    accounts: [connectedAccount, work],
+  });
+  button(harness.accounts, '[data-auth-profile-id="openai:work"]').click();
+  await waitForSolid(() =>
+    expect(
+      harness.accounts.querySelector("openclaw-model-accounts")?.getAttribute("aria-busy"),
+    ).toBe("true"),
+  );
+  harness.emit("connected", true);
+  await waitForSolid(() => {
+    expect(
+      harness.accounts.querySelector("openclaw-model-accounts")?.getAttribute("aria-busy"),
+    ).toBe("false");
+    expect(
+      button(harness.accounts, ".profile-auth-link-unlink").getAttribute("aria-label"),
+    ).toContain(connectedAccount.label);
+    expect(button(harness.accounts, '[data-auth-profile-id="openai:work"]').disabled).toBe(false);
+  });
+  pending.resolve({
+    links: [{ provider: "openai", authProfileId: work.authProfileId, updatedAt: 2 }],
+  });
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(
+    button(harness.accounts, ".profile-auth-link-unlink").getAttribute("aria-label"),
+  ).toContain(connectedAccount.label);
+});
+
 it("loads retained accounts one page at a time without dropping earlier choices", async () => {
   const first = { ...connectedAccount, selected: false };
   const second = { ...first, authProfileId: "openai:work" };

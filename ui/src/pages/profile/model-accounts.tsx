@@ -4,6 +4,7 @@ import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { projectMutableSource } from "../../lib/reactive/projection.ts";
+import { createModelAccountsActions } from "./model-accounts-actions.ts";
 import { ModelAccountsSection } from "./model-accounts-section.tsx";
 import { ModelAccountsState, type ModelAccountsProps } from "./model-accounts-state.ts";
 
@@ -14,6 +15,7 @@ export function ModelAccounts(props: ModelAccountsProps) {
   const state = new ModelAccountsState(context, props, () => view.publish());
   const view = projectMutableSource(state, (source) => source);
   const readState = view.read;
+  const actions = createModelAccountsActions(readState);
   // Snapshot identity/profile at request admission; target changes retire account reads and auth polls.
   onSettled(() => {
     const target = props.target;
@@ -36,9 +38,9 @@ export function ModelAccounts(props: ModelAccountsProps) {
     };
   });
   return (
-    <openclaw-model-accounts>
+    <openclaw-model-accounts aria-busy={actions.saving() ? "true" : "false"}>
       <Show when={readState().target || readState().context.gateway.snapshot.phase === "connected"}>
-        <ModelAccountsSection readState={readState} />
+        <ModelAccountsSection readState={readState} actions={actions} />
       </Show>
     </openclaw-model-accounts>
   );
