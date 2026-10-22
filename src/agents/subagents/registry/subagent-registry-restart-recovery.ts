@@ -511,6 +511,7 @@ export async function recoverInterruptedSubagentRow(
             agentId: authority.childAgentId,
             sessionKey: childSessionKey,
             expectedExistingSessionId: sessionEntry.sessionId,
+            expectedExistingSessionLifecycleRevision: lifecycleRevision ?? null,
             idempotencyKey: continuationRunId,
             message: formatSystemTurnPrompt(
               "A Gateway restart interrupted this task. Continue from the retained transcript " +

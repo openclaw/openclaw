@@ -202,6 +202,10 @@ describe("detached subagent restart recovery", () => {
         dispatchAgent.mockImplementationOnce(async (request, _timeout, options) => {
           await options.prepareDispatchCurrent();
           expect(options.operatorRunAuthority.profileId).toBe(source.authority.profileId);
+          expect(request).toMatchObject({
+            expectedExistingSessionId: "warm-restart-child-session",
+            expectedExistingSessionLifecycleRevision: "child-revision",
+          });
           expect(
             await reactivateCompletedSubagentSession({
               sessionKey: request.sessionKey,
