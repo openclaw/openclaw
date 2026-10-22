@@ -29,7 +29,6 @@ import {
 } from "../../app/question-prompt.ts";
 import { loadSettings } from "../../app/settings.ts";
 import type { SidebarSessionMutationResult } from "../../components/app-sidebar-session-types.ts";
-import type { MarkdownRenderOptions } from "../../components/markdown-render-options.ts";
 import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import type { CatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
@@ -184,7 +183,6 @@ export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   refreshSessionPullRequests: (options?: { refresh?: boolean; automatic?: boolean }) => boolean;
   sessionPullRequests: ControlUiSessionPullRequest[];
   sessionPullRequestsBranch: ControlUiSessionBranch | undefined;
-  githubRepo: MarkdownRenderOptions["githubRepo"];
   suggestionChatProps: (
     connected: boolean,
     archived: boolean,

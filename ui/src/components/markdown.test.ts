@@ -232,37 +232,6 @@ describe("toSanitizedMarkdownHtml", () => {
     expect(elapsed).toBeLessThan(500);
     expect(html.length).toBeGreaterThan(0);
   });
-  it("separates cached GitHub references by repository and absent context", () => {
-    for (const githubRepo of [
-      { owner: "first", repo: "one" },
-      { owner: "second", repo: "one" },
-      { owner: "second", repo: "two" },
-      null,
-    ]) {
-      const fragment = render("PR #141270", { githubRepo });
-      expect(fragment.querySelector("a")?.getAttribute("href") ?? null).toBe(
-        githubRepo ? `https://github.com/${githubRepo.owner}/${githubRepo.repo}/pull/141270` : null,
-      );
-    }
-  });
-
-  it("invalidates named-reference caches as authorized aliases arrive, collide, and disappear", () => {
-    const githubRepo = { owner: "openclaw", repo: "openclaw" };
-    const known = { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] };
-    for (const [githubRepositories, expected] of [
-      [[], null],
-      [[known], "https://github.com/openclaw/clawsweeper/pull/1576"],
-      [[known, { aliases: ["ClawSweeper"] }], null],
-      [[], null],
-    ] as const) {
-      expect(
-        render("ClawSweeper PR #1576", { githubRepo, githubRepositories })
-          .querySelector("a")
-          ?.getAttribute("href") ?? null,
-      ).toBe(expected);
-    }
-  });
-
   const jsonBlock = `\`\`\`json\n${JSON.stringify(
     Array.from({ length: 39 }, (_, i) => i),
     null,

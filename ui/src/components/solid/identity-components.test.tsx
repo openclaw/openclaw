@@ -30,14 +30,18 @@ it("refreshes shared-owner labels without changing identity initials on locale p
     </>
   ));
   const avatar = () => view.container.querySelector(".viewer-avatar")!;
-  expect(avatar().getAttribute("aria-label")).toBe("Shared owner");
-  i18n.registerTranslation("pt-BR", { presence: { sharedOwner: { name: "Dono compartilhado" } } });
+  expect(avatar().getAttribute("aria-label")).toBe("Saved owner name · Shared owner");
+  i18n.registerTranslation("pt-BR", {
+    presence: {
+      sharedOwner: { name: "Dono compartilhado", named: "{name} · Dono compartilhado" },
+    },
+  });
   await i18n.setLocale("pt-BR");
   flush();
-  expect(avatar().getAttribute("aria-label")).toBe("Dono compartilhado");
+  expect(avatar().getAttribute("aria-label")).toBe("Saved owner name · Dono compartilhado");
   expect(view.container.querySelector(".viewer-avatar__initials")?.textContent).toBe("SO");
   expect(view.container.querySelector(".viewer-facepile")?.getAttribute("aria-label")).toBe(
-    "Dono compartilhado",
+    "Saved owner name · Dono compartilhado",
   );
 });
 

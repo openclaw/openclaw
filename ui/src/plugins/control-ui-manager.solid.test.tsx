@@ -85,3 +85,21 @@ it("preserves Reload action failure presentation", async () => {
   );
   expect(reload.hasAttribute("disabled")).toBe(false);
 });
+
+it("retires a pending Reload when the Gateway connection changes", async () => {
+  const view = mountManager();
+  const oldReload = createDeferred();
+  view.reload.mockReturnValueOnce(oldReload.promise).mockResolvedValueOnce(undefined);
+  const reload = view.getByRole("button", { name: "Reload plugin UI" });
+  reload.click();
+  await waitForSolid(() => expect(reload.hasAttribute("disabled")).toBe(true));
+  Object.assign(view.gateway.gateway, { connectionRevision: 1 });
+  view.gateway.publish(view.gateway.gateway.snapshot);
+  await waitForSolid(() => expect(reload.hasAttribute("disabled")).toBe(false));
+  expect(view.getByRole("button", { name: "Reload plugin UI" })).toBe(reload);
+  reload.click();
+  await waitForSolid(() => expect(view.reload).toHaveBeenCalledTimes(2));
+  oldReload.reject(new Error("Retired plugin reload"));
+  await waitForSolid(() => expect(reload.hasAttribute("disabled")).toBe(false));
+  expect(view.queryByRole("alert")).toBeNull();
+});

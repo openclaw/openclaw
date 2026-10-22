@@ -5,7 +5,7 @@ import { createDeferred } from "openclaw/plugin-sdk/concurrency-runtime";
 import { flush } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { resetWorkboardConnectionState } from "../../lib/workboard/index.ts";
+import { resetWorkboardConnectionState } from "../../lib/workboard/runtime.ts";
 import {
   createGatewaySession,
   createWorkboardCard,
