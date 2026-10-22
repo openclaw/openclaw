@@ -885,7 +885,6 @@ it.each([
               currentAssistant: silentTail ? subscription.getCurrentAttemptAssistant() : completed,
               keptAnswer: subscription.getKeptAnswer(),
               assistantMessageIndex: index,
-              isCronTrigger: false,
               sessionKey: scope.sessionKey,
               verboseLevel: "off",
               reasoningLevel: "off",

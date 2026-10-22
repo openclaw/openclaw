@@ -270,7 +270,6 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     const payloads = buildEmbeddedRunPayloads({
       assistantTexts: ["NO_REPLY"],
       lastAssistant: undefined,
-      isCronTrigger: true,
       sessionKey: "cron:delivered-report",
       verboseLevel: "off",
       didSendViaMessagingTool: true,
@@ -306,5 +305,42 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
       delivered: true,
       replyDisposition: "silent",
     });
+  });
+
+  it("records a silent finish after a recovered tool error as successful", async () => {
+    const { buildEmbeddedRunPayloads } =
+      await import("../../agents/embedded-agent-runner/run/payloads.js");
+    await useRealOutcome();
+    harness.mockRunCronFallbackPassthrough();
+    const delivery = { mode: "announce" as const, channel: "topicchat", to: "room#42" };
+    harness.resolveCronDeliveryPlanMock.mockReturnValue({ ...delivery, requested: true });
+    harness.resolveDeliveryTargetMock.mockResolvedValue({ ...delivery, ok: true });
+    // The model saw the failed screenshot, finished its report another way and chose silence.
+    const payloads = buildEmbeddedRunPayloads({
+      assistantTexts: ["NO_REPLY"],
+      lastAssistant: undefined,
+      sessionKey: "cron:recovered-check",
+      verboseLevel: "off",
+      lastToolError: {
+        toolName: "view_image",
+        error: "Local media path is not under an allowed directory",
+        mutatingAction: false,
+      },
+    });
+    expect(payloads).toEqual([]);
+    harness.runEmbeddedAgentMock.mockResolvedValue({
+      payloads,
+      meta: {
+        agentMeta: { usage: { input: 10, output: 20 } },
+        terminalReply: { disposition: "silent" },
+      },
+    });
+
+    const result = await runTurn({
+      job: { id: "recovered-check", delivery },
+      sessionKey: "cron:recovered-check",
+    });
+
+    expectObjectFields(result, { status: "ok", error: undefined, replyDisposition: "silent" });
   });
 });

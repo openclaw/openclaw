@@ -3827,7 +3827,6 @@ describe("runReplyAgent typing", () => {
           currentAssistant: failedAssistant,
           sourceReplyDeliveryMode: "message_tool_only",
           sessionKey: "main",
-          isCronTrigger: false,
           verboseLevel: "off",
           reasoningLevel: "off",
           toolResultFormat: "plain",

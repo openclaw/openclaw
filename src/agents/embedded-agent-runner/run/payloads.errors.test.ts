@@ -66,22 +66,16 @@ describe("buildEmbeddedRunPayloads tool-error silence", () => {
     ).toHaveLength(0);
   });
 
-  it.each([
-    { name: "a scheduled run", mutatingAction: false, isCronTrigger: true },
-    { name: "an aborted run", mutatingAction: false, runAborted: true },
-  ])(
-    "keeps failure reporting for $name despite NO_REPLY",
-    ({ name: _name, mutatingAction, ...run }) => {
-      expectSingleToolErrorPayload(
-        buildPayloads({
-          ...run,
-          assistantTexts: ["NO_REPLY"],
-          lastToolError: { toolName: "read", error: "failed", mutatingAction },
-        }),
-        { title: "Read" },
-      );
-    },
-  );
+  it("keeps failure reporting for an aborted run despite NO_REPLY", () => {
+    expectSingleToolErrorPayload(
+      buildPayloads({
+        runAborted: true,
+        assistantTexts: ["NO_REPLY"],
+        lastToolError: { toolName: "read", error: "failed", mutatingAction: false },
+      }),
+      { title: "Read" },
+    );
+  });
 
   it("does not treat an earlier silent steered input as the current answer", () => {
     const prior = makeAgentAssistantMessage({ content: [{ type: "text", text: "NO_REPLY" }] });

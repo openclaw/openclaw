@@ -277,7 +277,6 @@ async function prepareCommittedSourceReplies(media: boolean) {
   context.execution.result.payloads = buildEmbeddedRunPayloads({
     assistantTexts: [],
     lastAssistant: undefined,
-    isCronTrigger: false,
     sessionKey,
     agentId: "main",
     runId: context.runId,

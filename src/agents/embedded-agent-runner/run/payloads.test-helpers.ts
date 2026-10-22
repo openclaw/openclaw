@@ -16,7 +16,6 @@ export function buildPayloads(overrides: Partial<BuildPayloadParams> = {}) {
       overrides.currentAssistant === undefined
         ? overrides.lastAssistant
         : overrides.currentAssistant,
-    isCronTrigger: false,
     sessionKey: "session:telegram",
     verboseLevel: "off",
     reasoningLevel: "off",

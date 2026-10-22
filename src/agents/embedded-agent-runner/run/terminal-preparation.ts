@@ -249,7 +249,6 @@ export function prepareEmbeddedRunTerminal(input: {
     // on the attempt for diagnostics without turning the pause into a warning.
     lastToolError: cleanYield ? undefined : attempt.lastToolError,
     config: runParams.config,
-    isCronTrigger: runParams.trigger === "cron",
     sessionKey: runParams.sessionKey ?? runParams.sessionId,
     provider: input.activeErrorContext.provider,
     providerOwner: input.providerOwner,

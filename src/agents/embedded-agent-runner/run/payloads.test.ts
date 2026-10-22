@@ -363,37 +363,6 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
   });
 });
 
-describe("cron completion after a delivered report", () => {
-  const deliveredReport = {
-    tool: "message",
-    provider: "slack",
-    to: "C_REPORTS",
-    text: "The daily report is complete.",
-  };
-  const completedRun = {
-    isCronTrigger: true,
-    assistantTexts: ["NO_REPLY"],
-    didSendViaMessagingTool: true,
-    messagingToolSentTargets: [deliveredReport],
-    lastToolError: {
-      toolName: "codex_apps.slack.slack_read_thread",
-      error: "429 RATE_LIMITED",
-      mutatingAction: false,
-    },
-  };
-
-  it.each([
-    {
-      name: "a send without visible content",
-      messagingToolSentTargets: [{ ...deliveredReport, text: "", visible: false }],
-    },
-  ])("still reports failure for $name", ({ name: _name, ...overrides }) => {
-    expect(buildPayloads({ ...completedRun, ...overrides })).toEqual([
-      expect.objectContaining({ isError: true }),
-    ]);
-  });
-});
-
 describe("buildEmbeddedRunPayloads delivery recovery", () => {
   it("uses persisted delivery facts for a recovered final assistant", () => {
     const payloads = buildPayloads({

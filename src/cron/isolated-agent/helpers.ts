@@ -195,8 +195,8 @@ export function resolveCronPayloadOutcome(params: {
     normalizedFinalAssistantVisibleText !== undefined ||
     hasSuccessfulPayloadAfterLastError ||
     hasSuccessfulPayloadBeforeLastError;
-  // Only genuinely visible terminal text can recover preceding tool warnings;
-  // silent control replies must leave the error fatal for scheduler alerting.
+  // Visible terminal output recovers preceding tool warnings. A silent final never
+  // carries a tool warning: the run already respected the model's NO_REPLY.
   const canRecoverToolWarning =
     !params.runLevelError && params.failureSignal?.fatalForCron !== true;
   const hasNonTerminalToolErrorWarning =

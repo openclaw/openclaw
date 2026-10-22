@@ -65,7 +65,6 @@ it.each(["whatsapp", "telegram", "slack"] as const)(
     const visibleText = "Your report is ready.";
     const spokenText = "The report has finished successfully.";
     const payloads = buildPayloads({
-      isCronTrigger: true,
       lastAssistant: {
         role: "assistant",
         stopReason: "stop",

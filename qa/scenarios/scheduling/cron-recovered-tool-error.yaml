@@ -1,0 +1,145 @@
+title: Cron recovered tool error
+
+scenario:
+  id: cron-recovered-tool-error
+  surface: cron
+  coverage:
+    primary:
+      - automation.isolated-cron-execution
+    secondary:
+      - automation.failure-destinations
+      - automation.run-history-cron
+  objective: Verify a scheduled turn whose tool call fails, and which then ends with NO_REPLY, records a successful silent run without failure alerts or repair requests.
+  successCriteria:
+    - Each run makes the failing read and receives its tool error before ending with NO_REPLY.
+    - Two consecutive runs of an owned no-delivery job stay ok and request no owner repair.
+    - Two consecutive runs of an unowned announce job stay ok, deliver nothing and send no failure alert.
+    - Both jobs keep zero consecutive errors and no recorded error.
+  docsRefs:
+    - docs/automation/cron-jobs/delivery.md
+  codeRefs:
+    - src/agents/embedded-agent-runner/run/payloads.ts
+    - src/cron/isolated-agent/helpers.ts
+    - extensions/qa-lab/src/providers/mock-openai/mock-openai-cron-recovered-tool-error.ts
+  execution:
+    kind: flow
+    suiteIsolation: isolated
+    isolationReason: Owns cron jobs and qa-channel conversations and checks for unexpected failure alerts and owner repair requests.
+    channel: qa-channel
+    retryCount: 0
+    timeoutMs: 360000
+    summary: Run owned and announce jobs twice with mock-openai; a failed read followed by NO_REPLY stays successful and silent.
+    config:
+      requiredProviderMode: mock-openai
+      conversationId: qa-cron-recovered-tool-error
+      controlConversationId: qa-cron-recovered-tool-error-control
+      ownerMarker: QA-CRON-RECOVERED-OWNER-READY
+      missingFile: qa-cron-recovered-missing-input.txt
+      repairBriefNeedle: "Automation repair request from the scheduler"
+
+flow:
+  steps:
+    - name: an owned no-delivery job with a recovered tool error stays successful without a repair request
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: cron recovered tool error proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+        - set: requestCursorBefore
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
+        - set: ownerSessionKey
+          value:
+            expr: "`agent:qa:qa-channel:group:group:${config.conversationId}`"
+        - sendInbound:
+            conversation:
+              id:
+                ref: config.conversationId
+              kind: group
+            senderId: qa-driver
+            senderName: QA Driver
+            text:
+              expr: "`@openclaw Cron recovered tool error owner ready. Reply exactly \\`${config.ownerMarker}\\`.`"
+          saveAs: ownerInbound
+        - call: waitForCompletedQaReply
+          saveAs: ownerReply
+          args:
+            - ref: state
+            - ref: ownerInbound
+            - 60000
+        - assert:
+            expr: "ownerReply.text.includes(config.ownerMarker)"
+            message: owner conversation did not finish its setup reply
+        - set: addJob
+          value:
+            expr: "async (extra) => await env.gateway.call('cron.add', { agentId: 'qa', name: `qa-cron-recovered-${randomUUID()}`, enabled: true, deleteAfterRun: false, schedule: { kind: 'at', at: new Date(Date.now() + 10 * 60 * 1000).toISOString() }, sessionTarget: 'isolated', wakeMode: 'now', payload: { kind: 'agentTurn', timeoutSeconds: 90, message: 'Cron recovered tool error QA check. Read the optional input file and report only if it has news.' }, delivery: { mode: 'none' }, ...extra }, { timeoutMs: 30000 })"
+        - set: runJob
+          value:
+            expr: "async (jobId) => { const runStartedAt = Date.now(); await env.gateway.call('cron.run', { id: jobId, mode: 'force' }, { timeoutMs: 30000 }); return await waitForCronRunCompletion({ callGateway: env.gateway.call.bind(env.gateway), jobId, afterTs: runStartedAt, timeoutMs: liveTurnTimeoutMs(env, 120000) }); }"
+        - set: ownedJob
+          value:
+            expr: "await addJob({ owner: { agentId: 'qa', sessionKey: ownerSessionKey } })"
+        - set: ownedRuns
+          value:
+            expr: "[await runJob(ownedJob.id), await runJob(ownedJob.id)]"
+        - assert:
+            expr: "ownedRuns.every((run) => run.status === 'ok' && run.completionStatus === 'succeeded' && !run.error && run.deliveryStatus === 'not-requested')"
+            message:
+              expr: "`recovered tool errors failed the owned runs: ${JSON.stringify(ownedRuns)}`"
+        - set: cronRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.prompt ?? '').includes('Cron recovered tool error QA check'))"
+        - set: failedReadOutputs
+          value:
+            expr: "cronRequests.filter((request) => JSON.stringify(request).includes(config.missingFile) && /function_call_output/.test(JSON.stringify(request)))"
+        - assert:
+            expr: "failedReadOutputs.length >= 2"
+            message:
+              expr: "`the model did not receive the failed read result in each run: ${cronRequests.length} cron requests, ${failedReadOutputs.length} with the read output`"
+        - set: repairRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.prompt ?? '').includes(config.repairBriefNeedle))"
+        - set: ownerOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.conversationId && message.id !== ownerReply.id)"
+        - assert:
+            expr: "repairRequests.length === 0 && ownerOutbound.length === 0"
+            message:
+              expr: "`an owned recovered run requested repair or notified: ${JSON.stringify({ repairs: repairRequests.length, outbound: ownerOutbound.map((message) => message.text) })}`"
+      detailsExpr: "`runs=${JSON.stringify(ownedRuns.map((run) => ({ status: run.status, error: run.error, delivery: run.deliveryStatus })))} cronRequests=${cronRequests.length} failedReadOutputs=${failedReadOutputs.length} repairRequests=${repairRequests.length}`"
+
+    - name: an unowned announce job with a recovered tool error stays silent without a failure alert
+      actions:
+        - set: announceJob
+          value:
+            expr: "await addJob({ delivery: { mode: 'announce', channel: 'qa-channel', to: `group:${config.controlConversationId}` } })"
+        - set: announceRuns
+          value:
+            expr: "[await runJob(announceJob.id), await runJob(announceJob.id)]"
+        - assert:
+            expr: "announceRuns.every((run) => run.status === 'ok' && run.completionStatus === 'succeeded' && !run.error && run.deliveryStatus === 'not-delivered' && run.deliverySuppressionReason === 'silent')"
+            message:
+              expr: "`recovered tool errors failed or delivered the announce runs: ${JSON.stringify(announceRuns)}`"
+        - set: controlOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && !message.deleted && message.conversation.id === config.controlConversationId).map((message) => message.text)"
+        - assert:
+            expr: "controlOutbound.length === 0"
+            message:
+              expr: "`a recovered announce run sent a failure alert or warning: ${JSON.stringify(controlOutbound)}`"
+        - set: jobs
+          value:
+            expr: "(await env.gateway.call('cron.list', { includeDisabled: true }, { timeoutMs: 30000 })).jobs.filter((job) => [ownedJob.id, announceJob.id].includes(job.id))"
+        - assert:
+            expr: "jobs.length === 2 && jobs.every((job) => job.enabled && job.state.lastRunStatus === 'ok' && job.state.consecutiveErrors === 0 && !job.state.lastError && !job.state.autoDisabled)"
+            message:
+              expr: "`recovered runs left failure state: ${JSON.stringify(jobs.map((job) => job.state))}`"
+      detailsExpr: "`announce=${JSON.stringify(announceRuns.map((run) => ({ status: run.status, delivery: run.deliveryStatus, suppression: run.deliverySuppressionReason })))} outbound=${controlOutbound.length}`"

@@ -51,10 +51,6 @@ import type { PreparedProviderFailoverOwner } from "../../failover/provider-patt
 import { renderRateLimitRetryExhaustion } from "../../failover/user-copy.js";
 import type { ReplyDeliveryState } from "../../reply-completion.js";
 import type { ToolErrorSummary } from "../../tool-error-summary.js";
-import {
-  hasCompletedMessagingToolDeliveryEvidence,
-  hasVisibleCommittedMessagingToolDeliveryEvidence,
-} from "../delivery-evidence.js";
 import { buildSourceReplyPayloadState } from "./source-reply-payloads.js";
 import { buildFailureWarning } from "./tool-error-warning.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
@@ -121,7 +117,6 @@ export function buildEmbeddedRunPayloads(params: {
   lastToolError?: ToolErrorSummary;
   config?: OpenClawConfig;
   sandboxRuntime?: EmbeddedRunAttemptResult["sandboxRuntime"];
-  isCronTrigger?: boolean;
   sessionKey: string;
   provider?: string;
   providerOwner?: PreparedProviderFailoverOwner;
@@ -463,18 +458,9 @@ export function buildEmbeddedRunPayloads(params: {
   appendSegmentAnswer({ ...params, assistantTexts: params.assistantTexts.slice(textStart) });
   // Native projections with no assistant text still deliver their committed reply.
   replyItems.push(...sourceReplyStateFor([...pendingAuthoredReplies]).replyItems);
-  // A conversational NO_REPLY is an authored outcome, not a missing answer.
-  // Native shell calls are conservatively classified as mutating even when
-  // they only search files. That replay-safety classification must not replace
-  // a completed answer with a synthetic warning. A scheduled report can also
-  // finish silently after a confirmed completed message-tool delivery. Progress
-  // updates alone must not suppress a scheduled task's failure reporting.
-  const respectIntentionalSilence =
-    hasIntentionalSilentFinal &&
-    (!params.isCronTrigger ||
-      (hasVisibleCommittedMessagingToolDeliveryEvidence(params) &&
-        hasCompletedMessagingToolDeliveryEvidence(params))) &&
-    !params.runAborted;
+  // NO_REPLY is an authored outcome, scheduled or not: the model judged the run
+  // after any tool error it saw. Runtime failures keep their own fatal paths.
+  const respectIntentionalSilence = hasIntentionalSilentFinal && !params.runAborted;
   if (params.lastToolError && !respectIntentionalSilence && !sourceReplyPending) {
     // A restart intentionally aborts the active tool while the Gateway takes over.
     // Report the lifecycle status instead of a tool failure.
