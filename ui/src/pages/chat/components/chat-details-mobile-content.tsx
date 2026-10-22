@@ -1,7 +1,5 @@
-import { dynamic } from "@solidjs/web";
 import { Match, Show, Switch, createMemo, isPending, onSettled } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
-import type { SessionPlacementPresentation } from "../../../components/session-placement-move-dialog.tsx";
 import { StepMarker } from "../../../components/session-progress-card-content.tsx";
 import {
   progressCardNoteSummary,
@@ -41,7 +39,6 @@ import {
   GitHubPublicationMobile,
   type GitHubPublicationMobileProps,
 } from "./chat-github-publication-mobile.tsx";
-import { ChatMachine, type ChatMachineProps } from "./chat-machine.tsx";
 import { ChatMobilePeopleBody, type ChatMobilePeopleBodyProps } from "./chat-mobile-people.tsx";
 import { ChatOutputsMobile, getChatOutputsCount } from "./chat-outputs.tsx";
 import {
@@ -97,7 +94,7 @@ type ChatDetailsMobileRootContent = {
   /** Review's Uncommitted snapshot and the host's actual navigation callbacks. */
   environment?: Omit<ChatDetailsEnvironmentMobileProps, "details" | "presented">;
   /** Labels only; facts/actions/demand come from the native details.outputs binding. */
-  outputs?: { label: string; accessibleLabel?: string };
+  outputs?: { label: string };
   /** The native Sharing adapter, constructed under the retained session host. */
   sharing?: ChatSessionSharingMobileAdapter;
   /** The publication owner supplies the review entry, including retained publication/recovery states. */
@@ -118,13 +115,9 @@ type ChatDetailsMobilePeopleContent = Omit<ChatMobilePeopleBodyProps, "sharingOp
   sharing?: ChatSessionSharingMobileAdapter;
 };
 
-type ChatDetailsMobileMoveRequest = Parameters<SessionPlacementPresentation>[0];
-
 /** Only supplied mobile bodies belong here. Missing peer bodies stay with their owners. */
 export type ChatDetailsMobilePage =
   | { kind: "root"; content: ChatDetailsMobileRootContent }
-  | { kind: "machine"; content: Omit<ChatMachineProps, "session"> }
-  | { kind: "move"; content: ChatDetailsMobileMoveRequest }
   | { kind: "people"; content: ChatDetailsMobilePeopleContent }
   | { kind: "task-progress"; content: ChatDetailsMobileProgressPreference }
   | { kind: "pull-requests"; content: ChatPullRequestMobileCollectionProps }
@@ -166,7 +159,6 @@ function MobileRoot(
     const count = getChatOutputsCount(data);
     return {
       label: props.content.outputs?.label ?? props.content.entries.labels.generatedFiles,
-      accessibleLabel: props.content.outputs?.accessibleLabel,
       metadata: count === null ? undefined : count,
     };
   };
@@ -372,12 +364,6 @@ export function ChatDetailsMobileContent(props: ChatDetailsMobileContentProps) {
           />
         )}
       </Match>
-      <Match when={props.page.kind === "machine" && props.page}>
-        {(page) => <ChatMachine {...page().content} session={props.details.selectedSession} />}
-      </Match>
-      <Match when={props.page.kind === "move" && props.page}>
-        {(page) => <MobileMove request={page().content} />}
-      </Match>
       <Match when={props.page.kind === "people" && props.page}>
         {(page) => (
           <ChatMobilePeopleBody
@@ -490,10 +476,4 @@ export function ChatDetailsMobileControls(props: ChatDetailsMobileContentProps) 
       )}
     </Show>
   );
-}
-
-/** The factory identity belongs to the native request, not the changing placement snapshot. */
-function MobileMove(props: { request: ChatDetailsMobileMoveRequest }) {
-  const Picker = dynamic(() => props.request.render);
-  return <Picker />;
 }

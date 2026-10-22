@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import "./working-phrase.ts";
+import "./working-phrase-solid.tsx";
 
 // Mirrors WORKING_PHRASE_SHOW_AFTER_MS / WORKING_PHRASE_ROTATE_EVERY_MS in
 // working-phrase-solid.tsx (knip forbids test-only exports).

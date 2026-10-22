@@ -121,7 +121,7 @@ function groupHasFailedResult(group: MessageGroup): boolean {
   );
 }
 
-function groupHasVisibleReplyContent(group: MessageGroup, includeText = true): boolean {
+function groupHasVisibleReplyContent(group: MessageGroup, includeText: boolean): boolean {
   return group.visibleContent === "non-text" || (includeText && group.visibleContent === "text");
 }
 

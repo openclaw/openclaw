@@ -4,14 +4,17 @@ import type { BoardWidget } from "../../lib/board/types.ts";
 import type { BoardWidgetAppViewState } from "../../lib/board/view-types.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { testId, boardWidget } from "./board-view.test-support.ts";
+import type {
+  BoardWidgetCellCallbacks,
+  BoardWidgetCellProps,
+} from "./board-widget-cell-options.ts";
 import {
   callbacks,
   cleanupCells,
   mountCell,
   mountElement,
 } from "./board-widget-cell.test-support.ts";
-import type { BoardWidgetCellCallbacks, BoardWidgetCellProps } from "./board-widget-cell.ts";
-import "./board-widget-cell.ts";
+import "./board-widget-cell.solid.tsx";
 
 class TestMcpAppView extends HTMLElement {
   sessionKey = "";

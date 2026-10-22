@@ -188,6 +188,19 @@ why a negative response budget alone did not fail earlier. Neither extends the
 lease or operation budget. The diagnostics do not change timeout or recovery
 behavior, and a successful retry does not establish the cause of an earlier failure.
 
+If a settled PR template clone loses its Git registration during provisioning,
+the clone owner removes the directory it created and keeps the caller's seed
+branch for retry. Older abandoned clones can be inspected with
+`scripts/pr gc --pr <number> --dry-run` and removed with `scripts/pr gc --pr <number>`,
+including while the PR is open. This recovery requires no PR registration, no
+`.local` artifacts, and an intact backlink to a registered template under the
+same repository's `.worktrees/.templates`. It checks process working directories
+and checks the clone against the PR's retained `temp/pr-<number>` seed using a
+temporary index, so later template refreshes cannot make a clean clone appear
+edited. Modified, untracked, and ignored files are preserved before revalidating
+the clone for removal. A missing seed, missing template metadata, and other
+ambiguous directories remain preserved; recovery never deletes their seed branches.
+
 ## Captured baseline evidence hashes
 
 Read-only baseline evidence hashes pass the already-captured bytes to the selected

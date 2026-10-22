@@ -40,7 +40,7 @@ type ResourceProps = {
 
 type OperationScope = { live: boolean; abort: AbortController | undefined };
 
-const ResourcePreview = lazy(() => import("../../../components/mcp-app-view-registration.ts"), {
+const ResourcePreview = lazy(() => import("../../../components/mcp-app-view.tsx"), {
   export: "McpAppView",
 });
 

@@ -94,7 +94,6 @@ export function controlUiStableChunkName(id: string): string | undefined {
     case "ui/src/components/copy-button-state.ts":
       // Login recovery also copies commands, before any Chat route can load.
       return "copy-button-runtime";
-    case "ui/src/components/login-gate.ts":
     case "ui/src/components/login-gate-solid.tsx":
     case "ui/src/components/login-gate-feedback.ts":
     case "ui/src/i18n/locales/en-login.ts":

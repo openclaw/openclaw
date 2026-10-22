@@ -20,8 +20,8 @@ import {
   type BoardViewMethods,
   type BoardViewElement,
 } from "./board-view-state.ts";
-import type { BoardWidgetCellMethods } from "./board-widget-cell-options.ts";
-import { BoardWidgetCell, type BoardWidgetCellProps } from "./board-widget-cell.ts";
+import type { BoardWidgetCellMethods, BoardWidgetCellProps } from "./board-widget-cell-options.ts";
+import { BoardWidgetCell } from "./board-widget-cell.solid.tsx";
 
 export type { BoardViewProps } from "./board-view-state.ts";
 

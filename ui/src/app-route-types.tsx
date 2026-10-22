@@ -23,17 +23,7 @@ type SolidPageDefinition<Id extends RouteId, Context, Data> = PageDefinition<
 /** Keep simple page renderers behind their route's existing lazy boundary. */
 export function defineSolidPage<Id extends RouteId, Context = unknown, Data = unknown>(
   id: Id,
-  load: () => Promise<Component>,
-  options?: SolidPageOptions<Id, Context, Data>,
-): SolidPageDefinition<Id, Context, Data>;
-export function defineSolidPage<Id extends RouteId, Context, Data>(
-  id: Id,
   load: () => Promise<Component<ForwardedRouteProps<Data>>>,
-  options?: SolidPageOptions<Id, Context, Data>,
-): SolidPageDefinition<Id, Context, Data>;
-export function defineSolidPage<Id extends RouteId, Context = unknown, Data = unknown>(
-  id: Id,
-  load: () => Promise<Component | Component<ForwardedRouteProps<Data>>>,
   options: SolidPageOptions<Id, Context, Data> = {},
 ): SolidPageDefinition<Id, Context, Data> {
   return definePage({

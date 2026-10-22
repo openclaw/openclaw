@@ -345,6 +345,12 @@ select a registered project or enter the correct repository path. Select
 **Start in a new worktree** again to continue; no child session is started for
 an invalid source folder.
 
+## Mobile composer
+
+On phones, tapping the compact composer focuses the text field and opens the
+keyboard in the same gesture. The expanded editor keeps your draft and selection
+while you use its controls.
+
 ## Composer predictions
 
 Enable **Settings → Labs → Composer predictions** to try optional next-message

@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import chromeExtensionManifest from "../../chrome-extension/manifest.json" with { type: "json" };
 import type { BrowserStatus } from "./client.types.js";
 import { buildBrowserDoctorReport } from "./doctor.js";
@@ -42,7 +42,7 @@ it.each([
 ] satisfies [Partial<BrowserStatus>, string, object, boolean][])(
   "reports readiness for %j",
   (status, id, expected, ok) => {
-    const report = reportFor(status, { platform: "linux", env: { DISPLAY: ":99" }, uid: 1000 });
+    const report = reportFor(status);
     expect(report.ok).toBe(ok);
     expect(check(report, id)).toMatchObject(expected);
     expect(check(report, "extension-version")).toBeUndefined();
@@ -50,11 +50,17 @@ it.each([
 );
 
 it.each([false, true])("keeps managed launch warnings non-fatal (headless=%s)", (headless) => {
+  vi.stubGlobal("process", {
+    ...process,
+    platform: "linux",
+    getuid: () => (headless ? 1000 : 0),
+  });
+  vi.stubEnv("DISPLAY", "");
+  vi.stubEnv("WAYLAND_DISPLAY", "");
   const report = reportFor(
     headless
       ? { headless: true, headlessSource: "default" }
       : { detectedBrowser: null, detectedExecutablePath: null, headlessSource: "config" },
-    { platform: "linux", env: {}, uid: headless ? 1000 : 0 },
   );
   expect(report.ok).toBe(true);
   expect(report.checks.filter((entry) => entry.status === "warn").map((entry) => entry.id)).toEqual(

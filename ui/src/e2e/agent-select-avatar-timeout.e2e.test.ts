@@ -1,6 +1,6 @@
 import type { Route } from "playwright";
 import { expect, it } from "vitest";
-import type { AgentSelectElement } from "../components/agent-select.ts";
+import type { AgentSelectElement } from "../components/agent-select.tsx";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { expectAttribute } from "./activity-assertions.test-support.ts";
 import { captureUiProof } from "./chat-flow.test-support.ts";
