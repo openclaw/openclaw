@@ -49,10 +49,11 @@ import { verifyClickClackAccountAfterSetup } from "./setup-verify.js";
 import type { CoreConfig } from "./types.js";
 
 const { credentials, status, introNote, finalize } = clickClackSetupWizard;
-const [credential] = credentials;
-if (!credential) {
+const [tokenCredential] = credentials;
+if (!tokenCredential) {
   throw new Error("expected ClickClack token credential");
 }
+const credential = tokenCredential;
 const baseInput = { baseUrl: "https://clickclack.example", workspace: "default" };
 const account = { ...baseInput, token: "ccb_test" };
 function channelConfig(

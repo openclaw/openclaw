@@ -1386,7 +1386,7 @@ describe("handleDiscordGuildAction", () => {
       cfg,
     );
 
-    expectProviderCall(discordGuildActionRuntime.fetchMemberInfoDiscord, ["G1", "U1"], {
+    expectProviderCall(vi.mocked(discordGuildActionRuntime.fetchMemberInfoDiscord), ["G1", "U1"], {
       cfg,
       accountId: "work",
     });

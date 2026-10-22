@@ -71,6 +71,25 @@ it("matches a reply to the exact outbound transport message", async () => {
   });
 });
 
+it("matches a reply that promotes the outbound message into its own thread", async () => {
+  const pending = ready("outbound-thread-root", { conversationRef: "conv_parent" });
+
+  const claim = await claimReply({
+    conversationRef: "conv_child",
+    parentConversationRef: "conv_parent",
+    replyToId: "outbound-thread-root",
+    threadId: "outbound-thread-root",
+  });
+
+  expect(claim).toBeDefined();
+  claim?.complete();
+  await expect(pending.wait()).resolves.toMatchObject({
+    conversationRef: "conv_child",
+    replyToId: "outbound-thread-root",
+    threadId: "outbound-thread-root",
+  });
+});
+
 it("does not promote a reply thread from a different conversation in a shared session", async () => {
   const pending = ready("outbound-peer-a", { conversationRef: "conv_peer_a" });
 
@@ -241,8 +260,12 @@ it("isolates equal turn IDs between agents", async () => {
     conversationRef: "conv_shared",
     sessionId: "session-shared",
   };
-  const first = ready("outbound-first", { ...identity, agentId: "first-agent" });
-  const second = ready("outbound-second", { ...identity, agentId: "second-agent" });
+  const first = register({ ...identity, agentId: "first-agent" });
+  const second = register({ ...identity, agentId: "second-agent" });
+  first.setOutboundMessageId("outbound-first");
+  second.setOutboundMessageId("outbound-second");
+  first.markReady();
+  second.markReady();
 
   expect(cancelPendingConversationTurn({ agentId: "first-agent", id: "shared-turn" })).toBe(true);
   await expect(first.wait()).resolves.toBeUndefined();
@@ -255,6 +278,21 @@ it("isolates equal turn IDs between agents", async () => {
   });
   claim?.complete();
   await expect(second.wait()).resolves.toMatchObject({ text: "second reply" });
+});
+
+it("gates an exact reply until outbound context is durable", async () => {
+  const pending = register();
+  pending.setOutboundMessageId("outbound-fast");
+  const claimPromise = claimReply({
+    replyToId: "outbound-fast",
+    text: "fast reply",
+  });
+
+  pending.markReady();
+  const claim = await claimPromise;
+  expect(claim).toBeDefined();
+  claim?.complete();
+  await expect(pending.wait()).resolves.toMatchObject({ text: "fast reply" });
 });
 
 it("keeps the configured timeout active until reply persistence completes", async () => {

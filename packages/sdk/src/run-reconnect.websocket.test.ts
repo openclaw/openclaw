@@ -260,6 +260,7 @@ it("bounds replay after 150 confirmed session unsubscribe cycles", async () => {
       subscriptions.delete(key);
       return { subscribed: false, key: canonicalKey };
     }
+    return undefined;
   });
   await oc.connect();
   for (let index = 0; index < 150; index += 1) {
@@ -289,6 +290,7 @@ it("preserves the current baseline when unsubscribe is rejected", async () => {
       return { subscribed: true, key: "global" };
     }
     reply({ code: "UNAVAILABLE", message: "unsubscribe rejected" }, false);
+    return undefined;
   });
   const address = { key: "global", agentId: "main" };
   await oc.request("sessions.messages.subscribe", address);

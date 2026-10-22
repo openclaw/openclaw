@@ -7,11 +7,12 @@ import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlus
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { ModalDialog, OpenClawModalDialog, type ModalDialogProperties } from "../modal-dialog.tsx";
 
-const modalDialog = (host: OpenClawModalDialog) =>
-  host.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog")!;
-
-function expectOpen(host: OpenClawModalDialog, open: boolean) {
-  expect([host.open, modalDialog(host).open]).toEqual([open, open]);
+function modalDialog(host: OpenClawModalDialog): HTMLDialogElement {
+  const dialog = host.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog");
+  if (!dialog) {
+    throw new Error("Expected native modal dialog");
+  }
+  return dialog;
 }
 
 let restoreDialog: () => void;
@@ -28,7 +29,10 @@ async function completeFrames() {
   await Promise.resolve();
 }
 
-function mount(props: Partial<ModalDialogProperties> = {}, container?: HTMLElement) {
+function mount(
+  props: Partial<ModalDialogProperties> & { onCancel?: (event: Event) => void } = {},
+  container?: HTMLElement,
+) {
   let handle!: OpenClawModalDialog;
   let confirm!: HTMLButtonElement;
   const view = render(
@@ -42,6 +46,9 @@ function mount(props: Partial<ModalDialogProperties> = {}, container?: HTMLEleme
         initialFocus={() => confirm}
         ref={(value) => {
           handle = value;
+          if (props.onCancel) {
+            handle.addEventListener("modal-cancel", props.onCancel);
+          }
         }}
       >
         <button autofocus ref={(element) => (confirm = element)}>
@@ -53,7 +60,12 @@ function mount(props: Partial<ModalDialogProperties> = {}, container?: HTMLEleme
     container ? { container } : undefined,
   );
   flush();
-  return { view, handle };
+  return {
+    view,
+    get handle() {
+      return handle;
+    },
+  };
 }
 
 beforeEach(() => {
@@ -79,35 +91,40 @@ describe("Solid native modal policy", () => {
   it("opens a labelled dialog and updates controlled attributes without replacing content", () => {
     const [description, setDescription] = createSignal("Review the operation");
     const [open, setOpen] = createSignal(true);
-    const { handle } = mount({
-      label: "Confirm action",
-      get description() {
-        return description();
-      },
-      get open() {
-        return open();
-      },
-    });
-    const dialog = modalDialog(handle);
-    const draft = dialog.querySelector("textarea");
+    let handle!: OpenClawModalDialog;
+    let draftInput!: HTMLTextAreaElement;
+    render(() => (
+      <ModalDialog
+        label="Confirm action"
+        description={description()}
+        open={open()}
+        initialFocus={() => draftInput}
+        ref={(value) => {
+          handle = value;
+        }}
+      >
+        <textarea aria-label="Draft" autofocus ref={(element) => (draftInput = element)} />
+      </ModalDialog>
+    ));
+    flush();
+    const draft = modalDialog(handle).querySelector("textarea");
     expect(handle).toBeInstanceOf(OpenClawModalDialog);
-    expect(dialog.open).toBe(true);
-    expect(
-      ["role", "aria-modal", "aria-label", "aria-description"].map((name) =>
-        dialog.getAttribute(name),
-      ),
-    ).toEqual(["dialog", "true", "Confirm action", "Review the operation"]);
+    expect(modalDialog(handle).open).toBe(true);
+    expect(modalDialog(handle).getAttribute("role")).toBe("dialog");
+    expect(modalDialog(handle).getAttribute("aria-modal")).toBe("true");
+    expect(modalDialog(handle).getAttribute("aria-label")).toBe("Confirm action");
+    expect(modalDialog(handle).getAttribute("aria-description")).toBe("Review the operation");
     expect(document.openClawModalLayers?.has(handle)).toBe(true);
     setDescription("");
     setOpen(false);
     flush();
-    expect(dialog.hasAttribute("aria-description")).toBe(false);
-    expect(dialog.open).toBe(false);
+    expect(modalDialog(handle).hasAttribute("aria-description")).toBe(false);
+    expect(modalDialog(handle).open).toBe(false);
     expect(document.openClawModalLayers?.has(handle)).toBe(false);
     setOpen(true);
     flush();
-    expect(dialog.open).toBe(true);
-    expect(dialog.querySelector("textarea")).toBe(draft);
+    expect(modalDialog(handle).open).toBe(true);
+    expect(modalDialog(handle).querySelector("textarea")).toBe(draft);
   });
 
   it("publishes each lifecycle phase once from the host with settled focus", async () => {
@@ -150,12 +167,23 @@ describe("Solid native modal policy", () => {
       const initial = operation === "hide";
       const [open, setOpen] = createSignal(initial);
       const changes = vi.fn((next: boolean) => setOpen(next));
-      const { handle: host } = mount({
-        get open() {
-          return open();
-        },
-        onOpenChange: changes,
-      });
+      let host!: OpenClawModalDialog;
+      let confirm!: HTMLButtonElement;
+      render(() => (
+        <ModalDialog
+          open={open()}
+          onOpenChange={changes}
+          initialFocus={() => confirm}
+          ref={(element) => {
+            host = element;
+          }}
+        >
+          <button autofocus ref={(element) => (confirm = element)}>
+            Confirm
+          </button>
+        </ModalDialog>
+      ));
+      flush();
       changes.mockClear();
       const eventName = operation === "show" ? "overlay-show" : "overlay-hide";
       const veto = (event: Event) => event.preventDefault();
@@ -163,7 +191,8 @@ describe("Solid native modal policy", () => {
       setOpen(!initial);
       flush();
       expect(untrack(open)).toBe(initial);
-      expectOpen(host, initial);
+      expect(host.open).toBe(initial);
+      expect(modalDialog(host).open).toBe(initial);
       expect(changes.mock.calls).toEqual([[initial]]);
       flush();
       expect(changes.mock.calls).toEqual([[initial]]);
@@ -178,23 +207,59 @@ describe("Solid native modal policy", () => {
 
   it("keeps only current publications when the controlled owner closes during opening", () => {
     const [open, setOpen] = createSignal(false);
+    let host!: OpenClawModalDialog;
+    let confirm!: HTMLButtonElement;
     const changes = vi.fn((next: boolean) => {
       setOpen(next);
       if (next) {
         host.hide();
       }
     });
-    const { handle: host } = mount({
-      get open() {
-        return open();
-      },
-      onOpenChange: changes,
-    });
+    render(() => (
+      <ModalDialog
+        open={open()}
+        onOpenChange={changes}
+        initialFocus={() => confirm}
+        ref={(element) => {
+          host = element;
+        }}
+      >
+        <button autofocus ref={(element) => (confirm = element)}>
+          Confirm
+        </button>
+      </ModalDialog>
+    ));
+    flush();
     setOpen(true);
     flush();
     expect(untrack(open)).toBe(false);
-    expectOpen(host, false);
+    expect(host.open).toBe(false);
+    expect(modalDialog(host).open).toBe(false);
     expect(changes.mock.calls).toEqual([[true], [false]]);
+  });
+
+  it("retires a disconnected dialog without canceling or changing its owner's desired state", () => {
+    const changes = vi.fn();
+    const onCancel = vi.fn();
+    const { handle } = mount({ onOpenChange: changes, onCancel });
+    const parent = handle.parentNode!;
+    changes.mockClear();
+    const hiding: Event[] = [];
+    handle.addEventListener("overlay-hide", (event) => {
+      hiding.push(event);
+      event.preventDefault();
+    });
+    handle.remove();
+    expect(handle.open).toBe(true);
+    expect(modalDialog(handle).open).toBe(false);
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(hiding).toHaveLength(0);
+    expect(changes).not.toHaveBeenCalled();
+    parent.appendChild(handle);
+    flush();
+    expect(handle.open).toBe(true);
+    expect(modalDialog(handle).open).toBe(true);
+    expect(changes).not.toHaveBeenCalled();
   });
 
   it.each(["cancel", "backdrop"])(
@@ -211,7 +276,8 @@ describe("Solid native modal policy", () => {
             ? new Event("cancel", { bubbles: true, cancelable: true })
             : new MouseEvent("mousedown", { bubbles: true, detail: 1 }),
         );
-        expectOpen(handle, true);
+        expect(handle.open).toBe(true);
+        expect(modalDialog(handle).open).toBe(true);
         expect(modalDialog(handle).dataset.phase).toBe("open");
         expect(modalDialog(handle).inert).toBe(false);
         expect(document.activeElement).toBe(active);
@@ -251,8 +317,10 @@ describe("Solid native modal policy", () => {
       await completeFrames();
       expect(inner.handle.open).toBe(true);
       outer.handle.hide();
-      expectOpen(outer.handle, false);
-      expectOpen(inner.handle, false);
+      expect(outer.handle.open).toBe(false);
+      expect(inner.handle.open).toBe(false);
+      expect(modalDialog(outer.handle).open).toBe(false);
+      expect(modalDialog(inner.handle).open).toBe(false);
       expect(document.openClawModalLayers?.size).toBe(0);
       expect(document.activeElement).toBe(trigger);
       await completeFrames();
@@ -263,5 +331,35 @@ describe("Solid native modal policy", () => {
       unsubscribe();
       trigger.remove();
     }
+  });
+
+  it("never publishes a superseded close completion after reopening", async () => {
+    const { handle } = mount();
+    await completeFrames();
+    const hidden = vi.fn();
+    const shown = vi.fn();
+    handle.addEventListener("overlay-after-hide", hidden);
+    handle.addEventListener("overlay-after-show", shown);
+    handle.hide();
+    handle.show();
+    await completeFrames();
+    expect(hidden).not.toHaveBeenCalled();
+    expect(shown).toHaveBeenCalledTimes(1);
+    expect(handle.open).toBe(true);
+    expect(modalDialog(handle).dataset.phase).toBe("open");
+  });
+
+  it("disposal cancels pending completion and removes modal ownership", async () => {
+    const { handle, view } = mount();
+    const dialog = modalDialog(handle);
+    const shown = vi.fn();
+    handle.addEventListener("overlay-after-show", shown);
+    view.unmount();
+    await completeFrames();
+    expect(shown).not.toHaveBeenCalled();
+    expect(dialog.open).toBe(false);
+    expect(handle.querySelector(".oc-modal-dialog")).toBeNull();
+    expect(document.openClawModalLayers?.has(handle)).toBe(false);
+    expect(document.documentElement.classList.contains("oc-modal-scroll-lock")).toBe(false);
   });
 });

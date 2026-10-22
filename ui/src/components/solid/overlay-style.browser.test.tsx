@@ -90,7 +90,7 @@ function entries(prefix: string, count: number, padded = false): MenuItem[] {
 }
 
 function positionTrigger(style: Partial<CSSStyleDeclaration>) {
-  Object.assign(trigger().style, { position: "fixed", ...style });
+  Object.assign(trigger().style, { position: "fixed" }, style);
 }
 
 function expectItemVisible(element: HTMLElement, menu: HTMLElement) {

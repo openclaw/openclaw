@@ -76,6 +76,7 @@ const plan = [
 const INITIAL_DELAY_MS = 1_500;
 const quiet = { toolProgress: false, label: false } as const;
 const commentary = { toolProgress: true, label: false, commentary: true } as const;
+const prepared = { preparedItems: true };
 const approvalRequest = {
   phase: "requested",
   approvalId: "approval",

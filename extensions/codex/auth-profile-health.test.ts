@@ -35,8 +35,12 @@ registerCodexManagedAppServerDoctorChecks({
   getHealthCheck: (id) => checks.find((check) => check.id === id),
   registerHealthCheck: (check) => checks.push(check),
 });
-const healthCheck = checks.find((candidate) => candidate.id === CHECK_ID);
-assert(healthCheck, "Doctor must register the recovery finding");
+function recoveryCheck() {
+  const check = checks.find((candidate) => candidate.id === CHECK_ID);
+  assert(check, "Doctor must register the recovery finding");
+  return check;
+}
+const healthCheck = recoveryCheck();
 
 async function doctorState(applyEnv = true) {
   const state = await createOpenClawTestState({ label: "codex-profile-recovery", applyEnv });

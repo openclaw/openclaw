@@ -81,7 +81,7 @@ describe("handleDiscordMessageAction", () => {
   it.each([
     {
       action: "timeout",
-      actions: { moderation: true },
+      actions: { moderation: true, channels: false },
       params: { guildId: "guild-1", userId: "user-2", durationMin: 5 },
       payload: {
         action: "timeout",
@@ -95,7 +95,7 @@ describe("handleDiscordMessageAction", () => {
     },
     {
       action: "channel-delete",
-      actions: { channels: true },
+      actions: { moderation: false, channels: true },
       params: { channelId: "channel-1" },
       payload: { action: "channelDelete", channelId: "channel-1" },
     },

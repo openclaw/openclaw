@@ -6,19 +6,21 @@ import {
 } from "./outbound.js";
 import type { CoreConfig } from "./types.js";
 
-const client = vi.hoisted(() => ({
-  createChannelMessage: vi.fn(async () => ({ id: "msg_out" })),
-  createThreadReply: vi.fn(async () => ({ id: "msg_out" })),
-  createDirectMessage: vi.fn(async () => ({ id: "msg_out" })),
-  createDirectConversation: vi.fn(async () => ({ id: "dm_1" })),
-  createUpload: vi.fn(async () => ({ id: "upl_1" })),
-  findUploadByNonce: vi.fn(async () => undefined as { id: string; filename: string } | undefined),
-  findMessageByNonce: vi.fn(
-    async () => undefined as { id: string; attachments?: Array<{ id: string }> } | undefined,
-  ),
-  attachUpload: vi.fn(async () => undefined),
-  message: vi.fn(async () => ({ id: "msg_out", attachments: [] as Array<{ id: string }> })),
-}));
+const createChannelMessage = vi.hoisted(() => vi.fn(async () => ({ id: "msg_out" })));
+const createThreadReply = vi.hoisted(() => vi.fn(async () => ({ id: "msg_out" })));
+const createDirectMessage = vi.hoisted(() => vi.fn(async () => ({ id: "msg_out" })));
+const createDirectConversation = vi.hoisted(() => vi.fn(async () => ({ id: "dm_1" })));
+const createUpload = vi.hoisted(() => vi.fn(async () => ({ id: "upl_1" })));
+const findUploadByNonce = vi.hoisted(() =>
+  vi.fn(async () => undefined as { id: string; filename: string } | undefined),
+);
+const findMessageByNonce = vi.hoisted(() =>
+  vi.fn(async () => undefined as { id: string; attachments?: Array<{ id: string }> } | undefined),
+);
+const attachUpload = vi.hoisted(() => vi.fn(async () => undefined));
+const message = vi.hoisted(() =>
+  vi.fn(async () => ({ id: "msg_out", attachments: [] as Array<{ id: string }> })),
+);
 const createClientOptions = vi.hoisted(() => vi.fn());
 const loadOutboundMediaFromUrl = vi.hoisted(() => vi.fn());
 
@@ -35,7 +37,22 @@ vi.mock("./accounts.js", () => ({
   }),
 }));
 
-vi.mock("./http-client.js", () => ({ createClickClackClient: createClientOptions }));
+vi.mock("./http-client.js", () => ({
+  createClickClackClient: (options: unknown) => {
+    createClientOptions(options);
+    return {
+      createChannelMessage,
+      createThreadReply,
+      createDirectMessage,
+      createDirectConversation,
+      createUpload,
+      findUploadByNonce,
+      findMessageByNonce,
+      attachUpload,
+      message,
+    };
+  },
+}));
 
 vi.mock("./resolve.js", () => ({
   resolveWorkspaceId: async () => "wsp_1",
@@ -85,12 +102,11 @@ function batchPlan(
 
 beforeEach(() => {
   vi.clearAllMocks();
-  createClientOptions.mockReturnValue(client);
-  client.createUpload.mockReset().mockResolvedValue({ id: "upl_1" });
-  client.findUploadByNonce.mockReset().mockResolvedValue(undefined);
-  client.findMessageByNonce.mockReset().mockResolvedValue(undefined);
-  client.attachUpload.mockReset().mockResolvedValue(undefined);
-  client.message.mockReset().mockResolvedValue({ id: "msg_out", attachments: [] });
+  createUpload.mockReset().mockResolvedValue({ id: "upl_1" });
+  findUploadByNonce.mockReset().mockResolvedValue(undefined);
+  findMessageByNonce.mockReset().mockResolvedValue(undefined);
+  attachUpload.mockReset().mockResolvedValue(undefined);
+  message.mockReset().mockResolvedValue({ id: "msg_out", attachments: [] });
   loadOutboundMediaFromUrl.mockReset();
 });
 
@@ -134,12 +150,8 @@ describe("sendClickClackText routing", () => {
       replyToId: "msg_root",
     });
 
-    expect(client.createThreadReply).toHaveBeenCalledWith(
-      "msg_thread_root",
-      "Done.",
-      expect.anything(),
-    );
-    expect(client.createChannelMessage).not.toHaveBeenCalled();
+    expect(createThreadReply).toHaveBeenCalledWith("msg_thread_root", "Done.", expect.anything());
+    expect(createChannelMessage).not.toHaveBeenCalled();
   });
 
   it("sanitizes leaked tool XML in a DM quote-reply", async () => {
@@ -188,13 +200,13 @@ describe("sendClickClackMedia", () => {
       mediaUrl: "https://files.example/missing-type",
     });
 
-    expect(client.createUpload).toHaveBeenCalledWith({
+    expect(createUpload).toHaveBeenCalledWith({
       workspaceId: "wsp_1",
       buffer: Buffer.from("opaque bytes"),
       filename: "attachment",
       contentType: "application/octet-stream",
     });
-    expect(client.createChannelMessage).toHaveBeenCalledWith(
+    expect(createChannelMessage).toHaveBeenCalledWith(
       "general",
       "attachment",
       expect.objectContaining({ quotedMessageId: undefined }),
@@ -208,30 +220,30 @@ describe("sendClickClackMedia", () => {
       mediaUrl: "https://files.example/viewer-proof.ts",
     });
 
-    expect(client.createDirectConversation).toHaveBeenCalledWith("wsp_1", ["usr_1"]);
-    expect(client.createDirectMessage).toHaveBeenCalledWith(
+    expect(createDirectConversation).toHaveBeenCalledWith("wsp_1", ["usr_1"]);
+    expect(createDirectMessage).toHaveBeenCalledWith(
       "dm_1",
       "viewer-proof.ts",
       expect.objectContaining({ quotedMessageId: undefined }),
     );
-    expect(client.attachUpload).toHaveBeenCalledWith("msg_out", "upl_1");
+    expect(attachUpload).toHaveBeenCalledWith("msg_out", "upl_1");
     expect(messageId).toBe("msg_out");
   });
 
   it("routes explicit thread targets before attaching the upload", async () => {
     await sendTestMedia({ to: "thread:msg_root", text: "Thread artifact" });
 
-    expect(client.createThreadReply).toHaveBeenCalledWith(
+    expect(createThreadReply).toHaveBeenCalledWith(
       "msg_root",
       "Thread artifact",
       expect.anything(),
     );
-    expect(client.createChannelMessage).not.toHaveBeenCalled();
-    expect(client.attachUpload).toHaveBeenCalledWith("msg_out", "upl_1");
+    expect(createChannelMessage).not.toHaveBeenCalled();
+    expect(attachUpload).toHaveBeenCalledWith("msg_out", "upl_1");
   });
 
   it("reuses a persisted durable upload without another multipart write", async () => {
-    client.findUploadByNonce.mockResolvedValueOnce({
+    findUploadByNonce.mockResolvedValueOnce({
       id: "upl_existing",
       filename: "viewer-proof.ts",
     });
@@ -240,9 +252,9 @@ describe("sendClickClackMedia", () => {
       "msg_out",
     );
 
-    expect(client.createUpload).not.toHaveBeenCalled();
+    expect(createUpload).not.toHaveBeenCalled();
     expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
-    expect(client.attachUpload).toHaveBeenCalledWith("msg_out", "upl_existing");
+    expect(attachUpload).toHaveBeenCalledWith("msg_out", "upl_existing");
   });
 
   it("marks dispatch once after upload and before visible message creation", async () => {
@@ -250,11 +262,11 @@ describe("sendClickClackMedia", () => {
     const onPlatformSendDispatch = vi.fn(async () => {
       order.push("dispatch");
     });
-    client.createUpload.mockImplementationOnce(async () => {
+    createUpload.mockImplementationOnce(async () => {
       order.push("upload");
       return { id: "upl_1", filename: "viewer-proof.ts" };
     });
-    client.createChannelMessage.mockImplementationOnce(async () => {
+    createChannelMessage.mockImplementationOnce(async () => {
       order.push("message");
       return { id: "msg_out" };
     });
@@ -279,19 +291,19 @@ describe("sendClickClackMedia", () => {
   });
 
   it("still rejects when attachment association and its bounded retry both fail", async () => {
-    client.attachUpload.mockRejectedValue(new Error("attachment rejected"));
+    attachUpload.mockRejectedValue(new Error("attachment rejected"));
 
     await expect(sendTestMedia()).rejects.toThrow("attachment rejected");
 
-    expect(client.createUpload).toHaveBeenCalledTimes(1);
-    expect(client.createChannelMessage).toHaveBeenCalledTimes(1);
-    expect(client.attachUpload).toHaveBeenCalledTimes(2);
+    expect(createUpload).toHaveBeenCalledTimes(1);
+    expect(createChannelMessage).toHaveBeenCalledTimes(1);
+    expect(attachUpload).toHaveBeenCalledTimes(2);
   });
 });
 
 describe("reconcileClickClackUnknownSend", () => {
   it("reconciles a text send only when its durable message exists", async () => {
-    client.findMessageByNonce.mockResolvedValueOnce({ id: "msg_text" });
+    findMessageByNonce.mockResolvedValueOnce({ id: "msg_text" });
 
     const result = await reconcile({
       queueId: "queue-text",
@@ -303,12 +315,12 @@ describe("reconcileClickClackUnknownSend", () => {
       status: "sent",
       receipt: { platformMessageIds: ["msg_text"] },
     });
-    expect(client.findMessageByNonce).toHaveBeenCalledWith({
+    expect(findMessageByNonce).toHaveBeenCalledWith({
       workspaceId: "wsp_1",
       nonce: "openclaw-text:4a171ee0c18d243d8d3c510320ab1b1d317afd95b0204abec18312e57307fb24",
     });
-    expect(client.createChannelMessage).not.toHaveBeenCalled();
-    expect(client.createUpload).not.toHaveBeenCalled();
+    expect(createChannelMessage).not.toHaveBeenCalled();
+    expect(createUpload).not.toHaveBeenCalled();
     expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
   });
 
@@ -319,7 +331,7 @@ describe("reconcileClickClackUnknownSend", () => {
     });
 
     expect(result).toEqual({ status: "not_sent" });
-    expect(client.createChannelMessage).not.toHaveBeenCalled();
+    expect(createChannelMessage).not.toHaveBeenCalled();
   });
 
   it("proves media was not sent when its durable message is absent", async () => {
@@ -328,24 +340,24 @@ describe("reconcileClickClackUnknownSend", () => {
     });
 
     expect(result).toEqual({ status: "not_sent" });
-    expect(client.findUploadByNonce).toHaveBeenCalledWith({
+    expect(findUploadByNonce).toHaveBeenCalledWith({
       workspaceId: "wsp_1",
       nonce: "openclaw-upload:b7ec5953ddec187b357faecde36f1abf0ef8590b1cda47c199c562b9e2e24432",
     });
-    expect(client.findMessageByNonce).toHaveBeenCalledWith({
+    expect(findMessageByNonce).toHaveBeenCalledWith({
       workspaceId: "wsp_1",
       nonce: "openclaw-media:b7ec5953ddec187b357faecde36f1abf0ef8590b1cda47c199c562b9e2e24432",
     });
-    expect(client.createChannelMessage).not.toHaveBeenCalled();
-    expect(client.attachUpload).not.toHaveBeenCalled();
+    expect(createChannelMessage).not.toHaveBeenCalled();
+    expect(attachUpload).not.toHaveBeenCalled();
     expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
   });
 
   it("repairs attachments only after every nonce-keyed message exists", async () => {
-    client.findUploadByNonce
+    findUploadByNonce
       .mockResolvedValueOnce({ id: "upl_first", filename: "first.png" })
       .mockResolvedValueOnce({ id: "upl_second", filename: "second.png" });
-    client.findMessageByNonce
+    findMessageByNonce
       .mockResolvedValueOnce({ id: "msg_first", attachments: [] })
       .mockResolvedValueOnce({ id: "msg_second", attachments: [{ id: "upl_second" }] });
 
@@ -359,13 +371,13 @@ describe("reconcileClickClackUnknownSend", () => {
       status: "sent",
       receipt: { platformMessageIds: ["msg_first", "msg_second"] },
     });
-    expect(client.createChannelMessage).not.toHaveBeenCalled();
-    expect(client.attachUpload).toHaveBeenCalledExactlyOnceWith("msg_first", "upl_first");
+    expect(createChannelMessage).not.toHaveBeenCalled();
+    expect(attachUpload).toHaveBeenCalledExactlyOnceWith("msg_first", "upl_first");
     expect(loadOutboundMediaFromUrl).not.toHaveBeenCalled();
   });
 
   it("refuses to acknowledge a message whose nonce-keyed upload is missing", async () => {
-    client.findMessageByNonce.mockResolvedValueOnce({ id: "msg_orphan", attachments: [] });
+    findMessageByNonce.mockResolvedValueOnce({ id: "msg_orphan", attachments: [] });
 
     const result = await reconcile();
 
@@ -374,6 +386,6 @@ describe("reconcileClickClackUnknownSend", () => {
       error: "ClickClack message msg_orphan exists without its nonce-keyed upload",
       retryable: false,
     });
-    expect(client.attachUpload).not.toHaveBeenCalled();
+    expect(attachUpload).not.toHaveBeenCalled();
   });
 });

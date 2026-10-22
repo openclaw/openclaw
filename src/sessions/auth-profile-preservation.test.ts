@@ -165,3 +165,31 @@ it.each(["openai", "anthropic"])(
     });
   },
 );
+
+it("clears an incompatible auth profile when resetting to a cross-provider default", () => {
+  const sessionEntry = {
+    ...entry,
+    providerOverride: "openai",
+    modelOverride: "gpt-4.1",
+    modelOverrideSource: "user" as const,
+    authProfileOverride: "team:prod",
+    authProfileOverrideSource: "user" as const,
+    authProfileOverrideCompactionCount: 2,
+  };
+
+  const result = applyOverride({
+    ...defaults,
+    cfg: profileConfig("openai"),
+    agentDir: tempDirs.make("openclaw-auth-profile-default-"),
+    entry: sessionEntry,
+    selection: { provider: "anthropic", model: "claude-opus-4-6", isDefault: true },
+  });
+
+  expect(result.updated).toBe(true);
+  expect(sessionEntry.providerOverride).toBeUndefined();
+  expect(sessionEntry.modelOverride).toBeUndefined();
+  expect(sessionEntry.modelOverrideSource).toBeUndefined();
+  expect(sessionEntry.authProfileOverride).toBeUndefined();
+  expect(sessionEntry.authProfileOverrideSource).toBeUndefined();
+  expect(sessionEntry.authProfileOverrideCompactionCount).toBeUndefined();
+});

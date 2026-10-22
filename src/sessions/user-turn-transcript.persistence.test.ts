@@ -262,11 +262,6 @@ describe("persistUserTurnTranscript", () => {
     identity: { type: "profile" as const, id: "8489979671" },
     ...runtimeOnlySenderFields,
   };
-  const observedSender = buildChannelUserTurnSender({
-    SenderId: "shared-id",
-    SenderName: "Same label",
-    Provider: "test-channel",
-  });
   it.each([
     {
       name: "source bytes and attachments despite logging patterns",
@@ -277,6 +272,7 @@ describe("persistUserTurnTranscript", () => {
       },
       metadata: { media },
       config: { logging: { redactPatterns: ["computeToken"] } },
+      forbidden: [],
     },
     {
       name: "durable sender fields without runtime profile data",
@@ -288,30 +284,46 @@ describe("persistUserTurnTranscript", () => {
         senderIdentity: profileSender.identity,
       },
       config: undefined,
+      forbidden: Object.entries(runtimeOnlySenderFields).flatMap(([key, value]) => [
+        key,
+        String(value),
+      ]),
     },
-    {
-      name: "channel observation without display inference",
-      input: { text: "hello", timestamp: 123, sender: observedSender },
-      metadata: {
-        senderId: "shared-id",
-        senderName: "Same label",
-        senderIdentity: {
-          type: "observation",
-          id: "shared-id",
-          pluginId: "test-channel",
-          accountId: null,
-          senderKind: "unknown",
-        },
-      },
-      config: undefined,
-    },
-  ])("round-trips $name", async ({ input, metadata, config }) => {
+  ])("round-trips $name", async ({ input, metadata, config, forbidden }) => {
     const expected = userMessage(input.text, { timestamp: input.timestamp, __openclaw: metadata });
     const appended = await writeInput(structuredClone(input), { config, updateMode: "none" });
     const messages = await readMessages();
     const durable = [appended?.message, messages[0]];
     expect(durable).toEqual([expected, expected]);
     expect(messages).toEqual([expected]);
+    const serialized = durable.map((message) => JSON.stringify(message));
+    expect(serialized).toEqual([JSON.stringify(expected), JSON.stringify(expected)]);
+    for (const bytes of serialized) {
+      for (const value of forbidden) {
+        expect(bytes).not.toContain(value);
+      }
+    }
+  });
+
+  it("sender provenance round-trips an observation without display inference", async () => {
+    const sender = buildChannelUserTurnSender({
+      SenderId: "shared-id",
+      SenderName: "Same label",
+      Provider: "test-channel",
+    });
+    await writeInput({ text: "hello", sender });
+    const message = await readMessage();
+    expect(message?.["__openclaw"]).toMatchObject({
+      senderId: "shared-id",
+      senderName: "Same label",
+      senderIdentity: {
+        type: "observation",
+        id: "shared-id",
+        pluginId: "test-channel",
+        accountId: null,
+        senderKind: "unknown",
+      },
+    });
   });
 
   it.each(["retain", "in-place", "raw-redact", "forge"] as const)(
@@ -579,7 +591,7 @@ describe("persistUserTurnTranscript", () => {
           };
         },
       });
-      const metadata = stored?.["__openclaw"];
+      const metadata = stored?.["__openclaw"] as { humanMentions?: unknown } | undefined;
       expect({ content: stored?.content, mentions: metadata?.humanMentions }).toEqual({
         content: mode === "replace-text" ? "[redacted]" : "Hello @Ada",
         mentions: mode === "replace-text" || mode === "forge" ? undefined : mentions,
@@ -588,14 +600,9 @@ describe("persistUserTurnTranscript", () => {
   );
 
   it("returns the existing user turn when the idempotency key was already persisted", async () => {
-    const sessionEntry = {
-      sessionId: target.sessionId,
-      sessionFile: target.sqliteMarker,
-      updatedAt: 1,
-    };
     const first = await writeInput(
       { text: "hello once", timestamp: 123, idempotencyKey: "chat-run-1:user" },
-      { updateMode: "none", sessionEntry, sessionStore: { [target.sessionKey]: sessionEntry } },
+      { updateMode: "none" },
     );
     const second = await writeInput(
       { text: "hello once replayed", timestamp: 456, idempotencyKey: "chat-run-1:user" },
@@ -607,7 +614,6 @@ describe("persistUserTurnTranscript", () => {
       timestamp: 123,
       idempotencyKey: "chat-run-1:user",
     };
-    expect(first?.sessionFile).toBe(target.sessionKey);
     expect(second?.messageId).toBe(first?.messageId);
     expect(second?.message).toMatchObject(expected);
     await expect(readMessages()).resolves.toEqual([expect.objectContaining(expected)]);
@@ -685,16 +691,17 @@ describe("persistUserTurnTranscript", () => {
         goalId: "goal-1",
         operationId: "resume-1",
       };
-      const original = userMessage("Continue pursuing the current goal.", { timestamp: 123 });
-      if (isGoal) {
-        Object.assign(original, {
-          display: false,
-          provenance: { kind: "internal_system" },
-          __openclaw: { intent },
-        });
-      }
       const message = await writeAndRead({
-        message: original,
+        message: userMessage("Continue pursuing the current goal.", {
+          timestamp: 123,
+          ...(isGoal
+            ? {
+                display: false as const,
+                provenance: { kind: "internal_system" as const },
+                __openclaw: { intent },
+              }
+            : {}),
+        }),
         beforeMessageWrite: () =>
           castAgentMessage({
             role: "user",

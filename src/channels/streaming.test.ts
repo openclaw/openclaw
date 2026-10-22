@@ -417,7 +417,7 @@ it("replaces a terminal failure when recovered output names no command", () => {
 
 const DEFAULT_PROGRESS_DRAFT_INITIAL_DELAY_MS = 1_500;
 const progressEntry = (progress: ChannelStreamingProgressConfig) => ({ streaming: { progress } });
-const render: typeof draftText = (lines, progress, options = {}) =>
+const render: typeof draftText = (lines, progress, options) =>
   formatText({ entry: progressEntry(progress), lines, ...options });
 const commentary = (text: string) => ({
   kind: "item" as const,

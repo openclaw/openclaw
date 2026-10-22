@@ -51,21 +51,24 @@ it.each([
   },
 );
 
-it("skips disabled options and rolls back rejected keyboard choice", () => {
+it("isolates radio groups, skips disabled options and rolls back rejected keyboard choice", () => {
   const onChange = vi.fn(() => false);
   const onReselect = vi.fn();
   const choices = [options[0], { value: "locked", label: "Locked", disabled: true }, options[1]];
   const view = render(() => (
-    <SettingsSegmented
-      value="first"
-      options={choices}
-      ariaLabel="Schedule"
-      onChange={onChange}
-      onReselect={onReselect}
-    />
+    <>
+      <SettingsSegmented
+        value="first"
+        options={choices}
+        ariaLabel="Schedule"
+        onChange={onChange}
+        onReselect={onReselect}
+      />
+      <SettingsSegmented value="first" options={choices} ariaLabel="Other" onChange={() => {}} />
+    </>
   ));
-  const group = view.getByRole("radiogroup");
-  const radio = (value: string) =>
+  const groups = view.getAllByRole("radiogroup");
+  const radio = (value: string, group = groups[0]!) =>
     group.querySelector<HTMLInputElement>(`input[value="${value}"]`)!;
   const first = radio("first"),
     last = radio("last");
@@ -73,7 +76,11 @@ it("skips disabled options and rolls back rejected keyboard choice", () => {
   fireEvent.keyDown(first, { key: "ArrowRight" });
   expect(document.activeElement).toBe(last);
   expect(onChange).toHaveBeenCalledExactlyOnceWith("last", last.parentElement);
-  expect([first.checked, last.checked]).toEqual([true, false]);
+  expect([first.checked, last.checked, radio("first", groups[1]).checked]).toEqual([
+    true,
+    false,
+    true,
+  ]);
   first.click();
   expect(onReselect).toHaveBeenCalledExactlyOnceWith("first", first.parentElement);
   radio("locked").click();
@@ -84,8 +91,11 @@ it("registers keyed radio refs without untracked reads and retains focused input
   const warnings = vi.spyOn(console, "warn");
   onTestFinished(() => warnings.mockRestore());
   const inputRef = vi.fn();
-  const initial = [options[0], { value: "middle", label: "Middle" }, options[1]];
-  const [choices, setChoices] = createSignal(initial);
+  const [choices, setChoices] = createSignal([
+    options[0],
+    { value: "middle", label: "Middle" },
+    options[1],
+  ]);
   const [value, setValue] = createSignal("first");
   const view = render(() => (
     <SettingsSegmented
@@ -100,9 +110,11 @@ it("registers keyed radio refs without untracked reads and retains focused input
   expect(inputRef).toHaveBeenCalledTimes(3);
   expect(inputRef).toHaveBeenCalledWith("last", last);
   last.focus();
-  setChoices(
-    initial.map((option) => Object.assign({}, option, { label: `${option.label} updated` })),
-  );
+  setChoices([
+    { value: "first", label: "First updated" },
+    { value: "middle", label: "Middle updated" },
+    { value: "last", label: "Last updated" },
+  ]);
   flush();
   last.click();
   flush();
