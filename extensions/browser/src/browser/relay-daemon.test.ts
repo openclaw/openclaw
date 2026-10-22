@@ -1,12 +1,14 @@
 import fs from "node:fs/promises";
 import net from "node:net";
 import path from "node:path";
-import { afterEach, expect, it, vi } from "vitest";
+import { promisify } from "node:util";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { relayTestKey } from "../../chrome-extension/relay-key.test-support.js";
 import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { runExtensionRelayDaemon } from "./relay-daemon.js";
 
 const TOKEN = relayTestKey(1);
+let secretPath: string;
 
 const tempStateDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(async () => {
@@ -14,23 +16,19 @@ afterEach(async () => {
   vi.unstubAllEnvs();
 });
 
-async function stageRelaySecret(token: string | null = TOKEN): Promise<void> {
+beforeEach(async () => {
   const stateDir = tempStateDirs.make("openclaw-relay-daemon-");
   const credentialsDir = path.join(stateDir, "credentials");
   await fs.mkdir(credentialsDir, { recursive: true, mode: 0o700 });
-  if (token !== null) {
-    await fs.writeFile(path.join(credentialsDir, "browser-extension-relay.secret"), `${token}\n`, {
-      mode: 0o600,
-    });
-  }
+  secretPath = path.join(credentialsDir, "browser-extension-relay.secret");
+  await fs.writeFile(secretPath, `${TOKEN}\n`, { mode: 0o600 });
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-}
+});
 
 it.each([
   [undefined, 401],
   [true, 503],
 ] as const)("legacy auth opt-in %s returns %s", async (allowLegacyAuth, expected) => {
-  await stageRelaySecret();
   const run = await runExtensionRelayDaemon({ port: 0, allowLegacyAuth });
   try {
     const response = await fetch(`http://127.0.0.1:${run.port}/json/version`, {
@@ -44,14 +42,13 @@ it.each([
 });
 
 it("refuses to start without a relay credential", async () => {
-  await stageRelaySecret(null);
+  await fs.unlink(secretPath);
   const run = await runExtensionRelayDaemon({ port: 0 });
   expect(run.port).toBeNull();
   await expect(run.done).resolves.toBe("no-credential");
 });
 
 it("exits quietly when the relay port is already served", async () => {
-  await stageRelaySecret();
   const server = net.createServer();
   await new Promise<void>((resolve) => {
     server.listen(0, "127.0.0.1", () => resolve());
@@ -63,14 +60,11 @@ it("exits quietly when the relay port is already served", async () => {
     expect(run.port).toBeNull();
     await expect(run.done).resolves.toBe("port-in-use");
   } finally {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
+    await promisify(server.close.bind(server))();
   }
 });
 
 it("serves the relay until the idle grace elapses with no peers", async () => {
-  await stageRelaySecret();
   vi.useFakeTimers({ toFake: ["Date", "setInterval", "clearInterval"] });
   const run = await runExtensionRelayDaemon({ port: 0 });
   expect(run.port).toBeGreaterThan(0);

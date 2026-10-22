@@ -1,8 +1,8 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 import { describeBrowserScreenshot, neutralizeMediaDirectives } from "./vision.js";
 
 const prompt =
@@ -31,6 +31,7 @@ beforeEach(() => {
   save.mockReset().mockResolvedValue({ path: "/tmp/resized.jpg" });
 });
 const filePath = "/tmp/screenshot.png";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function screenshot(overrides: Partial<Parameters<typeof describeBrowserScreenshot>[0]> = {}) {
   return describeBrowserScreenshot({ cfg: {}, filePath, ...overrides });
 }
@@ -86,18 +87,13 @@ describe("describeBrowserScreenshot", () => {
       buffer: Buffer.from("small"),
       contentType: "image/jpeg" as const,
     });
-    const dir = await mkdtemp(path.join(os.tmpdir(), "browser-vision-"));
-    const image = path.join(dir, "screenshot.png");
+    const image = path.join(tempDirs.make("browser-vision-"), "screenshot.png");
     await writeFile(image, Buffer.from("image"));
-    try {
-      await screenshot({
-        cfg: { browser: {} },
-        filePath: image,
-        imageSanitization: { maxDimensionPx: 800 },
-      });
-    } finally {
-      await rm(dir, { recursive: true, force: true });
-    }
+    await screenshot({
+      cfg: { browser: {} },
+      filePath: image,
+      imageSanitization: { maxDimensionPx: 800 },
+    });
     expect(normalize).toHaveBeenCalledWith(Buffer.from("image"), { maxSide: 800 });
     expect(save).toHaveBeenCalledWith(Buffer.from("small"), "image/jpeg", "browser");
     expect(expectDefined(describeImage.mock.calls[0]?.[0], "browser vision request").filePath).toBe(

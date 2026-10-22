@@ -1,4 +1,5 @@
 import { createServer } from "node:http";
+import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { getBridgeAuthForPort } from "./bridge-auth-registry.js";
 import { startBrowserBridgeServer, stopBrowserBridgeServer } from "./bridge-server.js";
@@ -8,24 +9,23 @@ import { isBrowserRuntimeRunning } from "./server-context.lifecycle.js";
 const tokenAuth = { authToken: "secret-token" };
 const tokenHeaders = { Authorization: "Bearer secret-token" };
 
-function buildResolvedConfig() {
-  return {
-    ...resolveBrowserConfig({
-      evaluateEnabled: false,
-      attachOnly: true,
-      defaultProfile: "openclaw",
-      profiles: { openclaw: { cdpPort: 1 } },
-    }),
-    controlPort: 0,
-  };
-}
-
 describe("startBrowserBridgeServer auth", () => {
   const servers: Awaited<ReturnType<typeof startBrowserBridgeServer>>[] = [];
   async function startBridge(
     options: Omit<Parameters<typeof startBrowserBridgeServer>[0], "resolved"> = {},
   ) {
-    const bridge = await startBrowserBridgeServer({ resolved: buildResolvedConfig(), ...options });
+    const bridge = await startBrowserBridgeServer({
+      resolved: {
+        ...resolveBrowserConfig({
+          evaluateEnabled: false,
+          attachOnly: true,
+          defaultProfile: "openclaw",
+          profiles: { openclaw: { cdpPort: 1 } },
+        }),
+        controlPort: 0,
+      },
+      ...options,
+    });
     servers.push(bridge);
     return bridge;
   }
@@ -69,17 +69,11 @@ describe("startBrowserBridgeServer auth", () => {
     }
 
     try {
-      await expect(
-        startBridge({
-          ...tokenAuth,
-          host: "127.0.0.1",
-          port: address.port,
-        }),
-      ).rejects.toMatchObject({ code: "EADDRINUSE" });
-    } finally {
-      await new Promise<void>((resolve) => {
-        blocker.close(() => resolve());
+      await expect(startBridge({ ...tokenAuth, port: address.port })).rejects.toMatchObject({
+        code: "EADDRINUSE",
       });
+    } finally {
+      await promisify(blocker.close.bind(blocker))();
     }
   });
 
