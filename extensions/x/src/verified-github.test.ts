@@ -9,13 +9,14 @@ import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-s
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveXAccount } from "./accounts.js";
 import { openXAllowlist } from "./allowlist.js";
-import { createXApiClient } from "./api.js";
 import { xPlugin } from "./channel.js";
 import { getXApi } from "./client.js";
 import { createXGitHubReader } from "./github.js";
 import { formatXSenderLine } from "./guest-policy.js";
 import { resolveXIngress } from "./ingress.js";
 import { XBudgetExceededError } from "./spend.js";
+import { createXTestApi as createXApiClient } from "./test-support/api-client.js";
+import { setXTestFetch } from "./test-support/fetch.js";
 import { config, fixture, post } from "./test-support/monitor-fixture.js";
 import { createXTestSpend } from "./test-support/spend.js";
 import { createXGitHubService } from "./verified-github-service.js";
@@ -25,14 +26,6 @@ const network = vi.hoisted(() => ({
   github: vi.fn<(url: string, init?: RequestInit) => Promise<Response>>(),
 }));
 
-vi.mock("./github.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./github.js")>();
-  return {
-    ...actual,
-    createXGitHubReader: (options: Parameters<typeof actual.createXGitHubReader>[0]) =>
-      actual.createXGitHubReader({ ...options, fetch: options.fetch ?? network.github }),
-  };
-});
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
   getXApi: vi.fn(),
@@ -43,6 +36,7 @@ beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(new Date("2026-10-09T12:00:00Z"));
   network.github.mockReset();
+  setXTestFetch("api.github.com", network.github);
   vi.mocked(getXApi).mockReset();
 });
 afterEach(() => {

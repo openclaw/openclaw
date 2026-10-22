@@ -9,6 +9,7 @@ import {
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { LegacyPluginSdkResourceHost } from "../plugins/legacy-sdk-resource-host.js";
+import { writeFixtureJson } from "../plugins/loader-fixture-builders.test-support.js";
 import { acquirePluginRegistryForInspection, loadPluginRegistryHandle } from "../plugins/loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
@@ -117,18 +118,15 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   });
 } };`,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({
-      id,
-      contracts: { speechProviders: [id] },
-      configSchema: {
-        type: "object",
-        additionalProperties: false,
-        properties: { voiceId: { type: "string" } },
-      },
-    }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    contracts: { speechProviders: [id] },
+    configSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: { voiceId: { type: "string" } },
+    },
+  });
   const cfg: OpenClawConfig = {
     plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
     tts: { provider: id, providers: { [id]: {} } },
@@ -262,9 +260,9 @@ describe.each([
             );
             expect(outcome.value?.providerVoice).toBe("native-voice");
           }
-          const requests = fixture.state.connections.flatMap((entry) => entry.requests);
-          expect(requests.length).toBe(1);
-          expect(requests[0]?.timeoutMs).toBe(12345);
+          expect(fixture.state.connections.flatMap((entry) => entry.requests)).toMatchObject([
+            { timeoutMs: 12345 },
+          ]);
           expectDisposed([fixture]);
         } finally {
           fixture.resume();
@@ -379,25 +377,18 @@ describe.each([
       fallback.resume();
       await withFixtures([primary, fallback], async () => {
         const base = combineConfig(primary, [fallback]);
-        const cfg: OpenClawConfig = {
+        const tts = { ...base.tts, providers: { [primary.id]: {}, [fallback.id]: {} } };
+        const voiceConfig = (voiceId: string): OpenClawConfig => ({
           ...base,
-          plugins: {
-            ...base.plugins,
-            entries: { [fallback.id]: { config: { voiceId: "before-refresh" } } },
-          },
-          tts: { ...base.tts, providers: { [primary.id]: {}, [fallback.id]: {} } },
-        };
+          plugins: { ...base.plugins, entries: { [fallback.id]: { config: { voiceId } } } },
+          tts,
+        });
+        const cfg = voiceConfig("before-refresh");
         setRuntimeConfigSnapshot(runtimeOwned ? cfg : { ...cfg });
         const pending = settle(primary.run({ cfg, timeoutMs: undefined }));
         try {
           await waitForHook(primary.state.synthesizeStarted.promise, pending);
-          const nextConfig: OpenClawConfig = {
-            ...cfg,
-            plugins: {
-              ...cfg.plugins,
-              entries: { [fallback.id]: { config: { voiceId: "after-refresh" } } },
-            },
-          };
+          const nextConfig = voiceConfig("after-refresh");
           setRuntimeConfigSnapshot(nextConfig);
           primary.state.synthesizeResume.resolve();
           const result = await pending;
@@ -431,9 +422,7 @@ describe.each([
       });
       try {
         await waitForHook(fixture.state.tailStarted.promise, pending);
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
+        await nextTurn();
         expect(settled).toBe(false);
         expect(fixture.state.connections.every((entry) => entry.database.isOpen)).toBe(true);
         fixture.state.tailResume.resolve();
@@ -442,12 +431,8 @@ describe.each([
         expect(result.value?.success).toBe(true);
         expectDisposed([fixture]);
         for (const entry of fixture.state.connections) {
-          const reopened = new DatabaseSync(entry.databasePath, { readOnly: true });
-          try {
-            expect(reopened.prepare("SELECT value FROM fixture").get()?.value).toBe(42);
-          } finally {
-            reopened.close();
-          }
+          using reopened = new DatabaseSync(entry.databasePath, { readOnly: true });
+          expect(reopened.prepare("SELECT value FROM fixture").get()?.value).toBe(42);
         }
       } finally {
         fixture.resume();
@@ -529,10 +514,11 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
   });
 } };`,
   });
-  fs.writeFileSync(
-    path.join(dir, "openclaw.plugin.json"),
-    JSON.stringify({ id, contracts: { speechProviders: [id] }, configSchema: { type: "object" } }),
-  );
+  writeFixtureJson(dir, "openclaw.plugin.json", {
+    id,
+    contracts: { speechProviders: [id] },
+    configSchema: { type: "object" },
+  });
   const cfg: OpenClawConfig = {
     plugins: { allow: [id], load: { paths: [plugin.file] }, slots: { memory: "none" } },
     tts: { provider: id, providers: { [id]: {} }, modelOverrides: { allowProvider: true } },

@@ -190,6 +190,38 @@ export async function executePluginCommandDispatch(
   });
 }
 
+/** Core-only cron adapter: no ambient completion, agent fallback or chat-error conversion. */
+export async function executeScheduledPluginCommandDispatch(
+  dispatch: PluginCommandDispatch,
+  context: PluginCommandDispatchContext & { abortSignal: AbortSignal },
+): Promise<PluginCommandResult> {
+  context.abortSignal.throwIfAborted();
+  context.assertOwnerCurrent?.();
+  const selected = dispatchSelections.get(dispatch);
+  if (
+    !selected ||
+    selected.selection.availability !== "loaded" ||
+    isPluginRegistryRetired(selected.registry) ||
+    selected.channel !== normalizeOptionalLowercaseString(context.channel) ||
+    selected.selection.command.requireAuth !== true ||
+    !selected.selection.command.runtimeCapabilities?.includes("subagents")
+  ) {
+    throw new Error("Scheduled command selection is no longer eligible.");
+  }
+  const { executeRegisteredPluginCommand } = await import("./plugin-command-execution.js");
+  context.abortSignal.throwIfAborted();
+  context.assertOwnerCurrent?.();
+  return await executeRegisteredPluginCommand(
+    selected.registry,
+    {
+      ...context,
+      command: selected.selection.command,
+      args: selected.selection.args,
+    },
+    { abortSignal: context.abortSignal },
+  );
+}
+
 /** Creates one command runtime bound permanently to the current scoped registry generation. */
 export function createPluginCommandRuntime(): PluginCommandRuntime {
   const registry = getPluginRegistryForContext();

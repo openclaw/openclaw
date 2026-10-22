@@ -25,6 +25,7 @@ export const inertAgentFileControls = {
 export function createAgentViewTestProps(
   overrides: Partial<AgentsViewProps> = {},
 ): AgentsViewProps {
+  const retired = Promise.withResolvers<void>().promise;
   const data: ReturnType<AgentsViewProps["readData"]> = {
     agentsList: {
       defaultId: "alpha",
@@ -38,15 +39,10 @@ export function createAgentViewTestProps(
     agentsSelectedId: "beta",
     agentsPanel: "overview",
     requestGeneration: 0,
-    toolsCatalogLoading: false,
-    toolsCatalogError: null,
-    toolsCatalogResult: null,
-    toolsEffectiveLoading: false,
-    toolsEffectiveError: null,
-    toolsEffectiveResult: null,
     chatModelCatalogRead: null,
     agentFilesLoading: false,
-    agentFilesError: null,
+    agentFileRead: null,
+    agentFileOutcome: null,
     agentFilesList: null,
     agentFileActive: null,
     agentFileEditors: {},
@@ -62,9 +58,10 @@ export function createAgentViewTestProps(
   };
   return {
     readData: () => data,
+    presentationRetired: () => retired,
     readChannels: () => ({
       channelsSnapshot: null,
-      channelsLoading: false,
+      channelsRead: null,
       channelsError: null,
       channelsLastSuccess: null,
     }),
@@ -101,7 +98,6 @@ export function createAgentViewTestProps(
       onRunNow: () => undefined,
     },
     agentFiles: {
-      agentFilesError: null,
       listRead: null,
       ...inertAgentFileControls,
     },
@@ -142,6 +138,12 @@ export function createAgentViewTestProps(
       onDisableAll: () => false,
     },
     tools: {
+      readCatalog: () => null,
+      readEffective: () => null,
+      effectivePreview: null,
+      effectiveRequest: null,
+      catalogRequest: null,
+      onRetryCatalog: () => undefined,
       onOpenGitHubConnections: () => undefined,
       githubIdentity: githubIdentityViewFixture(),
       runtimeSessionKey: "main",

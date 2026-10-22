@@ -177,6 +177,46 @@ function addLogoutTarget(
   existing.profileIds = [...new Set([...existing.profileIds, ...profileIds])];
 }
 
+export function collectProviderUsage(
+  summary: UsageSummary | null,
+): Map<string, { displayName: string; snapshot: ProviderUsageSnapshot }> {
+  const result = new Map<string, { displayName: string; snapshot: ProviderUsageSnapshot }>();
+  for (const snapshot of summary?.providers ?? []) {
+    const id = canonicalModelAuthProviderId(snapshot.provider);
+    if (id) {
+      result.set(id, {
+        displayName: result.get(id)?.displayName ?? snapshot.displayName,
+        snapshot,
+      });
+    }
+  }
+  return result;
+}
+
+export function collectProviderLocalCost(
+  entries: SessionModelUsage[] | null,
+): Map<string, ModelProviderLocalCost> {
+  const result = new Map<string, ModelProviderLocalCost>();
+  for (const entry of entries ?? []) {
+    const id = canonicalModelAuthProviderId(entry.provider ?? "");
+    if (!id) {
+      continue;
+    }
+    let cost = result.get(id);
+    if (!cost) {
+      cost = { totalCost: 0, totalTokens: 0, messageCount: 0 };
+      result.set(id, cost);
+    }
+    cost.totalCost += entry.totals.totalCost;
+    cost.totalTokens += entry.totals.totalTokens;
+    cost.messageCount += entry.count;
+    if (entry.totals.usageReport?.state === "unavailable") {
+      cost.usageReport = entry.totals.usageReport;
+    }
+  }
+  return result;
+}
+
 /**
  * Builds the provider card list. A provider qualifies as "configured" when it
  * has model-provider auth, catalog models (the default models.list view only contains
@@ -347,28 +387,13 @@ export function buildModelProviderCards(input: ModelProviderCardsInput): ModelPr
     }
   }
 
-  for (const snapshot of input.providerUsage?.providers ?? []) {
-    const draft = providerDraft(snapshot.provider, snapshot.displayName);
-    if (!draft) {
-      continue;
-    }
-    // usage.status snapshots carry cost history and errors that the
-    // auth-status embed drops, so they win when both are present.
-    draft.card.usage = snapshot;
+  for (const [id, { displayName, snapshot }] of collectProviderUsage(input.providerUsage)) {
+    // Live usage includes cost history and errors omitted by auth-status embeds.
+    ensureDraft(drafts, id, displayName || providerDisplayLabel(id)).card.usage = snapshot;
   }
 
-  for (const entry of input.costByProvider ?? []) {
-    const draft = providerDraft(entry.provider ?? "");
-    if (!draft) {
-      continue;
-    }
-    const cost = (draft.card.localCost ??= { totalCost: 0, totalTokens: 0, messageCount: 0 });
-    cost.totalCost += entry.totals.totalCost;
-    cost.totalTokens += entry.totals.totalTokens;
-    cost.messageCount += entry.count;
-    if (entry.totals.usageReport?.state === "unavailable") {
-      cost.usageReport = entry.totals.usageReport;
-    }
+  for (const [id, localCost] of collectProviderLocalCost(input.costByProvider)) {
+    ensureDraft(drafts, id, providerDisplayLabel(id)).card.localCost = localCost;
   }
 
   return drafts

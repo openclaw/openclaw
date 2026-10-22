@@ -19,8 +19,8 @@ function renderObserver(overrides: Partial<Parameters<typeof SidebarPreferencesS
       sessionObserverModels: [],
       sessionObserverModelsUnavailable: false,
       sessionObserverDisabled: false,
-      setSessionObserverEnabled: () => undefined,
-      setSessionObserverUtilityModel: () => undefined,
+      setSessionObserverEnabled: async () => true,
+      setSessionObserverUtilityModel: async () => true,
       ...overrides,
     }),
   ).container;

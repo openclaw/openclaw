@@ -4,13 +4,16 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { dailyEntry } from "./usage-chart.test-support.ts";
 import {
   cacheSnapshot,
+  changeUsageControl,
   cleanupUsagePageTest,
   focusDocument,
   loadUsagePage,
+  queryUsagePage,
   settleUsageTimers,
   textOf,
   type TestUsagePage,
 } from "./usage-page.test-support.ts";
+import { texts } from "./view-render.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
 beforeEach(() => {
@@ -75,16 +78,14 @@ it.each<["fresh" | "partial", boolean, string[]]>([
       dailyEntry("2026-05-02", 100),
     ];
     const { page } = await loadCalendar(cache, daily);
-    const startDate = page.querySelector<HTMLInputElement>('input[aria-label="Start date"]')!;
-    startDate.value = "2026-05-01";
-    startDate.dispatchEvent(new Event("change", { bubbles: true }));
+    changeUsageControl(
+      page.querySelector<HTMLInputElement>('input[aria-label="Start date"]')!,
+      "2026-05-01",
+    );
     await settleUsageTimers(page, 400);
 
     if (filtered) {
-      const query = page.querySelector<HTMLInputElement>(".usage-query-input")!;
-      query.value = 'label:"Usage on"';
-      query.dispatchEvent(new Event("input", { bubbles: true }));
-      query.dispatchEvent(new KeyboardEvent("keydown", { bubbles: true, key: "Enter" }));
+      await queryUsagePage(page, 'label:"Usage on"');
       await settleUsageTimers(page);
     }
 
@@ -108,9 +109,10 @@ it.each<["fresh" | "partial", boolean, string[]]>([
     ).toEqual(selectedLabels);
     expect(textOf(page, ".filter-chip-label")).toBe(`Days: ${selectedLabels.length} days`);
     expect(textOf(page, ".usage-metric-badge strong")).toBe("1.0K");
-    expect(
-      [...page.querySelectorAll(".session-bar-title")].map((row) => row.textContent).toSorted(),
-    ).toEqual(["Usage on 2026-05-02", "Usage on 2026-05-04"]);
+    expect(texts(page.element, ".session-bar-title", false).toSorted()).toEqual([
+      "Usage on 2026-05-02",
+      "Usage on 2026-05-04",
+    ]);
   },
 );
 
@@ -125,9 +127,7 @@ it("keeps the same calendar interactive while day totals are pending", async () 
   const last = bars().at(-1)!;
   first.click();
   await page.updateComplete;
-  expect(
-    [...page.querySelectorAll(".usage-metric-badge strong")].map((node) => node.textContent),
-  ).toEqual(["—", "—", "—"]);
+  expect(texts(page.element, ".usage-metric-badge strong", false)).toEqual(["—", "—", "—"]);
   expect(bars()).toContain(last);
   shiftClick(last);
   await page.updateComplete;

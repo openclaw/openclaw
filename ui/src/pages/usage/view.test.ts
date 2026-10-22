@@ -5,13 +5,16 @@ import * as usageQuery from "../../../../src/shared/usage-query.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createRecordedCostUsage } from "./test-helpers/recorded-cost.test-support.ts";
-import type { UsageProps, UsageTotals } from "./types.ts";
+import type { UsageProps } from "./types.ts";
+import { texts } from "./view-render.test-support.ts";
 import {
   buildAggregatesFromSessions,
   projectUsageData,
   createUsageProps,
   createUsageOverview,
   usageSession,
+  usageFixture,
+  usageTotals,
 } from "./view.test-support.ts";
 import { renderUsage } from "./view.tsx";
 
@@ -25,10 +28,7 @@ function mountFixture(
   data: Partial<UsageProps["data"]>,
   filters: Partial<UsageProps["filters"]> = {},
 ) {
-  const base = createUsageProps();
-  return mountUsage(
-    createUsageProps({ data: { ...base.data, ...data }, filters: { ...base.filters, ...filters } }),
-  );
+  return mountUsage(usageFixture(data, filters));
 }
 
 function mountReactiveUsage(props: UsageProps) {
@@ -48,21 +48,6 @@ function mountReactiveUsage(props: UsageProps) {
 
 function textAt(container: ParentNode, selector: string) {
   return container.querySelector(selector)?.textContent?.trim();
-}
-
-function usageTotals(
-  input: number,
-  cost: number,
-  overrides: Partial<UsageTotals> = {},
-): UsageTotals {
-  return {
-    ...createEmptyCostUsageTotals(),
-    input,
-    totalTokens: input,
-    totalCost: cost,
-    inputCost: cost,
-    ...overrides,
-  };
 }
 
 function insightCard(container: ParentNode, title: string): Element | undefined {
@@ -131,21 +116,19 @@ describe("renderUsage", () => {
   it.each(["session", "day"] as const)(
     "restores the range warning after clearing a known-zero %s filter",
     (filter) => {
-      const base = createUsageProps();
       const fixture = createRecordedCostUsage();
       const zeroSession = fixture.sessions[0]!;
       const selected: Partial<UsageProps["filters"]> =
         filter === "session"
           ? { selectedSessions: [zeroSession.key] }
           : { selectedDays: zeroSession.usage!.activityDates! };
-      const props = createUsageProps({
-        data: {
-          ...base.data,
+      const props = usageFixture(
+        {
           ...fixture,
           aggregates: buildAggregatesFromSessions(fixture.sessions),
         },
-        filters: { ...base.filters, startDate: fixture.costDaily[0]!.date },
-      });
+        { startDate: fixture.costDaily[0]!.date },
+      );
       const clearedFilters = { ...props.filters };
       const container = document.createElement("div");
       const [currentFilters, setFilters] = createSignal(props.filters);
@@ -274,17 +257,15 @@ describe("renderUsage", () => {
   });
 
   it("updates the existing breakdown when mode and totals change", () => {
-    const base = createUsageProps();
     const initial = usageTotals(100, 1, {
       output: 20,
       totalTokens: 120,
       inputCost: 0.8,
       outputCost: 0.2,
     });
-    const { container, setData, setDisplay } = mountReactiveUsage({
-      ...base,
-      data: { ...base.data, totals: initial },
-    });
+    const { container, setData, setDisplay } = mountReactiveUsage(
+      usageFixture({ totals: initial }),
+    );
     const breakdown = container.querySelector(".cost-breakdown")!;
     expect(textAt(breakdown, ".cost-breakdown-total")).toContain("120");
     setDisplay((current) => ({ ...current, chartMode: "cost" }));
@@ -410,12 +391,12 @@ describe("renderUsage", () => {
     for (const label of ["OpenRouter", "Production", "75% left", "$64.50", "$5.00 / $20.00"]) {
       expect(card?.textContent).toContain(label);
     }
-    expect(
-      Array.from(
-        container.querySelectorAll(".provider-usage-billing-row strong"),
-        (value) => value.textContent,
-      ),
-    ).toEqual(["$64.50", "$5.00 / $20.00", "¥13 / ¥20", "1.5  Credits  / 3  Credits "]);
+    expect(texts(container, ".provider-usage-billing-row strong", false)).toEqual([
+      "$64.50",
+      "$5.00 / $20.00",
+      "¥13 / ¥20",
+      "1.5  Credits  / 3  Credits ",
+    ]);
   });
 
   it("keeps complete insights and history beyond the visible page", () => {
@@ -427,14 +408,7 @@ describe("renderUsage", () => {
       {
         totals,
         costDaily: [
-          {
-            ...totals,
-            date: "2026-05-01",
-            input: 990,
-            totalTokens: 990,
-            totalCost: 9.9,
-            inputCost: 9.9,
-          },
+          { ...usageTotals(990, 9.9, { missingCostEntries: 1 }), date: "2026-05-01" },
           visibleDay,
         ],
         aggregates: {
@@ -477,9 +451,7 @@ describe("renderUsage", () => {
     expect(container.textContent).toContain(
       "Cost data is missing for some or all sessions in this range.",
     );
-    expect(
-      [...container.querySelectorAll(".usage-metric-badge strong")].map((el) => el.textContent),
-    ).toEqual(["1.0K", "$10.00", "1"]);
+    expect(texts(container, ".usage-metric-badge strong", false)).toEqual(["1.0K", "$10.00", "1"]);
     const firstDay = container.querySelector(".daily-bar-wrapper");
     expect(firstDay?.getAttribute("aria-label")).toContain("May 1, 2026");
     expect(firstDay?.getAttribute("aria-label")).toContain("990 tokens, $9.90");

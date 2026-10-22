@@ -2,7 +2,7 @@ import {
   readClawHubRiskAcknowledgementRequiredError,
   readClawReviewRequiredError,
 } from "@openclaw/gateway-protocol";
-import { createMemo, createSignal, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
@@ -539,7 +539,7 @@ export function ClawsCatalogDialog(props: ClawsDialogProps) {
     invalidateRequests: (change) => model.invalidateRequests(change),
     ensureInitialData: () => model.ensureInitialData(),
   });
-  onCleanup(() => model.dispose());
+  onSettled(() => () => model.dispose());
   const detail = createMemo(() => detailRequest() ?? null);
   const view = createMemo(() => {
     revision();

@@ -118,6 +118,7 @@ function validateCommandName(
 const commandCapabilityRules = {
   subagents: { requireAuth: true, manifestContract: true },
   models: { requireAuth: false, manifestContract: false },
+  scheduledTurns: { requireAuth: true, manifestContract: true },
 } satisfies Record<
   PluginCommandRuntimeCapability,
   {
@@ -167,6 +168,12 @@ function validatePluginCommandDefinition(
       command.requireAuth !== true
     ) {
       return "Command runtime capabilities require requireAuth: true";
+    }
+    if (
+      command.runtimeCapabilities.includes("scheduledTurns") &&
+      !command.runtimeCapabilities.includes("subagents")
+    ) {
+      return "Scheduled command turns require the subagents runtime capability";
     }
   }
   if (command.requiredScopes !== undefined) {
@@ -332,13 +339,26 @@ export function registerPluginCommand(
   );
 }
 
+/**
+ * Read caller-owned runtime capabilities once into a plain array, so validation, manifest
+ * contract checks and the stored registration all observe the same values.
+ */
+export function snapshotPluginCommandRuntimeCapabilities<
+  T extends Pick<OpenClawPluginCommandDefinition, "runtimeCapabilities">,
+>(command: T): T {
+  return Array.isArray(command.runtimeCapabilities)
+    ? { ...command, runtimeCapabilities: Array.from(command.runtimeCapabilities) }
+    : command;
+}
+
 export function registerPluginCommandInRegistry(
   registry: PluginRegistry,
   pluginId: string,
-  command: OpenClawPluginCommandDefinition,
+  callerCommand: OpenClawPluginCommandDefinition,
   opts?: Parameters<typeof registerPluginCommand>[2],
   commandRuntimeCapabilities?: readonly string[],
 ): CommandRegistrationResult {
+  const command = snapshotPluginCommandRuntimeCapabilities(callerCommand);
   if (getPluginCommandExecutionCount(registry) > 0) {
     return { ok: false, error: "Cannot register commands while processing is in progress" };
   }

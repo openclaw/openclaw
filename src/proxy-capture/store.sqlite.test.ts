@@ -32,15 +32,12 @@ afterEach(() => {
   cleanupTempDirs(cleanupDirs);
 });
 
-function makeStore(
-  kind: "shared" | "path" = "shared",
-  env = makeStateEnv("openclaw-proxy-capture-"),
-) {
+function makeStore(kind: "shared" | "path" = "shared", env = makeStateEnv()) {
   return makeLease(kind, env).store;
 }
 
-function makeStateEnv(prefix = "openclaw-proxy-capture-"): NodeJS.ProcessEnv {
-  return { OPENCLAW_STATE_DIR: makeTempDir(cleanupDirs, prefix) };
+function makeStateEnv(): NodeJS.ProcessEnv {
+  return { OPENCLAW_STATE_DIR: makeTempDir(cleanupDirs, "proxy-capture-") };
 }
 
 function storagePaths(env: NodeJS.ProcessEnv) {
@@ -185,7 +182,7 @@ describe("DebugProxyCaptureStore", () => {
   );
 
   it("keeps the cached store open until the last lease releases", () => {
-    const options = { env: makeStateEnv("openclaw-proxy-capture-lease-") };
+    const options = { env: makeStateEnv() };
 
     const first = acquireDebugProxyCaptureStore(options);
     const second = acquireDebugProxyCaptureStore(options);
@@ -207,7 +204,7 @@ describe("DebugProxyCaptureStore", () => {
   it.each(["quiet", "active"] as const)(
     "retains %s capture through idle expiry and releases its native handle after close",
     (activity) => {
-      const options = { env: makeStateEnv("openclaw-proxy-capture-idle-") };
+      const options = { env: makeStateEnv() };
       vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       const store = getDebugProxyCaptureStore(options);
       const intervals =
@@ -241,7 +238,7 @@ describe("DebugProxyCaptureStore", () => {
   );
 
   it("rebinds a cached shared store after the state database closes underneath it", () => {
-    const options = { env: makeStateEnv("openclaw-proxy-capture-rebind-") };
+    const options = { env: makeStateEnv() };
     const stale = getDebugProxyCaptureStore(options);
     upsertSession(stale, { id: "exit-session", sourceProcess: "cli" });
 
@@ -254,7 +251,7 @@ describe("DebugProxyCaptureStore", () => {
   });
 
   it("fences a shared store that was opened before external ownership was claimed", () => {
-    const env = makeStateEnv("openclaw-proxy-capture-preclaim-");
+    const env = makeStateEnv();
     const store = new DebugProxyCaptureStore({ env });
     env.OPENCLAW_SUPERVISOR_MODE = "external";
     claimOpenClawStateOwnership("gateway-supervisor", { env });
@@ -266,12 +263,8 @@ describe("DebugProxyCaptureStore", () => {
   });
 
   it("tracks and closes cached stores independently across paths", () => {
-    const first = acquireDebugProxyCaptureStore({
-      env: makeStateEnv("openclaw-proxy-capture-first-"),
-    });
-    const second = acquireDebugProxyCaptureStore({
-      env: makeStateEnv("openclaw-proxy-capture-second-"),
-    });
+    const first = acquireDebugProxyCaptureStore({ env: makeStateEnv() });
+    const second = acquireDebugProxyCaptureStore({ env: makeStateEnv() });
 
     first.release();
     expect(first.store.isClosed).toBe(true);
@@ -450,7 +443,7 @@ describe("DebugProxyCaptureStore", () => {
   it.runIf(process.platform !== "win32")(
     "stores capture blobs in the private shared state database",
     () => {
-      const env = makeStateEnv("openclaw-proxy-capture-permissions-");
+      const env = makeStateEnv();
       const root = env.OPENCLAW_STATE_DIR!;
       const store = makeStore("shared", env);
       const blob = store.persistPayload(Buffer.from("authorization: Bearer secret"));

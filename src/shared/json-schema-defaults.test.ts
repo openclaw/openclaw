@@ -20,14 +20,12 @@ describe("JSON Schema helpers", () => {
   });
 
   it("preserves pattern property key __proto__", () => {
+    const properties = () => Object.fromEntries([["__proto__", { type: "string" }]]);
     const normalized = normalizeJsonSchemaForTypeBox({
       type: "object",
-      patternProperties: Object.fromEntries([["__proto__", { type: "string" }]]),
+      patternProperties: properties(),
     });
-
-    expect(normalized).toMatchObject({
-      patternProperties: Object.fromEntries([["__proto__", { type: "string" }]]),
-    });
+    expect(normalized).toMatchObject({ patternProperties: properties() });
   });
 
   it("resolves local refs to array entries beyond config path index limits", () => {

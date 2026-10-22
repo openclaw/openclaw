@@ -106,7 +106,7 @@ it("keeps a newly quarantined pending deletion out of update reclamation", async
       const bytes = fs.readFileSync(agentPath);
       const inode = fs.statSync(agentPath).ino;
       mocks.config.mockReturnValue(cfg);
-      mocks.packageRoot.mockReturnValue(undefined);
+      mocks.packageRoot.mockReturnValue(process.cwd());
       mocks.runContributions.mockReset();
       const runtime = createDoctorRuntime();
 

@@ -29,7 +29,12 @@ import {
   type ModelProviderRowMessage,
 } from "./config-mutation.ts";
 import { ModelProviderCoreLoader, type ModelProviderRefreshReason } from "./core-load.ts";
-import { buildModelProviderPresentation, type DefaultsDraft } from "./data.ts";
+import {
+  buildModelProviderPresentation,
+  collectProviderLocalCost,
+  collectProviderUsage,
+  type DefaultsDraft,
+} from "./data.ts";
 import { createModelProviderDiscovery } from "./discovery-controller.tsx";
 import { createInstalledAgents } from "./installed-agents.tsx";
 import { EMPTY_MODEL_PROVIDERS_DATA } from "./load.ts";
@@ -40,6 +45,7 @@ import { createModelProviderProfilePresentation } from "./profile-actions-presen
 import { updateRecordEntry } from "./record-state.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
 import { ModelProviderSupplementalLoader } from "./supplemental-load.ts";
+import { projectSupplementalRead } from "./supplemental-read.ts";
 
 export function createModelProviders(
   context: ApplicationContext,
@@ -114,6 +120,20 @@ export function createModelProviders(
     setDataClient: (client) => (dataClient = client),
     refreshPolicy,
   });
+  const metrics = {
+    usage: projectSupplementalRead(
+      projection.read,
+      () => supplemental.usageRead(),
+      (data) => data?.providerUsage ?? null,
+      (result) => collectProviderUsage(result?.ok ? result.value : null),
+    ),
+    cost: projectSupplementalRead(
+      projection.read,
+      () => supplemental.costRead(),
+      (data) => data?.costByProvider ?? null,
+      collectProviderLocalCost,
+    ),
+  };
   const gateway = new GatewayPageBinding(notify, {
     getGateway: () => context.gateway,
     onIdentityChange: () => resetConnectionState(),
@@ -148,6 +168,7 @@ export function createModelProviders(
         readAccess = canRead;
       }
       installedAgents.synchronize();
+      login.synchronizePresentation();
       if (change.becameConnected && !change.initial && routeDataObserved && !loaderPending) {
         void refresh("replacement");
       }
@@ -354,6 +375,7 @@ export function createModelProviders(
       discovery.synchronize();
       syncSelectedAgent();
       installedAgents.synchronize();
+      login.synchronizePresentation();
     };
     const cleanups = [
       context.router.subscribe((next) => {
@@ -598,7 +620,9 @@ export function createModelProviders(
       scopeError: rosterError ?? (noSelectableAgents ? t("agents.noAgents") : null),
       error: rosterError ?? (noSelectableAgents ? t("agents.noAgents") : data.error),
       providerUsageFailed: data.providerUsage?.ok === false,
+      // Admission also coordinates usage retries; do not hold the shared row on either read.
       supplementalLoading: loaderPending || supplemental.loading,
+      metrics,
       updatedAt: data.updatedAt,
       credentialAgentLabel: agentLabel,
       cards: noSelectableAgents ? [] : installedAgents.filterProviders(cards),

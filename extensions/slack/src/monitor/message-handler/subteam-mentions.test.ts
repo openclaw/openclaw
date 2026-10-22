@@ -3,17 +3,12 @@ import { describe, expect, it, vi } from "vitest";
 import { isSlackSubteamMentionForBot } from "./subteam-mentions.js";
 
 function createLookup(users: string[]) {
+  const list = vi.fn(async () => ({ ok: true, users }));
   const client = {
-    usergroups: {
-      users: {
-        list: vi.fn(async () => ({ ok: true, users })),
-      },
-    },
-  } as unknown as WebClient & {
-    usergroups: { users: { list: ReturnType<typeof vi.fn> } };
-  };
+    usergroups: { users: { list } },
+  } as unknown as WebClient;
   return {
-    list: client.usergroups.users.list,
+    list,
     mention: (overrides: Partial<Parameters<typeof isSlackSubteamMentionForBot>[0]> = {}) =>
       isSlackSubteamMentionForBot({
         client,
@@ -29,18 +24,9 @@ describe("Slack subteam mentions", () => {
     const { mention, list } = createLookup(["U_OTHER", "U_BOT"]);
 
     await expect(
-      mention({
-        text: "<!subteam^S123|eng> ping",
-        botUserId: "u_bot",
-        teamId: "T1",
-        now: 1,
-      }),
+      mention({ text: "<!subteam^S123|eng> ping", botUserId: "u_bot", teamId: "T1", now: 1 }),
     ).resolves.toBe(true);
-
-    expect(list).toHaveBeenCalledWith({
-      usergroup: "S123",
-      team_id: "T1",
-    });
+    expect(list).toHaveBeenCalledWith({ usergroup: "S123", team_id: "T1" });
   });
 
   it("fails closed and caches successful membership lookups", async () => {

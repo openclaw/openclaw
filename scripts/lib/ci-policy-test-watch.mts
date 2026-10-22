@@ -1327,7 +1327,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   {
-    testFile: "src/tts/tts-summary.static-catalog.test.ts",
+    testFile: "src/tts/tts-summary.selection.test.ts",
     watchGlobs: ["extensions/kimi-coding/openclaw.plugin.json"],
   },
   {
