@@ -25,6 +25,13 @@ function usage(usedPercent: number) {
   };
 }
 
+function expectProvider(respond: GatewayRequestHandlerOptions["respond"], provider: unknown) {
+  expect(respond).toHaveBeenCalledWith(
+    true,
+    expect.objectContaining({ providers: [expect.objectContaining(provider)] }),
+  );
+}
+
 describe("codex.accountUsage", () => {
   let config: OpenClawConfig;
   let store: AuthProfileStore;
@@ -86,17 +93,10 @@ describe("codex.accountUsage", () => {
       ["openai:blair", 72],
     ] as const) {
       const respond = await request({ agentId: "work", profileId });
-      expect(respond).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          providers: [
-            expect.objectContaining({
-              provider: "openai",
-              windows: [{ label: "5h", usedPercent, resetAt: 1_800_000_000_000 }],
-            }),
-          ],
-        }),
-      );
+      expectProvider(respond, {
+        provider: "openai",
+        windows: [{ label: "5h", usedPercent, resetAt: 1_800_000_000_000 }],
+      });
     }
   });
 
@@ -119,22 +119,12 @@ describe("codex.accountUsage", () => {
       },
     });
     const respond = await request({ agentId: "work", profileId: "openai:alex" });
-    expect(respond).toHaveBeenCalledWith(
-      true,
-      expect.objectContaining({
-        providers: [
-          expect.objectContaining({
-            summary: expect.stringContaining("Ordinary Luna does not use this reserve"),
-            windows: expect.arrayContaining([
-              expect.objectContaining({
-                groupLabel: "Luna Reserve (separate route)",
-                usedPercent: 0,
-              }),
-            ]),
-          }),
-        ],
-      }),
-    );
+    expectProvider(respond, {
+      summary: expect.stringContaining("Ordinary Luna does not use this reserve"),
+      windows: expect.arrayContaining([
+        expect.objectContaining({ groupLabel: "Luna Reserve (separate route)", usedPercent: 0 }),
+      ]),
+    });
   });
 
   it("rejects proxy launches before sending the selected account to a shared daemon", async () => {
