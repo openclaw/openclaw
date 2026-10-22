@@ -49,18 +49,18 @@ describe("cloud target accessibility", () => {
   it.each([
     { providerId: "crabbox", providerDisplayId: "azure", provider: "Azure" },
     { providerId: "custom-worker", providerDisplayId: undefined, provider: "custom-worker" },
-  ])("keeps compact and Move names separate from $provider descriptions", async (profile) => {
+  ])("keeps cloud profile names separate from $provider descriptions", async (profile) => {
     const params = {
       profiles: [{ id: "aws", ...profile, trust: "persistent" as const }],
       selectedId: "",
       submitting: false,
       onSelect: vi.fn(),
     };
-    const { update } = mountCloudProfiles({ ...params, compact: true });
+    const { update } = mountCloudProfiles(params);
     await expectChoice("aws", `Cloud worker provider: ${profile.provider}`);
 
-    update(params);
-    await expectChoice("Cloud · aws Persistent", `Cloud worker provider: ${profile.provider}`);
+    update({ ...params, profiles: [{ ...params.profiles[0]!, id: "production" }] });
+    await expectChoice("production", `Cloud worker provider: ${profile.provider}`);
   });
 
   it("retains the provider in the configuration tooltip description", async () => {
@@ -78,7 +78,6 @@ describe("cloud target accessibility", () => {
         },
       ],
       selectedId: "production",
-      compact: true,
       submitting: false,
       onSelect: vi.fn(),
     });

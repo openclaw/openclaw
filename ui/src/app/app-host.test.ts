@@ -292,7 +292,7 @@ describe("OpenClaw shell source initialization", () => {
       context: undefined,
       lastLocalePrefSignature: null,
       outboxStoreImport: { load: vi.fn(async () => undefined) },
-      recoverDeletedActiveSession: vi.fn(),
+      shellNavigation: { recoverDeletedActiveSession: vi.fn() },
       routeState: {},
     } as unknown as ShellGatewayHost;
     const owner = new ShellGatewayOwner(host);
@@ -455,11 +455,11 @@ describe("OpenClaw shell route session commits", () => {
     shell.activeSessionKey = "main";
     shell.routeState = { routeId: "chat" };
 
-    expect(shell.recoverNotFoundRoute()).toBe(false);
+    expect(shell.shellNavigation.recoverNotFoundRoute()).toBe(false);
     expect(replace).not.toHaveBeenCalled();
 
     snapshot.phase = "connected";
-    expect(shell.recoverNotFoundRoute()).toBe(true);
+    expect(shell.shellNavigation.recoverNotFoundRoute()).toBe(true);
     expect(replace).toHaveBeenCalledWith("chat", { pathname: "/chat/research" });
   });
 

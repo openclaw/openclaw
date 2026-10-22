@@ -458,14 +458,15 @@ describe("createBeamMirrorRunner", () => {
       async (origin) => {
         const { warnings, logger } = fixture;
         let signal: AbortSignal | undefined;
+        const realFetch = fetch;
         const fetchFn = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
           signal = init?.signal ?? undefined;
-          return fetch(input, init);
+          return realFetch(input, init);
         }) as unknown as typeof fetch;
+        vi.stubGlobal("fetch", fetchFn);
         const runner = createScheduledBeamTestRunner({
           endpoint: `${origin}/beam`,
           logger,
-          fetchFn,
         });
 
         try {

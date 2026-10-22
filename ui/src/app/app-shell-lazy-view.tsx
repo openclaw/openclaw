@@ -8,6 +8,7 @@ import type { DebugOverlayFrameHost } from "../pages/debug/debug-overlay-frame.t
 import type { DebugOverlayElement } from "../pages/debug/debug-overlay-state.ts";
 import { CommandPaletteLoading } from "./app-shell-command-palette-loading-view.tsx";
 import type { CommandPaletteLoadingState } from "./app-shell-command-palette-loading.ts";
+import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ShellNewSessionHost } from "./app-shell-new-session.ts";
 import type { ApplicationNavigationOptions } from "./context.ts";
 import {
@@ -52,14 +53,13 @@ export interface ShellOwnedElements {
 }
 
 export interface ShellLazyOverlayHost extends DebugOverlayFrameHost, ShellNewSessionHost {
+  readonly shellNavigation: ShellNavigationCapability;
   readonly elements: ShellOwnedElements;
   readonly commandPaletteElement: OptionalCustomElement;
   readonly commandPaletteLoading: CommandPaletteLoadingState;
   closePendingPalette(): void;
   readonly lazyCustomElements: LazyCustomElementRequests;
   handleCommandPaletteSlashCommand(command: string): void;
-  navigate(routeId: string, options?: ApplicationNavigationOptions): void;
-  selectChatSession(sessionKey: string, agentId?: string | null): void;
 }
 
 /** Shell-level optional dialogs share lazy-load recovery, not route ownership. */
@@ -126,9 +126,11 @@ export function ShellLazyOverlays(props: {
           prop:desktopAvailable={props.desktopPanelAvailable}
           prop:custodianAvailable={props.custodianPanelAvailable}
           prop:onNavigate={(routeId: RouteId, options?: ApplicationNavigationOptions) =>
-            props.host.navigate(routeId, options)
+            props.host.shellNavigation.navigate(routeId, options)
           }
-          prop:onSelectSession={(sessionKey: string) => props.host.selectChatSession(sessionKey)}
+          prop:onSelectSession={(sessionKey: string) =>
+            props.host.shellNavigation.selectChatSession(sessionKey)
+          }
           prop:onSlashCommand={(command: string) =>
             props.host.handleCommandPaletteSlashCommand(command)
           }

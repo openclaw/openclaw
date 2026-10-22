@@ -27,7 +27,7 @@ it("keeps project search live through catalog reads and retires invalidated rows
   Object.assign(context.gateway.snapshot.hello!, { features: { methods: ["projects.list"] } });
   vi.spyOn(browser, "popoverOpen").mockReturnValue(true);
   vi.spyOn(place, "folder", "get").mockReturnValue("");
-  vi.spyOn(place, "workspacePath").mockReturnValue("/fixture");
+  vi.spyOn(place, "workspacePath").mockReturnValue("/home/openclaw/.openclaw/workspace");
   vi.spyOn(place, "browseAvailable").mockReturnValue(true);
   vi.spyOn(place, "isAdmin").mockReturnValue(true);
   vi.spyOn(place, "canWrite").mockReturnValue(true);
@@ -57,7 +57,7 @@ it("keeps project search live through catalog reads and retires invalidated rows
           params: { ...options },
           state: resolveProjectChip({
             folder: "",
-            workspace: "/fixture",
+            workspace: "/home/openclaw/.openclaw/workspace",
             projectId: browser.projectId,
             selectedRemoteProject: browser.remoteProject,
             projects: browser.projects,
@@ -84,13 +84,15 @@ it("keeps project search live through catalog reads and retires invalidated rows
   const alpha = {
     id: "alpha",
     displayName: "Alpha project",
-    repoRoot: "/fixture/alpha",
+    repoRoot: "/home/openclaw/.openclaw/projects/alpha",
+    originUrl: "https://github.com/openclaw/alpha.git",
     source: "registered" as const,
   };
   const beta = {
     id: "beta",
     displayName: "Beta project",
-    repoRoot: "/fixture/beta",
+    repoRoot: "/home/openclaw/.openclaw/projects/beta",
+    originUrl: "https://github.com/openclaw/beta.git",
     source: "registered" as const,
   };
   first.resolve({ projects: [alpha, beta] });
@@ -101,7 +103,14 @@ it("keeps project search live through catalog reads and retires invalidated rows
   expect(document.activeElement).toBe(input);
   type("");
   expect(rows()).toHaveLength(2);
-  type("ALPHA");
+  type("  ALPHA  ");
+  expect(rows()).toEqual([alphaRow]);
+  type("openclaw");
+  expect(rows()).toHaveLength(0);
+  expect(view.container.querySelector('[data-value="workspace"]')).toBeNull();
+  type("worksp");
+  expect(view.container.querySelector('[data-value="workspace"]')).not.toBeNull();
+  type("alpha");
   expect(rows()).toEqual([alphaRow]);
   const refresh = browser.refreshProjects();
   nativeTerminal = true;
