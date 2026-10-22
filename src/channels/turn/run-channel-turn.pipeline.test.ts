@@ -3,13 +3,25 @@
 import { channelTurnMocks } from "./run-channel-turn.test-support.js";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { bindTestChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { noteDispatchProcessedOutcome } from "../../auto-reply/reply/dispatch-processed-outcome.js";
+import type { HistoryEntry } from "../../auto-reply/reply/history.types.js";
 import type { DispatchReplyWithBufferedBlockDispatcher as Dispatch } from "../../auto-reply/reply/provider-dispatcher.types.js";
 import { createReplyDispatcher } from "../../auto-reply/reply/reply-dispatcher.js";
 import { getReplySystemEventContext } from "../../auto-reply/reply/system-event-session-key.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import {
+  createChannelAdmissionAudit,
+  consumeChannelAdmissionEvidence,
+  readChannelContextAdmissionEvidence,
+} from "../message-access/admission-evidence.js";
+import { recordOutboundMessageIdentity } from "../message/outbound-echo.js";
+import {
+  hasVisibleChannelTurnDispatch,
+  resolveChannelTurnDispatchCounts,
+} from "./dispatch-result.js";
 import { runPreparedChannelTurn } from "./execution.js";
 import { dispatchAssembledChannelTurn } from "./lifecycle.js";
 import {
@@ -19,8 +31,16 @@ import {
   createReplyDispatchReceipt,
   expectDispatched,
 } from "./run-channel-turn.delivery.test-helpers.js";
+import { runChannelTurn } from "./run-channel-turn.js";
 import * as fixture from "./turn-state.test-support.js";
-import type { AssembledChannelTurn, ChannelTurnLogEvent } from "./types.js";
+import type {
+  AssembledChannelTurn,
+  ChannelTurnLogEvent,
+  ChannelTurnHistoryFinalizeOptions,
+  ChannelTurnPlan,
+  PreparedChannelTurn,
+  RunChannelTurnParams,
+} from "./types.js";
 
 const subsystemWarn = vi.hoisted(() => vi.fn());
 
@@ -43,7 +63,12 @@ vi.mock("../../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-const { emitMessageSent, readRecentUserAssistantTextForSession: readRecent } = channelTurnMocks;
+const {
+  emitMessageSent,
+  readRecentUserAssistantTextForSession: readRecent,
+  recordInboundSessionCore,
+  dispatchReplyWithRoutedChannelDispatcherCore,
+} = channelTurnMocks;
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let storePath: string;
@@ -69,11 +94,43 @@ function runDelivery(
   });
 }
 
-describe("channel turn pipeline", () => {
+function pendingHistory() {
+  return {
+    isGroup: true,
+    historyKey: "room",
+    historyMap: new Map([["room", [{ sender: "Alice", body: "earlier message" }]]]),
+    limit: 50,
+  } satisfies ChannelTurnHistoryFinalizeOptions;
+}
+function prepared<T extends Partial<PreparedChannelTurn>>(overrides: T) {
+  return {
+    ...fixture.turnContext(storePath),
+    runDispatch: vi.fn(async () => fixture.finalDispatch()),
+    ...overrides,
+  };
+}
+function routed(overrides: Partial<ChannelTurnPlan> = {}): ChannelTurnPlan {
+  return {
+    cfg: {},
+    channel: "test",
+    route: { agentId: "main", sessionKey: "agent:main:test:peer" },
+    ctxPayload: createCtx(),
+    delivery: { deliver: vi.fn() },
+    ...overrides,
+  };
+}
+function run(adapter: RunChannelTurnParams<unknown>["adapter"]) {
+  return runChannelTurn({ channel: "test", raw: {}, adapter });
+}
+const ingest = () => ({ id: "msg-1", rawText: "hello" });
+
+describe("channel turn pipeline and finalization", () => {
   beforeEach(() => {
     storePath = path.join(tempDirs.make("openclaw-channel-turn-pipeline-"), "sessions.json");
     fixture.resetTurnState();
     readRecent.mockResolvedValue([]);
+    recordInboundSessionCore.mockResolvedValue(undefined);
+    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementation(createDispatch());
   });
 
   afterEach(fixture.resetTurnLogger);
@@ -357,5 +414,250 @@ describe("channel turn pipeline", () => {
     expect(log.mock.calls).not.toContainEqual([
       expect.objectContaining({ reason: "zero-count-visible-dispatch" }),
     ]);
+  });
+  it("drops repeated bot-pair turns before recording and releases prepared resources", async () => {
+    const history = pendingHistory();
+    const onDispatchSkipped = vi.fn();
+    const turn = prepared({
+      history,
+      runDispatchLifecycle: { turnAdoptionLifecycle: undefined, onDispatchSkipped },
+      botLoopProtection: {
+        scopeId: "prepared-loop-test",
+        conversationId: "room",
+        senderId: "bot-a",
+        receiverId: "bot-b",
+        config: { maxEventsPerWindow: 1, windowSeconds: 60, cooldownSeconds: 60 },
+        defaultEnabled: true,
+        nowMs: 1000,
+      },
+    });
+    expect((await runPreparedChannelTurn(turn)).dispatched).toBe(true);
+    expect(history.historyMap.get("room")).toStrictEqual([]);
+    history.historyMap.set("room", [{ sender: "Alice", body: "queued again" }]);
+    const result = await run({
+      ingest,
+      resolveTurn: () => ({
+        ...turn,
+        botLoopProtection: { ...turn.botLoopProtection, nowMs: 1001 },
+      }),
+    });
+    expect(result).toMatchObject({
+      admission: { kind: "drop", reason: "bot-loop-protection" },
+      dispatched: false,
+    });
+    expect(turn.recordInboundSession).toHaveBeenCalledOnce();
+    expect(turn.runDispatch).toHaveBeenCalledOnce();
+    expect(onDispatchSkipped).toHaveBeenCalledWith("botLoopProtection");
+    expect(history.historyMap.get("room")).toStrictEqual([]);
+  });
+
+  it("drops a recorded webhook echo after thread unbind before record or dispatch", async () => {
+    const history = pendingHistory();
+    const recordInboundSession = createRecordInboundSession();
+    const dispatch = createDispatch();
+    const deliver = vi.fn();
+    const onAdopted = vi.fn(async () => {});
+    recordOutboundMessageIdentity({
+      channel: "discord",
+      accountId: "default",
+      conversationId: "thread-1",
+      sourceId: "webhook-1",
+    });
+    const result = await run({
+      ingest,
+      resolveTurn: () =>
+        fixture.assembledTurn(storePath, {
+          channel: "discord",
+          accountId: "default",
+          routeSessionKey: "agent:main:discord:channel:thread-1",
+          ctxPayload: createCtx({
+            Provider: "discord",
+            Surface: "discord",
+            ChatId: "thread-1",
+            MessageSid: "webhook-message-1",
+          }),
+          outboundEchoSourceId: "webhook-1",
+          recordInboundSession,
+          dispatchReplyWithBufferedBlockDispatcher: dispatch,
+          delivery: { deliver },
+          turnAdoptionLifecycle: { onAdopted },
+          history,
+        }),
+    });
+    expect(result).toMatchObject({
+      admission: { kind: "drop", reason: "outbound-echo" },
+      dispatched: false,
+    });
+    expect(recordInboundSession).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    expect(onAdopted).toHaveBeenCalledOnce();
+    expect(history.historyMap.get("room")).toStrictEqual([]);
+  });
+
+  it.each(["transcript", "record"])("cleans up after %s fails before dispatch", async (phase) => {
+    const history = pendingHistory();
+    const events: string[] = [];
+    const error = new Error(`${phase} failed`);
+    const afterRecord = vi.fn();
+    const onPreDispatchFailure = vi.fn(async () => {
+      events.push("cleanup");
+    });
+    const turn = prepared({
+      history,
+      afterRecord,
+      onPreDispatchFailure,
+      ctxPayload: createCtx({ AgentId: "main", SessionTranscriptContext: { historyLimit: 1 } }),
+      recordInboundSession: vi.fn(async () => {
+        events.push("record");
+        throw error;
+      }),
+    });
+    if (phase === "transcript") {
+      readRecent.mockRejectedValueOnce(error);
+    }
+    await expect(runPreparedChannelTurn(turn)).rejects.toBe(error);
+    expect(events).toEqual(phase === "record" ? ["record", "cleanup"] : ["cleanup"]);
+    expect(turn.recordInboundSession).toHaveBeenCalledTimes(phase === "record" ? 1 : 0);
+    expect(afterRecord).not.toHaveBeenCalled();
+    expect(turn.runDispatch).not.toHaveBeenCalled();
+    expect(onPreDispatchFailure).toHaveBeenCalledWith(error);
+    expect(history.historyMap.get("room")).toStrictEqual([]);
+  });
+
+  it("handles non-turn event classes without resolving a turn", async () => {
+    const resolveTurn = vi.fn();
+    const result = await run({
+      ingest,
+      classify: () => ({ kind: "reaction", canStartAgentTurn: false }),
+      resolveTurn,
+    });
+    expect(result).toEqual({
+      admission: { kind: "handled", reason: "event:reaction" },
+      dispatched: false,
+    });
+    expect(resolveTurn).not.toHaveBeenCalled();
+  });
+
+  it("records dropped history with local media through the turn kernel", async () => {
+    const historyMap = new Map<string, HistoryEntry[]>();
+    const resolveTurn = vi.fn();
+    const image = { path: "/tmp/a.png", contentType: "image/png", kind: "image" } as const;
+    const result = await run({
+      ingest: () => ({ id: "msg-1", timestamp: 1700000000000, rawText: "<media:image>" }),
+      preflight: () => ({
+        admission: { kind: "drop", reason: "missing-mention", recordHistory: true },
+        message: { bodyForAgent: "<media:image>", senderLabel: "Alice" },
+        history: { key: "room-1", historyMap, limit: 5, mediaLimit: 2 },
+        media: async () => [image, { ...image, path: "https://example.com/b.png" }],
+      }),
+      resolveTurn,
+    });
+    expect(result).toEqual({
+      admission: { kind: "drop", reason: "missing-mention", recordHistory: true },
+      dispatched: false,
+    });
+    expect(resolveTurn).not.toHaveBeenCalled();
+    expect(historyMap.get("room-1")).toEqual([
+      {
+        sender: "Alice",
+        body: "<media:image>",
+        timestamp: 1700000000000,
+        messageId: "msg-1",
+        media: [{ ...image, messageId: "msg-1" }],
+      },
+    ]);
+  });
+
+  it("runs observe-only turns through record, dispatch and finalize without visible delivery", async () => {
+    const events: string[] = [];
+    dispatchReplyWithRoutedChannelDispatcherCore.mockImplementation(createDispatch(events));
+    recordInboundSessionCore.mockImplementation(async () => {
+      events.push("record");
+    });
+    const deliver = vi.fn();
+    const onFinalize = vi.fn();
+    const result = await run({
+      ingest,
+      preflight: () => ({ kind: "observeOnly", reason: "broadcast-observer" }),
+      resolveTurn: () =>
+        routed({
+          route: {
+            agentId: "observer",
+            dmScope: "per-channel-peer",
+            sessionKey: "agent:observer:test:peer",
+          },
+          ctxPayload: createCtx({ SessionKey: "agent:observer:test:peer" }),
+          delivery: { deliver },
+        }),
+      onFinalize,
+    });
+    expectDispatched(result);
+    expect(result.admission).toEqual({ kind: "observeOnly", reason: "broadcast-observer" });
+    expect(events).toEqual(["record", "dispatch"]);
+    expect(dispatchReplyWithRoutedChannelDispatcherCore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx: expect.objectContaining({ DmScope: "per-channel-peer" }),
+        suppressOutboundHooks: true,
+      }),
+    );
+    expect(deliver).not.toHaveBeenCalled();
+    expect(hasVisibleChannelTurnDispatch(result.dispatchResult)).toBe(false);
+    expect(resolveChannelTurnDispatchCounts(result.dispatchResult)).toEqual({
+      tool: 0,
+      block: 0,
+      final: 0,
+    });
+    expect(onFinalize).toHaveBeenCalledExactlyOnceWith(result);
+  });
+
+  it("degrades private admission evidence when routing changes the DM scope", async () => {
+    const audit = createChannelAdmissionAudit({ enabled: true });
+    try {
+      const ctx = createCtx();
+      bindTestChannelParticipantAdmissionEvidence({
+        audit,
+        context: ctx,
+        channelId: "test",
+        participantId: "person-1",
+      });
+      await run({
+        ingest,
+        resolveTurn: () =>
+          routed({
+            route: {
+              agentId: "main",
+              dmScope: "per-channel-peer",
+              sessionKey: "agent:main:test:peer",
+            },
+            ctxPayload: ctx,
+          }),
+      });
+      const dispatched = dispatchReplyWithRoutedChannelDispatcherCore.mock.calls[0]?.[0];
+      expect(dispatched?.ctx.DmScope).toBe("per-channel-peer");
+      expect(
+        consumeChannelAdmissionEvidence(readChannelContextAdmissionEvidence(dispatched?.ctx ?? {})),
+      ).toMatchObject({ ingressState: "unknown", invoker: { state: "unknown" } });
+    } finally {
+      audit.close();
+    }
+  });
+
+  it("clears history and finalizes failed dispatches before rethrowing", async () => {
+    const history = pendingHistory();
+    const onFinalize = vi.fn();
+    const error = new Error("dispatch failed");
+    dispatchReplyWithRoutedChannelDispatcherCore.mockRejectedValueOnce(error);
+    await expect(run({ ingest, resolveTurn: () => routed({ history }), onFinalize })).rejects.toBe(
+      error,
+    );
+    expect(onFinalize).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        admission: { kind: "dispatch" },
+        dispatched: false,
+        routeSessionKey: "agent:main:test:peer",
+      }),
+    );
+    expect(history.historyMap.get("room")).toStrictEqual([]);
   });
 });

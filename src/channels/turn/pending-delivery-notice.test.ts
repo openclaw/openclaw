@@ -95,15 +95,6 @@ describe("pending delivery notice", () => {
     expectNotice("owed");
   });
 
-  it("retains debt terminally when the notice send is suppressed", async () => {
-    sendRecoveryNotice.mockResolvedValue({ suppressed: true });
-
-    await deliver();
-
-    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
-    expectNotice("unresolved");
-  });
-
   it.each([
     ["failed", "unresolved"],
     ["completed", "acknowledged"],

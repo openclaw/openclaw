@@ -127,65 +127,57 @@ describe("durable inbound reply delivery", () => {
     });
   });
 
-  it("preserves explicit null thread targets instead of falling back to context thread", async () => {
-    const executionIdentityToken = createExecutionIdentityAdmissionToken("run-exact");
-    await deliver({
-      executionIdentityToken,
-      threadId: null,
-      ctxPayload: { ...context, MessageThreadId: "context-thread" },
-    });
-    expectOnlyCall(mocks.sendDurableMessageBatch, {
-      cfg: {},
-      channel: "telegram",
-      to: "chat-1",
-      threadId: null,
-      durability: "best_effort",
-      gatewayClientScopes: [],
-      runId: "run-exact",
-      executionIdentityToken,
-    });
-    expectOnlyCall(mocks.resolveOutboundDurableFinalDeliverySupport, {
-      requirements: { text: true, messageSendingHooks: true },
-    });
-    expect(
-      mocks.sendDurableMessageBatch.mock.calls[0]?.[0].requireUnknownSendReconciliation,
-    ).toBeUndefined();
-    expect(mocks.sendStructuredDurableMessageBatch).not.toHaveBeenCalled();
-  });
-
-  it("carries prepared directive literals and explicit fields through the durable sender", async () => {
-    const executionIdentityToken = createExecutionIdentityAdmissionToken("run-prepared");
-    const [entry] = createStructuredOutboundPayloadPlan([
-      {
-        text: "[[reply_to:literal]] [[audio_as_voice]]",
-        mediaUrl: "https://example.invalid/audio.ogg",
-        replyToId: "source-message",
-      },
-    ]);
-    if (!entry) {
-      throw new Error("expected a sendable prepared plan");
-    }
-    const plan = { ...entry, sourceIndex: 3 };
-    const result = await deliverStructuredInboundReplyWithMessageSendContextCore({
-      ...request(),
-      plan,
-      threadId: null,
-      executionIdentityToken,
-      ctxPayload: { ...context, MessageThreadId: "context-thread" },
-    });
-    expect(result.status).toBe("handled_visible");
-    expect(mocks.sendDurableMessageBatch).not.toHaveBeenCalled();
-    expectOnlyCall(mocks.sendStructuredDurableMessageBatch, {
-      plan: [plan],
-      channel: "telegram",
-      to: "chat-1",
-      threadId: null,
-      replyToId: "source-message",
-      durability: "best_effort",
-      runId: "run-prepared",
-      executionIdentityToken,
-    });
-  });
+  it.each([false, true])(
+    "preserves null threads and run identity (prepared=%s)",
+    async (prepared) => {
+      const runId = prepared ? "run-prepared" : "run-exact";
+      const executionIdentityToken = createExecutionIdentityAdmissionToken(runId);
+      const [entry] = createStructuredOutboundPayloadPlan([
+        {
+          text: "[[reply_to:literal]] [[audio_as_voice]]",
+          mediaUrl: "https://example.invalid/audio.ogg",
+          replyToId: "source-message",
+        },
+      ]);
+      if (!entry) {
+        throw new Error("expected a sendable prepared plan");
+      }
+      const plan = { ...entry, sourceIndex: 3 };
+      const params = request({
+        threadId: null,
+        executionIdentityToken,
+        ctxPayload: { ...context, MessageThreadId: "context-thread" },
+      });
+      const result = await (prepared
+        ? deliverStructuredInboundReplyWithMessageSendContextCore({ ...params, plan })
+        : deliverInboundReplyWithMessageSendContextCore(params));
+      expect(result.status).toBe("handled_visible");
+      const send = prepared
+        ? mocks.sendStructuredDurableMessageBatch
+        : mocks.sendDurableMessageBatch;
+      const unused = prepared
+        ? mocks.sendDurableMessageBatch
+        : mocks.sendStructuredDurableMessageBatch;
+      expect(unused).not.toHaveBeenCalled();
+      expectOnlyCall(send, {
+        ...(prepared
+          ? { plan: [plan], replyToId: "source-message" }
+          : { cfg: {}, gatewayClientScopes: [] }),
+        channel: "telegram",
+        to: "chat-1",
+        threadId: null,
+        durability: "best_effort",
+        runId,
+        executionIdentityToken,
+      });
+      if (!prepared) {
+        expectOnlyCall(mocks.resolveOutboundDurableFinalDeliverySupport, {
+          requirements: { text: true, messageSendingHooks: true },
+        });
+        expect(send.mock.calls[0]?.[0].requireUnknownSendReconciliation).toBeUndefined();
+      }
+    },
+  );
 
   it("uses required durability when a caller explicitly requires unknown-send reconciliation", async () => {
     const requirements = { text: true, reconcileUnknownSend: true };

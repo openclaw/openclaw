@@ -264,6 +264,9 @@ describe("pending delivery notice end to end", () => {
       }),
     );
     expectNoticeState(suppressed);
+    if (suppressed) {
+      expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    }
 
     await closeOpenClawAgentDatabasesAsync(path.dirname(storePath));
     closeOpenClawAgentDatabasesForTest(path.dirname(storePath));
