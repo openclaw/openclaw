@@ -4,18 +4,14 @@ import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gatewa
 import type { AgentsFilesGetResult, AgentsFilesSetResult } from "../../api/types.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { agentFileValues, setAgentFileValues } from "./agent-file-state.test-helpers.ts";
-import {
-  loadAgentFileContent,
-  overwriteAgentFile,
-  reloadAgentFile,
-  resetAgentFile,
-  saveAgentFile,
-} from "./files.ts";
+import { createAgentFileActions, loadAgentFileContent } from "./files.ts";
 
-type FilesState = Parameters<typeof loadAgentFileContent>[0];
+type FilesState = Parameters<typeof createAgentFileActions>[0];
 
-function createState(client: GatewayBrowserClient): FilesState {
-  return {
+function createFixture(client: GatewayBrowserClient) {
+  const state: FilesState = {
+    agentsSelectedId: "main",
+    agentFileActive: null,
     client,
     connected: true,
     requestGeneration: 0,
@@ -28,6 +24,7 @@ function createState(client: GatewayBrowserClient): FilesState {
     agentFileSaving: false,
     agentFileWriteRevisions: new Map(),
   };
+  return { state, actions: createAgentFileActions(state, "main", () => true) };
 }
 
 function fileResult(content: string, hash?: string, missing = false): AgentsFilesGetResult {
@@ -53,14 +50,14 @@ describe("agent file requests", () => {
         .fn()
         .mockReturnValueOnce(read.promise)
         .mockResolvedValue(fileResult("", "a".repeat(64)));
-      const state = createState(createTestGatewayClient(request));
+      const { state, actions } = createFixture(createTestGatewayClient(request));
       const load = loadAgentFileContent(state, "main", "AGENTS.md");
       if (phase === "failed") {
         read.reject(new Error("workspace read failed"));
         expect(await load).toBe(false);
       }
 
-      expect(await saveAgentFile(state, "main", "AGENTS.md", "unread replacement")).toBe(false);
+      expect(await actions.onFileSave("AGENTS.md")).toBe(false);
       expect(request).toHaveBeenCalledTimes(1);
       expect(agentFileValues(state, "content")).toEqual({});
       if (phase === "pending") {
@@ -74,7 +71,8 @@ describe("agent file requests", () => {
         ok: true,
         ...fileResult("new instructions", "b".repeat(64)),
       });
-      expect(await saveAgentFile(state, "main", "AGENTS.md", "new instructions")).toBe(true);
+      actions.onFileDraftChange("AGENTS.md", "new instructions");
+      expect(await actions.onFileSave("AGENTS.md")).toBe(true);
       expect(request).toHaveBeenLastCalledWith("agents.files.set", {
         agentId: "main",
         name: "AGENTS.md",
@@ -97,15 +95,15 @@ describe("agent file requests", () => {
           ok: true,
           ...fileResult(draft, "b".repeat(64)),
         });
-      const state = createState(createTestGatewayClient(request));
+      const { state, actions } = createFixture(createTestGatewayClient(request));
       setAgentFileValues(state, "draft", { "AGENTS.md": draft });
       setAgentFileValues(state, "version", { "AGENTS.md": { hash: "a".repeat(64) } });
       const load = loadAgentFileContent(state, "main", "AGENTS.md");
-      resetAgentFile(state, "AGENTS.md");
+      actions.onFileReset("AGENTS.md");
       expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe(draft);
       expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: "a".repeat(64) });
 
-      expect(await saveAgentFile(state, "main", "AGENTS.md", draft)).toBe(true);
+      expect(await actions.onFileSave("AGENTS.md")).toBe(true);
       expect(request).toHaveBeenLastCalledWith("agents.files.set", {
         agentId: "main",
         name: "AGENTS.md",
@@ -131,7 +129,7 @@ describe("agent file requests", () => {
         )
         .mockResolvedValueOnce(fileResult("external update", refreshedHash))
         .mockResolvedValueOnce({ ok: true, ...fileResult("edited after reset", "c".repeat(64)) });
-      const state = createState(createTestGatewayClient(request));
+      const { state, actions } = createFixture(createTestGatewayClient(request));
 
       await loadAgentFileContent(state, "main", "AGENTS.md");
       setAgentFileValues(state, "draft", { "AGENTS.md": "dirty draft" });
@@ -141,10 +139,10 @@ describe("agent file requests", () => {
         missing ? { missing: true } : { hash: loadedHash },
       );
 
-      resetAgentFile(state, "AGENTS.md");
+      actions.onFileReset("AGENTS.md");
       expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("external update");
       setAgentFileValues(state, "draft", { "AGENTS.md": "edited after reset" });
-      await saveAgentFile(state, "main", "AGENTS.md", "edited after reset");
+      await actions.onFileSave("AGENTS.md");
 
       expect(request).toHaveBeenLastCalledWith("agents.files.set", {
         agentId: "main",
@@ -168,7 +166,7 @@ describe("agent file requests", () => {
         ok: true,
         ...fileResult("old draft", "c".repeat(64)),
       }));
-      const state = createState(createTestGatewayClient(request));
+      const { state, actions } = createFixture(createTestGatewayClient(request));
       setAgentFileValues(state, "draft", { "AGENTS.md": "old draft" });
       state.agents.recordFile = vi.fn(() => {
         if (scope === "client") {
@@ -180,7 +178,7 @@ describe("agent file requests", () => {
         }
       });
 
-      await overwriteAgentFile(state, "main", "AGENTS.md", "old draft");
+      await actions.onFileOverwrite("AGENTS.md");
 
       expect(request.mock.calls.map(([method]) => method)).toEqual(["agents.files.get"]);
       expect(replacementRequest).not.toHaveBeenCalled();
@@ -198,13 +196,13 @@ describe("agent file requests", () => {
             : Promise.resolve({ ok: true, ...fileResult("saved") }),
         ),
       } as unknown as GatewayBrowserClient;
-      const state = createState(client);
+      const { state, actions } = createFixture(client);
       setAgentFileValues(state, "content", { "AGENTS.md": "original" });
       setAgentFileValues(state, "draft", { "AGENTS.md": "original" });
 
       const load = loadAgentFileContent(state, "main", "AGENTS.md", { force: true });
       setAgentFileValues(state, "draft", { "AGENTS.md": "saved" });
-      expect(await saveAgentFile(state, "main", "AGENTS.md", "saved")).toBe(true);
+      expect(await actions.onFileSave("AGENTS.md")).toBe(true);
       if (completion === "read error") {
         read.reject(new Error("obsolete read failed"));
       } else {
@@ -228,11 +226,11 @@ describe("agent file requests", () => {
           method === "agents.files.get" ? read.promise : write.promise,
         ),
       } as unknown as GatewayBrowserClient;
-      const state = createState(client);
+      const { state, actions } = createFixture(client);
       setAgentFileValues(state, "content", { "AGENTS.md": "original" });
       setAgentFileValues(state, "draft", { "AGENTS.md": "saved" });
 
-      const save = saveAgentFile(state, "main", "AGENTS.md", "saved");
+      const save = actions.onFileSave("AGENTS.md");
       const load = loadAgentFileContent(state, "main", "AGENTS.md", { force: true });
       if (readFailsFirst) {
         read.reject(new Error("refresh failed"));
@@ -259,10 +257,11 @@ describe("agent file requests", () => {
       .mockReturnValueOnce(read.promise)
       .mockResolvedValueOnce({ ok: true, ...fileResult("saved") })
       .mockResolvedValueOnce(fileResult("external update"));
-    const state = createState({ request } as unknown as GatewayBrowserClient);
+    const { state, actions } = createFixture({ request } as unknown as GatewayBrowserClient);
     setAgentFileValues(state, "content", { "AGENTS.md": "original" });
     const load = loadAgentFileContent(state, "main", "SOUL.md");
-    await saveAgentFile(state, "main", "AGENTS.md", "saved");
+    actions.onFileDraftChange("AGENTS.md", "saved");
+    await actions.onFileSave("AGENTS.md");
     read.resolve({ ...fileResult("soul"), file: { ...fileResult("soul").file, name: "SOUL.md" } });
     expect(await load).toBe(true);
     expect(agentFileValues(state, "draft")).toEqual({ "AGENTS.md": "saved", "SOUL.md": "soul" });
@@ -279,14 +278,14 @@ describe("agent file requests", () => {
       const request = vi.fn((method: string) =>
         method === "agents.files.get" ? read.promise : write.promise,
       );
-      const state = createState({ request } as unknown as GatewayBrowserClient);
+      const { state, actions } = createFixture({ request } as unknown as GatewayBrowserClient);
       setAgentFileValues(state, "content", { "AGENTS.md": "original" });
       setAgentFileValues(state, "draft", { "AGENTS.md": "unsaved" });
       const load =
         timing === "before"
           ? loadAgentFileContent(state, "main", "AGENTS.md", { force: true })
           : null;
-      const save = saveAgentFile(state, "main", "AGENTS.md", "unsaved");
+      const save = actions.onFileSave("AGENTS.md");
       const refresh = load ?? loadAgentFileContent(state, "main", "AGENTS.md", { force: true });
       write.reject(new Error("workspace write failed"));
       expect(await save).toBe(false);
@@ -305,7 +304,7 @@ describe("agent file requests", () => {
     const nextClient = {
       request: vi.fn(() => nextRead.promise),
     } as unknown as GatewayBrowserClient;
-    const state = createState(oldClient);
+    const { state } = createFixture(oldClient);
 
     const oldLoad = loadAgentFileContent(state, "main", "AGENTS.md");
     state.client = nextClient;
@@ -327,9 +326,9 @@ describe("agent file requests", () => {
   it.each(["client", "capability"] as const)("ignores an old-%s save completion", async (owner) => {
     const saved = createDeferred<AgentsFilesSetResult>();
     const oldClient = { request: vi.fn(() => saved.promise) } as unknown as GatewayBrowserClient;
-    const state = createState(oldClient);
+    const { state, actions } = createFixture(oldClient);
     setAgentFileValues(state, "draft", { "AGENTS.md": "old" });
-    const save = saveAgentFile(state, "main", "AGENTS.md", "old");
+    const save = actions.onFileSave("AGENTS.md");
 
     if (owner === "client") {
       state.client = { request: vi.fn() } as unknown as GatewayBrowserClient;
@@ -349,11 +348,11 @@ describe("agent file requests", () => {
   it("preserves edits made while a save is pending", async () => {
     const saved = createDeferred<AgentsFilesSetResult>();
     const client = { request: vi.fn(() => saved.promise) } as unknown as GatewayBrowserClient;
-    const state = createState(client);
+    const { state, actions } = createFixture(client);
     setAgentFileValues(state, "content", { "AGENTS.md": "original" });
     setAgentFileValues(state, "draft", { "AGENTS.md": "submitted" });
 
-    const save = saveAgentFile(state, "main", "AGENTS.md", "submitted");
+    const save = actions.onFileSave("AGENTS.md");
     setAgentFileValues(state, "draft", { "AGENTS.md": "typed while saving" });
     saved.resolve({ ok: true, ...fileResult("submitted") });
     await save;
@@ -377,12 +376,12 @@ describe("agent file requests", () => {
       .mockResolvedValueOnce(fileResult("original", loadedHash))
       .mockRejectedValueOnce(conflict())
       .mockRejectedValueOnce(conflict());
-    const state = createState({ request } as unknown as GatewayBrowserClient);
+    const { state, actions } = createFixture({ request } as unknown as GatewayBrowserClient);
 
     expect(await loadAgentFileContent(state, "main", "AGENTS.md")).toBe(true);
     setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
-    expect(await saveAgentFile(state, "main", "AGENTS.md", "original\noperator note")).toBe(false);
-    expect(await saveAgentFile(state, "main", "AGENTS.md", "original\noperator note")).toBe(false);
+    expect(await actions.onFileSave("AGENTS.md")).toBe(false);
+    expect(await actions.onFileSave("AGENTS.md")).toBe(false);
 
     const setCall = [
       "agents.files.set",
@@ -419,7 +418,7 @@ describe("agent file requests", () => {
           details: { type: "agent_file_conflict", name: "AGENTS.md", currentHash },
         }),
       );
-    const state = createState({ request } as unknown as GatewayBrowserClient);
+    const { state, actions } = createFixture({ request } as unknown as GatewayBrowserClient);
 
     expect(await loadAgentFileContent(state, "main", "AGENTS.md")).toBe(true);
     setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
@@ -429,7 +428,7 @@ describe("agent file requests", () => {
     expect(state.agentFileEditors["AGENTS.md"]?.draft).toBe("original\noperator note");
     expect(state.agentFileEditors["AGENTS.md"]?.version).toEqual({ hash: loadedHash });
 
-    expect(await saveAgentFile(state, "main", "AGENTS.md", "original\noperator note")).toBe(false);
+    expect(await actions.onFileSave("AGENTS.md")).toBe(false);
 
     expect(request.mock.calls[2]).toEqual([
       "agents.files.set",
@@ -451,7 +450,7 @@ describe("agent file requests", () => {
       .fn()
       .mockResolvedValueOnce(fileResult("original", loadedHash))
       .mockResolvedValueOnce(fileResult("original\nagent appended", currentHash));
-    const state = createState({ request } as unknown as GatewayBrowserClient);
+    const { state } = createFixture({ request } as unknown as GatewayBrowserClient);
 
     expect(await loadAgentFileContent(state, "main", "AGENTS.md")).toBe(true);
     expect(await loadAgentFileContent(state, "main", "AGENTS.md", { force: true })).toBe(true);
@@ -474,11 +473,11 @@ describe("agent file requests", () => {
         }),
       )
       .mockResolvedValueOnce(fileResult("original\nagent appended", currentHash));
-    const state = createState({ request } as unknown as GatewayBrowserClient);
+    const { state, actions } = createFixture({ request } as unknown as GatewayBrowserClient);
 
     expect(await loadAgentFileContent(state, "main", "AGENTS.md")).toBe(true);
     setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
-    expect(await saveAgentFile(state, "main", "AGENTS.md", "original\noperator note")).toBe(false);
+    expect(await actions.onFileSave("AGENTS.md")).toBe(false);
     expect(state.agentFileConflict).toBe("AGENTS.md");
 
     expect(await loadAgentFileContent(state, "main", "AGENTS.md", { force: true })).toBe(true);
@@ -509,14 +508,12 @@ describe("agent file requests", () => {
             missing,
           ),
         );
-      const state = createState({ request } as unknown as GatewayBrowserClient);
+      const { state, actions } = createFixture({ request } as unknown as GatewayBrowserClient);
 
       expect(await loadAgentFileContent(state, "main", "AGENTS.md")).toBe(true);
       setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
-      expect(await saveAgentFile(state, "main", "AGENTS.md", "original\noperator note")).toBe(
-        false,
-      );
-      expect(await reloadAgentFile(state, "main", "AGENTS.md")).toBe(true);
+      expect(await actions.onFileSave("AGENTS.md")).toBe(false);
+      expect(await actions.onFileReload("AGENTS.md")).toBe(true);
 
       expect(request.mock.calls[2]).toEqual([
         "agents.files.get",
@@ -562,16 +559,12 @@ describe("agent file requests", () => {
           ok: true,
           ...fileResult("original\noperator note", writtenHash),
         });
-      const state = createState({ request } as unknown as GatewayBrowserClient);
+      const { state, actions } = createFixture({ request } as unknown as GatewayBrowserClient);
 
       expect(await loadAgentFileContent(state, "main", "AGENTS.md")).toBe(true);
       setAgentFileValues(state, "draft", { "AGENTS.md": "original\noperator note" });
-      expect(await saveAgentFile(state, "main", "AGENTS.md", "original\noperator note")).toBe(
-        false,
-      );
-      expect(await overwriteAgentFile(state, "main", "AGENTS.md", "original\noperator note")).toBe(
-        true,
-      );
+      expect(await actions.onFileSave("AGENTS.md")).toBe(false);
+      expect(await actions.onFileOverwrite("AGENTS.md")).toBe(true);
 
       expect(request.mock.calls[3]).toEqual([
         "agents.files.set",
