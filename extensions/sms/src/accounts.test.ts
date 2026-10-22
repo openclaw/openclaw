@@ -88,12 +88,7 @@ describe("SMS account config", () => {
   });
 
   it("treats top-level enabled false as a channel kill switch", () => {
-    const cfg = config({
-      enabled: false,
-      accounts: {
-        support: { enabled: true },
-      },
-    });
+    const cfg = config({ enabled: false, accounts: { support: { enabled: true } } });
 
     expect(resolveSmsAccount(cfg, "support")).toMatchObject({
       accountId: "support",

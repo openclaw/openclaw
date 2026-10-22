@@ -1,4 +1,5 @@
 // Sms test support shares webhook fixtures between the unit and raw-wire suites.
+import { createHmac } from "node:crypto";
 import { vi } from "vitest";
 import type { SmsDeliveryRecorder } from "./delivery-observations.js";
 import type { ResolvedSmsAccount } from "./types.js";
@@ -49,4 +50,32 @@ export function createSmsTestDeliveryRecorder(
   })),
 ): SmsDeliveryRecorder & { record: typeof record } {
   return { record };
+}
+
+// Raw provider input shared by webhook and transport tests, never normalized by production code.
+export function createSmsTestForm(
+  overrides: Record<string, string> = {},
+  account = createSmsTestAccount(),
+): Record<string, string> {
+  return {
+    AccountSid: account.accountSid,
+    From: "+15551234567",
+    To: account.fromNumber,
+    Body: "hello",
+    MessageSid: "SM123",
+    ...overrides,
+  };
+}
+
+export function signSmsTestForm(form: Record<string, string>, account = createSmsTestAccount()) {
+  const signed =
+    account.publicWebhookUrl +
+    Object.keys(form)
+      .toSorted()
+      .map((key) => `${key}${form[key] ?? ""}`)
+      .join("");
+  return {
+    body: new URLSearchParams(form).toString(),
+    signature: createHmac("sha1", account.authToken).update(signed).digest("base64"),
+  };
 }

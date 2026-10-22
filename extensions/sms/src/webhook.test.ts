@@ -1,4 +1,3 @@
-import { createHmac } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { Readable } from "node:stream";
@@ -11,6 +10,8 @@ import {
   advanceSmsTestAccountId,
   createSmsTestAccount,
   createSmsTestDeliveryRecorder,
+  createSmsTestForm,
+  signSmsTestForm as signForm,
 } from "./webhook.test-support.js";
 
 const assertSmsCredentialOwnerAvailable = vi.hoisted(() => vi.fn());
@@ -39,30 +40,16 @@ function parseTestTwilioForm(body: string): Record<string, string> {
   return Object.fromEntries(new URLSearchParams(body));
 }
 
-function createSignedBody(params?: {
-  account?: ResolvedSmsAccount;
-  body?: string;
-  messageSid?: string;
-}): { body: string; signature: string } {
-  const account = params?.account ?? createSmsTestAccount();
-  const body =
-    params?.body ??
-    `AccountSid=${encodeURIComponent(account.accountSid)}&From=%2B15551234567&To=%2B15557654321&Body=hello&MessageSid=${encodeURIComponent(params?.messageSid ?? "SM123")}`;
-  const form = parseTestTwilioForm(body);
-  const signed =
-    account.publicWebhookUrl +
-    Object.keys(form)
-      .toSorted()
-      .map((key) => `${key}${form[key] ?? ""}`)
-      .join("");
-  return {
-    body,
-    signature: createHmac("sha1", account.authToken).update(signed).digest("base64"),
-  };
-}
-
-function signForm(form: Record<string, string>, account = createSmsTestAccount()) {
-  return createSignedBody({ account, body: new URLSearchParams(form).toString() });
+function createSignedBody(
+  params: { account?: ResolvedSmsAccount; body?: string; messageSid?: string } = {},
+) {
+  const account = params.account ?? createSmsTestAccount();
+  const form =
+    params.body !== undefined
+      ? parseTestTwilioForm(params.body)
+      : createSmsTestForm({ MessageSid: params.messageSid ?? "SM123" }, account);
+  const payload = signForm(form, account);
+  return { ...payload, body: params.body ?? payload.body };
 }
 
 function createLoopbackSocket(remoteAddress = "127.0.0.1"): Socket {
@@ -83,9 +70,7 @@ function createRequest(
     "x-twilio-signature": signature,
     ...options?.headers,
   };
-  Object.defineProperty(req, "socket", {
-    value: createLoopbackSocket(options?.remoteAddress),
-  });
+  Object.defineProperty(req, "socket", { value: createLoopbackSocket(options?.remoteAddress) });
   return req;
 }
 
@@ -171,13 +156,13 @@ function createSignedSmsPayload(
   messageSid: string,
   overrides: { from?: string; to?: string } = {},
 ): { body: string; signature: string } {
-  return signForm({
-    AccountSid: "AC123",
-    From: overrides.from ?? "+15551234567",
-    To: overrides.to ?? "+15557654321",
-    Body: "hello",
-    MessageSid: messageSid,
-  });
+  return signForm(
+    createSmsTestForm({
+      MessageSid: messageSid,
+      From: overrides.from ?? "+15551234567",
+      To: overrides.to ?? "+15557654321",
+    }),
+  );
 }
 
 function createSignedDeliveryPayload(
@@ -272,24 +257,6 @@ describe("createSmsWebhookHandler", () => {
     expect(enqueueSmsIngress).toHaveBeenCalledWith(form);
   });
 
-  it("does not acknowledge a delivery callback until durable persistence succeeds", async () => {
-    const payload = createSignedDeliveryPayload(createMessageSid(21), "sent");
-    const delivery = createSmsTestDeliveryRecorder(
-      vi.fn<SmsDeliveryRecorder["record"]>(async () => {
-        throw new Error("sqlite unavailable");
-      }),
-    );
-    const handler = createHandler({ delivery });
-    const res = createResponse();
-
-    await expect(handler(createRequest(payload.body, payload.signature), res)).rejects.toThrow(
-      "sqlite unavailable",
-    );
-    expect(res.endMock).not.toHaveBeenCalled();
-    expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
-    expect(enqueueSmsIngress).not.toHaveBeenCalled();
-  });
-
   it("waits for the durable delivery commit before returning HTTP 200", async () => {
     const account = createSmsTestAccount();
     const payload = createSignedDeliveryPayload(createMessageSid(22), "sent", { account });
@@ -329,19 +296,34 @@ describe("createSmsWebhookHandler", () => {
     expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
   });
 
-  it("does not acknowledge when the durable enqueue fails", async () => {
-    const { body, signature } = createSignedSmsPayload(createMessageSid(2));
-    enqueueSmsIngress.mockRejectedValueOnce(new Error("sqlite unavailable"));
-    const handler = createHandler();
-    const res = createResponse();
-
-    await expect(handler(createRequest(body, signature), res)).rejects.toThrow(
-      "sqlite unavailable",
-    );
-
-    expect(res.endMock).not.toHaveBeenCalled();
-    expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
-  });
+  it.each(["delivery", "ingress"] as const)(
+    "does not acknowledge failed durable %s",
+    async (kind) => {
+      const failure = new Error("sqlite unavailable");
+      const delivery = createSmsTestDeliveryRecorder(
+        vi.fn<SmsDeliveryRecorder["record"]>(async () => {
+          throw failure;
+        }),
+      );
+      if (kind === "ingress") {
+        enqueueSmsIngress.mockRejectedValueOnce(failure);
+      }
+      const payload =
+        kind === "delivery"
+          ? createSignedDeliveryPayload(createMessageSid(21), "sent")
+          : createSignedSmsPayload(createMessageSid(2));
+      const handler = createHandler(kind === "delivery" ? { delivery } : {});
+      const res = createResponse();
+      await expect(handler(createRequest(payload.body, payload.signature), res)).rejects.toThrow(
+        "sqlite unavailable",
+      );
+      expect(res.endMock).not.toHaveBeenCalled();
+      expect(res.setHeaderMock).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
+      if (kind === "delivery") {
+        expect(enqueueSmsIngress).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("acknowledges only after the durable enqueue resolves", async () => {
     const { body, signature } = createSignedSmsPayload(createMessageSid(3));
@@ -413,9 +395,7 @@ describe("createSmsWebhookHandler", () => {
     expect(enqueueSmsIngress).not.toHaveBeenCalled();
 
     const valid = createSignedBody({ account, messageSid: "SM-valid-after-invalid-burst" });
-    await expectStatus(handler, valid, 200, {
-      headers: { "x-forwarded-for": "203.0.113.10" },
-    });
+    await expectStatus(handler, valid, 200, { headers: { "x-forwarded-for": "203.0.113.10" } });
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(1);
   });
 
@@ -456,9 +436,7 @@ describe("createSmsWebhookHandler", () => {
 
     for (let i = 0; i < 30; i += 1) {
       const { body, signature } = createSignedSmsPayload(createMessageSid(500 + i));
-      await expectStatus(handler, { body, signature }, 200, {
-        remoteAddress: "203.0.113.30",
-      });
+      await expectStatus(handler, { body, signature }, 200, { remoteAddress: "203.0.113.30" });
     }
     // Equivalent Twilio RCS address syntax canonicalizes into the same sender bucket.
     const overQuota = createSignedSmsPayload(createMessageSid(530), {
@@ -496,9 +474,7 @@ describe("createSmsWebhookHandler", () => {
       await expectStatus(handler, { body, signature }, 200);
     }
 
-    const overAggregate = createSignedSmsPayload(createMessageSid(1_200), {
-      from: "+15559999999",
-    });
+    const overAggregate = createSignedSmsPayload(createMessageSid(1_200), { from: "+15559999999" });
     await expectStatus(handler, overAggregate, 429);
     expect(enqueueSmsIngress).toHaveBeenCalledTimes(300);
 
@@ -530,10 +506,7 @@ describe("createSmsWebhookHandler", () => {
 
   it("keeps validation-disabled webhook dispatches on the stricter callback budget", async () => {
     const account = createSmsTestAccount({ dangerouslyDisableSignatureValidation: true });
-    const handler = createHandler({
-      cfg: { gateway: { trustedProxies: ["127.0.0.1"] } },
-      account,
-    });
+    const handler = createHandler({ cfg: { gateway: { trustedProxies: ["127.0.0.1"] } }, account });
 
     for (let i = 0; i < 30; i += 1) {
       // Rotate From: without signature validation it is unauthenticated input and

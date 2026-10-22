@@ -36,11 +36,7 @@ async function resolveSmsSecretAssignments(sms: SmsChannelConfig, env: NodeJS.Pr
 
   const resolved = await resolveSecretRefValues(
     context.assignments.map((assignment) => assignment.ref),
-    {
-      config: sourceConfig,
-      env: context.env,
-      cache: context.cache,
-    },
+    { config: sourceConfig, env: context.env, cache: context.cache },
   );
   applyResolvedAssignments({ assignments: context.assignments, resolved });
 
@@ -48,45 +44,31 @@ async function resolveSmsSecretAssignments(sms: SmsChannelConfig, env: NodeJS.Pr
 }
 
 describe("sms secret contract", () => {
-  it("resolves top-level authToken SecretRefs for SMS accounts", async () => {
-    const resolved = await resolveSmsSecretAssignments(
-      { ...sender, authToken: tokenRef("TWILIO_AUTH_TOKEN") },
-      { TWILIO_AUTH_TOKEN: "resolved-token" },
-    );
-
-    expect(resolved.config.channels?.sms?.authToken).toBe("resolved-token");
-    expect(resolved.warnings).toStrictEqual([]);
-  });
-
-  it("keeps top-level authToken active for an implicit default sender plus named accounts", async () => {
-    const resolved = await resolveSmsSecretAssignments(
-      { ...sender, authToken: tokenRef("TWILIO_DEFAULT_TOKEN"), accounts },
-      tokens,
-    );
-
-    expect(resolved.config.channels?.sms?.authToken).toBe("resolved-default-token");
-    expect(resolved.config.channels?.sms?.accounts?.support?.authToken).toBe(
-      "resolved-support-token",
-    );
-    expect(resolved.warnings).toStrictEqual([]);
-  });
-
-  it("keeps top-level authToken active for env-backed default senders plus named accounts", async () => {
-    const resolved = await resolveSmsSecretAssignments(
-      { enabled: true, authToken: tokenRef("TWILIO_DEFAULT_TOKEN"), accounts },
-      {
-        ...tokens,
-        TWILIO_ACCOUNT_SID: "AC-env",
-        TWILIO_PHONE_NUMBER: "+15550001111",
-      },
-    );
-
-    expect(resolved.config.channels?.sms?.authToken).toBe("resolved-default-token");
-    expect(resolved.config.channels?.sms?.accounts?.support?.authToken).toBe(
-      "resolved-support-token",
-    );
-    expect(resolved.warnings).toStrictEqual([]);
-  });
+  it.each([
+    ["standalone", { ...sender }, { TWILIO_DEFAULT_TOKEN: tokens.TWILIO_DEFAULT_TOKEN }, false],
+    ["implicit default with named accounts", { ...sender, accounts }, tokens, true],
+    [
+      "env-backed default with named accounts",
+      { enabled: true, accounts },
+      { ...tokens, TWILIO_ACCOUNT_SID: "AC-env", TWILIO_PHONE_NUMBER: "+15550001111" },
+      true,
+    ],
+  ] satisfies [string, SmsChannelConfig, NodeJS.ProcessEnv, boolean][])(
+    "resolves the %s sender token",
+    async (_name, sms, env, named) => {
+      const resolved = await resolveSmsSecretAssignments(
+        { ...sms, authToken: tokenRef("TWILIO_DEFAULT_TOKEN") },
+        env,
+      );
+      expect(resolved.config.channels?.sms?.authToken).toBe("resolved-default-token");
+      if (named) {
+        expect(resolved.config.channels?.sms?.accounts?.support?.authToken).toBe(
+          "resolved-support-token",
+        );
+      }
+      expect(resolved.warnings).toStrictEqual([]);
+    },
+  );
 
   it("treats top-level authToken refs as inactive when all enabled accounts override them", async () => {
     const resolved = await resolveSmsSecretAssignments(

@@ -244,59 +244,30 @@ describe("SMS status probe", () => {
     });
   });
 
-  it("preserves inbound and outbound facts when the webhook lookup fails", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
-      if (fetchInputUrl(input).includes("IncomingPhoneNumbers.json")) {
-        throw new Error("number lookup unavailable");
-      }
-      return new Response(
-        JSON.stringify({
-          messages: [
-            {
-              sid: "SM-inbound",
-              direction: "inbound",
-              status: "received",
-            },
-          ],
-        }),
-        { status: 200 },
-      );
-    });
-
-    const result = await probeDelivery(
-      { messageSid: "SM-delivered", status: "delivered", lastObservedAt: 2 },
-      fetchImpl,
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("number lookup unavailable"),
-      webhook: { status: "unavailable" },
-      recentInbound: { sid: "SM-inbound", status: "received" },
-      recentOutbound: { messageSid: "SM-delivered", status: "delivered" },
-    });
-  });
-
-  it("preserves a successful webhook check and outbound facts when history fails", async () => {
-    const fetchImpl = vi.fn<typeof fetch>(async (input) => {
-      if (fetchInputUrl(input).includes("/Messages.json")) {
-        throw new Error("message history unavailable");
-      }
-      return new Response(JSON.stringify(createWebhookResponse()), { status: 200 });
-    });
-
-    const result = await probeDelivery(
-      { messageSid: "SM-undelivered", status: "undelivered", lastObservedAt: 2 },
-      fetchImpl,
-    );
-
-    expect(result).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("message history unavailable"),
-      webhook: { status: "matches" },
-      recentOutbound: { messageSid: "SM-undelivered", status: "undelivered" },
-    });
-  });
+  it.each(["webhook", "history"] as const)(
+    "preserves sibling and durable facts when the %s lookup fails",
+    async (lookup) => {
+      const webhookFailed = lookup === "webhook";
+      const error = webhookFailed ? "number lookup unavailable" : "message history unavailable";
+      const fetchImpl = vi.fn<typeof fetch>(async (input) => {
+        if (fetchInputUrl(input).includes("IncomingPhoneNumbers.json") === webhookFailed) {
+          throw new Error(error);
+        }
+        return Response.json(webhookFailed ? inbound("SM-inbound") : createWebhookResponse());
+      });
+      const outbound = webhookFailed
+        ? { messageSid: "SM-delivered", status: "delivered", lastObservedAt: 2 }
+        : { messageSid: "SM-undelivered", status: "undelivered", lastObservedAt: 2 };
+      const result = await probeDelivery(outbound, fetchImpl);
+      expect(result).toMatchObject({
+        ok: false,
+        error: expect.stringContaining(error),
+        webhook: { status: webhookFailed ? "unavailable" : "matches" },
+        recentOutbound: { messageSid: outbound.messageSid, status: outbound.status },
+        ...(webhookFailed ? { recentInbound: { sid: "SM-inbound", status: "received" } } : {}),
+      });
+    },
+  );
 
   it.each(["webhook", "history"] as const)(
     "preserves sibling and durable delivery facts when the %s request times out",

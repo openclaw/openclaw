@@ -1,4 +1,3 @@
-import { createHmac } from "node:crypto";
 import { mkdtemp, realpath, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import os from "node:os";
@@ -11,7 +10,11 @@ import type { SmsChannelRuntime } from "./inbound.js";
 import { createSmsIngressSpool } from "./ingress-spool.js";
 import type { ResolvedSmsAccount } from "./types.js";
 import { createSmsWebhookHandler } from "./webhook.js";
-import { createSmsTestAccount } from "./webhook.test-support.js";
+import {
+  createSmsTestAccount,
+  signSmsTestForm,
+  createSmsTestForm,
+} from "./webhook.test-support.js";
 
 type SmsIngressPayload = {
   version: 1;
@@ -63,14 +66,8 @@ function createTestSpool(
   return spool;
 }
 
-function form(messageSid: string): Record<string, string> {
-  return {
-    AccountSid: account.accountSid,
-    From: "+15551234567",
-    To: "+15557654321",
-    Body: "hello",
-    MessageSid: messageSid,
-  };
+function form(messageSid: string) {
+  return createSmsTestForm({ MessageSid: messageSid }, account);
 }
 
 async function drainSpool(spool: SmsIngressSpool): Promise<void> {
@@ -221,19 +218,11 @@ describe("createSmsIngressSpool", () => {
     spool.start();
 
     async function postSignedCallback(callback: Record<string, string>) {
-      const signatureData =
-        testAccount.publicWebhookUrl +
-        Object.keys(callback)
-          .toSorted()
-          .map((key) => `${key}${callback[key] ?? ""}`)
-          .join("");
-      const signature = createHmac("sha1", testAccount.authToken)
-        .update(signatureData)
-        .digest("base64");
+      const { body, signature } = signSmsTestForm(callback, testAccount);
       return await fetch(testAccount.publicWebhookUrl, {
         method: "POST",
         headers: { "x-twilio-signature": signature },
-        body: new URLSearchParams(callback),
+        body,
       });
     }
 

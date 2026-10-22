@@ -60,10 +60,9 @@ beforeEach(() => {
     return { sid: "SM-default", to, from: FROM, status: "queued" };
   });
   hostedMediaMocks.cleanup.mockReset().mockResolvedValue(undefined);
-  hostedMediaMocks.prepare.mockReset().mockResolvedValue({
-    url: hostedMediaMocks.url,
-    cleanup: hostedMediaMocks.cleanup,
-  });
+  hostedMediaMocks.prepare
+    .mockReset()
+    .mockResolvedValue({ url: hostedMediaMocks.url, cleanup: hostedMediaMocks.cleanup });
   listRecentSmsDeliveryRecords.mockClear();
   recordInitialSmsDeliveryResult.mockReset().mockResolvedValue(null);
   probeSmsAccount.mockClear();
@@ -75,9 +74,7 @@ afterEach(() => {
 
 function createConfig(overrides: SmsChannelConfig = {}) {
   return {
-    channels: {
-      sms: { accountSid: "AC123", authToken: "secret", fromNumber: FROM, ...overrides },
-    },
+    channels: { sms: { accountSid: "AC123", authToken: "secret", fromNumber: FROM, ...overrides } },
   };
 }
 
@@ -114,10 +111,7 @@ describe("smsPlugin status", () => {
 
   it("passes only the remaining probe budget after loading delivery observations", async () => {
     vi.useFakeTimers();
-    const account = createSmsTestAccount({
-      accountId: "support",
-      accountSid: "AC-support",
-    });
+    const account = createSmsTestAccount({ accountId: "support", accountSid: "AC-support" });
     listRecentSmsDeliveryRecords.mockImplementationOnce(
       async () =>
         await new Promise<SmsDeliveryRecord[]>((resolve) => {
@@ -125,11 +119,7 @@ describe("smsPlugin status", () => {
         }),
     );
 
-    const probe = smsPlugin.status?.probeAccount?.({
-      cfg: {},
-      account,
-      timeoutMs: 1000,
-    });
+    const probe = smsPlugin.status?.probeAccount?.({ cfg: {}, account, timeoutMs: 1000 });
     await vi.advanceTimersByTimeAsync(250);
     await probe;
 
@@ -195,21 +185,13 @@ describe("smsPlugin outbound", () => {
 
   it("resolves the configured default SMS target for outbound delivery", () => {
     expect(
-      smsPlugin.outbound?.resolveTarget?.({
-        cfg: createConfig({ defaultTo: TO }),
-        to: "",
-      }),
+      smsPlugin.outbound?.resolveTarget?.({ cfg: createConfig({ defaultTo: TO }), to: "" }),
     ).toEqual({ ok: true, to: TO });
   });
 
   it("hosts and sends outbound media as MMS with an ordered multipart receipt", async () => {
     for (const sid of ["MM-first", "SM-second"]) {
-      sendSmsViaTwilio.mockResolvedValueOnce({
-        sid,
-        to: TO,
-        from: FROM,
-        status: "queued",
-      });
+      sendSmsViaTwilio.mockResolvedValueOnce({ sid, to: TO, from: FROM, status: "queued" });
     }
     const ctx = mediaContext({
       config: { textChunkLimit: 5 },
@@ -225,11 +207,7 @@ describe("smsPlugin outbound", () => {
     );
     expect(sendSmsViaTwilio).toHaveBeenNthCalledWith(
       1,
-      expect.objectContaining({
-        to: TO,
-        text: "alpha",
-        mediaUrls: [hostedMediaMocks.url],
-      }),
+      expect.objectContaining({ to: TO, text: "alpha", mediaUrls: [hostedMediaMocks.url] }),
     );
     expect(sendSmsViaTwilio).toHaveBeenNthCalledWith(
       2,
@@ -252,10 +230,7 @@ describe("smsPlugin outbound", () => {
     const events: string[] = [];
     hostedMediaMocks.prepare.mockImplementationOnce(async () => {
       events.push("prepare");
-      return {
-        url: hostedMediaMocks.url,
-        cleanup: hostedMediaMocks.cleanup,
-      };
+      return { url: hostedMediaMocks.url, cleanup: hostedMediaMocks.cleanup };
     });
     sendSmsViaTwilio.mockImplementationOnce(async ({ to, onPlatformSendDispatch }) => {
       await onPlatformSendDispatch?.();
