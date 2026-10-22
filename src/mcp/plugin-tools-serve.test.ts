@@ -9,19 +9,26 @@ import {
   resetAdjustedParamsByToolCallIdForTests,
 } from "../agents/agent-tools.before-tool-call.state.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import type { OpenClawConfig } from "../config/config.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { createMockPluginRegistry } from "../plugins/hooks.test-fixtures.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
+import {
+  createCodexSupervisionToolsMcpServer,
+  serveCodexSupervisionToolsMcp,
+} from "./codex-supervision-tools-serve.js";
 import { createPluginToolsMcpHandlers } from "./plugin-tools-handlers.js";
 import { acquirePluginToolsForMcp, servePluginToolsMcp } from "./plugin-tools-serve.js";
 import { createTool, withMcpConnection } from "./tools-mcp.test-support.js";
 
 const callGatewayTool = vi.hoisted(() => vi.fn());
 const connectToolsMcpServerToStdioMock = vi.hoisted(() => vi.fn());
-const getRuntimeConfigMock = vi.hoisted(() => vi.fn(() => ({ plugins: { enabled: true } })));
+const getRuntimeConfigMock = vi.hoisted(() =>
+  vi.fn<() => OpenClawConfig>(() => ({ plugins: { enabled: true } })),
+);
 const acquireStandalonePluginToolRegistryMock = vi.hoisted(() =>
   vi.fn<typeof import("../plugins/tools.js").acquireStandalonePluginToolRegistry>(),
 );
@@ -88,6 +95,7 @@ afterEach(() => {
   resolvePluginToolsMock.mockReturnValue([]);
   resetAdjustedParamsByToolCallIdForTests();
   resetGlobalHookRunner();
+  vi.unstubAllEnvs();
 });
 
 function approvalHook(context?: HookContext) {
@@ -111,19 +119,6 @@ function approvalHook(context?: HookContext) {
 }
 
 const stored = () => vi.fn().mockResolvedValue({ content: "Stored." });
-
-async function expectApprovalReported(tool: AnyAgentTool, execute: ReturnType<typeof vi.fn>) {
-  const result = await createPluginToolsMcpHandlers([tool]).callTool({
-    name: "memory_store",
-    arguments: { text: "remember this" },
-  });
-  expect(callGatewayTool).not.toHaveBeenCalled();
-  expect(execute).not.toHaveBeenCalled();
-  expect(result).toEqual({
-    isError: true,
-    content: [{ type: "text", text: "Tool error: Approval required" }],
-  });
-}
 
 describe("plugin tools MCP server", () => {
   it.each([
@@ -312,7 +307,16 @@ describe("plugin tools MCP server", () => {
         callGatewayTool.mockRejectedValue(new Error("gateway unavailable"));
       }
 
-      await expectApprovalReported(tool, execute);
+      const result = await createPluginToolsMcpHandlers([tool]).callTool({
+        name: "memory_store",
+        arguments: { text: "remember this" },
+      });
+      expect(callGatewayTool).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        isError: true,
+        content: [{ type: "text", text: "Tool error: Approval required" }],
+      });
       expect(handler).toHaveBeenCalledTimes(1);
       expect(onResolution).toHaveBeenCalledTimes(1);
       expect(onResolution).toHaveBeenLastCalledWith(PluginApprovalResolutions.CANCELLED);
@@ -327,4 +331,63 @@ describe("plugin tools MCP server", () => {
       }
     },
   );
+});
+
+describe("Codex supervision MCP server", () => {
+  const names = [
+    "codex_endpoint_probe",
+    "codex_sessions_list",
+    "codex_session_read",
+    "codex_session_send",
+    "codex_session_interrupt",
+  ];
+  const tools = () => names.map((name) => createTool(name, vi.fn<AnyAgentTool["execute"]>()));
+
+  it("lists official tools through the trusted standalone owner context", async () => {
+    resolvePluginToolsMock.mockReturnValue(tools());
+    await serveCodexSupervisionToolsMcp();
+    await withMcpConnection(
+      createCodexSupervisionToolsMcpServer({ tools: tools() }),
+      async (client) => {
+        expect((await client.listTools()).tools.map((tool) => tool.name)).toEqual(names);
+        expect(acquireStandalonePluginToolRegistryMock).toHaveBeenCalledWith(
+          expect.objectContaining({ context: expect.objectContaining({ senderIsOwner: true }) }),
+        );
+      },
+    );
+  });
+
+  it("preserves endpoint config and translates legacy env policy at the standalone boundary", async () => {
+    vi.stubEnv("OPENCLAW_CODEX_SUPERVISOR_ALLOW_RAW_TRANSCRIPTS", "1");
+    vi.stubEnv("OPENCLAW_CODEX_SUPERVISOR_ALLOW_WRITE_CONTROLS", "1");
+    const appServer = { transport: "websocket", url: "ws://127.0.0.1:4500" };
+    const config = {
+      plugins: {
+        allow: [" CODEX "],
+        deny: ["CoDeX"],
+        entries: { " CODEX ": { config: { appServer, supervision: { enabled: false } } } },
+      },
+    };
+    const original = structuredClone(config);
+    getRuntimeConfigMock.mockReturnValue(config);
+    resolvePluginToolsMock.mockReturnValue(tools());
+    await serveCodexSupervisionToolsMcp();
+    const plugins =
+      acquireStandalonePluginToolRegistryMock.mock.calls[0]?.[0]?.context.config?.plugins;
+    expect(plugins).toMatchObject({
+      allow: ["codex"],
+      deny: [],
+      entries: {
+        codex: {
+          enabled: true,
+          config: {
+            appServer: original.plugins.entries[" CODEX "].config.appServer,
+            supervision: { enabled: true, allowRawTranscripts: true, allowWriteControls: true },
+          },
+        },
+      },
+    });
+    expect(plugins?.entries).not.toHaveProperty(" CODEX ");
+    expect(config).toEqual(original);
+  });
 });
