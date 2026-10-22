@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireGit } from "../../agents/worktrees/git.js";
 import { resolveExecutablePath } from "../../infra/executable-path.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { readWorkerProjectEnvironmentRecipe } from "./project-preparation.js";
 import { createProjectPreparationFixture } from "./project-preparation.test-support.js";
 import { prepareWorkerProjectSnapshot } from "./workspace-git-base.js";
@@ -35,14 +36,15 @@ async function fixture(files: Record<string, string>) {
   );
   const bin = path.join(f.home, "fixture-bin");
   await fs.mkdir(bin);
+  const nodeExecutable = resolveTestNodeExecPath();
   // Linux selects tools beside process.execPath; a symlink to host Node would select host tools.
   // A separate copier keeps writable Node descriptors out of sibling Vitest forks.
-  execFileSync(process.execPath, [
+  execFileSync(nodeExecutable, [
     "-e",
     'const fs = require("node:fs"); fs.copyFileSync(process.execPath, process.argv[1], fs.constants.COPYFILE_FICLONE)',
     path.join(bin, "node"),
   ]);
-  const libraries = path.resolve(path.dirname(process.execPath), "../lib");
+  const libraries = path.resolve(path.dirname(nodeExecutable), "../lib");
   if (existsSync(libraries)) {
     await fs.symlink(libraries, path.join(f.home, "lib"));
   }

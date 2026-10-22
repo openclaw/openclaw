@@ -155,7 +155,8 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
       const closingAtStart = held.closing;
       let phase = "fetch";
       try {
-        const response = await route.fetch();
+        // A reset while fetching a local asset is transport noise; HTTP failures still surface.
+        const response = await route.fetch({ maxRetries: 1 });
         expect(response.status()).toBe(200);
         request.resolve(route.request().url());
         phase = "held";

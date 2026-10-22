@@ -28,7 +28,7 @@ async function buildContext(
   messageOverrides: Partial<InboundDecisionParams["message"]>,
   overrides: Parameters<typeof resolveDecision>[0] = {},
 ) {
-  const message = makeMessage(messageOverrides);
+  const { message } = createInboundDecisionParams({ message: messageOverrides });
   const admitted = await resolveDecision({ ...overrides, message });
   expect(admitted.kind).toBe("dispatch");
   if (admitted.kind !== "dispatch") {
@@ -42,17 +42,6 @@ async function buildContext(
     historyLimit: 0,
     groupHistories: new Map(),
   });
-}
-
-function makeMessage(overrides: Partial<InboundDecisionParams["message"]> = {}) {
-  return {
-    id: 42,
-    sender: "+15555550123",
-    text: "ok",
-    is_from_me: false,
-    is_group: false,
-    ...overrides,
-  };
 }
 
 describe("buildIMessageInboundContext presentation", () => {

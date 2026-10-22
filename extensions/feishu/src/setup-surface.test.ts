@@ -219,17 +219,15 @@ describe("feishu setup wizard", () => {
   });
   it("probes the resolved default account in multi-account config", async () => {
     probeFeishuMock.mockResolvedValueOnce({ ok: true, botName: "Feishu Main" });
-
+    const account = {
+      appId: "cli_main",
+      appSecret: "main-app-secret", // pragma: allowlist secret
+      connectionMode: "websocket",
+    };
     const result = await status({
       enabled: true,
       defaultAccount: "main-bot",
-      accounts: {
-        "main-bot": {
-          appId: "cli_main",
-          appSecret: "main-app-secret", // pragma: allowlist secret
-          connectionMode: "websocket",
-        },
-      },
+      accounts: { "main-bot": account },
     });
 
     expect(result).toMatchObject({
@@ -241,17 +239,12 @@ describe("feishu setup wizard", () => {
       enabled: true,
       configured: true,
       name: undefined,
-      appId: "cli_main",
-      appSecret: "main-app-secret", // pragma: allowlist secret
+      appId: account.appId,
+      appSecret: account.appSecret,
       encryptKey: undefined,
       verificationToken: undefined,
       domain: "feishu",
-      config: {
-        enabled: true,
-        appId: "cli_main",
-        appSecret: "main-app-secret", // pragma: allowlist secret
-        connectionMode: "websocket",
-      },
+      config: { enabled: true, ...account },
     });
   });
 
