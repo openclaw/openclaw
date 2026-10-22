@@ -777,7 +777,7 @@ describe("tui command handlers", () => {
   });
 
   it("forwards /reset soft to the gateway instead of resetting the session", async () => {
-    const h = createTuiCommandHandlersHarness();
+    const h = createHarness();
     await h.handleCommand("/reset soft please reload");
     expectSendChatFields(h.sendChat, {
       sessionKey: "agent:main:main",
@@ -788,7 +788,7 @@ describe("tui command handlers", () => {
   });
 
   it("rejects /reset soft in local mode without resetting the session", async () => {
-    const h = createTuiCommandHandlersHarness({ opts: { local: true } });
+    const h = createHarness({ opts: { local: true } });
     await h.handleCommand("/reset soft please reload");
     expect(h.sendChat).not.toHaveBeenCalled();
     expect(h.resetSession).not.toHaveBeenCalled();
