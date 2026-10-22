@@ -81,6 +81,8 @@ const CANDIDATE_RELEASE_TOOLING_PATHS = [
   ".github/workflows/full-release-candidate.yml",
   ".github/workflows/full-release-validation.yml",
   ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
+  ".github/workflows/openclaw-release-checks.yml",
+  ".github/workflows/plugin-prerelease.yml",
   ":(glob)scripts/full-release-*",
   "scripts/frv.mjs",
   "scripts/npm-prepared-bundle.mjs",
@@ -94,6 +96,7 @@ const CANDIDATE_RELEASE_TOOLING_PATHS = [
   ":(glob)scripts/lib/frozen-target-*",
   ":(glob)scripts/lib/full-release-*",
   "scripts/lib/qualification-admission-baselines.mjs",
+  "scripts/lib/release-qualification-coverage.json",
   "scripts/lib/release-upgrade-baseline.mjs",
   ":(glob)scripts/lib/upgrade-survivor-*",
   ":(glob)scripts/e2e/lib/upgrade-survivor/**",
@@ -882,9 +885,17 @@ export function formatCandidateToolingLagWarning(
 }
 
 function warnCandidateToolingLag(candidateSha: string) {
-  run("git", ["fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"], {
-    stdio: "inherit",
-  });
+  const fetch = runStatus(
+    "git",
+    ["fetch", "--no-tags", "origin", "refs/heads/main:refs/remotes/origin/main"],
+    { stdio: ["ignore", "ignore", "pipe"] },
+  );
+  if (fetch.status !== 0) {
+    console.warn(
+      "WARNING: candidate tooling lag is unavailable because origin/main could not be refreshed; continuing with the existing qualification checks.",
+    );
+    return;
+  }
   const mainSha = resolveSha("origin/main");
   if (candidateSha === mainSha) {
     return;

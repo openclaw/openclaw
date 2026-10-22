@@ -66,6 +66,34 @@ describe("full-release-validation-at-sha", () => {
     );
   });
 
+  it("keeps candidate dispatch available when the tooling-lag lookup is unavailable", () => {
+    const fixture = createDispatchFixture({
+      candidateOwned: true,
+      toolingLagFetchFailure: true,
+    });
+    const result = fixture.run();
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stderr).toContain(
+      "candidate tooling lag is unavailable because origin/main could not be refreshed",
+    );
+  });
+
+  it("includes child workflows and coverage policy in the tooling-lag comparison", () => {
+    const fixture = createDispatchFixture({ candidateOwned: true });
+    const result = fixture.run();
+
+    expect(result.status, result.stderr).toBe(0);
+    const comparison = fixture.gitCalls().find((args) => args[0] === "log");
+    expect(comparison).toEqual(
+      expect.arrayContaining([
+        ".github/workflows/openclaw-release-checks.yml",
+        ".github/workflows/plugin-prerelease.yml",
+        "scripts/lib/release-qualification-coverage.json",
+      ]),
+    );
+  });
+
   it("rejects a missing purpose before remote creation on supporting tooling", () => {
     const fixture = createDispatchFixture({ omitPurpose: true });
     const result = fixture.run();
