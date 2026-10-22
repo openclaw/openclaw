@@ -91,6 +91,13 @@ export function encodeLocalPluginDiscoveryId(identity: string): string {
   return encodeDiscoveryId(LOCAL_DISCOVERY_ID_PREFIX, identity);
 }
 
+/** Discovery identity that joins an installed inventory row to its catalog entry. */
+export function pluginCatalogId(plugin: Pick<PluginCatalogEntry, "id" | "clawhubPackage">): string {
+  return plugin.clawhubPackage
+    ? encodePluginDiscoveryId(plugin.clawhubPackage)
+    : encodeLocalPluginDiscoveryId(plugin.id);
+}
+
 export function resolvePluginDiscoveryIdentity(
   id: string,
 ): { origin: "clawhub" | "local"; identity: string } | undefined {
