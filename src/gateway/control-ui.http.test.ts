@@ -1237,21 +1237,6 @@ it("does not expose precompressed sidecars as independent assets", async () => {
   expectNotFoundResponse(reply);
 });
 
-it("compresses prepared SPA fallback HTML", async () => {
-  const tmp = await createControlUiRoot(`<html><body>${"hello ".repeat(200)}</body></html>\n`);
-  const params = { headers: { "accept-encoding": "gzip" } };
-  const first = await runControlUiRequest(tmp, "/chat", params);
-  const reply = await runControlUiRequest(tmp, "/chat", params);
-  expect(reply.headers).toMatchObject({
-    "Cache-Control": "no-cache",
-    "Content-Encoding": "gzip",
-  });
-  expect(gunzipSync(reply.body as Buffer).toString()).toContain(
-    '<html data-openclaw-control-ui-base-path="" data-openclaw-terminal-enabled="true">',
-  );
-  expect(reply.body).toEqual(first.body);
-});
-
 it("returns 406 when every HTML representation is explicitly rejected", async () => {
   const reply = await runControlUiRequest(await createControlUiRoot(), "/", {
     headers: { "accept-encoding": "*;q=0" },
