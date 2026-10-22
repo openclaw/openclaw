@@ -530,8 +530,8 @@ describe("web_fetch extraction fallbacks", () => {
 
   it("extracts HTML bodies when content-type is missing", async () => {
     const html =
-      '<!DOCTYPE html><html><head><title>Docs</title><script>track()</script></head><body><p>Visible docs</p><div hidden>secret instructions</div></body></html>';
-    installMockFetch(async (input) => errorHtmlResponse(html, 200, resolveRequestUrl(input), null));
+      "<!DOCTYPE html><html><head><title>Docs</title><script>track()</script></head><body><p>Visible docs</p><div hidden>secret instructions</div></body></html>";
+    installResponse(new TextEncoder().encode(html), null);
 
     const { details } = await fetchPage("untyped", undefined, { extractMode: "text" });
 
@@ -544,9 +544,7 @@ describe("web_fetch extraction fallbacks", () => {
   });
 
   it("keeps untyped non-HTML bodies raw", async () => {
-    installMockFetch(async (input) =>
-      errorHtmlResponse("plain <b>notes</b>", 200, resolveRequestUrl(input), null),
-    );
+    installResponse(new TextEncoder().encode("plain <b>notes</b>"), null);
 
     const { details } = await fetchPage("untyped-text");
 
