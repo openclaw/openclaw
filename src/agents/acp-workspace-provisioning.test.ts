@@ -1,4 +1,4 @@
-import { expect, it } from "vitest";
+import { beforeEach, expect, it } from "vitest";
 import { resolveConfiguredAcpBindingRecord } from "../acp/persistent-bindings.resolve.js";
 import type { ChannelConfiguredBindingProvider } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/config.js";
@@ -15,31 +15,32 @@ const bindings: ChannelConfiguredBindingProvider = {
   matchInboundConversation: ({ compiledBinding, conversationId }) =>
     compiledBinding.conversationId === conversationId ? { conversationId, matchPriority: 2 } : null,
 };
-
-const cfg: OpenClawConfig = {
-  agents: {
-    defaults: { workspace: "/shared-ws" },
-    entries: {
-      main: {},
-      codex: { runtime: { type: "acp" } },
-      global: { runtime: { type: "acp", acp: { cwd: "/projects/app" } } },
-    },
-  },
-};
-const acp = (cwd?: string): SessionAcpMeta => ({
-  backend: "acpx",
-  agent: "codex",
-  runtimeSessionName: "rs",
-  mode: "persistent",
-  ...(cwd ? { cwd } : {}),
-  state: "idle",
-  lastActivityAt: 0,
+beforeEach(() => {
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: "discord",
+        plugin: { ...createChannelTestPluginBase({ id: "discord" }), bindings },
+        source: "test",
+      },
+    ]),
+  );
 });
-function expectMode(
-  overrides: Partial<Parameters<typeof resolve>[0]>,
-  expected: "standard" | "runtime-managed-implicit",
-) {
-  return expect(resolve({ cfg, agentId: "codex", ...overrides })).resolves.toBe(expected);
+
+function config(entries: NonNullable<OpenClawConfig["agents"]>["entries"]): OpenClawConfig {
+  return { agents: { defaults: { workspace: "/shared-ws" }, entries } };
+}
+const cfg = config({ main: {}, codex: { runtime: { type: "acp" } } });
+function acp(cwd?: string): SessionAcpMeta {
+  return {
+    backend: "acpx",
+    agent: "codex",
+    runtimeSessionName: "rs",
+    mode: "persistent",
+    ...(cwd ? { cwd } : {}),
+    state: "idle",
+    lastActivityAt: 0,
+  };
 }
 function binding(conversationId: string, cwd?: string) {
   return {
@@ -52,8 +53,6 @@ function binding(conversationId: string, cwd?: string) {
 
 // #92015: a sibling binding must not inherit the cwd-bearing turn's decision.
 it("scopes provisioning to the concrete ACP binding", async () => {
-  const plugin = { ...createChannelTestPluginBase({ id: "discord" }), bindings };
-  setActivePluginRegistry(createTestRegistry([{ pluginId: "discord", plugin, source: "test" }]));
   const mixed = { ...cfg, bindings: [binding("111", "/projects/app"), binding("222")] };
   const key = (conversationId: string) =>
     resolveConfiguredAcpBindingRecord({
@@ -65,17 +64,41 @@ it("scopes provisioning to the concrete ACP binding", async () => {
   const withCwd = key("111");
   const withoutCwd = key("222");
   expect(withCwd).not.toBe(withoutCwd);
-  await expectMode({ cfg: mixed, sessionKey: withCwd }, "runtime-managed-implicit");
-  await expectMode({ cfg: mixed, sessionKey: withoutCwd }, "standard");
+  await expect(resolve({ cfg: mixed, agentId: "codex", sessionKey: withCwd })).resolves.toBe(
+    "runtime-managed-implicit",
+  );
+  await expect(resolve({ cfg: mixed, agentId: "codex", sessionKey: withoutCwd })).resolves.toBe(
+    "standard",
+  );
 });
 
 it.each([
-  ["codex", "/projects/app", "runtime-managed-implicit"],
-  ["codex", undefined, "standard"],
-  ["global", undefined, "runtime-managed-implicit"],
-] as const)("provisions %s with session cwd %s as %s", async (agentId, cwd, expected) => {
-  await expectMode(
-    { agentId, sessionEntry: agentId === "global" ? undefined : { acp: acp(cwd) } },
+  ["/projects/app", "runtime-managed-implicit"],
+  [undefined, "standard"],
+])("uses the live ACP session cwd %s", async (cwd, expected) => {
+  await expect(resolve({ cfg, agentId: "codex", sessionEntry: { acp: acp(cwd) } })).resolves.toBe(
     expected,
   );
+});
+
+it.each(["work", "pinned"])("keeps standard provisioning for %s", async (agentId) => {
+  await expect(
+    resolve({
+      cfg: config({
+        work: { runtime: { type: "embedded" } },
+        pinned: { workspace: "/explicit-ws", runtime: { type: "acp" } },
+      }),
+      agentId,
+      sessionEntry: { acp: acp("/projects/app") },
+    }),
+  ).resolves.toBe("standard");
+});
+
+it("falls back to the agent-global ACP cwd", async () => {
+  await expect(
+    resolve({
+      cfg: config({ codex: { runtime: { type: "acp", acp: { cwd: "/projects/app" } } } }),
+      agentId: "codex",
+    }),
+  ).resolves.toBe("runtime-managed-implicit");
 });

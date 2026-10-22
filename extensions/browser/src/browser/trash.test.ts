@@ -2,7 +2,6 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test-support.js";
 
 const browserUtilsMock = vi.hoisted(() => ({ configDir: "/tmp/openclaw-state" }));
 
@@ -27,7 +26,6 @@ afterAll(() => {
 let testRoot = "";
 let configDir = "";
 let trashDir = "";
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function write(target: string, contents: string) {
   fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -38,6 +36,10 @@ function profile(dir: string, contents = "outside profile") {
   write(path.join(dir, "Preferences"), contents);
   return dir;
 }
+function expectOutsideProfile(dir: string) {
+  expect(fs.lstatSync(dir).isDirectory()).toBe(true);
+  expect(fs.readFileSync(path.join(dir, "Preferences"), "utf8")).toBe("outside profile");
+}
 function expectForbidden(target: string) {
   return expect(movePathToTrash(target)).rejects.toThrow(
     "Refusing to trash path outside allowed roots",
@@ -46,7 +48,7 @@ function expectForbidden(target: string) {
 
 beforeEach(() => {
   vi.restoreAllMocks();
-  testRoot = tempDirs.make("openclaw-browser-");
+  testRoot = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-browser-")));
   configDir = path.join(testRoot, "state");
   const homeDir = path.join(testRoot, "home", "test");
   trashDir = path.join(homeDir, ".Trash");
@@ -56,14 +58,26 @@ beforeEach(() => {
   vi.spyOn(os, "homedir").mockReturnValue(homeDir);
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  if (testRoot) {
+    fs.rmSync(testRoot, { recursive: true, force: true });
+  }
+});
 
 it("allows managed browser data under a configured state directory outside home", async () => {
   const target = profile(path.join(configDir, "browser", "constructor"), "profile data");
 
   const moved = await movePathToTrash(target);
-  expect(path.dirname(path.dirname(moved))).toBe(trashDir);
+  const reservation = path.dirname(moved);
+  expect(path.dirname(reservation)).toBe(trashDir);
   expect(path.basename(moved)).toBe("constructor");
+  expect(fs.realpathSync.native(moved)).toBe(moved);
+  const reservationStat = fs.lstatSync(reservation);
+  expect(reservationStat.isDirectory()).toBe(true);
+  if (process.platform !== "win32") {
+    expect(reservationStat.mode & 0o777).toBe(0o700);
+  }
   expect(fs.readFileSync(path.join(moved, "Preferences"), "utf8")).toBe("profile data");
   expect(fs.lstatSync(target, { throwIfNoEntry: false })).toBeUndefined();
 });
@@ -101,6 +115,5 @@ it.each([false, true])("confines symlink moves (parent=%s)", async (parent) => {
     expect(fs.readdirSync(reservation)).toEqual([path.basename(target)]);
   }
   expect(fs.readlinkSync(link)).toBe(outsideDir);
-  expect(fs.lstatSync(outsideTarget).isDirectory()).toBe(true);
-  expect(fs.readFileSync(path.join(outsideTarget, "Preferences"), "utf8")).toBe("outside profile");
+  expectOutsideProfile(outsideTarget);
 });

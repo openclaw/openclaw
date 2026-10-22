@@ -232,7 +232,7 @@ describe("plugin active-run steering", () => {
     expect(claimAnswer).not.toHaveBeenCalled();
   });
 
-  it.each(["legacy", "disabled", "no_active_run", "not_streaming"] as const)(
+  it.each(["legacy", "disabled", "no_active_run", "not_streaming", "runtime_rejected"] as const)(
     "returns a reason instead of throwing for %s",
     async (reason) => {
       const { steer } = createApi(reason !== "disabled");
