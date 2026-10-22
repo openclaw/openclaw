@@ -3,7 +3,10 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import type { ExecutionIdentityAdmissionFacts } from "./execution-identity-admission.js";
 import { executionIdentitySpawnAdmission } from "./execution-identity-spawn-admission.js";
-import { prepareExecutionIdentityContextAtAdmission } from "./execution-identity.test-support.js";
+import {
+  executionIdentityFacts,
+  prepareExecutionIdentityContextAtAdmission,
+} from "./execution-identity.test-support.js";
 
 afterEach(closeOpenClawStateDatabaseForTest);
 
@@ -19,13 +22,7 @@ function prepareContext(
   const { spawnLineage, spawnMissingEvidence = [], ...admissionOverrides } = overrides;
   const admissionFacts: ExecutionIdentityAdmissionFacts = executionIdentitySpawnAdmission({
     operation: "attach",
-    value: {
-      runId,
-      agentId: "main",
-      ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-      runtime: { kind: "embedded" },
-      ...admissionOverrides,
-    },
+    value: executionIdentityFacts(runId, admissionOverrides),
     extra: executionIdentitySpawnAdmission({
       operation: "serialize",
       value: spawnLineage,

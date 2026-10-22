@@ -21,6 +21,7 @@ import {
 } from "./execution-identity-context.js";
 import {
   captureExecutionIdentityAdmissionEnvelope as captureEnvelope,
+  executionIdentityFacts as facts,
   persistExecutionIdentityAdmissionEnvelope as persistEnvelope,
   prepareExecutionIdentityContextAtAdmission as prepareContext,
   recordDeniedApprovalForRun,
@@ -55,19 +56,6 @@ function openIndependentStateDatabase(path: string): OpenClawStateDatabase {
       close: () => true,
       reclaimFreePages: createSqliteWalReclamationResult,
     },
-  };
-}
-
-function facts(
-  runId: string,
-  overrides: Partial<ExecutionIdentityAdmissionFacts> = {},
-): ExecutionIdentityAdmissionFacts {
-  return {
-    runId,
-    agentId: "main",
-    ingress: { kind: "local-cli", boundary: "agent-command.local", state: "present" },
-    runtime: { kind: "embedded" },
-    ...overrides,
   };
 }
 

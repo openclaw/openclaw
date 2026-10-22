@@ -12,6 +12,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { createUnattributedExecutionContext } from "./execution-decision-facts.test-support.js";
 import { presentExecutionDecisionReceiptsInDatabase } from "./execution-decision-receipts.js";
 import { deleteExecutionOwnerLifecycleMetadata } from "./execution-owner-lifecycle-binding-store.js";
 import {
@@ -122,21 +123,10 @@ function openCronDatabase() {
 
 function executionContext(contextId = "context-1"): ExecutionIdentityContextV1 {
   return {
-    schemaVersion: 1,
+    ...createUnattributedExecutionContext(),
     contextId,
-    executionId: "execution-1",
-    runId: "run-1",
-    createdAt: 50,
-    trustDomain: { kind: "gateway-cell", domainRef: "host-1", state: "present" },
     invoker: { state: "unknown" },
     ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
-    agentPrincipal: { kind: "agent", domainRef: "host-1", principalRef: "main" },
-    agentDefinition: { definitionRef: "main", state: "present" },
-    runtimeInstance: { runtimeRef: "runtime-1", kind: "embedded", state: "present" },
-    applicableGrants: [],
-    assurance: [],
-    coverageState: "unattributed",
-    missingEvidence: [],
   };
 }
 

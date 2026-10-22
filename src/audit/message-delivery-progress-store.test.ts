@@ -26,6 +26,7 @@ function createStore() {
   const writeOptions = () => ({ ...options, database: open() });
   return {
     open,
+    count: (table: string) => open().db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get(),
     recordProgress: (input: OutboundMessageProgressInput) =>
       recordOutboundMessageProgressInDatabase(input, writeOptions()),
     recordTerminal: (input: ReturnType<typeof terminalInput>) =>
@@ -129,10 +130,8 @@ describe("outbound message progress companion", () => {
     expect(first).toMatchObject({ action: "message.outbound.queued", outcome: "queued" });
     expect(recoveredReplay).toBeUndefined();
     const { db } = database.open();
-    expect(db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get()).toEqual({
-      count: 2,
-    });
-    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 0 });
+    expect(database.count("outbound_message_progress")).toEqual({ count: 2 });
+    expect(database.count("audit_events")).toEqual({ count: 0 });
     const stored = JSON.stringify(
       db.prepare("SELECT * FROM outbound_message_progress ORDER BY sequence").all(),
     );
@@ -231,11 +230,9 @@ describe("outbound message progress companion", () => {
     ).run(OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT + 1, expiredAt);
 
     expect(database.prune(now)).toBe(OUTBOUND_PROGRESS_PRUNE_BATCH_ROWS_CONTRACT);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM outbound_message_progress").get()).toEqual({
-      count: 1,
-    });
+    expect(database.count("outbound_message_progress")).toEqual({ count: 1 });
     expect(database.prune(now)).toBe(1);
     expect(database.prune(now)).toBe(0);
-    expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 1 });
+    expect(database.count("audit_events")).toEqual({ count: 1 });
   });
 });
