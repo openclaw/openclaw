@@ -2234,7 +2234,6 @@ src/plugins/update-channel.ts	2
 src/plugins/update-config.ts	2
 src/plugins/update-installed.ts	5
 src/plugins/update-summary.ts	2
-src/plugins/web-search-credential-presence.ts	1
 src/plugins/web-search-install-catalog.ts	2
 src/poll-params.ts	1
 src/process/command-queue.ts	2
