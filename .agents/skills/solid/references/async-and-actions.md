@@ -438,6 +438,13 @@ from startup. Keep the loader's current retention/error behavior. JSX belongs
 in `.tsx`; replace hand-written `createComponent` rather than keeping a second
 render helper. Check startup bytes against the base on the same machine.
 
+Native custom-element bridges create independent Solid roots, so their lazy
+reads do not inherit the shell's `Errored` boundary. Protect each lazy region
+within the same root with a local `Errored` boundary, or use an explicit
+optional fallback when losing that decoration is acceptable. `Loading` handles
+pending reads; it does not handle a rejected import. Keep usable controls and
+drafts outside the error slot so retry can recover the region in place.
+
 Check the emitted graph as well as the source import. The first use of an
 action made Solid retain runtime initializers; the generated boot groups
 initially put them beside Markdown code, which pulled that entire chunk into
