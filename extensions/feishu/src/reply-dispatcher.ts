@@ -258,6 +258,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
   let streaming: FeishuStreamingSession | null = null;
   let streamText = "";
   let lastPartial = "";
+  let hasPartialPreviewForCurrentBlock = false;
   let reasoningText = "";
   let statusLine = "";
   let modelWaitLine = "";
@@ -328,6 +329,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     nextText: string,
     options?: {
       dedupeWithLastPartial?: boolean;
+      mergeWithPartialPreview?: boolean;
       mode?: "snapshot" | "delta";
     },
   ) => {
@@ -342,7 +344,9 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
     }
     const mode = options?.mode ?? "snapshot";
     if (mode === "delta") {
-      streamText = mergeStreamingText(streamText, nextText);
+      streamText = options?.mergeWithPartialPreview
+        ? mergeStreamingText(streamText, nextText)
+        : `${streamText}${nextText}`;
     } else {
       const currentSnapshotText = snapshotBaseText
         ? streamText.slice(snapshotBaseText.length)
@@ -1255,7 +1259,12 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
             if (info?.kind === "block") {
               // Some runtimes emit block payloads without onPartial/final callbacks.
               // Mirror block text into streamText so onIdle close still sends content.
-              queueStreamingUpdate(text, { mode: "delta", dedupeWithLastPartial: true });
+              queueStreamingUpdate(text, {
+                mode: "delta",
+                dedupeWithLastPartial: true,
+                mergeWithPartialPreview: hasPartialPreviewForCurrentBlock,
+              });
+              hasPartialPreviewForCurrentBlock = false;
             }
             if (info?.kind === "final") {
               // Final payloads can be cumulative snapshots or independent
@@ -1353,6 +1362,7 @@ export function createFeishuReplyDispatcher(params: CreateFeishuReplyDispatcherP
               dedupeWithLastPartial: true,
               mode: "snapshot",
             });
+            hasPartialPreviewForCurrentBlock = true;
             return false;
           }
         : undefined,

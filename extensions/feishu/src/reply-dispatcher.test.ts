@@ -1157,6 +1157,18 @@ describe("createFeishuReplyDispatcher streaming behavior", () => {
     expectClosed(expected);
   });
 
+  it("keeps independent block chunks additive without a partial preview", async () => {
+    resolveFeishuAccountMock.mockReturnValue(createReplyAccount("card", "partial", "feishu"));
+    const { options } = createDispatcherHarness();
+    await options.onReplyStart?.();
+    await options.deliver({ text: "ban" }, { kind: "block" });
+    await options.deliver({ text: "ana" }, { kind: "block" });
+    await options.onIdle?.();
+    expect(streamingInstances).toHaveLength(1);
+    expect(stream(0).closeWithResult).toHaveBeenCalledTimes(1);
+    expectClosed("banana");
+  });
+
   it("keeps an over-limit block in its active streaming card", async () => {
     useStreamingBlockAccount();
     const text = makeTableText(6);
