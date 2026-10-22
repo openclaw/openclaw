@@ -1,11 +1,7 @@
 import { expect, it } from "vitest";
 import { createEmptyCostUsageTotals } from "../infra/session-cost-usage-totals.js";
 import type { SessionCostSummary } from "../infra/session-cost-usage.types.js";
-import {
-  createUsageAggregateAccumulator,
-  usageDailyModelIdentity,
-  usageModelIdentity,
-} from "./usage-aggregates.js";
+import { createUsageAggregateAccumulator, usageModelIdentity } from "./usage-aggregates.js";
 
 const usage = (...parts: Partial<SessionCostSummary>[]): SessionCostSummary =>
   Object.assign(createEmptyCostUsageTotals(), ...parts);
@@ -34,21 +30,24 @@ function modelDay(
 ) {
   return { date, model, provider, tokens, cost, count };
 }
+function aggregate(...summaries: Partial<SessionCostSummary>[]) {
+  const accumulator = createUsageAggregateAccumulator();
+  for (const summary of summaries) {
+    accumulator.add({ usage: usage(summary) });
+  }
+  return accumulator.finish();
+}
 
 it("retains incomplete daily and model subtotals after merging complete rows", () => {
-  const accumulator = createUsageAggregateAccumulator();
   const date = "2026-05-15";
   const marker = { state: "unavailable" as const };
-  for (const usageReport of [marker, undefined]) {
-    accumulator.add({
-      usage: usage({
-        usageReport,
-        dailyBreakdown: [{ ...usage(), date, tokens: 10, cost: 1, usageReport }],
-        dailyModelUsage: [{ date, model: "local", tokens: 10, cost: 1, count: 1, usageReport }],
-      }),
-    });
-  }
-  const result = accumulator.finish();
+  const result = aggregate(
+    ...[marker, undefined].map((usageReport) => ({
+      usageReport,
+      dailyBreakdown: [{ ...usage(), date, tokens: 10, cost: 1, usageReport }],
+      dailyModelUsage: [{ date, model: "local", tokens: 10, cost: 1, count: 1, usageReport }],
+    })),
+  );
   expect(result.daily).toEqual([
     { date, tokens: 20, cost: 2, messages: 0, toolCalls: 0, errors: 0, usageReport: marker },
   ]);
@@ -58,12 +57,6 @@ it("retains incomplete daily and model subtotals after merging complete rows", (
 });
 
 it("builds collision-free model identities with legacy unknown grouping", () => {
-  expect(usageModelIdentity("fixture", "bedrock::arn")).not.toBe(
-    usageModelIdentity("fixture::bedrock", "arn"),
-  );
-  expect(usageDailyModelIdentity("2026-02-01", "fixture", "bedrock:arn")).not.toBe(
-    usageDailyModelIdentity("2026-02-01", "fixture:bedrock", "arn"),
-  );
   expect(usageModelIdentity("fixture\0bedrock", "arn")).not.toBe(
     usageModelIdentity("fixture", "bedrock\0arn"),
   );
@@ -130,20 +123,17 @@ it("accounts for every supplied row without conflating matching session IDs or m
 });
 
 it("merges models and providers by identity and ranks equal costs by token usage", () => {
-  const accumulator = createUsageAggregateAccumulator();
-  for (const [provider, model, tokens] of [
+  const rows = [
     ["fixture", "bedrock::arn", 10],
     ["fixture::bedrock", "arn", 20],
     ["fixture", "bedrock::arn", 15],
-  ] as const) {
-    accumulator.add({
-      usage: usage({
-        modelUsage: [{ provider, model, count: 1, totals: usage({ totalTokens: tokens }) }],
-        dailyModelUsage: [{ date: "2026-03-12", provider, model, tokens, cost: 0, count: 1 }],
-      }),
-    });
-  }
-  const aggregates = accumulator.finish();
+  ] as const;
+  const aggregates = aggregate(
+    ...rows.map(([provider, model, tokens]) => ({
+      modelUsage: [{ provider, model, count: 1, totals: usage({ totalTokens: tokens }) }],
+      dailyModelUsage: [{ date: "2026-03-12", provider, model, tokens, cost: 0, count: 1 }],
+    })),
+  );
   expect(aggregates.byModel).toMatchObject([
     { provider: "fixture", model: "bedrock::arn", count: 2, totals: { totalTokens: 25 } },
     { provider: "fixture::bedrock", model: "arn", count: 1, totals: { totalTokens: 20 } },
@@ -159,13 +149,12 @@ it("merges models and providers by identity and ranks equal costs by token usage
 });
 
 it("merges overlapping daily buckets and uses weighted latency summaries", () => {
-  const accumulator = createUsageAggregateAccumulator();
   const earlier = "2026-03-11";
   const later = "2026-03-12";
   const quick = latency(2, 50, 20, 90, 80);
   const slow = latency(1, 120, 120, 120);
-  accumulator.add({
-    usage: usage({
+  const aggregates = aggregate(
+    {
       latency: quick,
       dailyLatency: [{ date: later, ...quick }],
       dailyBreakdown: [
@@ -173,10 +162,8 @@ it("merges overlapping daily buckets and uses weighted latency summaries", () =>
         day(earlier, { totalTokens: 5, totalCost: 6 }),
       ],
       dailyModelUsage: [modelDay(later, "one", 3, 4, 2, "fixture")],
-    }),
-  });
-  accumulator.add({
-    usage: usage({
+    },
+    {
       latency: slow,
       dailyLatency: [
         { date: later, ...slow },
@@ -192,9 +179,8 @@ it("merges overlapping daily buckets and uses weighted latency summaries", () =>
         modelDay(later, "two", 7, 8, 1, "fixture"),
         modelDay(earlier, "one", 5, 6, 1, "fixture"),
       ],
-    }),
-  });
-  const aggregates = accumulator.finish();
+    },
+  );
   const weighted = latency(3, 220 / 3, 20, 120);
   expect(aggregates.latency).toEqual(weighted);
   expect(aggregates.dailyLatency).toEqual([

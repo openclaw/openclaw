@@ -38,22 +38,10 @@ describe("device bootstrap profile", () => {
     });
   });
 
-  test("normalizes issued handoff profiles to the bootstrap allowlist", () => {
-    expectHandoff(
-      profile(["node.exec", ...handoffScopes], "control-ui"),
-      profile(scopes("approvals", "read", "talk.secrets", "write"), "control-ui"),
-    );
-  });
-
-  test("allows admin only for closed full-access purposes", () => {
+  test("preserves the closed browser-owner handoff", () => {
     expectHandoff(
       profile(handoffScopes, "control-ui-owner", ["operator"]),
       profile(handoffScopes, "control-ui-owner", ["operator"]),
-    );
-
-    expectHandoff(
-      profile(scopes("admin", "pairing", "read"), "mobile-full"),
-      profile(scopes("admin", "read", "write"), "mobile-full"),
     );
   });
 

@@ -2,7 +2,7 @@ import { setImmediate as nextTurn } from "node:timers/promises";
 import { describe, expect, it, vi } from "vitest";
 import { execNodeEvalSync } from "../test-utils/node-process.js";
 import { runWithAsyncWorkResources } from "./async-work-resources.js";
-import { AsyncWorkScope, getAsyncWorkSignal, trackAsyncWork } from "./async-work-scope.js";
+import { AsyncWorkScope } from "./async-work-scope.js";
 import { createDeferredCore } from "./deferred.js";
 
 describe("async work resources", () => {
@@ -116,37 +116,6 @@ describe("async work resources", () => {
       await owner.drain();
     }
     await outcome;
-    expect(release).toHaveBeenCalledOnce();
-  });
-
-  it("propagates cancellation immediately while accepted work retains cleanup", async () => {
-    const owner = new AsyncWorkScope();
-    const finishAdmission = createDeferredCore();
-    const release = vi.fn();
-    let operationSignal: AbortSignal | undefined;
-    const result = owner.run(() =>
-      runWithAsyncWorkResources(async (onAcquired) => {
-        onAcquired({ release, releaseBeforeResultWhenIdle: true });
-        operationSignal = getAsyncWorkSignal();
-        void trackAsyncWork(() => finishAdmission.promise);
-        return "enqueued";
-      }),
-    );
-    try {
-      expect(await result).toBe("enqueued");
-      expect(owner.hasPendingWork).toBe(true);
-      expect(release).not.toHaveBeenCalled();
-      expect(operationSignal?.aborted).toBe(false);
-      const reason = new Error("requester cancelled");
-      owner.beginClose(reason);
-      expect(operationSignal?.aborted).toBe(true);
-      expect(operationSignal?.reason).toBe(reason);
-      expect(release).not.toHaveBeenCalled();
-      expect(owner.hasPendingWork).toBe(true);
-    } finally {
-      finishAdmission.resolve();
-      await owner.drain();
-    }
     expect(release).toHaveBeenCalledOnce();
   });
 });

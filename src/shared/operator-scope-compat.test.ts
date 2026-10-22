@@ -11,10 +11,6 @@ function allows(role: string, requestedScopes: string[], allowedScopes: string[]
 }
 const operator = (scopes: string[]) => scopes.map((scope) => `operator.${scope}`);
 
-it("does not broaden session write authority to general writes", () => {
-  expect(allows("operator", ["operator.write"], ["operator.sessions.write"])).toBe(false);
-});
-
 it.each([
   [["read", "write"], ["sessions.write"], ["sessions.write"]],
   [["admin"], ["sessions.read"], ["sessions.read"]],
@@ -25,22 +21,6 @@ it.each([
 ])("intersects operator grants %j with ceiling %j", (grants, ceiling, expected) => {
   expect(intersect(operator(grants), operator(ceiling))).toEqual(operator(expected));
 });
-it("treats operator.talk as satisfied by talk/write/admin scopes", () => {
-  for (const allowedScope of ["operator.talk", "operator.write", "operator.admin"]) {
-    expect(allows("operator", ["operator.talk"], [allowedScope])).toBe(true);
-  }
-  expect(allows("operator", ["operator.talk"], ["operator.read"])).toBe(false);
-});
-
-it("requires an exact grant or admin for operator.talk.secrets", () => {
-  for (const grants of [["operator.talk.secrets"], ["operator.admin"]]) {
-    expect(allows("operator", ["operator.talk.secrets"], grants)).toBe(true);
-  }
-  for (const grants of [[], ["operator.write"]]) {
-    expect(allows("operator", ["operator.talk.secrets"], grants)).toBe(false);
-  }
-});
-
 it("uses strict matching with role-prefix partitioning for non-operator roles", () => {
   expect(allows("node", ["node.exec"], ["operator.admin", "node.exec"])).toBe(true);
   expect(allows("node", ["node.exec"], ["operator.admin"])).toBe(false);

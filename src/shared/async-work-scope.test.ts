@@ -108,6 +108,7 @@ it.each([false, true])(
       expect(await result).toBe("accepted");
     }
     expect(owner.hasPendingWork).toBe(true);
+    expect(workSignal?.aborted).toBe(false);
     const cancelReason = new Error("requester cancelled");
     requester.abort(cancelReason);
     expect(operationSignal?.reason).toBe(cancelReason);

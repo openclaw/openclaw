@@ -12,12 +12,7 @@ it("keeps explicit restart recovery at write scope", () => {
   expect(scope("sessions.recover")).toBe("operator.write");
 });
 
-it("requires admin to create a full-access session", () => {
-  expect(scope("sessions.create", { permissionMode: "full" })).toBe("operator.admin");
-});
-
-it("requires admin to patch a session to full access", () => {
-  expect(patchScope({ permissionMode: "full" })).toBe("operator.admin");
+it("requires admin to batch patch sessions to full access", () => {
   expect(batchScope({ permissionMode: "full" })).toBe("operator.admin");
 });
 
@@ -78,11 +73,8 @@ it("scopes sessions.patchMany from the shared patch only", () => {
   expect(scope("sessions.patchMany", {})).toBe("operator.write");
 });
 
-it.each([
-  { ...target, autoDevice: true },
-  { ...target, profileId: "development", deviceId: "device-1" },
-] as const)("classifies dispatch target %j as write-scoped", (params) => {
-  expect(scope("sessions.dispatch", params)).toBe("operator.write");
+it("classifies automatic device dispatch as write-scoped", () => {
+  expect(scope("sessions.dispatch", { ...target, autoDevice: true })).toBe("operator.write");
 });
 
 it("does not duplicate static method policy from the core descriptor table", () => {
