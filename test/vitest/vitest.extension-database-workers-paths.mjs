@@ -340,7 +340,6 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/crabbox/src/crabbox-worker-warm-image-maintenance.test.ts",
   "extensions/crabbox/src/crabbox-worker-warm-image-recovery.test.ts",
   "extensions/crabbox/src/crabbox-worker-warm-image-retirement.test.ts",
-  "extensions/crabbox/src/crabbox-worker-warm-image-store.test.ts",
   "extensions/crabbox/src/crabbox-worker-warm-image.test.ts",
   "extensions/diffs/src/store.cleanup.test.ts",
   "extensions/diffs/src/store.test.ts",

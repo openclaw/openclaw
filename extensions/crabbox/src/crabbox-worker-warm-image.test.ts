@@ -121,26 +121,32 @@ it("scrubs every worker identity and workspace before capturing an enrolled leas
   );
   const home = tempDirs.make("openclaw-crabbox-warm-scrub-");
   const at = (relative: string) => path.join(home, relative);
-  const workspace = at(`.openclaw/cloud-workers/${LEASE_ID}/node-host/gateway/workspaces/session`);
-  const npmCache = at(".npm/cached-package");
-  const sshWorkspace = at(".openclaw-worker/workspaces/session");
-  const bundle = at(".openclaw-worker/bundle-hash/index.js");
-  const gitSeed = at(".openclaw-worker/git-seeds/gateway/seed/file");
   const bin = at("bin");
   const workdir = at("crabbox-workdir");
   const envFile = path.join(workdir, ".crabbox", "env", "forwarded.env");
-  const egressEnvFile = path.join(workdir, ".crabbox", "env-setup");
+  const egressEnvFile = path.join(workdir, ".crabbox/env-setup");
   const scrubScript = path.join(workdir, ".crabbox", "scripts", "scrub.sh");
   const tmp = at("tmp");
-  const setupCa = path.join(tmp, "openclaw-setup-egress.fixture", "ca.pem");
   const fixedTmp = at("fixed-tmp");
-  const fixedSetupCa = path.join(fixedTmp, "openclaw-setup-egress.fixed", "ca.pem");
   // Map the owned Linux /tmp root into the fixture without scanning host temporary files.
   const scrubInput = String(scrub?.options.input).replace('"/tmp"', JSON.stringify(fixedTmp));
-  const unrelatedTemp = path.join(tmp, "unrelated", "keep");
-  const repoConfig = path.join(workdir, ".npmrc");
-  const homeConfig = at(".gitconfig");
-  const write = (file: string, contents: string) => {
+  const retained = [
+    ".npm/cached-package",
+    ".openclaw-worker/bundle-hash/index.js",
+    ".openclaw-worker/git-seeds/gateway/seed/file",
+    "tmp/unrelated/keep",
+    "crabbox-workdir/.npmrc",
+    ".gitconfig",
+  ].map(at);
+  const removed = [
+    ".openclaw/cloud-workers",
+    ".openclaw-worker/workspaces",
+    "crabbox-workdir/.crabbox/env",
+    "tmp/openclaw-setup-egress.fixture",
+    "fixed-tmp/openclaw-setup-egress.fixed",
+    "crabbox-workdir/.crabbox/scripts",
+  ].map(at);
+  const write = (file: string, contents = "synthetic retained bytes") => {
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, contents);
   };
@@ -150,19 +156,18 @@ it("scrubs every worker identity and workspace before capturing an enrolled leas
   fs.symlinkSync(process.execPath, runtimeNode);
   fs.writeFileSync(path.join(bin, "node"), "#!/bin/sh\nexit 97\n", { mode: 0o700 });
   write(envFile, "CRABBOX_WORKER_BOOTSTRAP_TOKEN=synthetic-expired-token");
+  for (const file of retained) {
+    write(file);
+  }
+  for (const directory of removed) {
+    write(path.join(directory, "fixture"));
+  }
   write(egressEnvFile, "SETUP_TOKEN=synthetic-sentinel");
-  for (const file of [setupCa, fixedSetupCa, unrelatedTemp, repoConfig, homeConfig]) {
-    write(file, "preserved configuration or temporary data");
-  }
   write(scrubScript, scrubInput);
-  write(path.join(workspace, "private.txt"), "session workspace bytes");
-  write(npmCache, "reusable npm package");
-  for (const file of [path.join(sshWorkspace, "private.txt"), bundle, gitSeed]) {
-    write(file, file);
-  }
   const runtime = path.join(home, ".openclaw-worker", "node-runtimes", "a".repeat(64));
   fs.mkdirSync(runtime, { recursive: true });
   const state = at(`.openclaw/cloud-workers/${LEASE_ID}`);
+  fs.mkdirSync(state, { recursive: true });
   fs.symlinkSync(runtime, path.join(state, "runtime"));
   const node =
     process.platform === "linux"
@@ -217,23 +222,13 @@ it("scrubs every worker identity and workspace before capturing an enrolled leas
   }
   expect(fs.existsSync(runtime)).toBe(true);
   expect(fs.readlinkSync(runtimeNode)).toBe(process.execPath);
-  for (const file of [
-    at(".openclaw/cloud-workers"),
-    sshWorkspace,
-    envFile,
-    egressEnvFile,
-    path.dirname(setupCa),
-    path.dirname(fixedSetupCa),
-    scrubScript,
-  ]) {
+  for (const file of removed) {
     expect(fs.existsSync(file)).toBe(false);
   }
-  for (const file of [unrelatedTemp, repoConfig, homeConfig]) {
-    expect(fs.readFileSync(file, "utf8")).toBe("preserved configuration or temporary data");
+  expect(fs.existsSync(egressEnvFile)).toBe(false);
+  for (const file of retained) {
+    expect(fs.readFileSync(file, "utf8")).toBe("synthetic retained bytes");
   }
-  expect(fs.readFileSync(npmCache, "utf8")).toBe("reusable npm package");
-  expect(fs.readFileSync(bundle, "utf8")).toBe(bundle);
-  expect(fs.readFileSync(gitSeed, "utf8")).toBe(gitSeed);
   write(envFile, "CRABBOX_WORKER_BOOTSTRAP_TOKEN=synthetic-expired-token");
   write(scrubScript, scrubInput);
   fs.writeFileSync(
