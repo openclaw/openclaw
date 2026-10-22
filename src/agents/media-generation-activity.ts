@@ -10,6 +10,9 @@ export type MediaGenerationOperation = {
   runId?: string;
   taskKind: string;
   sourceId?: string;
+  /** Successful generation result; sourceId retains the submission identity. */
+  provider?: string;
+  model?: string;
   requestKey?: string;
   requesterSessionKey: string;
   requesterAgentId?: string;
@@ -170,6 +173,8 @@ export function updateMediaGenerationOperation(
       | "status"
       | "endedAt"
       | "progressSummary"
+      | "provider"
+      | "model"
       | "completionDelivery"
       | "terminalOutcome"
     >
