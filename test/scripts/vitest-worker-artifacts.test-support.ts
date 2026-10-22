@@ -218,7 +218,12 @@ export type WorkerArtifactContext =
     ? Fixtures & TestContext
     : never;
 
-function createWorkerArtifactFixture(context: WorkerArtifactContext) {
+type WorkerArtifactLifetime = Pick<
+  WorkerArtifactContext,
+  "workerArtifacts" | "signal" | "onTestFinished"
+>;
+
+function createWorkerArtifactFixture(context: WorkerArtifactLifetime) {
   const commands = context.workerArtifacts.createFixtureCommands();
   const directory = context.workerArtifacts.fixtureDirectory();
   return {
@@ -236,7 +241,7 @@ function createWorkerArtifactFixture(context: WorkerArtifactContext) {
 }
 
 export function inWorkerArtifactFixture(
-  context: WorkerArtifactContext,
+  context: WorkerArtifactLifetime,
   body: (fixture: ReturnType<typeof createWorkerArtifactFixture>) => Promise<void>,
 ) {
   return context.workerArtifacts.fixtureLifetime.run(() =>

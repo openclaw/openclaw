@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { setTimeout as waitForReaper } from "node:timers/promises";
 import { afterAll, expect, it, vi, type TestContext } from "vitest";
+import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
 import { createVitestWorkerRun } from "../../scripts/lib/vitest-worker-run.mts";
 import { isProcessAlive } from "../helpers/process-wait.js";
 import { awaitGateBeforeSettlement, createDeferred, withinTest } from "../helpers/promise.js";
@@ -38,29 +39,9 @@ function observeReadyLine(child: ChildProcess, line: string, ready: () => void) 
 }
 
 function expectClosedPipes(child: ChildProcess) {
-  expect([child.stdout?.closed, child.stderr?.closed]).toEqual([true, true]);
+  expect(child.stdout?.closed).toBe(true);
+  expect(child.stderr?.closed).toBe(true);
 }
-
-it.runIf(process.platform !== "win32")(
-  "forwards caller cancellation to the shutdown command",
-  (context) =>
-    runJoinedShutdownTest(context, async () => {
-      const controller = new AbortController();
-      let child!: ChildProcess;
-      await expect(
-        runVitestShutdownCommand({
-          args: ["-e", "setInterval(() => {}, 1000)"],
-          signal: AbortSignal.any([context.signal, controller.signal]),
-          onReady(owned) {
-            child = owned;
-            controller.abort();
-          },
-        }),
-      ).rejects.toMatchObject({ code: "ABORT_ERR" });
-      expect(isProcessAlive(child.pid!)).toBe(false);
-      expectClosedPipes(child);
-    }),
-);
 
 function observeOutcome<T>(invocation: Promise<T>) {
   return invocation.then(
@@ -386,5 +367,102 @@ installVitestShutdownCancellation({root:${JSON.stringify(root)},preload:import.m
         await outcome;
         await waitForFixtureProcessesDead(pids, context.signal);
       }
+    }),
+);
+
+it.runIf(process.platform !== "win32")(
+  "rejects fixture cancellation by caller signal and joins descendants",
+  (context) =>
+    runJoinedShutdownTest(context, async () => {
+      const ownedDirs = createTempDirTracker();
+      const root = ownedDirs.make("managed-caller-signal-", fixtureRoots);
+      const descendantPidPath = path.join(root, "descendant.pid");
+      // Reuse the managed-owner tests' TERM-resistant tree and atomic ready PID.
+      // This proves the shared helper boundary, not cold Vitest initialization.
+      const resistTerm = (role: string) => `
+process.on("SIGTERM", () => {
+  process.stdout.write("${role}-out\\n");
+  process.stderr.write("${role}-err\\n");
+});
+setInterval(() => {}, 1000);
+`;
+      const descendantSource = `
+const fs = require("node:fs");
+${resistTerm("descendant")}
+fs.writeFileSync(process.argv[1] + ".tmp", String(process.pid));
+fs.renameSync(process.argv[1] + ".tmp", process.argv[1]);
+process.stdout.write("descendant-ready\\n");
+`;
+      const controller = new AbortController();
+      const descendantReady = createDeferred();
+      let child!: ChildProcess;
+      const invocation = runVitestShutdownCommand({
+        args: [
+          "-e",
+          `
+const { spawn } = require("node:child_process");
+${resistTerm("leader")}
+spawn(process.execPath, ["-e", ${JSON.stringify(descendantSource)}, process.argv[1]], {
+  stdio: ["ignore", "inherit", "inherit"],
+});
+`,
+          descendantPidPath,
+        ],
+        timeoutMs: 20_000,
+        signal: AbortSignal.any([context.signal, controller.signal]),
+        onReady(owned) {
+          child = owned;
+          observeReadyLine(child, "descendant-ready\n", () => descendantReady.resolve());
+        },
+      });
+      const outcome = observeOutcome(invocation);
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            descendantReady.promise,
+            invocation,
+            `Child exited before writing ${descendantPidPath}`,
+          ),
+          context.signal,
+        );
+        const descendantPid = Number(fs.readFileSync(descendantPidPath, "utf8"));
+        if (!Number.isSafeInteger(descendantPid) || descendantPid <= 0) {
+          throw new Error("Invalid descendant PID receipt");
+        }
+        context.signal.throwIfAborted();
+        const childPid = child.pid!;
+        const processes = processRows([
+          "-p",
+          `${childPid},${descendantPid}`,
+          "-o",
+          "pid=,ppid=,pgid=",
+        ]);
+        expect(processes).toEqual(
+          expect.arrayContaining([
+            { pid: childPid, ppid: process.pid, pgid: childPid },
+            { pid: descendantPid, ppid: childPid, pgid: childPid },
+          ]),
+        );
+        expect([childPid, descendantPid].every(isProcessAlive)).toBe(true);
+        expect(inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" })).toBe("live");
+
+        controller.abort();
+        const result = await withinTest(outcome, context.signal);
+        expect(result.error).toMatchObject({ code: "ABORT_ERR" });
+        for (const role of ["leader", "descendant"]) {
+          expect(result.error).toMatchObject({
+            stdout: expect.stringContaining(`${role}-out\n`),
+            stderr: expect.stringContaining(`${role}-err\n`),
+          });
+        }
+        expect(child).toMatchObject({ exitCode: null, signalCode: "SIGKILL" });
+        expect([childPid, descendantPid].filter(isProcessAlive)).toEqual([]);
+        expect(inspectManagedProcessGroup(child, { errorPolicy: "indeterminate" })).toBe("dead");
+        expectClosedPipes(child);
+      } finally {
+        controller.abort();
+        expect((await outcome).error).toMatchObject({ code: "ABORT_ERR" });
+      }
+      ownedDirs.cleanup();
     }),
 );

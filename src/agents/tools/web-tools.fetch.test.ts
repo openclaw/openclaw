@@ -15,6 +15,7 @@ import * as logger from "../../logger.js";
 import type { WebFetchProviderToolDefinition } from "../../plugin-sdk/provider-web-fetch.js";
 import { resolveRequestUrl } from "../../plugin-sdk/request-url.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { compactToolOutputHint } from "../tool-schema-hints.js";
 import * as webGuardedFetch from "./web-guarded-fetch.js";
 const { extractReadableContentMock, resolveWebFetchDefinitionMock } = vi.hoisted(() => ({
   extractReadableContentMock: vi.fn(),
@@ -31,6 +32,12 @@ import { createWebFetchTool } from "./web-fetch.js";
 
 const WEB_FETCH_SPILL_MAX_CHARS = 2_000_000;
 const EMPTY_HTML = "<!doctype html><html><head></head><body></body></html>";
+
+it("declares the exact web_fetch schema and promotes its complete compact hint", () => {
+  expect(compactToolOutputHint(createFetchTool()?.outputSchema)).toBe(
+    '{ externalContent: { source: "web_fetch"; untrusted: true; wrapped: true; provider?: string }; extractMode: "markdown" | "text"; extractor: string; fetchedAt: string; finalUrl: string; length: number; rawLength: number; status: number; text: string; tookMs: number; truncated: boolean; url: string; cached?: true; contentType?: string; spill?: { chars: number; path: string; truncated?: true }; title?: string; warning?: string }',
+  );
+});
 
 const lookupMock = vi.fn();
 

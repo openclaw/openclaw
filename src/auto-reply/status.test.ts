@@ -546,11 +546,9 @@ const openrouterArgs = {
 function usage(input: number, output: number, cacheRead: number, totalTokens: number) {
   return { input, output, cacheRead, cacheWrite: 0, totalTokens };
 }
-const freshUsage = (totalTokens: number) => ({
-  totalTokens,
-  totalTokensFresh: true,
-  totalTokensVersion: 1 as const,
-});
+function freshUsage(totalTokens: number) {
+  return { totalTokens, totalTokensFresh: true, totalTokensVersion: 1 as const };
+}
 function withStatusHome(run: () => Promise<void>) {
   return withTempHome(
     async () => {

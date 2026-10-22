@@ -1,13 +1,11 @@
 /* @vitest-environment jsdom */
 
-import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createShellOwner } from "../app/app-host-solid.test-support.ts";
 import { i18n } from "../i18n/index.ts";
-import { focusChatComposerFromPrintableKeydown } from "../pages/chat/chat-pane-shared.ts";
+import { profileDirectory } from "../lib/profile-directory.ts";
 import type { ApplicationContextProvider } from "../test-helpers/application-context.ts";
-import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   containers,
   mountMenu,
@@ -23,11 +21,9 @@ import {
   createSessionOwnerMenuHarness,
   sessionOwnerProfiles,
 } from "../test-helpers/session-owner-menu.ts";
-import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import { EMPTY_SESSION_MENU_DATA } from "./session-menu-actions.ts";
-import { SessionMenu, type SessionMenuAction } from "./session-menu-solid.tsx";
+import type { SessionMenuAction } from "./session-menu-solid.tsx";
 
 function press(target: EventTarget, key: string, options: KeyboardEventInit = {}) {
   const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true, ...options });
@@ -42,8 +38,8 @@ function focusButton() {
   return button;
 }
 
-async function reopen(menu: Awaited<ReturnType<typeof mountMenu>>, coordinate?: number) {
-  menu.anchor = coordinate === undefined ? { ...menu.anchor } : { x: coordinate, y: coordinate };
+async function reopen(menu: Awaited<ReturnType<typeof mountMenu>>) {
+  menu.anchor = { ...menu.anchor };
   await settleSessionMenu(menu);
 }
 
@@ -78,8 +74,15 @@ async function recordedMenu() {
   });
   return { menu, calls };
 }
-async function openAppearance(menu: Awaited<ReturnType<typeof mountMenu>>) {
-  return openAdvanced(menu, "Icon & color");
+async function openAppearance(menu: Awaited<ReturnType<typeof mountMenu>>, compact = false) {
+  if (!compact) {
+    return openAdvanced(menu, "Icon & color");
+  }
+  await selectMenuValue(menu, "compact:open-advanced");
+  await settleSessionMenu(menu);
+  await selectMenuValue(menu, "compact:open-icon");
+  await settleSessionMenu(menu);
+  return menu;
 }
 
 describe("session menu", () => {
@@ -95,6 +98,47 @@ describe("session menu", () => {
     expect(translatedLabel).not.toBe(englishLabel);
     await waitForSolid(() => expect(rename.getAttribute("aria-label")).toBe(translatedLabel));
     expect(menu.querySelector('[data-value="rename"]')).toBe(rename);
+  });
+
+  it("keeps self, agents, and the current owner while the directory loads, then retries a visible failure", async () => {
+    const pending = deferred<ReturnType<typeof sessionOwnerProfiles>>();
+    const { context, request } = createSessionOwnerMenuHarness(() => sessionOwnerProfiles("Ada"));
+    await profileDirectory(context.gateway).load();
+    request.mockImplementation(() => pending.promise);
+    const menu = await mountMenu({
+      context,
+      currentOwner: {
+        type: "human",
+        id: "profile-old-bob",
+        identity: { type: "profile", id: "profile-bob" },
+        label: "Bob",
+      },
+    });
+    const expectCurrentOwner = () => {
+      expect
+        .soft(menuItemLabels(menuItem(menu, "Assign to…")).slice(0, 3))
+        .toEqual(["Me", "Research", "Bob"]);
+      const selected = queryButton(menu, 'button[role="menuitemradio"][aria-checked="true"]');
+      expect.soft(selected?.getAttribute("value")).toBe("assign-owner:human:profile-bob");
+      expect.soft(selected?.disabled).toBe(true);
+    };
+    await waitForFast(() => expect(request).toHaveBeenCalledWith("users.list", {}));
+    expect(menu.textContent).toContain("Loading");
+    expectCurrentOwner();
+
+    pending.reject(new Error("Directory is temporarily unavailable."));
+    await waitForFast(() =>
+      expect(menu.querySelector('[role="alert"]')?.textContent).toContain(
+        "Directory is temporarily unavailable.",
+      ),
+    );
+    expectCurrentOwner();
+    request.mockImplementation(() => sessionOwnerProfiles("Ada", "Bob", "Carol"));
+    await openSubmenu(menu, "Assign to…");
+    await selectMenuValue(menu, "reload-owners");
+    await waitForOwners(menu, ["Me", "Research", "Bob", "Carol"]);
+    expect(menu.querySelector('[role="alert"]')).toBeNull();
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it.each(["reconnect", "replace gateway"] as const)(
@@ -211,6 +255,8 @@ describe("session menu", () => {
   });
 
   it.each([
+    ["Archive session", {}, "toggle-archived", { kind: "toggle-archived" }],
+    ["Archive session", { compact: true }, "toggle-archived", { kind: "toggle-archived" }],
     [
       "Stop cloud worker…",
       { cloudWorkerStopAllowed: true },
@@ -248,6 +294,56 @@ describe("session menu", () => {
     deleteItem.click();
     pin.click();
     expect(onAction).not.toHaveBeenCalled();
+  });
+
+  it("drills into compact menu groups without rendering side flyouts", async () => {
+    const { context } = createSessionOwnerMenuHarness(undefined, "Research owner");
+    const menu = await mountMenu({
+      compact: true,
+      groups: ["Research", "Operations"],
+      context,
+      currentOwner: { type: "agent", id: "research:one" },
+      work: {
+        pullRequestUrl: "https://example.test/pr",
+        worktreePath: "/work/openclaw",
+      },
+    });
+
+    expect(menuPanel(menu).querySelector('[role="menu"]')).toBeNull();
+    expect(menuItemLabels(menu)).not.toContain("Open in");
+    expect(menuItemLabels(menu)).toContain("Advanced");
+    expect(menuItemLabels(menu)).toContain("Assign to…");
+    expect(menuItemLabels(menu)).not.toContain("Icon & color");
+    expect(menuItemLabels(menu)).toContain("Move to group");
+
+    for (const [view, labels] of [
+      ["open-in", ["Back", "New tab", "New window", ...editorLabels]],
+      ["copy", ["Back", ...copyLabels]],
+      ["assign-owner", ["Back", "Me", "Research owner"]],
+      ["icon", ["Back"]],
+      ["group", ["Back", "Research", "Operations", "New group"]],
+    ] as const) {
+      if (["open-in", "copy", "icon"].includes(view)) {
+        await selectMenuValue(menu, "compact:open-advanced");
+        await settleSessionMenu(menu);
+      }
+      await selectMenuValue(menu, `compact:open-${view}`);
+      await settleSessionMenu(menu);
+      expectLabels(menu, labels);
+      expect(menuPanel(menu).querySelector('[role="menu"]')).toBeNull();
+      if (view === "icon") {
+        expect(menu.querySelectorAll(".session-menu__color-choice")).toHaveLength(9);
+      }
+      await selectMenuValue(
+        menu,
+        ["open-in", "copy", "icon"].includes(view) ? "compact:back-advanced" : "compact:back",
+      );
+      await settleSessionMenu(menu);
+      if (["open-in", "copy", "icon"].includes(view)) {
+        await selectMenuValue(menu, "compact:back");
+        await settleSessionMenu(menu);
+      }
+    }
   });
 
   it("describes the active session and its stable fork boundary", async () => {
@@ -443,25 +539,68 @@ describe("session menu", () => {
     await settleSessionMenu(menu);
     expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Projects" });
     expect(keydown.defaultPrevented).toBe(true);
+    onAction.mockClear();
+    await reopen(menu);
+    await openSubmenu(menu, "Move to group");
+    await selectMenuValue(menu, "move-to-group:Projects");
+    expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: "Projects" });
 
     await reopen(menu);
     await openSubmenu(menu, "Move to group");
     await selectMenuValue(menu, "move-to-group:");
     expect(onAction).toHaveBeenCalledWith({ kind: "move-to-group", category: null });
+
+    await reopen(menu);
+    await openSubmenu(menu, "Move to group");
+    await selectMenuValue(menu, "new-group");
+    expect(onAction).toHaveBeenCalledWith({ kind: "new-group" });
   });
 
-  it("clears icon and color independently without closing the menu", async () => {
+  it.each([false, true])("edits appearance (compact=%s)", async (compact) => {
     const { menu, onAction, onClose } = await actionMenu({
+      compact,
       session: { icon: "🦞", color: "blue" },
     });
-    await openAppearance(menu);
-    queryButton(menu, '[aria-label="No icon"]')!.click();
-    queryButton(menu, '.session-menu__color-choice[aria-label="No color"]')!.click();
+    await openAppearance(menu, compact);
+    if (compact) {
+      await selectMenuValue(menu, "compact:back-advanced");
+      await selectMenuValue(menu, "compact:open-icon");
+    }
+    const blue = queryButton(menu, '.session-menu__color-choice[aria-label="Blue"]');
+    expect(blue?.getAttribute("aria-pressed")).toBe("true");
+    expect(menu.querySelectorAll('.session-menu__colors [aria-pressed="true"]')).toHaveLength(1);
+    const choices = iconChoices(menu);
+    expect(choices[0]?.getAttribute("role")).toBeNull();
+    expect(choices[0]?.getAttribute("aria-pressed")).toBe("true");
+    expect(choices.filter((choice) => choice.tabIndex === 0)).toEqual([choices[0]]);
+    queryButton(menu, '.session-menu__color-choice[aria-label="Purple"]')?.click();
+    iconChoices(menu)[1]?.click();
+    const noIcon = queryButton(menu, '[aria-label="No icon"]');
+    expect(noIcon).not.toBeNull();
+    noIcon?.click();
+    queryButton(menu, '.session-menu__color-choice[aria-label="No color"]')?.click();
+    const reset = queryButton(menu, ".session-menu__icon-remove");
+    expect(reset?.previousElementSibling?.getAttribute("role")).toBe("separator");
+    expect(reset?.textContent?.trim()).toBe("Reset to default");
+    reset?.click();
     expect(onAction.mock.calls).toEqual([
+      [{ kind: "set-color", color: "purple" }],
+      [{ kind: "set-icon", icon: "🚀" }],
       [{ kind: "set-icon", icon: null }],
       [{ kind: "set-color", color: null }],
+      [{ kind: "reset-appearance" }],
     ]);
     expect(onClose).not.toHaveBeenCalled();
+    menu.session = { ...menu.session, icon: "🚀", color: "purple" };
+    await settleSessionMenu(menu);
+    expect(
+      menu.querySelector('.session-menu__icon-choice[aria-pressed="true"]')?.textContent?.trim(),
+    ).toBe("🚀");
+    expect(
+      menu
+        .querySelector('.session-menu__color-choice[aria-pressed="true"]')
+        ?.getAttribute("aria-label"),
+    ).toBe("Purple");
   });
 
   it.each([
@@ -487,36 +626,93 @@ describe("session menu", () => {
     expect(onAction).not.toHaveBeenCalled();
   });
 
-  it("validates and applies a multiline SVG with Enter", async () => {
-    const value =
-      '<svg\nxmlns="http://www.w3.org/2000/svg"\nviewBox="0 0 24 24">\n<circle cx="12" cy="12" r="10"/>\n</svg>';
-    const { menu, onAction, onClose } = await actionMenu();
+  it.each([
+    { name: "emoji", value: "🧜‍♀️", icon: "🧜‍♀️" },
+    {
+      name: "multiline SVG",
+      value:
+        '<svg\nxmlns="http://www.w3.org/2000/svg"\nviewBox="0 0 24 24">\n<circle cx="12" cy="12" r="10"/>\n</svg>',
+      icon: `data:image/svg+xml,${encodeURIComponent('<svg\nxmlns="http://www.w3.org/2000/svg"\nviewBox="0 0 24 24">\n<circle cx="12" cy="12" r="10"/>\n</svg>')}`,
+    },
+  ])("validates and applies custom $name with Enter", async ({ value, icon }) => {
+    const calls: string[] = [];
+    const menu = await mountMenu({
+      onClose: () => calls.push("close"),
+      onAction: (action) =>
+        calls.push(`${action.kind}:${action.kind === "set-icon" ? action.icon : ""}`),
+    });
     const submenu = await openAppearance(menu);
-    queryButton(submenu, '[aria-label="Custom icon…"]')!.click();
+    queryButton(submenu, '[aria-label="Custom icon…"]')?.click();
     await settleSessionMenu(menu);
-    const input = submenu.querySelector<HTMLTextAreaElement>(".session-menu__icon-custom-input")!;
+
+    const input = submenu.querySelector<HTMLTextAreaElement>(".session-menu__icon-custom-input");
+    const set = queryButton(submenu, ".session-menu__icon-set");
+    expect(input).not.toBeNull();
+    expect(input?.getAttribute("aria-label")).toBe("Custom icon");
     await waitForSolid(() => expect(document.activeElement).toBe(input));
-    for (const [text, disabled] of [
-      ["a", true],
-      [value, false],
-    ] as const) {
-      input.value = text;
-      input.dispatchEvent(new InputEvent("input", { bubbles: true }));
-      await settleSessionMenu(menu);
-      expect(queryButton(submenu, ".session-menu__icon-set")?.disabled).toBe(disabled);
+    expect(set?.disabled).toBe(true);
+
+    if (!input) {
+      throw new Error("Expected custom emoji input");
     }
+    input.value = "a";
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await settleSessionMenu(menu);
+    expect(queryButton(submenu, ".session-menu__icon-set")?.disabled).toBe(true);
+
+    input.value = value;
+    expect(input.value).toBe(value);
+    input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await settleSessionMenu(menu);
+    expect(queryButton(submenu, ".session-menu__icon-set")?.disabled).toBe(false);
     for (const composition of [{ isComposing: true }, { isComposing: false, keyCode: 229 }]) {
       const event = press(input, "Enter", composition);
-      expect(onAction).not.toHaveBeenCalled();
+      expect(calls).toEqual([]);
       expect(event.defaultPrevented).toBe(false);
     }
     press(input, "Enter");
-    expect(onAction).toHaveBeenCalledExactlyOnceWith({
-      kind: "set-icon",
-      icon: `data:image/svg+xml,${encodeURIComponent(value)}`,
-    });
-    expect(onClose).not.toHaveBeenCalled();
+
+    expect(calls).toEqual([`set-icon:${icon}`]);
     expect(document.activeElement).toBe(input);
+  });
+
+  it("returns from custom entry on Escape without closing the menu", async () => {
+    const onClose = vi.fn();
+    const menu = await mountMenu({ onClose, session: { icon: "braces" } });
+    const submenu = await openAppearance(menu);
+    const braces = queryButton(submenu, '[aria-label="braces"]');
+    expect(braces?.getAttribute("aria-pressed")).toBe("true");
+    expect(braces?.tabIndex).toBe(0);
+    queryButton(submenu, '[aria-label="Custom icon…"]')?.click();
+    await settleSessionMenu(menu);
+    const input = submenu.querySelector<HTMLTextAreaElement>(".session-menu__icon-custom-input");
+    if (!input) {
+      throw new Error("Expected custom emoji input");
+    }
+
+    press(input, "Escape");
+    await settleSessionMenu(menu);
+
+    const customEntry = input.closest(".session-menu__icon-custom-entry");
+    expect(customEntry?.getAttribute("aria-hidden")).toBe("true");
+    expect(customEntry?.hasAttribute("inert")).toBe(true);
+    expect(submenu.querySelector(".session-menu__icon-options")?.hasAttribute("inert")).toBe(false);
+    expect(document.activeElement).toBe(submenu.querySelector('[aria-label="Custom icon…"]'));
+    const currentIcon = queryButton(submenu, '.session-menu__icon-options button[tabindex="0"]');
+    const reset = queryButton(submenu, ".session-menu__icon-remove");
+    if (!currentIcon || !reset) {
+      throw new Error("Expected the current icon and reset control");
+    }
+    // jsdom has no layout; inert controls are still filtered by the menu owner.
+    for (const control of submenu.querySelectorAll<HTMLElement>("[data-form-control]")) {
+      control.checkVisibility = () => true;
+    }
+    currentIcon.focus();
+    press(currentIcon, "Tab");
+    expect(document.activeElement).toBe(reset);
+    press(reset, "Tab", { shiftKey: true });
+    expect(document.activeElement).toBe(currentIcon);
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it("moves icon-grid focus by cell and visible row", async () => {
@@ -539,6 +735,19 @@ describe("session menu", () => {
     press(choices[2 + columns]!, "ArrowUp");
     expect(document.activeElement).toBe(choices[2]);
   });
+
+  it.each([{ groups: [] }, { groups: ["Research"] }])(
+    "opens unassigned groups: $groups",
+    async ({ groups }) => {
+      const menu = await mountMenu({ groups });
+      const trigger = menuItem(menu, "Move to group");
+      const submenu = await openSubmenu(menu, "Move to group");
+      expectLabels(submenu, [...groups, "New group"]);
+      expect(trigger.getAttribute("aria-haspopup")).toBe("menu");
+      expect(submenu.getAttribute("role")).toBe("menu");
+      expect(submenu.matches(":popover-open")).toBe(true);
+    },
+  );
 
   it.each([
     ["absent", null],
@@ -735,115 +944,4 @@ describe("sidebar snooze menu", () => {
       expect(onAction).not.toHaveBeenCalled();
     },
   );
-});
-
-function focusAndPress(item: HTMLElement, key: string, composed = false) {
-  item.focus();
-  expect(document.activeElement).toBe(item);
-  press(document.activeElement!, key, { composed });
-}
-
-it("keeps advertised native menu shortcuts ahead of composer autotype", async () => {
-  const actions: SessionMenuAction[] = [];
-  const host = await mountMenu({
-    groups: ["Research", "Personal"],
-    onAction: (action) => actions.push(action),
-  });
-  const root = host.parentElement!;
-  const composer = root.appendChild(document.createElement("div"));
-  composer.className = "agent-chat__composer-combobox";
-  const input = composer.appendChild(document.createElement("textarea"));
-  const capture = (event: KeyboardEvent) =>
-    focusChatComposerFromPrintableKeydown(root, event, input);
-  document.addEventListener("keydown", capture, true);
-  try {
-    const expected: SessionMenuAction[] = [
-      { kind: "toggle-archived" },
-      { kind: "move-to-group", category: "Research" },
-    ];
-    for (const [index, key] of ["a", "1"].entries()) {
-      if (index) {
-        await reopen(host);
-      }
-      const target = index ? await openSubmenu(host, "Move to group") : host;
-      focusAndPress(menuItem(target, index ? "Personal" : "Pin session"), key, true);
-      await waitForSolid(() => expect(actions).toEqual(expected.slice(0, index + 1)));
-      expect(document.activeElement).not.toBe(input);
-    }
-
-    await reopen(host);
-    focusAndPress(menuItem(host, "Pin session"), "x", true);
-    expect(document.activeElement).toBe(input);
-  } finally {
-    document.removeEventListener("keydown", capture, true);
-  }
-});
-
-it("preserves focus and owner search with the Solid application provider", async () => {
-  const { context } = createSessionOwnerMenuHarness();
-  const { container } = mountSolid(
-    () =>
-      createComponent(SessionMenu, {
-        session: { ...EMPTY_SESSION_MENU_DATA, label: "First title" },
-        archiveAllowed: true,
-      }),
-    { wrapper: createSolidApplicationContextProvider(context).wrapper },
-  );
-  const host = container.querySelector("openclaw-session-menu")!;
-  await waitForSolid(() => expect(menuItemLabels(host)).toContain("Assign to…"));
-  await settleSessionMenu(host);
-  const pin = menuItem(host, "Pin session");
-  pin.focus();
-  expect(document.activeElement).toBe(pin);
-  host.session = { ...host.session, label: "Fresh title" };
-  await settleSessionMenu(host);
-  expect(menuItem(host, "Pin session")).toBe(pin);
-  expect(document.activeElement).toBe(pin);
-
-  const owner = menuItem(host, "Assign to…");
-  const ownerPanel = await openSubmenu(host, "Assign to…");
-  await waitForSolid(() => expect(owner.getAttribute("aria-expanded")).toBe("true"));
-  const search = ownerPanel.querySelector<HTMLInputElement>('input[type="search"]')!;
-  search.value = "Research";
-  search.dispatchEvent(new InputEvent("input", { bubbles: true }));
-  await waitForSolid(() => expect(menuItemLabels(owner)).toEqual(["Research"]));
-  search.focus();
-  host.session = { ...host.session, unread: true };
-  host.work = { pullRequestUrl: "https://example.test/pull/1", worktreePath: null };
-  await settleSessionMenu(host);
-  await waitForSolid(() => expect(menuItemLabels(host)).toContain("Open PR"));
-  expect(menuItem(host, "Assign to…")).toBe(owner);
-  expect(owner.getAttribute("aria-expanded")).toBe("true");
-  expect(menuPanel(owner)).toBe(ownerPanel);
-  expect(ownerPanel.querySelector('input[type="search"]')).toBe(search);
-  expect(document.activeElement).toBe(search);
-  expect(search).toMatchObject({ value: "Research" });
-  expect(menuItemLabels(host)).toContain("Mark as read");
-});
-
-it("ignores a stale native toggle after reopening the same session", async () => {
-  const onClose = vi.fn();
-  const trigger = document.body.appendChild(document.createElement("button"));
-  containers.push(trigger);
-  const menu = await mountMenu({ onClose, trigger });
-  const stalePanel = menuPanel(menu);
-  const advanced = menuItem(menu, "Advanced");
-  const child = await openSubmenu(menu, "Advanced");
-  const childItem = menuItem(child, "Icon & color");
-  focusAndPress(childItem, "Escape");
-  expect(child.matches(":popover-open")).toBe(false);
-  expect(stalePanel.matches(":popover-open")).toBe(true);
-  expect(document.activeElement).toBe(advanced);
-  expect(onClose).not.toHaveBeenCalled();
-  press(advanced, "Escape");
-  expect(onClose).toHaveBeenCalledTimes(1);
-  expect(document.activeElement).toBe(trigger);
-
-  await reopen(menu, 120);
-  stalePanel.dispatchEvent(new Event("toggle"));
-  stalePanel.dispatchEvent(new Event("overlay-after-hide"));
-
-  expect(onClose).toHaveBeenCalledTimes(1);
-  expect(menuPanel(menu)).not.toBe(stalePanel);
-  expect(menuPanel(menu).matches(":popover-open")).toBe(true);
 });

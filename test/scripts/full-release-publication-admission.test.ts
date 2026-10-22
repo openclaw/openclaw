@@ -2108,9 +2108,11 @@ describe("FRV publication source admission", () => {
   );
 
   publicationIt.concurrent.for([
+    "candidate-object",
     "tooling-object",
     "bootstrap",
     "import",
+    "yaml",
     "symlink",
     "non-utf8",
     "platform-helper",

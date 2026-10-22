@@ -88,11 +88,11 @@ function checkProps(gitStatus?: "behind" | "diverged"): UpdatesViewOverrides {
     ...(gitStatus ? { configObject: { update: { channel: "dev", checkOnStart: false } } } : {}),
     update: {
       updateSchedule: gitStatus
-        ? gitSchedule({
-            status: gitStatus,
-            commitsBehind: 3,
-            ...(gitStatus === "diverged" ? { commitsAhead: 1 } : {}),
-          })
+        ? gitSchedule(
+            gitStatus === "diverged"
+              ? { status: "diverged", commitsBehind: 3, commitsAhead: 1 }
+              : { status: "behind", commitsBehind: 3 },
+          )
         : null,
       updateAvailable: null,
       updateStatusCheckBanner: checkFailure,

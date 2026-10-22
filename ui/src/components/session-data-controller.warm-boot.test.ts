@@ -23,14 +23,6 @@ function row(key: string, updatedAt: number, extra: Partial<GatewaySessionRow> =
   return { key: `agent:main:${key}`, kind: "direct" as const, updatedAt, ...extra };
 }
 
-async function expectKeys(owner: SessionDataOwner, ...keys: string[]) {
-  await vi.waitFor(() =>
-    expect(owner.sessionsResult?.sessions.map((session) => session.key)).toEqual(
-      keys.map((key) => `agent:main:${key}`),
-    ),
-  );
-}
-
 it("applies the saved roster filter before its first read and releases it with the data owner", async () => {
   const rows = [row("mine", 1), row("other", 2)];
   const rosterFilters: unknown[] = [];
@@ -69,12 +61,21 @@ it("applies the saved roster filter before its first read and releases it with t
   const roster = rosterActivityStore(context);
   try {
     owner.connect();
-    await expectKeys(owner, "mine");
+    await vi.waitFor(() =>
+      expect(owner.sessionsResult?.sessions.map((session) => session.key)).toEqual([
+        "agent:main:mine",
+      ]),
+    );
     expect(rosterFilters).toEqual([true]);
 
     involvingMe = false;
     owner.synchronize();
-    await expectKeys(owner, "mine", "other");
+    await vi.waitFor(() =>
+      expect(owner.sessionsResult?.sessions.map((session) => session.key)).toEqual([
+        "agent:main:mine",
+        "agent:main:other",
+      ]),
+    );
     expect(rosterFilters).toEqual([true, undefined]);
 
     involvingMe = true;
@@ -89,12 +90,13 @@ it("applies the saved roster filter before its first read and releases it with t
 });
 
 it.each([
-  ["before controller binding", "before", false],
-  ["after controller binding", "after", false],
-  ["before filtered live rows win bootstrap", "after", true],
+  ["before controller binding", "before", null, false],
+  ["after controller binding", "after", null, false],
+  ["before a different profile connects", "after", "other-profile", false],
+  ["before filtered live rows win bootstrap", "after", null, true],
 ] as const)(
   "leaves routing cache loaded %s to its owner and renders only live rows",
-  async (_name, cacheTiming, filtered) => {
+  async (_name, cacheTiming, profileId, filtered) => {
     const cachedRow = row("kept", 1, {
       sessionId: "kept-session",
       derivedTitle: "Cached title",
@@ -170,7 +172,8 @@ it.each([
         controller.connect();
       }
 
-      expect(sessions).toMatchObject({ canonicalListRevision: 0, state: { resultCached: true } });
+      expect(sessions.canonicalListRevision).toBe(0);
+      expect(sessions.state.resultCached).toBe(true);
       expect(controller).toMatchObject({ sessionsResult: null, sessionsAgentId: null });
       expect(request).not.toHaveBeenCalled();
 
@@ -178,7 +181,12 @@ it.each([
         statusFilter = "archived";
         controller.resetSessionList();
       }
-      gateway.publish({ phase: "connected", selfUser: null });
+      gateway.publish({ phase: "connected", selfUser: profileId ? { id: profileId } : null });
+      if (profileId) {
+        expect(sessions.state.result).toBeNull();
+        expect(controller.sessionsResult).toBeNull();
+        expect(controller.sessionResultsByAgent).toEqual({});
+      }
       if (filtered) {
         await controller.refreshSidebarSessions();
         expect(controller.sessionsResult?.sessions).toEqual(archived.sessions);

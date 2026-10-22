@@ -1,12 +1,10 @@
 // Tsdown config tests protect package artifact build contracts.
-import { execFile, type ExecFileOptions } from "node:child_process";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core/expect";
-import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
-import { build, type TsdownPluginOption } from "tsdown";
+import { build } from "tsdown";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   collectRootPackageExcludedExtensionDirs,
@@ -16,10 +14,7 @@ import {
   collectPackageDistImportErrors,
   collectPackageDistImports,
 } from "../../scripts/lib/package-dist-imports.mjs";
-import {
-  publicPluginSdkEntrypoints,
-  buildPluginSdkPackageExports,
-} from "../../scripts/lib/plugin-sdk-entries.mts";
+import { publicPluginSdkEntrypoints } from "../../scripts/lib/plugin-sdk-entries.mts";
 import {
   TSDOWN_PACKAGE_CONFIG_GROUP,
   TSDOWN_PLUGIN_SDK_DTS_CONFIG_GROUPS,
@@ -33,13 +28,8 @@ import {
   WORKER_BUNDLE_DARWIN_NATIVE_ARTIFACTS,
   WORKER_BUNDLE_WINDOWS_SECURITY_HELPER_PATH,
 } from "../../src/shared/worker-bundle-hash.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
-import buildConfigs, {
-  createStateSchemaInlinePlugin,
-  STATE_SCHEMA_INLINE_PLUGIN_NAME,
-} from "../../tsdown.config.ts";
-import { stripNodeTypeScriptTypes } from "../helpers/node-toolchain.js";
+import buildConfigs from "../../tsdown.config.ts";
 import { copyFsSafePackageFixture } from "./fs-safe-package.test-support.js";
 import { materializeNativeCompiler } from "./native-boundary-fixture.js";
 import { createScriptTestHarness } from "./test-helpers.js";
@@ -48,23 +38,6 @@ const configs = Array.isArray(buildConfigs) ? buildConfigs : [buildConfigs];
 const { createTempDir } = createScriptTestHarness();
 const testNodeExecPath = resolveTestNodeExecPath();
 afterEach(() => vi.unstubAllEnvs());
-
-function runNode(args: string[], options: ExecFileOptions) {
-  return new Promise<{ error: Error | null; stdout: string; stderr: string }>((resolve) => {
-    execFile(
-      testNodeExecPath,
-      args,
-      { timeout: 30_000, ...options, encoding: "utf8" },
-      (error, stdout, stderr) => resolve({ error, stdout, stderr }),
-    );
-  });
-}
-
-async function dispose(bundles: Awaited<ReturnType<typeof build>>["bundles"]) {
-  for (const bundle of bundles) {
-    await bundle[Symbol.asyncDispose]();
-  }
-}
 
 type TsdownConfig = (typeof configs)[number];
 type OutExtensions = NonNullable<TsdownConfig["outExtensions"]>;
@@ -125,7 +98,9 @@ it("keeps the standalone launcher bootstrap within its measured metadata-only bo
       fs.statSync(path.join(root, "node-host-launcher-bootstrap.js")).size,
     ).toBeLessThanOrEqual(64 * 1024);
   } finally {
-    await dispose(bundles);
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
   }
 });
 
@@ -159,7 +134,9 @@ it("keeps catalog projections independent of discovery I/O", async () => {
       ),
     ).toEqual([]);
   } finally {
-    await dispose(bundles);
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
   }
 });
 
@@ -350,10 +327,19 @@ describe("tsdown config", () => {
         assert.equal(lazy, identity);
         assert.equal(value, "bundled plugin dependency");
       `;
-        const result = await runNode(["--input-type=module", "-e", script], { cwd: root });
+        const result = await new Promise<{ error: Error | null; stderr: string }>((resolve) => {
+          execFile(
+            testNodeExecPath,
+            ["--input-type=module", "-e", script],
+            { cwd: root, timeout: 30_000 },
+            (error, _stdout, stderr) => resolve({ error, stderr }),
+          );
+        });
         expect(result.error, result.stderr).toBeNull();
       } finally {
-        await dispose(bundles);
+        for (const bundle of bundles) {
+          await bundle[Symbol.asyncDispose]();
+        }
       }
     },
   );
@@ -451,24 +437,32 @@ describe("tsdown config", () => {
           }
           console.log("bundled memory store persists and recalls without image dependencies");
         `;
-        const result = await runNode(
-          [
-            "--input-type=module",
-            "-e",
-            script,
-            root,
-            path.join(root, "dist", `${entryName}.js`),
-            path.join(root, "dist", `${runtimeEntryName}.js`),
-            JSON.stringify(Object.keys(manifest.optionalDependencies)),
-          ],
-          { cwd: root },
+        const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+          (resolve) => {
+            execFile(
+              testNodeExecPath,
+              [
+                "--input-type=module",
+                "-e",
+                script,
+                root,
+                path.join(root, "dist", `${entryName}.js`),
+                path.join(root, "dist", `${runtimeEntryName}.js`),
+                JSON.stringify(Object.keys(manifest.optionalDependencies)),
+              ],
+              { cwd: root, timeout: 30_000 },
+              (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+            );
+          },
         );
         expect(result.error, result.stderr).toBeNull();
         expect(result.stdout.trim()).toBe(
           "bundled memory store persists and recalls without image dependencies",
         );
       } finally {
-        await dispose(bundles);
+        for (const bundle of bundles) {
+          await bundle[Symbol.asyncDispose]();
+        }
       }
     },
   );
@@ -497,16 +491,28 @@ describe("tsdown config", () => {
       logLevel: "silent",
     });
     try {
-      const result = await runNode(
-        [fileURLToPath(new URL("./imap-packaged-service.test-support.mjs", import.meta.url)), root],
-        {
-          cwd: root,
-          env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+        (resolve) => {
+          execFile(
+            testNodeExecPath,
+            [
+              fileURLToPath(new URL("./imap-packaged-service.test-support.mjs", import.meta.url)),
+              root,
+            ],
+            {
+              cwd: root,
+              env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
+              timeout: 30_000,
+            },
+            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+          );
         },
       );
       expect(result.error, result.stderr || result.stdout).toBeNull();
     } finally {
-      await dispose(bundles);
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
     }
   });
 
@@ -597,7 +603,9 @@ describe("tsdown config", () => {
         }
       }
     } finally {
-      await dispose(bundles);
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
     }
   });
 
@@ -724,16 +732,24 @@ describe("tsdown config", () => {
         }
         console.log("retained config APIs migrate without plugin installation or capability grants");
       `;
-      const result = await runNode(
-        ["--input-type=module", "-e", script, root, JSON.stringify(Object.keys(entries))],
-        { cwd: root },
+      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+        (resolve) => {
+          execFile(
+            testNodeExecPath,
+            ["--input-type=module", "-e", script, root, JSON.stringify(Object.keys(entries))],
+            { cwd: root, timeout: 30_000 },
+            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+          );
+        },
       );
       expect(result.error, result.stderr).toBeNull();
       expect(result.stdout.trim()).toBe(
         "retained config APIs migrate without plugin installation or capability grants",
       );
     } finally {
-      await dispose(bundles);
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
     }
   });
 
@@ -795,11 +811,14 @@ describe("tsdown config", () => {
           );
         }
       }
-      const result = await runNode(
-        [
-          "--input-type=module",
-          "--eval",
-          `
+      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+        (resolve) => {
+          execFile(
+            testNodeExecPath,
+            [
+              "--input-type=module",
+              "--eval",
+              `
 import assert from "node:assert/strict";
 import { createRequire, registerHooks } from "node:module";
 import path from "node:path";
@@ -825,16 +844,21 @@ try {
 }
 console.log("relocated Bash parser works without native grammar package");
 `,
-          path.join(installed, "dist", `${entry}.${worker ? "mjs" : "js"}`),
-        ],
-        { cwd: installed },
+              path.join(installed, "dist", `${entry}.${worker ? "mjs" : "js"}`),
+            ],
+            { cwd: installed, timeout: 30_000 },
+            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+          );
+        },
       );
       expect(result.error, result.stderr).toBeNull();
       expect(result.stdout.trim()).toBe(
         "relocated Bash parser works without native grammar package",
       );
     } finally {
-      await dispose(bundles);
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
     }
   });
 
@@ -863,11 +887,14 @@ console.log("relocated Bash parser works without native grammar package");
           fs.readFileSync(path.join(installed, "dist/assets/session-card", notice), "utf8"),
         ).toContain("SIL OPEN FONT LICENSE");
       }
-      const result = await runNode(
-        [
-          "--input-type=module",
-          "--eval",
-          `
+      const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+        (resolve) => {
+          execFile(
+            testNodeExecPath,
+            [
+              "--input-type=module",
+              "--eval",
+              `
 import assert from "node:assert/strict";
 import { pathToFileURL } from "node:url";
 const { renderPublicSessionCardPng } = await import(pathToFileURL(process.argv[1]).href);
@@ -884,14 +911,19 @@ assert.equal(png.readUInt32BE(16), 1200);
 assert.equal(png.readUInt32BE(20), 630);
 console.log("relocated session card renders with bundled fonts");
 `,
-          path.join(installed, "dist", `${entry}.js`),
-        ],
-        { cwd: installed },
+              path.join(installed, "dist", `${entry}.js`),
+            ],
+            { cwd: installed, timeout: 30_000 },
+            (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+          );
+        },
       );
       expect(result.error, result.stderr).toBeNull();
       expect(result.stdout.trim()).toBe("relocated session card renders with bundled fonts");
     } finally {
-      await dispose(bundles);
+      for (const bundle of bundles) {
+        await bundle[Symbol.asyncDispose]();
+      }
     }
   });
 
@@ -934,7 +966,9 @@ console.log("relocated session card renders with bundled fonts");
             ...bundles.flatMap((bundle) => bundle.chunks.map((chunk) => `dist/${chunk.fileName}`)),
           );
         } finally {
-          await dispose(bundles);
+          for (const bundle of bundles) {
+            await bundle[Symbol.asyncDispose]();
+          }
         }
       }
       expect(files).toEqual(
@@ -1043,32 +1077,40 @@ console.log("relocated session card renders with bundled fonts");
         ) => {
           const rootDir = path.join(relocatedRoot, name);
           fs.mkdirSync(rootDir);
-          const result = await runNode(
-            [
-              "--input-type=module",
-              "--eval",
-              FS_SAFE_CALLER_PROBE,
-              entry,
-              observer,
-              rootDir,
-              mode,
-              outcome,
-              worker ? "sealed" : "",
-              bundledNativeAsset,
-            ],
-            {
-              cwd: relocatedRoot,
-              env: {
-                PATH: process.env.PATH,
-                SystemRoot: process.env.SystemRoot,
-                WINDIR: process.env.WINDIR,
-                HOME: temporaryRoot,
-                USERPROFILE: temporaryRoot,
-                TMPDIR: temporaryRoot,
-                TMP: temporaryRoot,
-                TEMP: temporaryRoot,
-                ...override,
-              },
+          const result = await new Promise<{ error: Error | null; stdout: string; stderr: string }>(
+            (resolve) => {
+              execFile(
+                testNodeExecPath,
+                [
+                  "--input-type=module",
+                  "--eval",
+                  FS_SAFE_CALLER_PROBE,
+                  entry,
+                  observer,
+                  rootDir,
+                  mode,
+                  outcome,
+                  worker ? "sealed" : "",
+                  bundledNativeAsset,
+                ],
+                {
+                  cwd: relocatedRoot,
+                  encoding: "utf8",
+                  timeout: 30_000,
+                  env: {
+                    PATH: process.env.PATH,
+                    SystemRoot: process.env.SystemRoot,
+                    WINDIR: process.env.WINDIR,
+                    HOME: temporaryRoot,
+                    USERPROFILE: temporaryRoot,
+                    TMPDIR: temporaryRoot,
+                    TMP: temporaryRoot,
+                    TEMP: temporaryRoot,
+                    ...override,
+                  },
+                },
+                (error, stdout, stderr) => resolve({ error, stdout, stderr }),
+              );
             },
           );
           expect(result.error, `${name}\n${result.stdout}\n${result.stderr}`).toBeNull();
@@ -1114,13 +1156,15 @@ console.log("relocated session card renders with bundled fonts");
           ]);
         }
       } finally {
-        await dispose(bundles);
+        for (const bundle of bundles) {
+          await bundle[Symbol.asyncDispose]();
+        }
       }
     },
   );
 
   it.each(
-    ["runtime", "declarations", "worker", "client-credentials", "receiver"].flatMap((target) =>
+    ["runtime", "declarations", ...workerBuildTargets.map(([target]) => target)].flatMap((target) =>
       [false, true].map((verbose) => ({ target, verbose })),
     ),
   )(
@@ -1247,7 +1291,9 @@ console.log("relocated session card renders with bundled fonts");
           expectedImports.toSorted(),
         );
       } finally {
-        await dispose(bundles);
+        for (const bundle of bundles) {
+          await bundle[Symbol.asyncDispose]();
+        }
       }
     },
   );
@@ -1358,12 +1404,13 @@ console.log("relocated session card renders with bundled fonts");
         (name) => name.startsWith("extensions/") && excluded.has(name.split("/")[1]!),
       ),
     ).toEqual([]);
-    expect(entries).toMatchObject({
-      "plugin-sdk/codex-mcp-projection": "src/plugin-sdk/codex-mcp-projection.ts",
-      "plugin-sdk/codex-session-transcript-runtime":
-        "src/plugin-sdk/codex-session-transcript-runtime.ts",
-      "plugins/public-surface-runtime": "src/plugins/public-surface-runtime.ts",
-    });
+    expect(entries["plugin-sdk/codex-mcp-projection"]).toBe(
+      "src/plugin-sdk/codex-mcp-projection.ts",
+    );
+    expect(entries["plugin-sdk/codex-session-transcript-runtime"]).toBe(
+      "src/plugin-sdk/codex-session-transcript-runtime.ts",
+    );
+    expect(entries["plugins/public-surface-runtime"]).toBe("src/plugins/public-surface-runtime.ts");
     expect(Object.values(entries)).toEqual(
       expect.arrayContaining([
         "extensions/vault/vault-secret-id.js",
@@ -1452,26 +1499,24 @@ console.log("relocated session card renders with bundled fonts");
       SEALED_RUNTIME_BUILD: "true",
       WORKER_DEPLOY_VERSION: JSON.stringify(packageVersion),
     });
-    expect(workerConfig).toMatchObject({
-      alias: Object.fromEntries(
-        [
-          "bufferutil",
-          "chromium-bidi/lib/cjs/bidiMapper/BidiMapper",
-          "chromium-bidi/lib/cjs/cdp/CdpConnection",
-          "electron/index.js",
-          "fsevents",
-          "kerberos",
-          "utf-8-validate",
-        ].map((name) => [name, WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID]),
-      ),
-      plugins: expect.arrayContaining([
-        expect.objectContaining({ name: "openclaw:worker-deploy" }),
-      ]),
-      outputOptions: {
-        codeSplitting: true,
-        chunkFileNames: "worker/worker-chunk-[hash].mjs",
-        assetFileNames: "worker/[name][extname]",
-      },
+    expect(workerConfig?.alias).toMatchObject({
+      bufferutil: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "chromium-bidi/lib/cjs/bidiMapper/BidiMapper": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "chromium-bidi/lib/cjs/cdp/CdpConnection": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "electron/index.js": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      fsevents: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      kerberos: WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+      "utf-8-validate": WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
+    });
+    expect(workerConfig?.outDir).toBe("dist");
+    expect(workerConfig?.shims).toBe(true);
+    expect(workerConfig?.plugins).toEqual(
+      expect.arrayContaining([expect.objectContaining({ name: "openclaw:worker-deploy" })]),
+    );
+    expect(workerConfig?.outputOptions).toMatchObject({
+      codeSplitting: true,
+      chunkFileNames: "worker/worker-chunk-[hash].mjs",
+      assetFileNames: "worker/[name][extname]",
     });
     for (const config of [receiverConfig, launcherConfig]) {
       expect(config?.define).toBeUndefined();
@@ -1494,18 +1539,17 @@ console.log("relocated session card renders with bundled fonts");
       pkgType: "module",
     } as Parameters<OutExtensions>[0];
     for (const config of Object.values(workerConfigs)) {
-      expect(config).toMatchObject({
-        dts: false,
-        outDir: "dist",
-        shims: true,
-        platform: "node",
-        deps: { onlyBundle: false, alwaysBundle: expect.any(Function) },
-      });
+      expect(config?.dts).toBe(false);
+      expect(config?.outDir).toBe("dist");
+      expect(config?.shims).toBe(true);
+      expect(config?.deps?.onlyBundle).toBe(false);
+      expect(config?.deps?.alwaysBundle).toBeTypeOf("function");
       const alwaysBundle = config?.deps?.alwaysBundle;
       if (typeof alwaysBundle !== "function") {
         throw new Error("worker deploy config must define dependency bundling");
       }
       expect(alwaysBundle("json5", undefined)).toBe(true);
+      expect(config?.platform).toBe("node");
       expect(config?.outExtensions?.(context)).toEqual({ js: ".mjs", dts: ".d.ts" });
     }
   });
@@ -1525,321 +1569,5 @@ console.log("relocated session card renders with bundled fonts");
     for (const entry of nodePackageConfigs) {
       expect(entry.outExtensions?.(context)).toEqual({ js: ".js", dts: ".d.ts" });
     }
-  });
-});
-
-const extensionContext = {
-  format: "es",
-  options: {},
-  pkgType: "module",
-} as Parameters<OutExtensions>[0];
-function entrySources(config: TsdownConfig): Record<string, string> {
-  return Object.fromEntries(
-    Object.entries(config.entry ?? {}).map(([name, source]) => {
-      if (typeof source !== "string") {
-        throw new Error(`Expected one source for ${name}`);
-      }
-      return [name, source];
-    }),
-  );
-}
-const entryKeys = (config: TsdownConfig) => Object.keys(entrySources(config));
-function requireStandaloneRuntimeGraph(entry: string) {
-  const graphs = configs.filter(
-    (config) =>
-      !(typeof config.dts === "object" && config.dts.emitDtsOnly) &&
-      entryKeys(config).includes(entry),
-  );
-  expect(graphs).toHaveLength(1);
-  return expectDefined(graphs[0], `${entry} standalone graph`);
-}
-const requireNativeHookRelayGraph = () => requireStandaloneRuntimeGraph("native-hook-relay/entry");
-const requireUnifiedDistGraph = () => requireStandaloneRuntimeGraph("plugins/runtime/index");
-const bundledEntry = (pluginId: string) => `${bundledPluginRoot(pluginId)}/index`;
-async function resolvePluginNames(plugins: TsdownPluginOption): Promise<string[]> {
-  const resolved = await plugins;
-  if (!resolved) {
-    return [];
-  }
-  if (Array.isArray(resolved)) {
-    return (await Promise.all(resolved.map(resolvePluginNames))).flat();
-  }
-  if (!("name" in resolved)) {
-    throw new Error("expected a named plugin in build config assertions");
-  }
-  return [resolved.name];
-}
-async function runtimeInputOptions(config: TsdownConfig) {
-  if (typeof config.inputOptions !== "function") {
-    throw new Error("Expected runtime input options");
-  }
-  return config.inputOptions({}, "es", { cjsDts: false });
-}
-
-describe("tsdown runtime graphs", () => {
-  it.each(["0", "1"])(
-    "emits QA transport facades only for private QA builds (%s)",
-    async (mode) => {
-      vi.stubEnv("OPENCLAW_BUILD_PRIVATE_QA", mode);
-      const { default: selectedConfigs } = await importFreshModule<
-        typeof import("../../tsdown.config.ts")
-      >(import.meta.url, `../../tsdown.config.ts?private-qa=${mode}`);
-      const runtimeEntries = selectedConfigs
-        .filter((config) => !(typeof config.dts === "object" && config.dts.emitDtsOnly))
-        .flatMap((config) => Object.entries(entrySources(config)));
-      const packageExports = buildPluginSdkPackageExports();
-      for (const subpath of ["qa-channel", "qa-channel-protocol", "qa-lab", "qa-runtime"]) {
-        const matches = runtimeEntries.filter(([name]) => name === `plugin-sdk/${subpath}`);
-        expect(matches).toEqual(
-          mode === "1" ? [[`plugin-sdk/${subpath}`, `src/plugin-sdk/${subpath}.ts`]] : [],
-        );
-        expect(Object.hasOwn(packageExports, `./plugin-sdk/${subpath}`)).toBe(false);
-      }
-    },
-  );
-
-  it("inlines canonical state schema bytes", () => {
-    const rootDir = process.cwd();
-    const modulePath = path.resolve(rootDir, "src/state/openclaw-state-schema.ts");
-    const schemaPath = path.resolve(rootDir, "src/state/openclaw-state-schema.sql");
-    const watchedPaths: string[] = [];
-    const plugin = createStateSchemaInlinePlugin(rootDir);
-    let cacheKeyGenerator: ((context: { id: string }) => string | undefined) | undefined;
-    plugin.configureVitest({
-      defineCacheKeyGenerator: (generator) => {
-        cacheKeyGenerator = generator;
-      },
-    });
-    const result = plugin.load.call(
-      { addWatchFile: (filePath: string) => watchedPaths.push(filePath) },
-      modulePath,
-    );
-    const canonicalSql = fs.readFileSync(schemaPath, "utf8");
-
-    expect(result).not.toBeNull();
-    const match = result?.code.match(/^export const OPENCLAW_STATE_SCHEMA_SQL = (.*);\n$/su);
-    expect(match?.[1]).toBeDefined();
-    expect(JSON.parse(match?.[1] ?? "null")).toBe(canonicalSql);
-    expect(OPENCLAW_STATE_SCHEMA_SQL).toBe(canonicalSql);
-    expect(watchedPaths).toEqual([schemaPath]);
-    expect(cacheKeyGenerator?.({ id: modulePath })).toBe(canonicalSql);
-    expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, "src/index.ts") })).toBeUndefined();
-  });
-
-  it("installs schema inlining only on executable runtime graphs", async () => {
-    const unifiedGraph = requireUnifiedDistGraph();
-    const workerGraph = configs.find(
-      (config) => entrySources(config)["worker/worker"] === "src/worker/worker-deploy-entry.ts",
-    );
-    const executableGraphs = new Set([
-      ...configs.filter((config) =>
-        entryKeys(config).includes("worker/gateway-state-owner-heartbeat.worker"),
-      ),
-      unifiedGraph,
-      expectDefined(workerGraph, "deploy worker graph"),
-      requireStandaloneRuntimeGraph("worker/client-credential.worker"),
-      requireStandaloneRuntimeGraph("worker/code-mode-node.worker"),
-      requireStandaloneRuntimeGraph("worker/file-tool-planning.worker"),
-      requireStandaloneRuntimeGraph("worker/file-tool-read.worker"),
-      requireStandaloneRuntimeGraph("worker/gateway-state-owner-heartbeat.worker"),
-      requireStandaloneRuntimeGraph("worker/image-processor.worker"),
-      requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
-      requireStandaloneRuntimeGraph("worker/sqlite-source-revision.worker"),
-      requireStandaloneRuntimeGraph("worker/openclaw-state-read.worker"),
-      requireStandaloneRuntimeGraph("worker/worker-native-lifecycle.worker"),
-      requireStandaloneRuntimeGraph("managed-handoff-runtime"),
-      requireStandaloneRuntimeGraph("package-update-activation-recovery"),
-      requireNativeHookRelayGraph(),
-      requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),
-      requireStandaloneRuntimeGraph("infra/sqlite-source-revision.worker"),
-      requireStandaloneRuntimeGraph("state/openclaw-state-read.worker"),
-      requireStandaloneRuntimeGraph("agents/harness/native-hook-relay-client.worker"),
-      requireStandaloneRuntimeGraph("process/spawn-broker/worker"),
-      requireStandaloneRuntimeGraph("plugins/plugin-generation-preparation.worker"),
-      requireStandaloneRuntimeGraph("state/openclaw-state-lease-heartbeat.worker"),
-      requireStandaloneRuntimeGraph("infra/gateway-state-owner-heartbeat.worker"),
-      requireStandaloneRuntimeGraph("process/supervisor/service-child-relay"),
-      requireStandaloneRuntimeGraph("process/supervisor/service-child-group-anchor"),
-      requireStandaloneRuntimeGraph("tooling/managed-memory-launcher"),
-    ]);
-
-    for (const config of configs) {
-      const inlinePlugins = (await resolvePluginNames(config.plugins)).filter(
-        (name) => name === STATE_SCHEMA_INLINE_PLUGIN_NAME,
-      );
-      expect(inlinePlugins, entryKeys(config).join(", ")).toHaveLength(
-        executableGraphs.has(config) ? 1 : 0,
-      );
-    }
-  });
-
-  it("isolates relay startup from shared runtime chunks while retaining lazy fallback", async () => {
-    const relay = requireNativeHookRelayGraph();
-    expect(entrySources(relay)).toEqual({
-      "native-hook-relay/entry": "src/cli/native-hook-relay-entry.ts",
-    });
-    expect(relay).not.toBe(requireUnifiedDistGraph());
-    expect(relay.dts).toBe(false);
-    expect(relay.outputOptions?.codeSplitting).not.toBe(false);
-    expect(relay.outputOptions?.chunkFileNames).toBe("native-hook-relay/[name]-[hash].mjs");
-    // Only the shared graph may publish the global plugin ownership manifest.
-    expect(await resolvePluginNames(relay.plugins)).not.toContain(
-      "openclaw:runtime-dependency-ownership",
-    );
-  });
-
-  it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
-    const distGraph = requireUnifiedDistGraph();
-
-    const keys = entryKeys(distGraph);
-    for (const entry of [
-      "acp/control-plane/manager",
-      "agents/auth-profiles.runtime",
-      "agents/model-catalog.runtime",
-      "agents/models-config.runtime",
-      "cli/gateway-lifecycle.runtime",
-      "config/sessions/session-accessor.sqlite-archive.worker",
-      "plugin-sdk/sqlite-runtime",
-      "state/openclaw-database-verify.worker",
-      "plugins/memory-state",
-      "subagent-registry.runtime",
-      "link-understanding/apply.runtime",
-      "media-understanding/apply.runtime",
-      "index",
-      "commands/status.summary.runtime",
-      "docker-healthcheck",
-      "provider-dispatcher.runtime",
-      "plugins/hook-runner-global",
-      "plugins/provider-discovery.runtime",
-      "plugins/provider-runtime.runtime",
-      "plugins/runtime/index",
-      "plugins/synthetic-auth.runtime",
-      "web-fetch/runtime",
-      "mcp/openclaw-tools-serve",
-      "mcp/plugin-tools-serve",
-      bundledEntry("active-memory"),
-      "bundled/boot-md/handler",
-    ]) {
-      expect(keys).toContain(entry);
-    }
-  });
-
-  it.each([
-    "plugins/plugin-generation-preparation.worker",
-    "infra/sqlite-readonly-location.worker",
-    "infra/sqlite-source-revision.worker",
-    "agents/harness/native-hook-relay-client.worker",
-    "process/spawn-broker/worker",
-    "state/openclaw-state-lease-heartbeat.worker",
-  ])("emits %s once without sealing its package loaders", (entry) => {
-    const child = requireStandaloneRuntimeGraph(entry);
-    expect(entrySources(child)).toEqual({ [entry]: path.resolve(`src/${entry}.ts`) });
-    expect(child.outputOptions).toMatchObject({
-      codeSplitting:
-        entry === "infra/sqlite-readonly-location.worker" ||
-        entry === "plugins/plugin-generation-preparation.worker",
-    });
-    if (entry === "plugins/plugin-generation-preparation.worker") {
-      expect(child.outputOptions?.chunkFileNames).toBe(
-        "plugins/plugin-preparation-[name]-[hash].mjs",
-      );
-    }
-    expect(child.outExtensions?.(extensionContext).js).toBe(".js");
-    expect(child.define?.SEALED_RUNTIME_BUILD).toBeUndefined();
-  });
-
-  it.each([
-    [
-      "config/sessions/session-transcript-reconcile",
-      "src/config/sessions/session-transcript-reconcile.ts",
-    ],
-    [
-      "telegram-ingress-worker.runtime",
-      "extensions/telegram/src/telegram-ingress-worker.runtime.ts",
-    ],
-  ])("keeps %s behind its stable root dist entry", (entry, source) => {
-    expect(entrySources(requireUnifiedDistGraph())[entry]).toBe(source);
-  });
-
-  it("emits the dist modules referenced by every Docker client", () => {
-    const emittedPaths = new Set(
-      configs
-        .filter((config) => !(typeof config.dts === "object" && config.dts.emitDtsOnly))
-        .flatMap((config) =>
-          entryKeys(config).map((entry) =>
-            path.resolve(
-              config.outDir ?? "dist",
-              `${entry}${config.outExtensions?.(extensionContext).js ?? ".js"}`,
-            ),
-          ),
-        ),
-    );
-    const clients = ["test/e2e", "scripts/e2e"].flatMap((root) => {
-      const clientRoot = new URL(`../../${root}/`, import.meta.url);
-      return fs
-        .readdirSync(clientRoot, { recursive: true, encoding: "utf8" })
-        .filter((file) => file.endsWith("-docker-client.ts"))
-        .map((file) => new URL(file, clientRoot));
-    });
-    expect(clients.length).toBeGreaterThan(0);
-    for (const clientUrl of clients) {
-      const runtimeSource = stripNodeTypeScriptTypes(fs.readFileSync(clientUrl, "utf8"));
-      // Include literal paths assigned to variables used by dynamic imports, but not erased types.
-      for (const match of runtimeSource.matchAll(
-        /["'`]((?:\.{1,2}\/)+dist\/[^"'`\s]+\.[cm]?js)["'`]/gu,
-      )) {
-        const specifier = expectDefined(match[1], "Docker dist module path");
-        expect(emittedPaths, `${fileURLToPath(clientUrl)}: ${specifier}`).toContain(
-          fileURLToPath(new URL(specifier, clientUrl)),
-        );
-      }
-    }
-  });
-
-  it("bundles SDK-owned helpers while retaining native package ownership", async () => {
-    for (const [graph, bundleFsSafe] of [
-      [requireUnifiedDistGraph(), false],
-      [requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"), true],
-    ] as const) {
-      const alwaysBundle = graph.deps?.alwaysBundle;
-      const external = (await runtimeInputOptions(graph))?.external;
-      if (typeof alwaysBundle !== "function" || typeof external !== "function") {
-        throw new Error("expected runtime graph dependency predicates");
-      }
-
-      const shouldBundle = (id: string) => alwaysBundle(id, undefined);
-      expect(shouldBundle("@openclaw/fs-safe/path")).toBe(bundleFsSafe);
-      expect(external("@openclaw/fs-safe/path", undefined, false)).toBe(!bundleFsSafe);
-      for (const specifier of ["@openclaw/proc-safe/windows-job"]) {
-        expect(shouldBundle(specifier.split("/").slice(0, 2).join("/"))).toBe(false);
-        expect(shouldBundle(specifier)).toBe(false);
-        expect(external(specifier, undefined, false)).toBe(true);
-      }
-      expect(shouldBundle("openclaw/plugin-sdk/ssrf-runtime-internal")).toBe(true);
-      expect(shouldBundle("openclaw/plugin-sdk/ssrf-runtime")).toBe(false);
-      expect(shouldBundle("zod")).toBe(true);
-      expect(shouldBundle("zod/v4/core")).toBe(true);
-      for (const id of ["typebox", "typebox/schema", "typebox/format", "typebox/system"]) {
-        expect(shouldBundle(id)).toBe(false);
-        expect(external(id, undefined, false)).toBe(true);
-      }
-      expect(shouldBundle("not-a-runtime-dependency")).toBe(false);
-    }
-  });
-
-  it("suppresses unresolved imports from extension source", async () => {
-    const configured = (await runtimeInputOptions(requireUnifiedDistGraph()))?.onLog;
-    const handled: unknown[] = [];
-
-    configured?.(
-      "warn",
-      {
-        code: "UNRESOLVED_IMPORT",
-        message: "Could not resolve '@azure/identity' in extensions/msteams/src/sdk.ts",
-      },
-      (_level, log) => handled.push(log),
-    );
-
-    expect(handled).toStrictEqual([]);
   });
 });

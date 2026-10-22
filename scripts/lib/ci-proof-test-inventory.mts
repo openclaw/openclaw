@@ -3935,6 +3935,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "test/scripts/tsdown-build.test.ts",
   "test/scripts/tsdown-config.test.ts",
   "test/scripts/tsdown-declaration-resolution.test.ts",
+  "test/scripts/tsdown-runtime-config.test.ts",
   "test/scripts/tsgo-core-test-shards.test.ts",
   "test/scripts/type-suppression-inventory.test.ts",
   "test/scripts/typecheck-inert.test.ts",

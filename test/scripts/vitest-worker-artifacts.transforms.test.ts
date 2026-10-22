@@ -20,153 +20,159 @@ const generationDirectory = (url: string) => fileURLToPath(new URL("../../", url
 describe("fresh compiled subprocess invocation", { concurrent: false }, () => {
   it.for((["single", "projects"] as const).map((layout) => ({ layout })))(
     "preserves filesystem transforms across fresh generations, source mode, and edits ($layout)",
-    ({ layout }, context) =>
-      inWorkerArtifactFixture(context, async ({ runtime, startBorrower, directory }) => {
-        const { config, value, configuredValue, parent, cacheDirectory } = workerTransformProbe(
-          directory,
-          layout,
-        );
-        const projectNames = layout === "projects" ? ["first", "second"] : ["first"];
-        const projectCount = projectNames.length;
-        const controlled = createControlledWorkerCompiler(
-          directory,
-          testRunnerFixtureEnv(),
-          process.versions.bun ? "bun" : "node",
-        );
-        const readJsonLines = <T>(name: string) => readFixtureLines<T>(path.join(directory, name));
-        const counts = () => {
-          const transformed = readJsonLines<string>("transforms.jsonl").map(path.normalize);
-          return [[value, configuredValue], [parent]].map(
-            (ids) => transformed.filter((actual) => ids.includes(actual)).length,
+    ({ layout }, { workerArtifacts, signal, onTestFinished }) =>
+      inWorkerArtifactFixture(
+        { workerArtifacts, signal, onTestFinished },
+        async ({ runtime, startBorrower, directory }) => {
+          const { config, value, configuredValue, parent, cacheDirectory } = workerTransformProbe(
+            directory,
+            layout,
           );
-        };
-        const generations = new Set<string>();
-        const owner = createVitestWorkerRun(controlled.env);
-        let redirectedCompilers = 0;
-        // The second owner lives in this process; its child env cannot intercept its spawn.
-        const compilerLaunch = controlled.intercept(owner.descriptor.directory, () => {
-          redirectedCompilers += 1;
-        });
-        const preparationLog = vi.spyOn(console, "error");
-        try {
-          const launch = async (
-            mode: "compiled" | "source",
-            transforms: number[],
-            expectedValue = "first",
-          ) => {
-            const args = [
-              "run",
-              "--config",
-              config,
-              ...projectNames.flatMap((name) => ["--project", name]),
-            ];
-            const previousObservations = fs.existsSync(path.join(directory, "observations.jsonl"))
-              ? readJsonLines("observations.jsonl").length
-              : 0;
-            const reuse = mode === "compiled" && generations.size > 0;
-            const result = reuse
-              ? await startBorrower(owner, args).result
-              : await runtime(
-                  [
-                    mode === "compiled"
-                      ? process.versions.bun
-                        ? "scripts/run-vitest-child.mts"
-                        : "scripts/run-vitest.mjs"
-                      : "node_modules/vitest/vitest.mjs",
-                    ...args,
-                  ],
-                  root,
-                  controlled.env,
-                );
-            expect(result.code, result.stderr + result.stdout).toBe(0);
-            const currentGenerations: string[] =
-              readJsonLines<string>("generations.jsonl").slice(previousObservations);
-            const observed = readJsonLines("observations.jsonl").slice(previousObservations);
-            expect(observed).toEqual(
-              projectNames.map(() => ({ value: expectedValue, configValue: "first" })),
-            );
-            expect(currentGenerations).toHaveLength(projectCount);
-            expect(new Set(currentGenerations).size).toBe(1);
-            const generation = currentGenerations[0]!;
-            if (mode === "compiled") {
-              const dir = generationDirectory(generation);
-              if (reuse) {
-                expect(result.stderr).not.toContain("[vitest-workers] prepared");
-                expect(path.resolve(dir)).toBe(owner.descriptor.directory);
-              } else {
-                expect(result.stderr.match(/\[vitest-workers\] prepared/g)).toHaveLength(1);
-              }
-              generations.add(generation);
-              expect(path.dirname(dir)).toBe(path.join(root, ".artifacts", "vitest-workers"));
-              expect(fileURLToPath(generation)).toBe(
-                path.join(dir, "dist/infra/runtime-process-entrypoints.js"),
-              );
-              expect(fs.existsSync(dir)).toBe(reuse);
-            } else {
-              expect(result.stderr).not.toContain("[vitest-workers] prepared");
-              expect(fileURLToPath(generation)).toBe(
-                path.join(root, "src/infra/runtime-process-entrypoints.ts"),
-              );
-            }
-            expect(counts(), "filesystem transform reuse").toEqual(
-              transforms.map((count) => count * projectCount),
+          const projectNames = layout === "projects" ? ["first", "second"] : ["first"];
+          const projectCount = projectNames.length;
+          const controlled = createControlledWorkerCompiler(
+            directory,
+            testRunnerFixtureEnv(),
+            process.versions.bun ? "bun" : "node",
+          );
+          const readJsonLines = <T>(name: string) =>
+            readFixtureLines<T>(path.join(directory, name));
+          const counts = () => {
+            const transformed = readJsonLines<string>("transforms.jsonl").map(path.normalize);
+            return [[value, configuredValue], [parent]].map(
+              (ids) => transformed.filter((actual) => ids.includes(actual)).length,
             );
           };
-          await launch("compiled", [1, 1]);
-          expect(
-            JSON.parse(fs.readFileSync(path.join(cacheDirectory, "_metadata.json"), "utf8")),
-          ).toEqual({ lockfileHash: expect.stringMatching(/^[a-f\d]{8}$/u) });
-          await launch("compiled", [1, 1]);
-          expect(generations.size).toBe(2);
-          await launch("source", [2, 2]);
-          fs.writeFileSync(value, 'export const value: string = "second";');
-          await launch("compiled", [3, 2], "second");
-          fs.writeFileSync(
-            config,
-            fs
-              .readFileSync(config, "utf8")
-              .replace(
-                `replacement:${JSON.stringify(value)}`,
-                `replacement:${JSON.stringify(configuredValue)}`,
-              ),
-          );
-          await launch("compiled", [4, 3], "configured");
-          expect(generations.size).toBe(2);
-          expect(
-            preparationLog.mock.calls.filter(([line]) =>
-              String(line).startsWith("[vitest-workers] prepared"),
-            ),
-          ).toHaveLength(1);
-          const compilers = controlled.read();
-          expect(redirectedCompilers).toBe(1);
-          expect(compilers).toHaveLength(2);
-          // Windows can recycle a PID after exit; process start distinguishes its next owner.
-          expect(
-            new Set(compilers.map(({ pid, processStartTime }) => `${pid}:${processStartTime}`))
-              .size,
-          ).toBe(2);
-          expect(
-            new Set(compilers.map(({ directory: generation }) => path.resolve(generation))),
-          ).toEqual(new Set([...generations].map((url) => path.resolve(generationDirectory(url)))));
-          for (const compiler of compilers) {
-            expect(compiler).toMatchObject({
-              inputs: 3,
-              outputs: 3,
-              processStartTime: expect.any(Number),
-              isMainThread: true,
-            });
-          }
-        } finally {
+          const generations = new Set<string>();
+          const owner = createVitestWorkerRun(controlled.env);
+          let redirectedCompilers = 0;
+          // The second owner lives in this process; its child env cannot intercept its spawn.
+          const compilerLaunch = controlled.intercept(owner.descriptor.directory, () => {
+            redirectedCompilers += 1;
+          });
+          const preparationLog = vi.spyOn(console, "error");
           try {
-            await owner.dispose();
+            const launch = async (
+              mode: "compiled" | "source",
+              transforms: number[],
+              expectedValue = "first",
+            ) => {
+              const args = [
+                "run",
+                "--config",
+                config,
+                ...projectNames.flatMap((name) => ["--project", name]),
+              ];
+              const previousObservations = fs.existsSync(path.join(directory, "observations.jsonl"))
+                ? readJsonLines("observations.jsonl").length
+                : 0;
+              const reuse = mode === "compiled" && generations.size > 0;
+              const result = reuse
+                ? await startBorrower(owner, args).result
+                : await runtime(
+                    [
+                      mode === "compiled"
+                        ? process.versions.bun
+                          ? "scripts/run-vitest-child.mts"
+                          : "scripts/run-vitest.mjs"
+                        : "node_modules/vitest/vitest.mjs",
+                      ...args,
+                    ],
+                    root,
+                    controlled.env,
+                  );
+              expect(result.code, result.stderr + result.stdout).toBe(0);
+              const currentGenerations: string[] =
+                readJsonLines<string>("generations.jsonl").slice(previousObservations);
+              const observed = readJsonLines("observations.jsonl").slice(previousObservations);
+              expect(observed).toEqual(
+                projectNames.map(() => ({ value: expectedValue, configValue: "first" })),
+              );
+              expect(currentGenerations).toHaveLength(projectCount);
+              expect(new Set(currentGenerations).size).toBe(1);
+              const generation = currentGenerations[0]!;
+              if (mode === "compiled") {
+                const dir = generationDirectory(generation);
+                if (reuse) {
+                  expect(result.stderr).not.toContain("[vitest-workers] prepared");
+                  expect(path.resolve(dir)).toBe(owner.descriptor.directory);
+                } else {
+                  expect(result.stderr.match(/\[vitest-workers\] prepared/g)).toHaveLength(1);
+                }
+                generations.add(generation);
+                expect(path.dirname(dir)).toBe(path.join(root, ".artifacts", "vitest-workers"));
+                expect(fileURLToPath(generation)).toBe(
+                  path.join(dir, "dist/infra/runtime-process-entrypoints.js"),
+                );
+                expect(fs.existsSync(dir)).toBe(reuse);
+              } else {
+                expect(result.stderr).not.toContain("[vitest-workers] prepared");
+                expect(fileURLToPath(generation)).toBe(
+                  path.join(root, "src/infra/runtime-process-entrypoints.ts"),
+                );
+              }
+              expect(counts(), "filesystem transform reuse").toEqual(
+                transforms.map((count) => count * projectCount),
+              );
+            };
+            await launch("compiled", [1, 1]);
+            expect(
+              JSON.parse(fs.readFileSync(path.join(cacheDirectory, "_metadata.json"), "utf8")),
+            ).toEqual({ lockfileHash: expect.stringMatching(/^[a-f\d]{8}$/u) });
+            await launch("compiled", [1, 1]);
+            expect(generations.size).toBe(2);
+            await launch("source", [2, 2]);
+            fs.writeFileSync(value, 'export const value: string = "second";');
+            await launch("compiled", [3, 2], "second");
+            fs.writeFileSync(
+              config,
+              fs
+                .readFileSync(config, "utf8")
+                .replace(
+                  `replacement:${JSON.stringify(value)}`,
+                  `replacement:${JSON.stringify(configuredValue)}`,
+                ),
+            );
+            await launch("compiled", [4, 3], "configured");
+            expect(generations.size).toBe(2);
+            expect(
+              preparationLog.mock.calls.filter(([line]) =>
+                String(line).startsWith("[vitest-workers] prepared"),
+              ),
+            ).toHaveLength(1);
+            const compilers = controlled.read();
+            expect(redirectedCompilers).toBe(1);
+            expect(compilers).toHaveLength(2);
+            // Windows can recycle a PID after exit; process start distinguishes its next owner.
+            expect(
+              new Set(compilers.map(({ pid, processStartTime }) => `${pid}:${processStartTime}`))
+                .size,
+            ).toBe(2);
+            expect(
+              new Set(compilers.map(({ directory: generation }) => path.resolve(generation))),
+            ).toEqual(
+              new Set([...generations].map((url) => path.resolve(generationDirectory(url)))),
+            );
+            for (const compiler of compilers) {
+              expect(compiler).toMatchObject({
+                inputs: 3,
+                outputs: 3,
+                processStartTime: expect.any(Number),
+                isMainThread: true,
+              });
+            }
           } finally {
-            compilerLaunch.mockRestore();
-            preparationLog.mockRestore();
+            try {
+              await owner.dispose();
+            } finally {
+              compilerLaunch.mockRestore();
+              preparationLog.mockRestore();
+            }
           }
-        }
-        for (const generation of generations) {
-          expect(fs.existsSync(new URL("../../", generation))).toBe(false);
-        }
-      }),
+          for (const generation of generations) {
+            expect(fs.existsSync(new URL("../../", generation))).toBe(false);
+          }
+        },
+      ),
   );
 });
