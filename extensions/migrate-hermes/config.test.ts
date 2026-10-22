@@ -3,6 +3,9 @@ import path from "node:path";
 import { readConfigFileSnapshot } from "openclaw/plugin-sdk/health";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
+import { collectHermesProviders, collectHermesProviderSecretBindings } from "./config-providers.js";
+import { buildConfigItems } from "./config.js";
+import { resolveHermesModelRef } from "./model.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import { useHermesFixture } from "./test/migration-fixture.js";
 import { makeConfigRuntime, writeFile } from "./test/provider-helpers.js";
@@ -50,82 +53,28 @@ function modelProviderValues(
 
 describe("Hermes migration config mapping", () => {
   it("plans plugin-owned config when target credential storage is unreadable", async () => {
-    const { source, workspaceDir, agentDir } = fixture.paths;
+    const { source, agentDir } = fixture.paths;
     await writeConfig({
-      model: { provider: "custom:acme", default: "vendor/custom-v1" },
-      providers: {
-        acme: {
-          api: "https://api.acme.example/v1",
-          key_env: "ACME_TOKEN",
-          default_model: "vendor/custom-v1",
-          transport: "codex_responses",
-          models: { "vendor/custom-v1": { context_length: 262144, max_tokens: 16384 } },
-        },
-      },
       custom_providers: [
         { name: "local-llm", base_url: "http://127.0.0.1:11434/v1", models: ["local-model"] },
       ],
       memory: { provider: "honcho", honcho: { project: "hermes" } },
-      skills: { config: { "ship-it": { mode: "fast" } } },
-      mcp_servers: {
-        time: {
-          enabled: false,
-          command: "npx",
-          args: ["-y", "mcp-server-time"],
-          timeout: 45,
-          connect_timeout: 10,
-          supports_parallel_tool_calls: true,
-        },
-      },
     });
     await writeFile(path.join(source, "memories", "MEMORY.md"), "memory line\n");
-
     const credentialPath = path.join(agentDir, "openclaw-agent.sqlite");
     const unreadableCredentials = "not a SQLite database\n";
     await writeFile(credentialPath, unreadableCredentials);
-    const plan = await migrationProvider.plan(makeTestContext({ workspaceDir }));
-
-    const memoryPlugin = itemById(plan.items, "config:memory-plugin:honcho");
-    expect(memoryPlugin).toMatchObject({
+    const plan = await migrationProvider.plan(makeTestContext());
+    expect(itemById(plan.items, "config:memory-plugin:honcho")).toMatchObject({
       kind: "config",
       action: "merge",
       target: "plugins.entries.honcho",
     });
-
-    const manualMemory = itemById(plan.items, "manual:memory-provider:honcho");
-    expect(manualMemory).toMatchObject({ kind: "manual", status: "skipped" });
-
-    const modelProviderValue = modelProviderValues(plan.items);
-    expect(modelProviderValue?.acme?.baseUrl).toBe("https://api.acme.example/v1");
-    expect(modelProviderValue?.acme?.apiKey).toBeUndefined();
-    expect(modelProviderValue?.acme?.api).toBe("openai-responses");
-    expect(modelProviderValue?.acme?.models).toEqual([
-      expect.objectContaining({
-        id: "vendor/custom-v1",
-        contextWindow: 262_144,
-        maxTokens: 16_384,
-        api: "openai-responses",
-      }),
-    ]);
-    expect(modelProviderValue?.["local-llm"]?.baseUrl).toBe("http://127.0.0.1:11434/v1");
-
-    const mcpServers = itemById(plan.items, "config:mcp-server:time");
-    expect(mcpServers?.details?.value).toEqual({
-      time: {
-        enabled: false,
-        command: "npx",
-        args: ["-y", "mcp-server-time"],
-        connectionTimeoutMs: 10_000,
-        requestTimeoutMs: 45_000,
-        supportsParallelToolCalls: true,
-      },
+    expect(itemById(plan.items, "manual:memory-provider:honcho")).toMatchObject({
+      kind: "manual",
+      status: "skipped",
     });
-
-    const skillEntry = itemById(plan.items, "config:skill-entry:ship-it");
-    expect(skillEntry?.details).toEqual({
-      path: ["skills", "entries", "ship-it"],
-      value: { config: { mode: "fast" } },
-    });
+    expect(modelProviderValues(plan.items)["local-llm"]?.baseUrl).toBe("http://127.0.0.1:11434/v1");
     expect(plan.warnings).toEqual([
       "Some Hermes settings require manual review before they can be activated safely.",
     ]);
@@ -145,7 +94,16 @@ describe("Hermes migration config mapping", () => {
           models: ["gpt-5.4"],
         },
       },
-      mcp_servers: { time: { command: "npx" } },
+      mcp_servers: {
+        time: {
+          enabled: false,
+          command: "npx",
+          args: ["-y", "mcp-server-time"],
+          timeout: 45,
+          connect_timeout: 10,
+          supports_parallel_tool_calls: true,
+        },
+      },
       skills: { config: { "ship-it": { mode: "fast" } } },
     });
     await writeFile(path.join(source, "memories", "MEMORY.md"), "Imported memory\n");
@@ -159,7 +117,14 @@ describe("Hermes migration config mapping", () => {
     expect(result.items).toContainEqual(
       expect.objectContaining({ id: "manual:model-provider-key-env:openai", kind: "manual" }),
     );
-    expect(config.mcp?.servers?.time?.command).toBe("npx");
+    expect(config.mcp?.servers?.time).toEqual({
+      enabled: false,
+      command: "npx",
+      args: ["-y", "mcp-server-time"],
+      connectionTimeoutMs: 10_000,
+      requestTimeoutMs: 45_000,
+      supportsParallelToolCalls: true,
+    });
     expect(config.skills?.entries?.["ship-it"]?.config?.mode).toBe("fast");
     expect(config.plugins?.slots?.memory).toBe("memory-core");
     const configPath = path.join(stateDir, "openclaw.json");
@@ -690,5 +655,97 @@ describe("Hermes source encoding", () => {
       "migrated",
     );
     expect(config.skills?.entries?.proof?.config?.label).toBe(label);
+  });
+});
+
+function providerItems(raw: Record<string, unknown>) {
+  return buildConfigItems({
+    ctx: fixture.context(),
+    config: { providers: { acme: { api: "https://models.example/v1", ...raw } } },
+  });
+}
+
+function expectProvider(items: ReturnType<typeof providerItems>, acme: object) {
+  const item = items.find(({ id }) => id === "config:model-provider:acme");
+  expect(item?.details?.value).toMatchObject({ acme });
+}
+
+describe("Hermes provider source contracts", () => {
+  it.each(["constructor", "__proto__", "toString", "hasOwnProperty"])(
+    "preserves prototype-like provider IDs without inventing environment mappings: %s",
+    (provider) => {
+      const config = { model: { provider, default: "custom-model" } };
+      expect(resolveHermesModelRef(config)).toBe(`${provider.toLowerCase()}/custom-model`);
+      expect(collectHermesProviders(config)).toEqual([]);
+    },
+  );
+
+  it.each([
+    ["openai", "openai-completions"],
+    ["responses", "openai-responses"],
+    [" CHAT_COMPLETIONS ", "openai-completions"],
+  ])("imports Hermes transport alias %s as %s", (transport, api) => {
+    const items = providerItems({ transport, default_model: "acme-model" });
+    expectProvider(items, { api, models: [{ id: "acme-model", api }] });
+    expect(items.filter((item) => item.kind === "manual")).toEqual([]);
+  });
+
+  it("honors canonical field precedence while importing documented camelCase fields", () => {
+    const config = {
+      providers: {
+        acme: {
+          baseUrl: "https://models.example/v1",
+          apiMode: "messages",
+          keyEnv: "ACME_TOKEN",
+          defaultModel: "acme-model",
+          contextLength: 262144,
+        },
+      },
+    };
+    const items = buildConfigItems({
+      ctx: fixture.context(),
+      config,
+      env: { ACME_TOKEN: "test-only-placeholder" },
+    });
+    expectProvider(items, {
+      api: "anthropic-messages",
+      models: [{ id: "acme-model", contextWindow: 262144 }],
+    });
+    expect(collectHermesProviderSecretBindings(config)).toEqual([
+      { provider: "acme", envVar: "ACME_TOKEN" },
+    ]);
+    const precedence = providerItems({
+      api_mode: "chat_completions",
+      transport: "anthropic_messages",
+    });
+    expectProvider(precedence, { api: "openai-completions" });
+  });
+
+  it("preserves list model metadata and removes Hermes catalog marker keys", () => {
+    const arrayItems = providerItems({
+      context_length: 32768,
+      models: [
+        " plain-model ",
+        { id: "vision-model", context_length: 65536, max_tokens: 4096, supports_vision: true },
+        { name: "named-model", max_tokens: 2048 },
+      ],
+    });
+    expectProvider(arrayItems, {
+      models: [
+        { id: "plain-model", contextWindow: 32768 },
+        { id: "vision-model", contextWindow: 65536, maxTokens: 4096, input: ["text", "image"] },
+        { id: "named-model", contextWindow: 32768, maxTokens: 2048 },
+      ],
+    });
+    expectProvider(
+      providerItems({
+        models: {
+          "acme-model": { context_length: 262144, max_tokens: 16384 },
+          __discovered_model_catalog__: true,
+          __explicit_model_allowlist__: true,
+        },
+      }),
+      { models: [{ id: "acme-model", contextWindow: 262144, maxTokens: 16384 }] },
+    );
   });
 });

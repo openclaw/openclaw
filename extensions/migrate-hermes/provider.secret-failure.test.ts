@@ -6,9 +6,7 @@ import { fakeJwt } from "./test/auth-helpers.js";
 import { useHermesFixture, writeJson } from "./test/migration-fixture.js";
 import { writeFile } from "./test/provider-helpers.js";
 
-const mocks = vi.hoisted(() => ({
-  updateAuthProfileStoreWithLock: vi.fn(async () => null),
-}));
+const mocks = vi.hoisted(() => ({ updateAuthProfileStoreWithLock: vi.fn(async () => null) }));
 
 vi.mock("openclaw/plugin-sdk/provider-auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/provider-auth")>()),

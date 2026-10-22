@@ -4331,7 +4331,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "extensions/memory-core/src/short-term-promotion.test.ts",
   "extensions/memory-core/src/tools.real-manager.test.ts",
   "extensions/memory-wiki/src/compiled-cache.integration.test.ts",
-  "extensions/migrate-hermes/model.plan.test.ts",
   "extensions/msteams/src/msteams-ingress.test.ts",
   "extensions/msteams/src/reply-stream-controller.sdk.test.ts",
   "extensions/msteams/src/token.test.ts",

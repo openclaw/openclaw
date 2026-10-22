@@ -145,56 +145,32 @@ describe("Hermes migration secret items", () => {
     const plan = await buildHermesMigrationProvider().plan(secretContext());
     expectItems(
       plan.items,
-      {
+      { kind: "secret", details: expect.objectContaining({ provider: "moonshot" }) },
+      { kind: "secret", details: expect.objectContaining({ provider: "openai" }) },
+    );
+  });
+
+  it.each([
+    ["moonshot", "MOONSHOT_API_KEY", "placeholder", "moonshot"],
+    ["kimi-coding", "KIMI_API_KEY", "sk-kimi-placeholder", "kimi"],
+  ])(
+    "keeps %s model routing and credentials aligned",
+    async (sourceProvider, envVar, key, provider) => {
+      const { source, secretContext } = await makeHermesSecretFixture();
+      await writeJson(path.join(source, "config.yaml"), {
+        model: { provider: sourceProvider, default: "kimi-k2.5" },
+      });
+      await writeFile(path.join(source, ".env"), `${envVar}=${key}\n`);
+      const plan = await buildHermesMigrationProvider().plan(secretContext());
+      expect(plan.items.find((item) => item.id === "config:default-model")?.details?.model).toBe(
+        `${provider}/kimi-k2.5`,
+      );
+      expectItems(plan.items, {
         kind: "secret",
-        details: expect.objectContaining({ provider: "moonshot" }),
-      },
-      {
-        kind: "secret",
-        details: expect.objectContaining({ provider: "openai" }),
-      },
-    );
-  });
-
-  it("keeps legacy Moonshot model routing and credentials aligned", async () => {
-    const { source, secretContext } = await makeHermesSecretFixture();
-    const envVar = ["MOONSHOT", "API", "KEY"].join("_");
-    await writeFile(
-      path.join(source, "config.yaml"),
-      "model:\n  provider: moonshot\n  default: kimi-k2.5\n",
-    );
-    await writeFile(path.join(source, ".env"), `${envVar}=placeholder\n`);
-
-    const plan = await buildHermesMigrationProvider().plan(secretContext());
-
-    expect(plan.items.find((item) => item.id === "config:default-model")?.details?.model).toBe(
-      "moonshot/kimi-k2.5",
-    );
-    expectItems(plan.items, {
-      kind: "secret",
-      details: expect.objectContaining({ envVar, provider: "moonshot" }),
-    });
-  });
-
-  it("aligns KIMI_API_KEY with its effective Kimi route", async () => {
-    const { source, secretContext } = await makeHermesSecretFixture("kimi");
-    const envVar = ["KIMI", "API", "KEY"].join("_");
-    await writeFile(
-      path.join(source, "config.yaml"),
-      "model:\n  provider: kimi-coding\n  default: kimi-k2.5\n",
-    );
-    await writeFile(path.join(source, ".env"), `${envVar}=sk-kimi-placeholder\n`);
-
-    const plan = await buildHermesMigrationProvider().plan(secretContext());
-
-    expect(plan.items.find((item) => item.id === "config:default-model")?.details?.model).toBe(
-      "kimi/kimi-k2.5",
-    );
-    expectItems(plan.items, {
-      kind: "secret",
-      details: expect.objectContaining({ envVar, provider: "kimi" }),
-    });
-  });
+        details: expect.objectContaining({ envVar, provider }),
+      });
+    },
+  );
 
   it("imports a configured provider key_env as matching OpenClaw provider auth", async () => {
     const { source, stateDir, secretContext, config, runtime } = await makeHermesSecretFixture();
@@ -363,7 +339,7 @@ describe("Hermes migration secret items", () => {
     expect(store.profiles["openrouter:hermes-borrowed"]).toBeUndefined();
   });
 
-  it("uses per-provider global API-key pool fallback for an active profile", async () => {
+  it("uses per-provider global API-key and OAuth fallback for an active profile", async () => {
     const { root, secretContext, config, runtime } = await makeHermesSecretFixture();
     const hermesRoot = path.join(root, ".hermes");
     const source = path.join(hermesRoot, "profiles", "coder");
@@ -374,6 +350,17 @@ describe("Hermes migration secret items", () => {
     await writeFile(path.join(hermesRoot, "active_profile"), "coder\n");
     await writeFile(path.join(source, "config.yaml"), "{}\n");
     await writeJson(path.join(hermesRoot, "auth.json"), {
+      providers: {
+        "openai-codex": {
+          tokens: {
+            [HERMES_ACCESS_FIELD]: fakeJwt({
+              "https://api.openai.com/auth": { chatgpt_account_id: "acct-global" },
+              "https://api.openai.com/profile": { email: "global@example.test" },
+            }),
+            [HERMES_REFRESH_FIELD]: "global-refresh",
+          },
+        },
+      },
       credential_pool: {
         openrouter: [poolKey("global-openrouter", globalOpenRouterValue)],
         gemini: [poolKey("global-gemini", globalGeminiValue)],
@@ -387,6 +374,7 @@ describe("Hermes migration secret items", () => {
     const result = await buildHermesMigrationProvider({ runtime }).apply(
       secretContext({ source: "", config, runtime, overwrite: true }),
     );
+    expect(result.source).toBe(source);
 
     expectItems(
       result.items,
@@ -398,6 +386,10 @@ describe("Hermes migration secret items", () => {
         source: path.join(hermesRoot, "auth.json"),
         details: expect.objectContaining({ provider: "google" }),
       },
+      {
+        source: path.join(hermesRoot, "auth.json"),
+        details: expect.objectContaining({ provider: "openai" }),
+      },
     );
     const store = readAuthProfileStore(path.join(stateDir, "agents", "main", "agent"));
     expect(store.profiles["openrouter:hermes-profile-openrouter"]).toMatchObject({
@@ -405,6 +397,10 @@ describe("Hermes migration secret items", () => {
     });
     expect(store.profiles["openrouter:hermes-global-openrouter"]).toBeUndefined();
     expect(store.profiles["google:hermes-global-gemini"]).toMatchObject({ key: globalGeminiValue });
+    expect(store.profiles["openai:account-acct-global"]).toMatchObject({
+      provider: "openai",
+      refresh: "global-refresh",
+    });
   });
 
   it("reports API key import when config update fails after profile write", async () => {
@@ -437,79 +433,59 @@ describe("Hermes migration secret items", () => {
     });
   });
 
-  it("reports late-created auth profiles as conflicts without overwriting", async () => {
-    const { source, secretContext, reportDir, agentDir, provider } =
-      await makeHermesSecretFixture();
-    await writeFile(path.join(source, ".env"), "OPENAI_API_KEY=sk-hermes\n");
-    const ctx = secretContext({ reportDir });
-    const plan = await provider.plan(ctx);
-    writeAuthProfileStore(agentDir, {
-      version: 1,
-      profiles: { "openai:hermes-import": { type: "api_key", provider: "openai", key: "sk-late" } },
-    });
-
-    const result = await provider.apply(ctx, plan);
-
-    expect(result.items).toEqual([
-      expectedOpenAiSecret(source, agentDir, "conflict", HERMES_REASON_AUTH_PROFILE_EXISTS),
-    ]);
-    expect(result.summary.conflicts).toBe(1);
-    const authStore = readAuthProfileStore(agentDir);
-    expect(authStore.profiles?.["openai:hermes-import"]).toMatchObject({
-      type: "api_key",
-      provider: "openai",
-      key: "sk-late",
-    });
-  });
-
-  it("reports API key config auth profile conflicts during planning", async () => {
-    const { source, workspaceDir, secretContext, agentDir, provider } =
-      await makeHermesSecretFixture();
-    await writeFile(path.join(source, ".env"), "OPENAI_API_KEY=sk-hermes\n");
-    const config = {
-      agents: { defaults: { workspace: workspaceDir } },
-      auth: {
-        profiles: { "openai:hermes-import": { provider: "anthropic", mode: "api_key" } },
-      },
-    } as OpenClawConfig;
-    const ctx = secretContext({ config });
-    const plan = await provider.plan(ctx);
-
-    expect(plan.items).toEqual([
-      expect.objectContaining({
+  it.each(["store-after-plan", "config-before-plan", "config-after-plan"])(
+    "preserves existing API-key credentials: %s",
+    async (conflict) => {
+      const { source, config, secretContext, agentDir, provider, reportDir } =
+        await makeHermesSecretFixture();
+      await writeFile(path.join(source, ".env"), "OPENAI_API_KEY=sk-hermes\n");
+      const auth = {
+        profiles: { "openai:hermes-import": { provider: "anthropic", mode: "api_key" as const } },
+      };
+      if (conflict === "config-before-plan") {
+        config.auth = auth;
+      }
+      const ctx = secretContext({
+        config,
+        reportDir,
+        ...(conflict === "config-after-plan" ? { runtime: makeConfigRuntime(config) } : {}),
+      });
+      const plan = await provider.plan(ctx);
+      const expectedConflict = expect.objectContaining({
         id: "secret:openai",
         status: "conflict",
         reason: HERMES_REASON_AUTH_PROFILE_EXISTS,
-      }),
-    ]);
-
-    const result = await provider.apply(ctx, plan);
-
-    expect(result.summary.conflicts).toBe(1);
-    await expectMissingPath(path.join(agentDir, "auth-profiles.json"));
-  });
-
-  it("reports late-created API key config auth profile conflicts before writing", async () => {
-    const { source, config, secretContext, agentDir, provider } = await makeHermesSecretFixture();
-    await writeFile(path.join(source, ".env"), "OPENAI_API_KEY=sk-hermes\n");
-    const ctx = secretContext({ config, runtime: makeConfigRuntime(config) });
-    const plan = await provider.plan(ctx);
-    config.auth = {
-      profiles: { "openai:hermes-import": { provider: "anthropic", mode: "api_key" } },
-    };
-
-    const result = await provider.apply(ctx, plan);
-
-    expect(result.items).toEqual([
-      expect.objectContaining({
-        id: "secret:openai",
-        status: "conflict",
-        reason: HERMES_REASON_AUTH_PROFILE_EXISTS,
-      }),
-    ]);
-    expect(result.summary.conflicts).toBe(1);
-    await expectMissingPath(path.join(agentDir, "auth-profiles.json"));
-  });
+      });
+      if (conflict === "config-before-plan") {
+        expect(plan.items).toEqual([expectedConflict]);
+      }
+      if (conflict === "store-after-plan") {
+        writeAuthProfileStore(agentDir, {
+          version: 1,
+          profiles: {
+            "openai:hermes-import": { type: "api_key", provider: "openai", key: "sk-late" },
+          },
+        });
+      } else if (conflict === "config-after-plan") {
+        config.auth = auth;
+      }
+      const result = await provider.apply(ctx, plan);
+      expect(result.summary.conflicts).toBe(1);
+      if (conflict === "store-after-plan") {
+        expect(result.items).toEqual([
+          expectedOpenAiSecret(source, agentDir, "conflict", HERMES_REASON_AUTH_PROFILE_EXISTS),
+        ]);
+        expect(readAuthProfileStore(agentDir).profiles["openai:hermes-import"]).toMatchObject({
+          type: "api_key",
+          provider: "openai",
+          key: "sk-late",
+        });
+      } else {
+        expect(result.items).toEqual([expectedConflict]);
+        await expectMissingPath(path.join(agentDir, "auth-profiles.json"));
+      }
+    },
+  );
 
   it("imports supported OpenCode auth store credentials next to the Hermes home", async () => {
     const { root, source, config, secretContext, reportDir, agentDir, provider, openCodeAuth } =

@@ -3,16 +3,13 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { loadAuthProfileStoreWithoutExternalProfiles } from "openclaw/plugin-sdk/agent-runtime";
 import { MIGRATION_REASON_TARGET_EXISTS } from "openclaw/plugin-sdk/migration";
-import { resolvePlannedMigrationTargets } from "openclaw/plugin-sdk/migration-runtime";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
-import { buildAuthItems } from "./auth.js";
 import { buildHermesMigrationProvider } from "./provider.js";
 import { discoverHermesSource } from "./source.js";
-import { fakeJwt } from "./test/auth-helpers.js";
 import { configRuntime, useHermesFixture, writeJson } from "./test/migration-fixture.js";
 import { writeFile } from "./test/provider-helpers.js";
 
@@ -49,9 +46,6 @@ describe("Hermes migration file and skill items", () => {
   function itemById<T extends { id: string }>(items: T[], id: string): T | undefined {
     return items.find((item) => item.id === id);
   }
-
-  const hermesAccessField = ["access", "token"].join("_");
-  const hermesRefreshField = ["refresh", "token"].join("_");
 
   it.each(["stat", "readdir"] as const)(
     "rejects an incomplete plan when source directory %s fails",
@@ -151,44 +145,6 @@ describe("Hermes migration file and skill items", () => {
     expect(
       await discoverRoot({ LOCALAPPDATA: personaLocalAppData, USERPROFILE: personaHome }, "win32"),
     ).toBe(personaLegacyRoot);
-  });
-
-  it("uses global Hermes auth per provider when the active profile has no local entry", async () => {
-    const root = fixture.paths.root;
-    const home = path.join(root, "home");
-    const hermesRoot = path.join(home, ".hermes");
-    const profileRoot = path.join(hermesRoot, "profiles", "coder");
-
-    const access = fakeJwt({
-      "https://api.openai.com/auth": { chatgpt_account_id: "acct-global" },
-      "https://api.openai.com/profile": { email: "global@example.test" },
-    });
-    await writeFile(path.join(hermesRoot, "active_profile"), "coder\n");
-    await writeFile(path.join(profileRoot, "config.yaml"), "model: openai/gpt-5.6\n");
-    await writeJson(path.join(profileRoot, "auth.json"), { providers: {} });
-    await writeJson(path.join(hermesRoot, "auth.json"), {
-      providers: {
-        "openai-codex": {
-          tokens: { [hermesAccessField]: access, [hermesRefreshField]: "global-refresh" },
-        },
-      },
-    });
-
-    const source = await discoverSource({ HOME: home });
-    expect(source.root).toBe(profileRoot);
-    expect(source.globalAuthPath).toBe(path.join(hermesRoot, "auth.json"));
-    const ctx = makeTestContext({ source: profileRoot, includeSecrets: true });
-    const items = await buildAuthItems({
-      ctx,
-      source,
-      targets: resolvePlannedMigrationTargets(ctx),
-    });
-    expect(items).toEqual([
-      expect.objectContaining({
-        source: path.join(hermesRoot, "auth.json"),
-        details: expect.objectContaining({ provider: "openai" }),
-      }),
-    ]);
   });
 
   it("maps supported OAuth model providers and requests fresh OpenClaw authentication", async () => {
