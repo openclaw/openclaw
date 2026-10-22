@@ -136,6 +136,63 @@ it("archives malformed meaningful data with recovery instructions and still admi
 });
 
 it.each([
+  [
+    voiceFile,
+    { triggers: ["w\u00e3ke up"] },
+    "config_machine_state",
+    "voicewake.triggers",
+  ] as const,
+  [
+    "settings/voicewake-routing.json",
+    { version: 1, defaultTarget: { agentId: "w\u00f6rk" }, routes: [] },
+    "config_machine_state",
+    "voicewake.routing",
+  ] as const,
+  [
+    bindingsFile,
+    collection("bindings", {
+      ...binding,
+      targetSessionKey: "agent:main:t\u00e9st",
+      boundAt: 100,
+    }),
+    "current_conversation_bindings",
+    null,
+  ] as const,
+  [
+    approvalsFile,
+    collection("approvals", { ...approval, pluginName: "ex\u00e1mple", approvedAt: 100 }),
+    "plugin_binding_approvals",
+    null,
+  ] as const,
+])(
+  "refuses %s whose bytes are not valid UTF-8 instead of importing replaced characters",
+  async (relative, value, table, settingKey) => {
+    // One invalid byte inside a string keeps the JSON parseable, so lossy decoding imports it.
+    const bytes = Buffer.from(JSON.stringify(value), "utf8");
+    bytes[bytes.indexOf(0xc3)] = 0xff;
+    const file = path.join(stateDir, relative);
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, bytes);
+
+    const result = await migrate();
+
+    expect(result.warnings.join("\n")).toContain(
+      `Could not import ${relative}: Legacy retired state ${relative} must be valid UTF-8`,
+    );
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.readFileSync(`${file}.migrated`)).toEqual(bytes);
+    if (settingKey) {
+      expect(readSetting(settingKey, { env })).toBeUndefined();
+    }
+    const { db } = openOpenClawStateDatabase({ env });
+    expect(db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get()).toMatchObject({
+      count: 0,
+    });
+    expect(() => assertNoRetiredRuntimeStateFiles(stateDir, env)).not.toThrow();
+  },
+);
+
+it.each([
   [voiceFile, { triggers: ["retained"] }, "config_machine_state"],
   ["settings/voicewake-routing.json", { version: 1, routes: [] }, "config_machine_state"],
   [bindingsFile, collection("bindings", binding), "current_conversation_bindings"],
