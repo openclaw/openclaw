@@ -23,6 +23,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import {
   connectWorkerConnectionAttempt,
   isRetryableWorkerCloseReason,
@@ -73,6 +74,7 @@ export class WorkerConnection {
   private reconnectPromise: Promise<void> | undefined;
   private heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly heartbeatWork = new Set<Promise<void>>();
+  private readonly trackHeartbeat = createPendingPromiseTracker(this.heartbeatWork);
   private readonly admissionTimeoutMs: number;
   private readonly admissionDeadlineMs: number;
   private readonly requestTimeoutMs: number;
@@ -369,12 +371,7 @@ export class WorkerConnection {
     this.heartbeatTimer = setTimeout(() => {
       this.heartbeatTimer = undefined;
       // Reconnect can start a newer heartbeat while an older callback still settles writes.
-      const work = this.sendHeartbeat();
-      this.heartbeatWork.add(work);
-      void work.then(
-        () => this.heartbeatWork.delete(work),
-        () => this.heartbeatWork.delete(work),
-      );
+      void this.trackHeartbeat(this.sendHeartbeat());
     }, intervalMs);
     this.heartbeatTimer.unref?.();
   }

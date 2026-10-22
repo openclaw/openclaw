@@ -35,16 +35,13 @@ import {
 } from "./attempt-execution.helpers.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 
-function formatClaudeCliFallbackPrelude(
-  seed: ClaudeCliFallbackSeed,
-  options?: { charBudget?: number },
-) {
+function formatClaudeCliFallbackPrelude(seed: ClaudeCliFallbackSeed) {
   mocks.readClaudeCliFallbackSeed.mockReturnValue(seed);
-  return buildClaudeCliFallbackContextPrelude({ cliSessionId: "fixture-session", ...options });
+  return buildClaudeCliFallbackContextPrelude({ cliSessionId: "fixture-session" });
 }
 const turn = (role: "user" | "assistant", content: unknown) => ({ role, content });
-const summaryPrelude = (summaryText: string, charBudget: number) =>
-  formatClaudeCliFallbackPrelude({ summaryText, recentTurns: [] }, { charBudget });
+const summaryPrelude = (summaryText: string) =>
+  formatClaudeCliFallbackPrelude({ summaryText, recentTurns: [] });
 
 it("emits the retry prompt with prelude even when sessionHasHistory is false (claude-cli case)", () => {
   const originalBody = "Summarize the quarterly earnings report and highlight key trends.";
@@ -90,28 +87,25 @@ describe("formatClaudeCliFallbackPrelude", () => {
 
   it("truncates an oversized summary instead of dropping it silently", async () => {
     const huge = "x ".repeat(10_000).trim();
-    const out = await summaryPrelude(huge, 600);
+    const out = await summaryPrelude(huge);
     expect(out).toContain("Summary of earlier conversation (truncated):");
-    expect(out.length).toBeLessThan(800);
+    expect(out.length).toBeLessThan(8_000);
     expect(out).toMatch(/…$/);
   });
 
   it("preserves a surrogate boundary when truncating an oversized summary", async () => {
-    const out = await summaryPrelude(`${"x".repeat(21)}😀${"y".repeat(100)}`, 128);
-    expect(out).toContain(`Summary of earlier conversation (truncated):\n${"x".repeat(21)} …`);
+    const out = await summaryPrelude(`${"x".repeat(7_893)}😀${"y".repeat(100)}`);
+    expect(out).toContain(`Summary of earlier conversation (truncated):\n${"x".repeat(7_893)} …`);
   });
 
   it("keeps the recent turn window contiguous when an adjacent turn is oversized", async () => {
-    const out = await formatClaudeCliFallbackPrelude(
-      {
-        recentTurns: [
-          turn("user", "older small turn"),
-          turn("assistant", `oversized adjacent turn ${"x".repeat(500)}`),
-          turn("user", "newest small turn"),
-        ],
-      },
-      { charBudget: 260 },
-    );
+    const out = await formatClaudeCliFallbackPrelude({
+      recentTurns: [
+        turn("user", "older small turn"),
+        turn("assistant", `oversized adjacent turn ${"x".repeat(8_000)}`),
+        turn("user", "newest small turn"),
+      ],
+    });
 
     expect(out).toContain("newest small turn");
     expect(out).not.toContain("oversized adjacent turn");

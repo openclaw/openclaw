@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  makeEmptyPluginMetadataOwners,
+  makePluginMetadataIndex,
+} from "../plugins/current-plugin-metadata.test-support.js";
 import type { PluginCandidate } from "../plugins/discovery.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
@@ -97,15 +101,9 @@ export function createPluginMetadataSnapshot({
   const policyHash = resolveInstalledPluginIndexPolicyHash(config);
   const { plugins, diagnostics } = manifestRegistry;
   const index: PluginMetadataSnapshot["index"] = {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
+    ...makePluginMetadataIndex(),
     policyHash,
-    generatedAtMs: 1,
-    installRecords: {},
     plugins: [],
-    diagnostics: [],
   };
   return {
     policyHash,
@@ -120,17 +118,9 @@ export function createPluginMetadataSnapshot({
     normalizePluginId: (pluginId) => pluginId,
     declaredProviderOwners: buildDeclaredProviderOwnerIndex(plugins),
     owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
+      ...makeEmptyPluginMetadataOwners(),
       providerAuthContributions:
         buildPluginMetadataProviderFacts(plugins).providerAuthContributions,
-      modelIdNormalizationPolicies: new Map(),
     },
     metrics: {
       registrySnapshotMs: 0,

@@ -694,16 +694,10 @@ export function ChatDetailsDesktopComposition(props: ChatDetailsDesktopCompositi
           onHideProgress={props.onHideProgress}
         />
       </Show>
-      <Show when={!props.props?.progressCard && props.props?.progressCardError}>
-        {(error) => (
-          <div class="chat-details__muted" role="status">
-            {t(
-              error() === "access-denied"
-                ? "sessionProgressCard.widgetAccessDenied"
-                : "sessionProgressCard.widgetUnavailable",
-            )}
-          </div>
-        )}
+      <Show when={!props.props?.progressCard && props.props?.progressCardError === "access-denied"}>
+        <div class="chat-details__muted" role="status">
+          {t("sessionProgressCard.widgetAccessDenied")}
+        </div>
       </Show>
     </ChatDetailsDesktopBody>
   );

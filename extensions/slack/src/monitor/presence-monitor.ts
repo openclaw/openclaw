@@ -1,10 +1,10 @@
 import { type WebClient, WebAPIRateLimitedError } from "@slack/web-api";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { SlackAccountConfig } from "openclaw/plugin-sdk/config-contracts";
-import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
+import { requestHeartbeat as wake } from "openclaw/plugin-sdk/heartbeat-runtime";
 import type { PluginServiceSchedulerV1 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent as enqueue } from "openclaw/plugin-sdk/system-event-runtime";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatSlackTarget } from "../target-parsing.js";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
@@ -156,14 +156,10 @@ export function createSlackPresenceMonitor(params: {
   cooldownStore: PluginStateKeyedStore<number>;
   log?: (message: string) => void;
   error?: (message: string) => void;
-  enqueue?: typeof enqueueRoutedSystemEvent;
-  wake?: typeof requestHeartbeat;
 }) {
   const targets = new Map<string, PresenceTarget>();
   const presenceByUser = new Map<string, PresenceObservation>();
   const nowMs = params.scheduler.now;
-  const enqueue = params.enqueue ?? enqueueRoutedSystemEvent;
-  const wake = params.wake ?? requestHeartbeat;
   let pollOffset = 0;
   const scheduler = params.scheduler.scope();
   let started = false;

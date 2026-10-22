@@ -1,4 +1,4 @@
-import { createMemo, createSignal, createUniqueId, Show } from "solid-js";
+import { action, createMemo, createOptimistic, createSignal, createUniqueId, Show } from "solid-js";
 import type { AgentsAvatarGenerateResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { LobsterSvg } from "../components/lobster-pet-artwork.tsx";
@@ -10,7 +10,7 @@ import { registerAgentCreationEnglish } from "../i18n/locales/en-agent-creation.
 import { formatUiError } from "../lib/format-error.ts";
 import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { fileToAvatarDataUrl } from "../pages/agents/avatar-image.ts";
+import { fileToAvatarDataUrl, type AvatarDataUrlResult } from "../pages/agents/avatar-image.ts";
 import {
   AvatarPicker,
   type AvatarPickerActions,
@@ -30,7 +30,7 @@ export function AgentCreateDialog(props: {
 }) {
   const [name, setName] = createSignal("");
   const [avatar, setAvatar] = createSignal<string | null>(null);
-  const [uploadBusy, setUploadBusy] = createSignal(false);
+  const [uploadBusy, setUploadBusy] = createOptimistic(false);
   const [avatarError, setAvatarError] = createSignal<string | null>(null);
   const initialPickerFooter: AvatarPickerFooterState = {
     mode: "bot",
@@ -79,11 +79,13 @@ export function AgentCreateDialog(props: {
     );
   }
 
-  async function uploadAvatar(file: File) {
+  const uploadAvatar = action(function* (
+    file: File,
+  ): Generator<Promise<AvatarDataUrlResult>, void, AvatarDataUrlResult> {
     setUploadBusy(true);
     setAvatarError(null);
     try {
-      const result = await fileToAvatarDataUrl(file, props.context.config);
+      const result = yield fileToAvatarDataUrl(file, props.context.config);
       if (!result.ok) {
         throw new Error(
           t(
@@ -96,10 +98,8 @@ export function AgentCreateDialog(props: {
       setAvatar(result.dataUrl);
     } catch (error) {
       setAvatarError(formatUiError(error));
-    } finally {
-      setUploadBusy(false);
     }
-  }
+  });
 
   let submitted = false;
   function submit() {
@@ -183,7 +183,7 @@ export function AgentCreateDialog(props: {
               setAvatarError(null);
             }}
           />
-          <Show when={avatarError()}>
+          <Show when={!uploadBusy() && avatarError()}>
             {(message) => (
               <p class="agent-create-dialog__error" role="alert">
                 {message()}

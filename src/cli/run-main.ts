@@ -43,7 +43,6 @@ import {
   withConsoleLogsRoutedToStderr,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
-import { isMachineOutputStdoutTTY } from "./machine-output-argv.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
@@ -458,7 +457,7 @@ function resolvesMachineOutput(
   },
   argv: readonly string[],
 ): boolean {
-  return descriptor.machineOutput?.({ argv, stdoutIsTTY: isMachineOutputStdoutTTY() }) ?? false;
+  return descriptor.machineOutput?.({ argv, stdoutIsTTY: process.stdout.isTTY || false }) ?? false;
 }
 
 function resolveBuiltInMachineOutput({
