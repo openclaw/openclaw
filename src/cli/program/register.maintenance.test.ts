@@ -5,6 +5,7 @@ import { runDoctorLintCli as runDoctorLintCliEntry } from "../../commands/doctor
 import { parseReleasedDoctorLintReport } from "../../infra/test-fixtures/update-doctor-lint.v2026-9-5.js";
 import { ExitError } from "../../runtime.js";
 import { UpdateSchemaRefusalError } from "../../state/openclaw-update-schema-refusal.js";
+import { withCliTty } from "../run-main.bare-root.test-support.js";
 import { expectNoCalls } from "./program.test-helpers.js";
 import { registerMaintenanceCommands } from "./register.maintenance.js";
 
@@ -93,20 +94,6 @@ async function runCli(input: string) {
   }
 }
 
-async function withTerminal(action: () => Promise<void>) {
-  const descriptor = Object.getOwnPropertyDescriptor(process.stdout, "isTTY");
-  Object.defineProperty(process.stdout, "isTTY", { configurable: true, value: true });
-  try {
-    await action();
-  } finally {
-    if (descriptor) {
-      Object.defineProperty(process.stdout, "isTTY", descriptor);
-    } else {
-      Reflect.deleteProperty(process.stdout, "isTTY");
-    }
-  }
-}
-
 beforeEach(() => vi.resetAllMocks());
 afterEach(() => {
   vi.restoreAllMocks();
@@ -147,26 +134,29 @@ describe("registered maintenance commands", () => {
     expect(doctorCommand.mock.calls[0]?.[1].fullIntegrityCheck).toBe(fullIntegrityCheck);
   });
 
-  it.each(["--repair", "--fix"])(
-    "dispatches only client credential preparation with %s",
-    async (repair) => {
-      await runCli(`doctor --client-credentials ${repair} --non-interactive`);
+  it.each([
+    ["--repair", false],
+    ["--fix", false],
+    ["--repair", true],
+  ] as const)(
+    "dispatches only client credential preparation with %s (json=%s)",
+    async (repair, json) => {
+      await runCli(
+        `doctor --client-credentials ${repair} --non-interactive ${json ? "--json" : ""}`,
+      );
       expect(mocks.prepareStartupClientCredentials).toHaveBeenCalledExactlyOnceWith({
         env: process.env,
         runtime,
       });
-      expectNoCalls(doctorCommand, runDoctorLintCli, runtime.log, runtime.writeJson);
+      expectNoCalls(doctorCommand, runDoctorLintCli, runtime.log, runtime.error);
+      if (json) {
+        expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ ok: true });
+      } else {
+        expectNoCalls(runtime.writeJson);
+      }
       expect(runtime.exit).toHaveBeenCalledWith(0);
     },
   );
-
-  it("reports credential preparation success as JSON without running lint", async () => {
-    await runCli("doctor --client-credentials --repair --non-interactive --json");
-    expect(mocks.prepareStartupClientCredentials).toHaveBeenCalledOnce();
-    expect(runtime.writeJson).toHaveBeenCalledExactlyOnceWith({ ok: true });
-    expectNoCalls(doctorCommand, runDoctorLintCli, runtime.log, runtime.error);
-    expect(runtime.exit).toHaveBeenCalledWith(0);
-  });
 
   it.each([
     ["", "requires --repair (or --fix) and --non-interactive."],
@@ -306,7 +296,7 @@ describe("registered maintenance commands", () => {
 
   it("keeps interactive lint failures on stderr", async () => {
     runDoctorLintCli.mockRejectedValueOnce(new Error("lint failed"));
-    await withTerminal(() => runCli("doctor --lint"));
+    await withCliTty(true, () => runCli("doctor --lint"));
     expectFailure("lint failed", false);
   });
 

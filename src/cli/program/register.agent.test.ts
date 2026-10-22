@@ -16,11 +16,7 @@ const mocks = vi.hoisted(() => ({
   agentsSetIdentityCommandMock: vi.fn(),
   requestExitAfterOneShotOutputMock: vi.fn(),
   setVerboseMock: vi.fn(),
-  runtime: {
-    log: vi.fn(),
-    error: vi.fn(),
-    exit: vi.fn(),
-  },
+  runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
 }));
 
 vi.mock("../../commands/agent-via-gateway.js", () => ({
@@ -94,55 +90,40 @@ describe("agent command registration", () => {
     );
   });
 
-  it.each([
-    {
-      args: [
-        ..."agent --timeout 30 exec fix --timeout 120".split(" "),
-        "--config-override",
-        '{"tools":{"deny":["exec"]}}',
-        "--config-override",
-        '{"tools":{"deny":[]}}',
-      ],
-      timeout: "120",
-    },
-  ])("resolves parent and leaf exec options for $args", async ({ args, timeout }) => {
-    await runCli(args);
+  it("resolves parent and leaf exec options", async () => {
+    const overrides = ['{"tools":{"deny":["exec"]}}', '{"tools":{"deny":[]}}'];
+    await runCli([
+      ..."agent --timeout 30 exec fix --timeout 120".split(" "),
+      ...overrides.flatMap((value) => ["--config-override", value]),
+    ]);
     expect(agentExecCommandMock).toHaveBeenCalledWith(
       "fix",
       expect.objectContaining({
-        timeout,
-        configOverride: ['{"tools":{"deny":["exec"]}}', '{"tools":{"deny":[]}}'],
+        timeout: "120",
+        configOverride: overrides,
       }),
       runtime,
     );
     expect(agentCliCommandMock).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      args: "beta --workspace /tmp/ws --bind telegram --bind discord:acct --non-interactive --json".split(
+  it("selects agent creation posture", async () => {
+    await runCli(
+      "agents add beta --workspace /tmp/ws --bind telegram --bind discord:acct --non-interactive --json".split(
         " ",
       ),
-      options: {
+    );
+    expect(mocks.agentsAddCommandMock).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
         name: "beta",
+        workspace: "/tmp/ws",
         bind: ["telegram", "discord:acct"],
         nonInteractive: true,
         json: true,
-      },
-      workspace: "/tmp/ws",
-      hasAutomationFlags: true,
-    },
-  ])(
-    "selects agent creation posture for $args",
-    async ({ args, options, workspace, hasAutomationFlags }) => {
-      await runCli(["agents", "add", ...args]);
-      expect(mocks.agentsAddCommandMock).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining(options),
-        { hasAutomationFlags },
-      );
-      expect(mocks.agentsAddCommandMock.mock.calls[0]?.[0].workspace).toBe(workspace);
-    },
-  );
+      }),
+      { hasAutomationFlags: true },
+    );
+  });
 
   it.each([
     ["", mocks.agentsListCommandMock, {}],

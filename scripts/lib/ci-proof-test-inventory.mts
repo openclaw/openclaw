@@ -1786,7 +1786,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/cli/program/register.maintenance.test.ts",
   "src/cli/program/register.migrate.test.ts",
   "src/cli/program/register.onboard.test.ts",
-  "src/cli/program/register.setup.test.ts",
   "src/cli/program/register.status-health-sessions.test.ts",
   "src/cli/program/registration-runtime-boundary.test.ts",
   "src/cli/program/root-command-descriptions.test.ts",
