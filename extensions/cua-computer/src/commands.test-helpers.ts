@@ -163,7 +163,7 @@ export type ComputerExecution = Awaited<ReturnType<typeof execution>>;
 type Screen = { base64: string; displayFrameId: string; width: number; height: number };
 
 export type WindowObservation = {
-  observation: { observationId: string; elements: Array<{ elementRef: string }> };
+  observation: { base64?: string; observationId: string; elements: Array<{ elementRef: string }> };
 };
 
 export function pngImage(width: number, height: number) {

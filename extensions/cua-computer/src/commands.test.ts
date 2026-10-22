@@ -15,6 +15,7 @@ import {
   pngImage,
   frameTarget,
   type ComputerExecution,
+  type WindowObservation,
 } from "./commands.test-helpers.js";
 import {
   CUA_DRIVER_CONTRACT_FIXTURES as fixtures,
@@ -44,6 +45,25 @@ function windowDriver(handle: (name: string) => CuaToolResult = () => cuaToolRes
     return handle(name);
   });
   return native;
+}
+
+const nativeWindow = { pid: 4242, window_id: 99 };
+async function windowTarget(computer: ComputerExecution) {
+  const windowRef = await computer.window();
+  const { observation } = await computer.observe(windowRef);
+  return {
+    windowRef,
+    observationId: observation.observationId,
+    elementRef: observation.elements[0]!.elementRef,
+  };
+}
+
+function clickFrame(
+  computer: ComputerExecution,
+  screen: Parameters<typeof frameTarget>[0],
+  extra: Record<string, unknown> = {},
+) {
+  return computer.send("left_click", { ...frameTarget(screen), x: 10, y: 20, ...extra });
 }
 
 describe("cua-computer provider", () => {
@@ -196,11 +216,20 @@ describe("cua-computer provider", () => {
       }
     });
     const computer = await execution(session);
-    const listed = await computer.read("list_windows");
+    const listed = await computer.read<{
+      details: { windows: Array<{ windowRef: string; appName: string; title: string }> };
+    }>("list_windows");
+    expect(listed).toMatchObject({
+      ok: true,
+      details: { windows: [{ appName: "Editor", title: "Notes" }] },
+    });
     const windowRef = listed.details.windows[0]!.windowRef;
     expect(windowRef).toMatch(/^cua:v2:window:/);
 
-    const observed = await computer.read("get_window_state", { windowRef, includeScreenshot });
+    const observed = await computer.read<WindowObservation>("get_window_state", {
+      windowRef,
+      includeScreenshot,
+    });
     expect(Boolean(observed.observation.base64)).toBe(includeScreenshot);
     const { observationId } = observed.observation;
     const elementRef = observed.observation.elements[0]!.elementRef;
@@ -241,22 +270,21 @@ describe("cua-computer provider", () => {
   it("rejects forged window, observation, and element refs before native resolution", async () => {
     const { session, callTool } = windowDriver();
     const computer = await execution(session);
-    const windowRef = await computer.window();
-    const observed = await computer.observe(windowRef);
+    const target = await windowTarget(computer);
     const callsBeforeHostileRefs = callTool.mock.calls.length;
 
     for (const input of [
       { action: "get_window_state", windowRef: "/tmp/native-window" },
       {
         action: "left_click",
-        windowRef,
+        windowRef: target.windowRef,
         observationId: "/tmp/native-observation",
-        elementRef: observed.observation.elements[0]!.elementRef,
+        elementRef: target.elementRef,
       },
       {
         action: "left_click",
-        windowRef,
-        observationId: observed.observation.observationId,
+        windowRef: target.windowRef,
+        observationId: target.observationId,
         elementRef: "../native-element",
       },
     ]) {
@@ -292,7 +320,7 @@ describe("cua-computer provider", () => {
       }
     });
     const computer = await execution(session);
-    const apps = await computer.read("list_apps");
+    const apps = await computer.read<{ details: { apps: Array<{ app: string }> } }>("list_apps");
     const app = apps.details.apps[0]!.app;
     const windowRef = await computer.window();
     const observed = await computer.observe(windowRef);
@@ -300,7 +328,7 @@ describe("cua-computer provider", () => {
     await computer.send("launch_app", { app });
     await computer.send("kill_app", { app });
     await computer.send("invoke_menu", { windowRef, path: ["File", "Save"] });
-    const zoomed = await computer.read("zoom", {
+    const zoomed = await computer.read<{ observation: { observationId: string } }>("zoom", {
       windowRef,
       observationId: observed.observation.observationId,
       x1: 0,
@@ -372,7 +400,9 @@ describe("cua-computer provider", () => {
       });
       const computer = await execution(session, "darwin");
       try {
-        const listed = await computer.read("list_apps");
+        const listed = await computer.read<{ details: { apps: Array<{ app: string }> } }>(
+          "list_apps",
+        );
         const launched = JSON.parse(
           await computer.send("launch_app", { app: listed.details.apps[0]!.app }),
         );
@@ -407,11 +437,8 @@ describe("cua-computer provider", () => {
   it("maps the complete Linux window pointer and keyboard family", async () => {
     const { session, callTool } = windowDriver(() => actionResult("confirmedBackgroundAction"));
     const computer = await execution(session);
-    const windowRef = await computer.window();
-    const observed = await computer.observe(windowRef);
-    const observationId = observed.observation.observationId;
-    const elementRef = observed.observation.elements[0]!.elementRef;
-    const pixelTarget = { windowRef, observationId, x: 20, y: 30 };
+    const { elementRef, ...target } = await windowTarget(computer);
+    const pixelTarget = { ...target, x: 20, y: 30 };
     const cases = [
       ["right_click", "click", {}, { button: "right", count: 1 }],
       ["middle_click", "click", {}, { button: "middle", count: 1 }],
@@ -454,7 +481,7 @@ describe("cua-computer provider", () => {
       await computer.send(action, { ...pixelTarget, deliveryMode: "foreground", ...input });
       expect(callTool).toHaveBeenCalledWith(
         tool,
-        expect.objectContaining({ pid: 4242, window_id: 99, ...expected }),
+        expect.objectContaining({ ...nativeWindow, ...expected }),
         undefined,
       );
     }
@@ -472,32 +499,26 @@ describe("cua-computer provider", () => {
     });
     getCursorPosition.mockResolvedValue(cuaToolResult({ x: 11, y: 12, source: "x11" }));
     const computer = await execution(session);
-    const tree = await computer.read("get_accessibility_tree");
+    const tree = await computer.read<{ details: { windows: unknown[]; processes: unknown[] } }>(
+      "get_accessibility_tree",
+    );
     expect(tree.details.windows).toHaveLength(1);
     expect(tree.details.processes).toHaveLength(1);
     await expect(computer.send("get_cursor_position")).resolves.toContain('"x":11');
     expect(getCursorPosition).toHaveBeenCalledWith(undefined);
 
-    const windowRef = await computer.window();
-    const observed = await computer.observe(windowRef);
-    await computer.send("bring_to_front", { windowRef });
+    const target = await windowTarget(computer);
+    await computer.send("bring_to_front", { windowRef: target.windowRef });
     await computer.send("set_value", {
-      windowRef,
-      observationId: observed.observation.observationId,
-      elementRef: observed.observation.elements[0]!.elementRef,
+      ...target,
       value: "new",
       deliveryMode: "background",
     });
-    expect(callTool).toHaveBeenCalledWith(
-      "bring_to_front",
-      { pid: 4242, window_id: 99 },
-      undefined,
-    );
+    expect(callTool).toHaveBeenCalledWith("bring_to_front", nativeWindow, undefined);
     expect(callTool).toHaveBeenCalledWith(
       "set_value",
       {
-        pid: 4242,
-        window_id: 99,
+        ...nativeWindow,
         element_token: "native-element-token-7",
         value: "new",
       },
@@ -718,13 +739,9 @@ describe("cua-computer desktop frames", () => {
     });
     const computer = await execution(session);
     const screen = await computer.capture();
-    await expect(
-      computer.send("left_click", {
-        ...frameTarget(screen),
-        x: 10,
-        y: 20,
-      }),
-    ).rejects.toThrow("COMPUTER_REFUSED_desktop_unavailable");
+    await expect(clickFrame(computer, screen)).rejects.toThrow(
+      "COMPUTER_REFUSED_desktop_unavailable",
+    );
   });
 
   it("rejects a mismatched reference width before desktop input", async () => {
@@ -732,14 +749,9 @@ describe("cua-computer desktop frames", () => {
     const computer = await execution(session);
     const screen = await computer.capture();
 
-    await expect(
-      computer.send("left_click", {
-        displayFrameId: screen.displayFrameId,
-        refWidth: screen.width + 1,
-        x: 10,
-        y: 20,
-      }),
-    ).rejects.toThrow("COMPUTER_STALE_FRAME: the coordinate reference width changed");
+    await expect(clickFrame(computer, screen, { refWidth: screen.width + 1 })).rejects.toThrow(
+      "COMPUTER_STALE_FRAME: the coordinate reference width changed",
+    );
     expect(click).not.toHaveBeenCalled();
   });
 
