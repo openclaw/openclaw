@@ -1318,7 +1318,6 @@
 ["src/agents/agent-command.live-model-switch.test.ts","../infra/outbound/session-context.js","ef94b2d8a5644f4e3dffd239c8567fbafea38b6bd2e3fedbec4b4c02be791c40",1]
 ["src/agents/agent-command.live-model-switch.test.ts","../plugins/plugin-metadata-snapshot.js","1085dbb8528518de1e3d6a5ad99355f7601ce87b237ccc729d34fffc3dada8c5",1]
 ["src/agents/agent-command.live-model-switch.test.ts","../runtime.js","249b0cd318b37809a4ac972efbbe3f3352a2563e5fb047f75dab1938b5ec0233",1]
-["src/agents/agent-command.live-model-switch.test.ts","../sessions/level-overrides.js","9265fbb0e5cc987e60c363ec73b048a82447f7d0dbc4e647aad916cdcbf19522",1]
 ["src/agents/agent-command.live-model-switch.test.ts","../sessions/model-overrides.js","325cd6b2bb3d6c27d4db3552b8d65192565cea25e9e8cf932baa56cb3426667c",1]
 ["src/agents/agent-command.live-model-switch.test.ts","../sessions/send-policy.js","6815454b431cf7e8e0ff1427a6816803368dc803e6f581cc869ef8670f1baf6c",1]
 ["src/agents/agent-command.live-model-switch.test.ts","../skills/discovery/agent-filter.js","a4974b4850e21bb2f1f3548cb723f3cfb17de3cedc733240d96fa1f1d5a2bb52",1]
