@@ -2,7 +2,7 @@ import type { EnvironmentSummary } from "@openclaw/gateway-protocol";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient, DesktopConnectionHandle } from "./desktop-client.ts";
 import "./desktop-panel.ts";
@@ -17,11 +17,21 @@ export function usePanelStorage() {
   });
 }
 
-export function connectedClient(overrides: Partial<DesktopConnectionHandle> = {}) {
+export function connectedClient(
+  overrides: Partial<DesktopConnectionHandle> = {},
+  authenticate = true,
+) {
   return vi.fn(async (options: Parameters<DesktopClient["connect"]>[0]) => {
-    options.onConnect?.();
+    if (authenticate) {
+      options.onConnect?.();
+    }
     return createConnectionHandle(overrides);
   });
+}
+
+export async function waitForConnections(panel: Panel, connect: unknown, count = 1) {
+  await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(count));
+  await panel.updateComplete;
 }
 
 export async function mountDesktop(

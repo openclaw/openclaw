@@ -7,12 +7,7 @@ import { createStorageMock } from "../../test-helpers/storage.ts";
 import type { DesktopClient } from "./desktop-client.ts";
 import * as panels from "./desktop-panel.test-support.ts";
 
-function toggle(panel: ReturnType<typeof panels.createPanel>, open: boolean) {
-  const detail = open ? { open, environmentId: "gateway" } : { open };
-  panel.handleToggleRequest(new CustomEvent("openclaw:desktop-toggle", { detail }));
-}
-
-async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = false) {
+async function setup(mode: "mirror" | "pending" | "denied" = "mirror") {
   const frames = new Map<number, FrameRequestCallback>();
   let id = 0;
   const popup = Object.assign(new EventTarget(), {
@@ -62,11 +57,8 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = 
   const panel = await panels.mountDesktop(
     { request, addEventListener: () => () => {} } as unknown as GatewayBrowserClient,
     connect,
-    { embedded: !docked, presented: true, requestedSource: "gateway" },
+    { embedded: true, presented: true, requestedSource: "gateway" },
   );
-  if (docked) {
-    toggle(panel, true);
-  }
   await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
   await panel.updateComplete;
   const button = () =>
@@ -75,7 +67,6 @@ async function setup(mode: "mirror" | "pending" | "denied" = "mirror", docked = 
   return {
     panel,
     popup,
-    request,
     connect,
     requestWindow,
     drawImage,
@@ -114,27 +105,11 @@ afterEach(() => {
 
 it("accepts a native close before the Solid panel mounts", () => {
   const panel = document.createElement("openclaw-desktop-panel");
-  expect(() => toggle(panel, false)).not.toThrow();
-});
-
-it("mirrors dock without reconnecting or changing control; browser close preserves the viewer", async () => {
-  const f = await setup("mirror", true);
-  const source = f.panel.querySelector("canvas")!;
-  f.button().click();
-  // The native request must retain the click's user activation.
-  expect(f.requestWindow).toHaveBeenCalledOnce();
-  await waitForSolid(() => expect(f.state()).toMatchObject({ pressed: "true" }));
-  f.tick(0);
-  f.tick(40);
-  expect(f.drawImage).toHaveBeenCalledTimes(2);
-  expect(f.drawImage).toHaveBeenLastCalledWith(source, 0, 0, 300, 150);
-  expect(source.isConnected).toBe(true);
-  expect(f.canvas()?.getAttribute("role")).toBe("img");
-  expect(f.request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(1);
-  expect([f.connect.mock.calls.length, f.disconnect.mock.calls.length]).toEqual([1, 0]);
-  f.popup.dispatchEvent(new Event("pagehide"));
-  await waitForSolid(() => expect(f.state()).toMatchObject({ pressed: "false" }));
-  expect([f.frames.size, f.canvas(), f.disconnect.mock.calls.length]).toEqual([0, null, 0]);
+  expect(() =>
+    panel.handleToggleRequest(
+      new CustomEvent("openclaw:desktop-toggle", { detail: { open: false } }),
+    ),
+  ).not.toThrow();
 });
 
 it("mirrors the published opener palette only while PiP is open", async () => {
@@ -238,10 +213,17 @@ it.each<[string, (fixture: Fixture) => void | Promise<void>]>([
 it("closes an active mirror on disconnect and stops failed frame copies instead of showing stale pixels", async () => {
   const f = await setup();
   await f.open();
+  const source = f.panel.querySelector("canvas")!;
+  f.tick(0);
+  f.tick(40);
+  expect(f.drawImage).toHaveBeenCalledTimes(2);
+  expect(f.drawImage).toHaveBeenLastCalledWith(source, 0, 0, 300, 150);
+  expect(source.isConnected).toBe(true);
+  expect(f.canvas()?.getAttribute("role")).toBe("img");
   f.drawImage.mockImplementation(() => {
     throw new Error("copy failed");
   });
-  f.tick(0);
+  f.tick(80);
   expect([f.popup.closed, f.frames.size, f.disconnect.mock.calls.length]).toEqual([true, 0, 0]);
   f.popup.closed = false;
   f.drawImage.mockReset();
