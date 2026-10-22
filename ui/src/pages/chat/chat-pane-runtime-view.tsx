@@ -7,7 +7,6 @@ import {
 } from "../../app/link-reader-routing.ts";
 import { nativeGatewaysCapability } from "../../app/native-gateways.runtime.ts";
 import { isChatControlCommand } from "../../lib/chat/commands.ts";
-import { projectsForGateway } from "../../lib/projects.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { projectProgressCard } from "../../lib/reactive/domain-keyed.ts";
 import { i18nRevision } from "../../lib/reactive/i18n.ts";
@@ -168,7 +167,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
       (source) => source.read().attachments,
       Object.is,
     );
-    const projects = projectOwner(projectsForGateway(context.gateway), (owner) => owner.snapshot);
     const queuedEdit =
       state &&
       projectSource(state, {
@@ -252,7 +250,6 @@ export function createChatPaneView(runtime: ChatPaneRuntime) {
         parentSession.read();
         progress.read();
         realtime()?.read();
-        projects.read();
         theme.preferences.read();
         controlCommand.read();
         attachments.read();
