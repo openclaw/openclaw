@@ -409,7 +409,9 @@ it("redacts credentials from MCP list and show output without changing saved val
   expect((await readServer("local")).args).toEqual(["some-mcp", "--api-key", REDACTED_SENTINEL]);
 
   const saved = await listConfiguredMcpServers();
-  expect(saved.ok && saved.mcpServers.remote?.headers?.["X-Api-Key"]).toBe("header-key-not-real");
+  expect(saved.ok && saved.mcpServers.remote).toMatchObject({
+    headers: { "X-Api-Key": "header-key-not-real" },
+  });
   expect(saved.ok && saved.mcpServers.local).toMatchObject(local);
 });
 
