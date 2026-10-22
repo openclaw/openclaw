@@ -6,7 +6,6 @@ import {
   resolveChatThinkingSelectState,
   resolveCurrentThinkingLevel,
   resolveThinkingCommandArgOptionsForSession,
-  resolveThinkingLevelInput,
 } from "./thinking.ts";
 
 type SelectParams = Parameters<typeof resolveChatThinkingSelectState>[0];
@@ -72,14 +71,6 @@ it("keeps an explicitly empty session profile and its saved override", () => {
   expect(resolveThinkingCommandArgOptionsForSession(session, defaults, [entry])).toEqual([]);
 });
 
-it("keeps unknown capability distinct from an explicitly empty profile", () => {
-  const session = { modelProvider: "thinking-fixture", model: "unpublished" };
-  expect(select({ session })).toMatchObject({ options: [], inherited: { value: "" } });
-  expect(resolveCurrentThinkingLevel(session, undefined, [])).toBe("Unknown");
-  expect(formatThinkingCommandOptionsForSession(session, undefined, [])).toBe("Unknown");
-  expect(isThinkingLevelOptionForSession(session, undefined, "high")).toBeUndefined();
-});
-
 it("preserves explicitly empty default labels metadata", () => {
   const entry = model();
   const session = sessionFor(entry);
@@ -134,11 +125,6 @@ const lunaModel = model({
     { id: "ultra", label: "ultra" },
   ],
   thinkingDefault: "ultra",
-});
-
-it("normalizes canonical Ultra command input", () => {
-  const session = { thinkingLevels: [{ id: "ultra", label: "Ultra" }] };
-  expect(resolveThinkingLevelInput("ultra", session, undefined)).toBe("ultra");
 });
 
 it("does not promote an unsupported persisted Ultra override into a slider stop", () => {

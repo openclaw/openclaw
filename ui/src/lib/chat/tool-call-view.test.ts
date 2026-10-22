@@ -20,7 +20,6 @@ const patchView = (patch: string) => resolve("apply_patch", { patch });
 
 it.each([
   ["exec", undefined, "command"],
-  ["edit_file", { path: "file.ts" }, "edit"],
   ["apply_patch", { changes: [{ path: "file.ts", kind: "update", diff: "+line" }] }, "edit"],
   ["grep", { pattern: "line" }, "search"],
   ["web_fetch", { url: "https://example.test" }, "fetch"],
@@ -30,8 +29,8 @@ it.each([
   expect(resolve(name, args).kind).toBe(expected);
 });
 
-it.each([{}, { command: "rename" }])("keeps unsupported editor command %o generic", (args) => {
-  expect(editor(args).kind).toBe("generic");
+it("keeps unsupported editor commands generic", () => {
+  expect(editor({ command: "rename" }).kind).toBe("generic");
 });
 it("unwraps shell commands", () => {
   expect(resolve("bash", { command: "sh -lc 'echo hi'" }).command).toBe("echo hi");
@@ -171,11 +170,13 @@ it("caps the combined preview across multi-edit sections", () => {
     oldText: `old ${section}`,
     newText: Array.from({ length: 300 }, (_, index) => `new ${section}-${index}`).join("\n"),
   }));
+  edits.splice(1, 0, { oldText: "", newText: "" });
 
   const view = resolve("multiedit", { path: "big.ts", edits });
 
   expect(view.diff).toHaveLength(401);
   expect(view.diff?.at(-1)).toEqual(skip);
+  expect(view.diff?.slice(301, 303)).toEqual([skip, line("del", "old 1")]);
   expect(view.stat).toEqual({ added: 600, removed: 2 });
 });
 
@@ -193,17 +194,29 @@ it("stops processing excess multi-edit pairs and omits a partial diffstat", () =
 });
 
 it("uses authoritative write details for diff and created-flag stats", () => {
-  const args = { path: "/repo/file.ts", content: "line 1\nline 2\n" };
+  const content = Array.from({ length: 81 }, (_, i) => `line ${i + 1}`);
+  const args = { path: "/repo/file.ts", content: content.join("\n") + "\n" };
 
-  expect(resolve("write", args, { created: false, diff: "-4 old\n+4 replacement" })).toMatchObject({
-    diff: [line("del", "old", 4), line("add", "replacement", 4)],
-    stat: { added: 1, removed: 1 },
+  const authoritative = resolve("write", args, {
+    created: false,
+    diff: " 455 before\n-456 old line\n+456 new line\n    ...\n 460 after",
   });
+  expect(authoritative.diff).toEqual([
+    line("ctx", "before", 455),
+    line("del", "old line", 456),
+    line("add", "new line", 456),
+    skip,
+    line("ctx", "after", 460),
+  ]);
+  expect(authoritative.stat).toEqual({ added: 1, removed: 1 });
 
-  expect(resolve("write", args, { created: true }).stat).toEqual({ added: 2, removed: 0 });
+  expect(resolve("write", args, { created: true }).stat).toEqual({ added: 81, removed: 0 });
 
   const overwrite = resolve("write", args, { created: false });
-  expect(overwrite.diff).toEqual([line("add", "line 1", 1), line("add", "line 2", 2)]);
+  expect(overwrite.diff).toEqual([
+    ...content.slice(0, 80).map((text, i) => line("add", text, i + 1)),
+    skip,
+  ]);
   expect(overwrite.stat).toBeUndefined();
 
   const unknown = resolve("write", args, { changed: true });

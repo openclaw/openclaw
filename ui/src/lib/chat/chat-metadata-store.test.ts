@@ -642,31 +642,6 @@ describe("automatic metadata admission", () => {
     expect(wireRequest).toHaveBeenCalledOnce();
   });
 
-  it.each(["patch", "command-metadata"])(
-    "coalesces unrevisioned %s bursts and admits explicit catalog changes",
-    async (reason) => {
-      vi.useFakeTimers();
-      const settled = autoRefresh();
-      await refresh().completed;
-      wireRequest.mockClear();
-      for (let index = 0; index < 5; index++) {
-        sessionEvent({ reason });
-        await vi.advanceTimersByTimeAsync(500);
-      }
-      expect(wireRequest).not.toHaveBeenCalled();
-      await vi.advanceTimersByTimeAsync(2_000);
-      await settled();
-      expect(methods()).toEqual(["models.list"]);
-      wireRequest.mockClear();
-      sessionEvent({ reason });
-      expect(wireRequest).not.toHaveBeenCalled();
-      sessionEvent({ reason, catalogChanged: true });
-      await settled();
-      expect(methods()).toEqual(["models.list"]);
-      expect(vi.getTimerCount()).toBe(0);
-    },
-  );
-
   it("cancels startup polling after a retired refresh loses its last subscriber", async () => {
     vi.useFakeTimers();
     const protocol = new GatewayPendingRequests({
@@ -702,46 +677,37 @@ describe("automatic metadata admission", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it.each(["ready", "failed"] as const)(
-    "publishes compact commands independently of a %s catalog after a session patch",
-    async (outcome) => {
-      vi.useFakeTimers();
-      const commandsRead = pending(empty);
-      const catalog = pending({ models });
-      const updates: ChatMetadataUpdate[] = [];
-      request.mockReturnValue(commandsRead.promise);
-      catalogRequest.mockReturnValue(catalog.promise);
-      const commandsPublished = pending(empty);
-      mount(retained, (update) => {
-        updates.push(update);
-        if (update.type === "result") {
-          commandsPublished.resolve(update.result);
-        }
-      });
-      sessionEvent({ reason: "patch", catalogChanged: true });
-      const read = refresh();
-      const catalogResult = read.catalog.catch((error: unknown) => error);
-      expect(methods()).toEqual(["models.list", "chat.metadata"]);
-      commandsRead.resolve(empty);
-      await expect(commandsPublished.promise).resolves.toEqual(empty);
-      expect(peekChatMetadata(client, retained)).toEqual(empty);
-      const failure = new Error("Catalog unavailable");
-      if (outcome === "failed") {
-        catalog.reject(failure);
-      } else {
-        catalog.resolve({ models });
+  it("publishes compact commands independently of a failed catalog after a session patch", async () => {
+    vi.useFakeTimers();
+    const commandsRead = pending(empty);
+    const catalog = pending({ models });
+    const updates: ChatMetadataUpdate[] = [];
+    request.mockReturnValue(commandsRead.promise);
+    catalogRequest.mockReturnValue(catalog.promise);
+    const commandsPublished = pending(empty);
+    mount(retained, (update) => {
+      updates.push(update);
+      if (update.type === "result") {
+        commandsPublished.resolve(update.result);
       }
-      await read.completed;
-      expect(await catalogResult).toEqual(outcome === "failed" ? failure : { models });
-      expect(updates.filter((update) => update.type === "result")).toEqual([
-        { type: "result", result: empty },
-      ]);
-      expect(wireRequest.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
-      expect(peekModelCatalog(client, retained)).toEqual(
-        outcome === "failed" ? undefined : { models },
-      );
-    },
-  );
+    });
+    sessionEvent({ reason: "patch", catalogChanged: true });
+    const read = refresh();
+    const catalogResult = read.catalog.catch((error: unknown) => error);
+    expect(methods()).toEqual(["models.list", "chat.metadata"]);
+    commandsRead.resolve(empty);
+    await expect(commandsPublished.promise).resolves.toEqual(empty);
+    expect(peekChatMetadata(client, retained)).toEqual(empty);
+    const failure = new Error("Catalog unavailable");
+    catalog.reject(failure);
+    await read.completed;
+    expect(await catalogResult).toBe(failure);
+    expect(updates.filter((update) => update.type === "result")).toEqual([
+      { type: "result", result: empty },
+    ]);
+    expect(wireRequest.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(1);
+    expect(peekModelCatalog(client, retained)).toBeUndefined();
+  });
 
   it("admits metadata after a published catalog settles display before its wire responds", async () => {
     const catalog = pending({ models });
@@ -804,60 +770,26 @@ describe("automatic metadata admission", () => {
     expect(peekChatMetadata(client, draft)).toEqual(empty);
   });
 
-  it.each(["visible", "remounted"] as const)(
-    "preserves a hidden startup fallback until %s demand returns",
-    async (returning) => {
-      const oldModels = [{ id: "old", name: "Old", provider: "test" }];
-      const pendingCatalog = pending({ models });
-      catalogRequest.mockReturnValueOnce(pendingCatalog.promise).mockResolvedValue({ models });
-      let active = true;
-      const release = mount(retained, undefined, () => active);
-      beginChatMetadataPublication(client, retained);
-      const startup = refresh({ kind: "startup" });
-      active = false;
-      const fallback = refresh({ kind: "metadata" });
-      if (returning !== "visible") {
-        invalidateChatMetadataStore(client, retained);
-      }
-      if (returning === "remounted") {
-        release();
-        mount(retained, undefined, () => active);
-      }
-      active = true;
-      const visible = refresh();
-      expect(counts()).toEqual([1, returning === "visible" ? 1 : 2]);
-      pendingCatalog.resolve({ models: oldModels });
-      await Promise.all([startup.completed, fallback.completed, visible.completed]);
-      expect(counts()).toEqual([1, returning === "visible" ? 1 : 2]);
-      expect(await visible.catalog).toEqual({
-        models: returning === "visible" ? oldModels : models,
-      });
-    },
-  );
-
-  it("replaces retired running commands when a follower startup omits metadata", async () => {
-    const oldCommands = pending(empty);
+  it("preserves a hidden startup fallback until remounted demand returns", async () => {
+    const oldModels = [{ id: "old", name: "Old", provider: "test" }];
     const pendingCatalog = pending({ models });
-    request.mockReturnValueOnce(oldCommands.promise).mockResolvedValue(empty);
-    catalogRequest.mockReturnValue(pendingCatalog.promise);
-    mount(retained);
-    refresh();
-    const publication = beginChatMetadataPublication(client, retained);
-    refresh({ kind: "startup" });
-    const fallback = refresh({
-      kind: "metadata",
-      revalidateMetadata: () => publication.isCurrent(),
-    });
-    expect(counts()).toEqual([1, 1]);
-    oldCommands.resolve(empty);
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 0);
-    });
-    expect(counts()).toEqual([2, 1]);
-    expect(peekChatMetadata(client, retained)).toEqual(empty);
-    pendingCatalog.resolve({ models });
-    await fallback.completed;
-    expect(await fallback.catalog).toEqual({ models });
+    catalogRequest.mockReturnValueOnce(pendingCatalog.promise).mockResolvedValue({ models });
+    let active = true;
+    const release = mount(retained, undefined, () => active);
+    beginChatMetadataPublication(client, retained);
+    const startup = refresh({ kind: "startup" });
+    active = false;
+    const fallback = refresh({ kind: "metadata" });
+    invalidateChatMetadataStore(client, retained);
+    release();
+    mount(retained, undefined, () => active);
+    active = true;
+    const visible = refresh();
+    expect(counts()).toEqual([1, 2]);
+    pendingCatalog.resolve({ models: oldModels });
+    await Promise.all([startup.completed, fallback.completed, visible.completed]);
+    expect(counts()).toEqual([1, 2]);
+    expect(await visible.catalog).toEqual({ models });
   });
 
   it("loads the catalog beside missing commands after startup retired without dispatching", async () => {

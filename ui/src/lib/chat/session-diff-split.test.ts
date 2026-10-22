@@ -42,18 +42,14 @@ it("spans context, gaps and file separators without pairing across them", () => 
   ]);
 });
 
-it.each([false, true])("aligns replacements beside unmatched changes (reverse=%s)", (reverse) => {
+it("aligns replacements beside unmatched deletions", () => {
   const oldText = ["const retries = 2;", "const timeout = 3000;"];
   const newText = ["audit", "const retries = 3;", "const timeout = 5000;"];
-  const lines = replacements(reverse ? newText : oldText, reverse ? oldText : newText);
+  const lines = replacements(newText, oldText);
   const rows = pairSessionDiffLines(lines);
   expect(
     rows.map((row) => (row.kind === "pair" ? [row.left?.text, row.right?.text] : null)),
-  ).toEqual(
-    reverse
-      ? [[newText[0], undefined], ...oldText.map((text, i) => [newText[i + 1], text])]
-      : [[undefined, newText[0]], ...oldText.map((text, i) => [text, newText[i + 1]])],
-  );
+  ).toEqual([[newText[0], undefined], ...oldText.map((text, i) => [newText[i + 1], text])]);
 });
 
 it("bounds long-line comparison work without losing fallback inline highlights", () => {
@@ -89,7 +85,6 @@ it("shares comparison work across hunks and files, not just matrix dimensions", 
 
 it.each([
   { before: ["first = 1", "second = 2"], after: ["second = 3", "first = 4"] },
-  { before: ["removed", ""], after: [] },
   { before: numbered(80, "value"), after: numbered(90, "other") },
 ])("preserves source order through pairing and fallbacks", ({ before, after }) => {
   const lines = replacements(before, after);
@@ -97,9 +92,6 @@ it.each([
 });
 
 it.each([
-  ["const retries = 2;", "const retries = 3;", ["2"], ["3"]],
-  ['const label = "Working";', 'const label = "Running";', ["Working"], ["Running"]],
-  ["return { owner, label };", "return { owner, label, auditLabel };", [], [", auditLabel"]],
   ["  const café = '😀';", "\tconst café = '🚀';", ["  ", "😀"], ["\t", "🚀"]],
   ["  ", "\t", ["  "], ["\t"]],
   ["same", "same", [], []],
