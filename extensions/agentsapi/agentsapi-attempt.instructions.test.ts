@@ -129,6 +129,7 @@ vi.mock("./agentsapi-messages.js", () => ({
   },
 }));
 
+// mock-isolation: instruction fixtures stub turn submission; agentsapi-session.test.ts owns lifecycle.
 vi.mock("./agentsapi-session.js", () => ({
   createAgentsApiSession: (
     options: Parameters<typeof import("./agentsapi-session.js").createAgentsApiSession>[0],

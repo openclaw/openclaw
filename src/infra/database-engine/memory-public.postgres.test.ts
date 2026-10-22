@@ -14,7 +14,10 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { OpenKeyedStoreOptions } from "../../plugin-sdk/plugin-state-runtime.js";
+import type {
+  OpenKeyedStoreOptions,
+  PluginStateKeyedStore,
+} from "../../plugin-sdk/plugin-state-runtime.js";
 import { createPluginStateKeyedStoreForTests } from "../../plugin-sdk/plugin-state-test-runtime.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
@@ -44,15 +47,17 @@ const capabilityFixtures = [
 ] as const;
 const providerId = "postgres-memory-fixture";
 const sapphireHit = [{ path: "memory/sapphire.md" }];
-const completeIndex = { fts: { available: true }, vector: { index: { state: "complete" } } };
 let root: string;
 const capabilityRoots: string[] = [];
 let workspace: string;
 let client: pg.Client;
 let runtime: MemoryPluginRuntime;
 const stateAnchors: DatabaseSync[] = [];
-type MemoryApi = typeof import("../../../extensions/memory-core/runtime-api.js");
-let host: Parameters<MemoryApi["createMemoryRuntime"]>[0];
+type MemoryCliHost = {
+  runInBackgroundContext: <T>(run: () => T) => T;
+  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
+};
+let host: MemoryCliHost;
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -140,9 +145,9 @@ async function managerFor(
 }
 
 async function runMemoryCommand(args: string[]) {
-  const { registerMemoryCli } = await vi.importActual<MemoryApi>(
-    "../../../extensions/memory-core/runtime-api.js",
-  );
+  const { registerMemoryCli } = await vi.importActual<{
+    registerMemoryCli: (program: Command, host: MemoryCliHost) => void;
+  }>("../../../extensions/memory-core/runtime-api.js");
   const program = new Command().exitOverride();
   registerMemoryCli(program, host);
   await program.parseAsync(["memory", ...args], { from: "user" });
@@ -243,9 +248,9 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
         await capabilityClient.end();
       }
     }
-    const { createMemoryRuntime } = await vi.importActual<MemoryApi>(
-      "../../../extensions/memory-core/runtime-api.js",
-    );
+    const { createMemoryRuntime } = await vi.importActual<{
+      createMemoryRuntime: (host: MemoryCliHost) => MemoryPluginRuntime;
+    }>("../../../extensions/memory-core/runtime-api.js");
     host = {
       runInBackgroundContext: (run) => run(),
       openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
@@ -291,7 +296,12 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
     expect(await hybrid.search("blue-coordinate", { lexicalOnly: true })).toEqual([]);
     expect(await hybrid.search("blue-coordinate", { maxResults: 1 })).toMatchObject(sapphireHit);
     const indexed = await hybrid.statusAsync();
-    expect(indexed).toMatchObject({ files: 3, chunks: 3, ...completeIndex });
+    expect(indexed).toMatchObject({
+      files: 3,
+      chunks: 3,
+      fts: { available: true },
+      vector: { index: { state: "complete" } },
+    });
     await runtime.closeAllMemorySearchManagers?.();
 
     assert(indexed.dbPath);
@@ -320,7 +330,8 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
         { source: "memory", files: 2, chunks: 2, eligible: 2, issues: [] },
         { source: "sessions", files: 1, chunks: 1, eligible: 1, issues: [] },
       ],
-      ...completeIndex,
+      fts: { available: true },
+      vector: { index: { state: "complete" } },
     });
     await runtime.closeAllMemorySearchManagers?.();
     expect(await indexRows()).toEqual(beforeDiagnostic);
@@ -366,19 +377,20 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
     });
   });
 
-  it.each([
-    [noTrigramDatabase, "trigram", /PostgreSQL pg_trgm capability unavailable.*CREATE EXTENSION/],
-    [noUnaccentDatabase, "main", /PostgreSQL unaccent capability unavailable.*CREATE EXTENSION/],
-  ] as const)(
-    "refuses missing search capability in %s and names the administrator action",
-    async (database, agentId, error) => {
-      await selectCapabilityDatabase(database);
-      const cfg = config("none");
-      if (agentId === "trigram") {
-        cfg.agents!.entries!.trigram = { workspace };
-        cfg.memory!.search!.store = { fts: { tokenizer: "trigram" } };
-      }
-      await expect(searchWithConfig(cfg, agentId)).rejects.toThrow(error);
-    },
-  );
+  it("refuses configured trigram search without pg_trgm and names the administrator action", async () => {
+    await selectCapabilityDatabase(noTrigramDatabase);
+    const cfg = config("none");
+    cfg.agents!.entries!.trigram = { workspace };
+    cfg.memory!.search!.store = { fts: { tokenizer: "trigram" } };
+    await expect(searchWithConfig(cfg, "trigram")).rejects.toThrow(
+      /PostgreSQL pg_trgm capability unavailable.*CREATE EXTENSION/,
+    );
+  });
+
+  it("refuses full-text admission without unaccent and names the administrator action", async () => {
+    await selectCapabilityDatabase(noUnaccentDatabase);
+    await expect(searchWithConfig(config("none"))).rejects.toThrow(
+      /PostgreSQL unaccent capability unavailable.*CREATE EXTENSION/,
+    );
+  });
 });

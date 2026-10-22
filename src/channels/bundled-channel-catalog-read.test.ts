@@ -11,12 +11,14 @@ vi.mock("../plugins/bundled-dir.js", () => ({
   resolveSourceCheckoutDependencyDiagnostic: vi.fn(() => null),
 }));
 
+// mock-isolation: prove bundled metadata reads do not invoke full plugin discovery.
 vi.mock("../plugins/channel-catalog-registry.js", () => ({
   listChannelCatalogEntries: vi.fn(() => {
     throw new Error("bundled channel catalog read must not run full plugin discovery");
   }),
 }));
 
+// mock-isolation: only the temporary catalog entries belong to this fixture.
 vi.mock("../plugins/official-external-plugin-bundled-catalogs.js", () => ({
   BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES: [],
 }));
