@@ -1236,7 +1236,6 @@
 ["src/agents/agent-bundle-mcp-materialize.identity.test.ts","../gateway/control-ui-http-utils.js","4a94446306c9f26fd08007ccc8388ee34680763e6e518fa38dc91ece65a483b1",1]
 ["src/agents/agent-bundle-mcp-materialize.identity.test.ts","../gateway/http-common.js","f29c63ffb64f99bab9de679f464569dfdfdc0ad8191104a3238629a82878b11c",1]
 ["src/agents/agent-bundle-mcp-materialize.identity.test.ts","../gateway/mcp-app-form-resources.js","539dc2a8edcbb357c806fbe435f8710fde1c8751786cf6a92ba03d8c0a05e592",1]
-["src/agents/agent-bundle-mcp-materialize.identity.test.ts","../gateway/mcp-app-operations.js","de94a26d5d1349e4e8995aa27bc33ac3c8fa53c8a9c031f187e5187c4bbe6629",1]
 ["src/agents/agent-bundle-mcp-materialize.identity.test.ts","../logger.js","6ade37afbb6dc899c329e4d73809b431af0f34f899315b3e3444cea03d39d459",1]
 ["src/agents/agent-bundle-mcp-materialize.identity.test.ts","./agent-bundle-mcp-manager-cleanup.js","9b8821a7209560d6ff6cfd0719df018aac30b41d69c9ce7c6934e11e0a495c8c",1]
 ["src/agents/agent-bundle-mcp-materialize.identity.test.ts","./agent-bundle-mcp-requester-connect.js","3a6ff430a304c5ba7bb683097429cf8f40f3f243f9258f9aa69c5e0abc39a5a8",1]

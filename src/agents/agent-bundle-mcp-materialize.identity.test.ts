@@ -43,7 +43,8 @@ vi.mock("./mcp-content.js", () => ({
   setMcpCodeModeGuestResult: (value: unknown) => value,
   setMcpCodeModeGuestResultFromAgentResult: (value: unknown) => value,
 }));
-vi.mock("../gateway/mcp-app-operations.js", () => ({
+vi.mock("../gateway/mcp-app-operations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../gateway/mcp-app-operations.js")>()),
   prepareModelCreatedAppToolCall: mocks.approve,
   executeMcpAppOperation: vi.fn(),
   parseMcpAppOperation: vi.fn(),
