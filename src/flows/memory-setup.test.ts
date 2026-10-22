@@ -147,12 +147,12 @@ it("skips before catalog or provider runtime access and preserves identity", asy
 });
 
 it.each([
-  ["ref", secretRef("EMBED_KEY"), "probe-secret"],
-  ["existing", secretRef("CURRENT_EMBED_KEY"), "current-probe-key"],
-  ["key", "typed-key", "typed-key"],
-] as const)(
-  "saves %s credentials separately from the resolved probe key",
-  async (mode, key, resolved) => {
+  { mode: "ref", key: secretRef("EMBED_KEY"), resolved: "probe-secret" },
+  { mode: "existing", key: secretRef("CURRENT_EMBED_KEY"), resolved: "current-probe-key" },
+  { mode: "key", key: "typed-key", resolved: "typed-key" },
+])(
+  "saves $mode credentials separately from the resolved probe key",
+  async ({ mode, key, resolved }) => {
     mocks.promptRef.mockResolvedValue({ ref: key, resolvedValue: resolved });
     mocks.resolveRef.mockResolvedValue(resolved);
     const chosen = adapter();
@@ -212,12 +212,21 @@ it("keeps existing credentials as the ref-mode default and offers no plaintext e
 });
 
 it.each([
-  ["gemini", "google", "models.providers.google.apiKey", undefined],
-  ["tenant.example", "tenant.example", 'models.providers["tenant.example"].apiKey', undefined],
-  ["local-box", "local-box", "models.providers.local-box.apiKey", "ollama"],
-] as const)(
-  "resolves %s credentials only from %s",
-  async (selected, owner, keyPath, adapterOwner) => {
+  { selected: "gemini", owner: "google", keyPath: "models.providers.google.apiKey" },
+  {
+    selected: "tenant.example",
+    owner: "tenant.example",
+    keyPath: 'models.providers["tenant.example"].apiKey',
+  },
+  {
+    selected: "local-box",
+    owner: "local-box",
+    adapterOwner: "ollama",
+    keyPath: "models.providers.local-box.apiKey",
+  },
+])(
+  "resolves only $owner credentials for $selected",
+  async ({ selected, owner, adapterOwner, keyPath }) => {
     const ref = secretRef("MODEL_EMBED_KEY");
     const config = configFor(owner, "https://remote.example/v1", {
       api: "openai-completions",

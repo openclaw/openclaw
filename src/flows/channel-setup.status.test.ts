@@ -5,7 +5,6 @@ import {
   makeCatalogEntry,
   makeChannelSetupEntries,
   makeMeta,
-  makeSetupPlugin,
 } from "./channel-setup.test-helpers.js";
 
 type ListChatChannels = typeof import("../channels/chat-meta.js").listChatChannels;
@@ -15,6 +14,7 @@ type FormatChannelPrimerLine = typeof import("../channels/registry.js").formatCh
 type FormatChannelSelectionLine =
   typeof import("../channels/registry.js").formatChannelSelectionLine;
 type IsChannelConfigured = typeof import("../config/channel-configured.js").isChannelConfigured;
+type ChannelSetupPlugin = import("../channels/plugins/setup-wizard-types.js").ChannelSetupPlugin;
 
 const listChatChannels = vi.hoisted(() => vi.fn<ListChatChannels>(() => []));
 const resolveChannelSetupEntries = vi.hoisted(() => vi.fn<ResolveChannelSetupEntries>());
@@ -59,7 +59,14 @@ import {
   resolveChannelSetupSelectionOptions,
 } from "./channel-setup.status.js";
 
-const statusPlugin = (id: string, label: string) => makeSetupPlugin({ id, label });
+function statusPlugin(id: string, label: string): ChannelSetupPlugin {
+  return {
+    id,
+    meta: makeMeta(id, label),
+    capabilities: { chatTypes: [] },
+    config: {} as ChannelSetupPlugin["config"],
+  };
+}
 
 function statusSummary(overrides: Partial<Parameters<typeof collectChannelStatus>[0]> = {}) {
   return collectChannelStatus({
@@ -76,18 +83,6 @@ function selectionNotes(
     Partial<Parameters<typeof resolveChannelSelectionNoteLines>[0]>,
 ) {
   return resolveChannelSelectionNoteLines({ cfg: {}, installedPlugins: [], ...overrides });
-}
-
-function selectionOptions(
-  entries: Parameters<typeof resolveChannelSetupSelectionOptions>[0]["entries"],
-  statusByChannel: Parameters<
-    typeof resolveChannelSetupSelectionOptions
-  >[0]["statusByChannel"] = new Map(),
-  resolveDisabledHint: Parameters<
-    typeof resolveChannelSetupSelectionOptions
-  >[0]["resolveDisabledHint"] = () => undefined,
-) {
-  return resolveChannelSetupSelectionOptions({ entries, statusByChannel, resolveDisabledHint });
 }
 
 function discoverSelection(id: string, label: string, overrides: Parameters<typeof makeMeta>[2]) {
@@ -134,28 +129,49 @@ it.each<{ label: string; cfg: OpenClawConfig; workspaceDir?: string; expected: s
   ]);
 });
 
-it("sorts picker labels and sanitizes labels and hints before terminal rendering", () => {
-  const options = selectionOptions(
-    [
-      { id: "zalo", meta: { id: "zalo", label: "Zalo\u001B[31m\nBot\u0007" } },
+it("sorts channels alphabetically by picker label", () => {
+  const options = resolveChannelSetupSelectionOptions({
+    entries: (
+      [
+        ["zalo", "Zalo", "Zalo (Bot API)"],
+        ["discord", "Discord", "Discord (Bot API)"],
+        ["imessage", "iMessage", "iMessage (macOS app)"],
+      ] as const
+    ).map(([id, label, selectionLabel]) => ({
+      id,
+      meta: makeMeta(id, label, { selectionLabel }),
+    })),
+    statusByChannel: new Map(),
+    resolveDisabledHint: () => undefined,
+  });
+
+  expect(options.map((option) => option.label)).toEqual([
+    "Discord (Bot API)",
+    "iMessage (macOS app)",
+    "Zalo (Bot API)",
+  ]);
+});
+
+it("sanitizes picker labels and hints before terminal rendering", () => {
+  const options = resolveChannelSetupSelectionOptions({
+    entries: [
       {
-        id: "imessage",
-        meta: makeMeta("imessage", "iMessage", { selectionLabel: "iMessage (macOS app)" }),
-      },
-      {
-        id: "discord",
-        meta: makeMeta("discord", "Discord", { selectionLabel: "Discord (Bot API)" }),
+        id: "zalo",
+        meta: {
+          id: "zalo",
+          label: "Zalo\u001B[31m\nBot\u0007",
+        },
       },
     ],
-    new Map([["zalo", { selectionHint: "configured\u001B[2K\nnow" }]]),
-    (id) => (id === "zalo" ? "disabled\u0007" : undefined),
-  );
+    statusByChannel: new Map([["zalo", { selectionHint: "configured\u001B[2K\nnow" }]]),
+    resolveDisabledHint: () => "disabled\u0007",
+  });
 
-  expect(options).toEqual([
-    { value: "discord", label: "Discord (Bot API)" },
-    { value: "imessage", label: "iMessage (macOS app)" },
-    { value: "zalo", label: "Zalo\\nBot", hint: "configured\\nnow · disabled" },
-  ]);
+  expect(options[0]).toEqual({
+    value: "zalo",
+    label: "Zalo\\nBot",
+    hint: "configured\\nnow · disabled",
+  });
 });
 
 it.each(["rejected status check", "adapter resolution"] as const)(
@@ -164,7 +180,7 @@ it.each(["rejected status check", "adapter resolution"] as const)(
     const installedPlugins = [
       statusPlugin("matrix", "Matrix"),
       statusPlugin("telegram", "Telegram"),
-    ];
+    ] satisfies ChannelSetupPlugin[];
     listChatChannels.mockReturnValue([
       makeMeta("matrix", "Matrix"),
       makeMeta("telegram", "Telegram"),
@@ -233,38 +249,46 @@ it("redacts credentials and terminal controls in failed channel status checks", 
 });
 
 it.each([
-  [
-    "en",
-    true,
-    [
+  {
+    locale: "en",
+    sanitize: true,
+    expected: [
       "Discord\\nCore: not configured",
       "Matrix\\nPlugin: installed",
       "Zalo\\nPlugin: install plugin to enable",
     ],
-  ],
-  [
-    "zh-CN",
-    false,
-    ["Discord: 已配置（插件已禁用）", "Telegram: 未配置", "Matrix: 已安装", "Zalo: 安装插件后启用"],
-  ],
-] as const)("renders sanitized/localized %s status notes", async (locale, sanitize, expected) => {
-  const label = (name: string, suffix: string, ansi = "2K") =>
-    sanitize ? `${name}\u001B[${ansi}\n${suffix}\u0007` : name;
-  listChatChannels.mockReturnValue([
-    makeMeta("discord", label("Discord", "Core", "31m")),
-    ...(locale === "zh-CN" ? [makeMeta("telegram", "Telegram")] : []),
-  ]);
-  isChannelConfigured.mockImplementation((_, id) => locale === "zh-CN" && id === "discord");
-  resolveChannelSetupEntries.mockReturnValue(
-    makeChannelSetupEntries({
-      installedCatalogEntries: [makeCatalogEntry("matrix", label("Matrix", "Plugin"))],
-      installableCatalogEntries: [makeCatalogEntry("zalo", label("Zalo", "Plugin"))],
-    }),
-  );
-  await withEnvAsync({ OPENCLAW_LOCALE: locale }, async () => {
-    expect((await statusSummary()).statusLines).toEqual(expected);
-  });
-});
+  },
+  {
+    locale: "zh-CN",
+    sanitize: false,
+    expected: [
+      "Discord: 已配置（插件已禁用）",
+      "Telegram: 未配置",
+      "Matrix: 已安装",
+      "Zalo: 安装插件后启用",
+    ],
+  },
+] as const)(
+  "renders sanitized/localized $locale status notes",
+  async ({ locale, sanitize, expected }) => {
+    const label = (name: string, suffix: string, ansi = "2K") =>
+      sanitize ? `${name}\u001B[${ansi}\n${suffix}\u0007` : name;
+    listChatChannels.mockReturnValue([
+      makeMeta("discord", label("Discord", "Core", "31m")),
+      ...(locale === "zh-CN" ? [makeMeta("telegram", "Telegram")] : []),
+    ]);
+    isChannelConfigured.mockImplementation((_, id) => locale === "zh-CN" && id === "discord");
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        installedCatalogEntries: [makeCatalogEntry("matrix", label("Matrix", "Plugin"))],
+        installableCatalogEntries: [makeCatalogEntry("zalo", label("Zalo", "Plugin"))],
+      }),
+    );
+    await withEnvAsync({ OPENCLAW_LOCALE: locale }, async () => {
+      expect((await statusSummary()).statusLines).toEqual(expected);
+    });
+  },
+);
 
 it("sanitizes channel metadata before primer notes", async () => {
   const note = vi.fn(async () => undefined);
