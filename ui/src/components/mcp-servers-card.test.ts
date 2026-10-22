@@ -69,7 +69,7 @@ function createGateway(
   } as unknown as ApplicationGateway;
 }
 function createRuntimeConfig(config: Record<string, unknown>) {
-  const ensureLoaded = vi.fn(async () => undefined);
+  const ensureLoaded = vi.fn<() => Promise<void>>(async () => undefined);
   const patch = vi.fn<(options: ConfigPatchOptions) => Promise<boolean>>(async () => true);
   const listeners = new Set<() => void>();
   const state = {
