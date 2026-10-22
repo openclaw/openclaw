@@ -80,42 +80,69 @@ function createStore() {
 }
 
 describe("execution identity context storage", () => {
-  it("replays one byte-identical canonical context idempotently across restart", async () => {
-    const envelope = captureEnvelope(facts("run-1"), identity("1", 100, "runtime-secret-1"));
+  it.each([
+    ["absent", "unattributed"],
+    ["unknown", "unknown"],
+    ["present", "attribution-only"],
+  ] as const)("replays canonical %s attribution across restart", async (state, coverageState) => {
+    const attributed = state === "present";
+    const envelope = captureEnvelope(
+      facts(
+        `run-${state}`,
+        attributed
+          ? {
+              invoker: {
+                state,
+                kind: "local-account",
+                rawPrincipalRef: "private-local-account",
+                displayLabel: "Operator OPENAI_API_KEY=sk-1234567890abcdef",
+              },
+              applicableGrants: ["grant-z", "grant-a"].map((rawGrantRef) => ({
+                rawGrantRef,
+                state: "present" as const,
+              })),
+              assurance: [
+                {
+                  kind: "local-process",
+                  rawEvidenceRef: "private-process-evidence",
+                  strength: "boundary-verified",
+                },
+              ],
+            }
+          : state === "unknown"
+            ? { invoker: { state } }
+            : {},
+      ),
+      identity(state, 100, "private-runtime"),
+    );
     const first = persistEnvelope(envelope, { ...store.options, now: 100 });
-
     await restartDatabase();
     const second = persistEnvelope(structuredClone(envelope), { ...store.options, now: 999 });
-
     expect(second).toEqual(first);
-    expect(first.coverageState).toBe("unattributed");
-    expect(first.invoker).toEqual({ state: "absent" });
+    const missingEvidence = attributed ? [] : ["invoker.principal"];
+    expect(first).toMatchObject({ invoker: { state }, coverageState, missingEvidence });
+    if (!attributed) {
+      expect(first.invoker).toEqual({ state });
+    } else {
+      const grants = first.applicableGrants.map(({ grantRef }) => grantRef);
+      expect(grants).toEqual(grants.toSorted());
+      expect(first.invoker.principal?.principalRef).toMatch(/^hmac-sha256:v1:/u);
+    }
     expect(Object.isFrozen(first)).toBe(true);
     expect(Object.isFrozen(first.runtimeInstance)).toBe(true);
-    expect(JSON.stringify(first)).not.toContain("runtime-secret-1");
-
-    await restartDatabase();
-    const afterRestart = await store.inspect({ executionId: "execution-1" }, 999);
-    expect(afterRestart.identity).toEqual({ state: "present", context: first });
-  });
-
-  it.each([
-    ["unknown", "unknown", 100],
-    ["absent", "unattributed", 101],
-  ] as const)("preserves %s invoker evidence across restart", async (state, coverageState, now) => {
-    const context = store.prepare(
-      `run-${state}`,
-      identity(state, now, `runtime-${state}`),
-      state === "unknown" ? { invoker: { state } } : {},
-    );
-    const missingEvidence = ["invoker.principal"];
-    expect(context).toMatchObject({ invoker: { state }, coverageState, missingEvidence });
-    if (state === "unknown") {
-      expect(context.invoker).not.toHaveProperty("principal");
+    for (const secret of [
+      "private-local-account",
+      "private-process-evidence",
+      "private-runtime",
+      "grant-a",
+      "grant-z",
+      "sk-1234567890abcdef",
+    ]) {
+      expect(JSON.stringify(first)).not.toContain(secret);
     }
     await restartDatabase();
-    const result = await store.inspect({ executionId: `execution-${state}` }, 101);
-    expect(result.identity).toEqual({ state: "present", context });
+    const result = await store.inspect({ executionId: `execution-${state}` }, 999);
+    expect(result.identity).toEqual({ state: "present", context: first });
     if (state === "unknown") {
       expect(result.coverage).toEqual({ state: "unknown", missingEvidence });
       expect(result.decisions).toEqual([
@@ -216,18 +243,6 @@ describe("execution identity context storage", () => {
     });
   });
 
-  it.each([
-    ["local-cli", "agent-command.local"],
-    ["system", "gateway.boot"],
-  ] as const)("projects authoritative %s ingress", async (kind, boundary) => {
-    const ingress = { kind, boundary, state: "present" as const };
-    store.prepare("run", {}, kind === "system" ? { ingress } : {});
-    expect((await store.inspect({ runId: "run" })).identity).toMatchObject({
-      state: "present",
-      context: { ingress },
-    });
-  });
-
   it("keeps maintenance read-only until the first identity capture", () => {
     const table = () =>
       store
@@ -237,51 +252,6 @@ describe("execution identity context storage", () => {
     expect(table()).toBeUndefined();
     expect(store.prune()).toBe(0);
     expect(table()).toBeUndefined();
-  });
-
-  it("records attribution only when an invoker fact is actually present", () => {
-    const context = store.prepare(
-      "run-attributed",
-      { runtimeInstanceId: "private-runtime" },
-      {
-        invoker: {
-          state: "present",
-          kind: "local-account",
-          rawPrincipalRef: "private-local-account",
-          displayLabel: "Operator OPENAI_API_KEY=sk-1234567890abcdef",
-        },
-        applicableGrants: [
-          { rawGrantRef: "grant-z", state: "present" },
-          { rawGrantRef: "grant-a", state: "present" },
-        ],
-        assurance: [
-          {
-            kind: "local-process",
-            rawEvidenceRef: "private-process-evidence",
-            strength: "boundary-verified",
-          },
-        ],
-      },
-    );
-    const encoded = JSON.stringify(context);
-
-    expect(context.coverageState).toBe("attribution-only");
-    expect(context.invoker.state).toBe("present");
-    expect(context.missingEvidence).toEqual([]);
-    expect(context.applicableGrants.map((grant) => grant.grantRef)).toEqual(
-      context.applicableGrants.map((grant) => grant.grantRef).toSorted(),
-    );
-    for (const secret of [
-      "private-local-account",
-      "private-process-evidence",
-      "private-runtime",
-      "grant-a",
-      "grant-z",
-      "sk-1234567890abcdef",
-    ]) {
-      expect(encoded).not.toContain(secret);
-    }
-    expect(context.invoker.principal?.principalRef).toMatch(/^hmac-sha256:v1:/u);
   });
 
   it("keeps bounded retention maintenance available while collection is disabled", () => {

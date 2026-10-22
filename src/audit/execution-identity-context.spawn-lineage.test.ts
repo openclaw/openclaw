@@ -92,10 +92,9 @@ describe("execution identity child lineage", () => {
     );
   });
 
-  it("keeps attribution visible when parent evidence and ACP callbacks are unavailable", () => {
+  it("keeps lineage attribution and deduplicates missing parent, invoker, and ACP evidence", () => {
     const context = prepareContext("acp-child", {
       ingress: { kind: "acp", boundary: "sessions_spawn.acp", state: "present" },
-      invoker: { state: "present", kind: "agent", rawPrincipalRef: "parent-agent" },
       spawnLineage: {
         parentAgentId: "parent-agent",
         relation: "sessions_spawn",
@@ -110,6 +109,7 @@ describe("execution identity child lineage", () => {
         "lineage.parent-execution",
         "lineage.parent-run",
         "acp.native-action-callback",
+        "invoker.principal",
       ],
     });
 
@@ -118,17 +118,10 @@ describe("execution identity child lineage", () => {
     expect(context.lineage).not.toHaveProperty("parentContextId");
     expect(context.missingEvidence).toEqual([
       "acp.native-action-callback",
+      "invoker.principal",
       "lineage.parent-context",
       "lineage.parent-execution",
       "lineage.parent-run",
     ]);
-  });
-
-  it("deduplicates sorted missing invoker evidence across admission and spawn lineage", () => {
-    const context = prepareContext("missing-invoker", {
-      spawnMissingEvidence: ["invoker.principal", "acp.native-action-callback"],
-    });
-
-    expect(context.missingEvidence).toEqual(["acp.native-action-callback", "invoker.principal"]);
   });
 });

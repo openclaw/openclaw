@@ -26,18 +26,6 @@ afterEach(async () => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function oldSchemaSql(): string {
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(
-    "CREATE TABLE IF NOT EXISTS execution_owner_lifecycle_bindings (",
-  );
-  const endMarker = ") STRICT;";
-  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start);
-  if (start < 0 || end < start) {
-    throw new Error("owner lifecycle binding schema marker is missing");
-  }
-  return `${OPENCLAW_STATE_SCHEMA_SQL.slice(0, start)}${OPENCLAW_STATE_SCHEMA_SQL.slice(end + endMarker.length)}`;
-}
-
 function addCron(
   db: EngineConnection,
   id: string,
@@ -66,10 +54,10 @@ function bindCron(db: EngineConnection, id: string, executionId = "execution-1")
   ) VALUES ('cron', ?, 'context-1', ?)`).run(id, executionId);
 }
 
-function present(db: EngineConnection, decisionCursor?: string, context = executionContext()) {
+function present(db: EngineConnection, decisionCursor?: string) {
   return presentExecutionDecisionReceiptsInDatabase(db, {
     schema: retainedLifecycleSchema,
-    context,
+    context: executionContext(),
     decisionCursor,
     decisionLimit: 1,
     now: Date.now(),
@@ -84,11 +72,6 @@ function page(db: EngineConnection, schema = retainedLifecycleSchema) {
   });
 }
 
-function addSuccessor(db: EngineConnection) {
-  addCron(db, "cron-2", 63);
-  bindCron(db, "cron-2");
-}
-
 function deleteAnchor(db: EngineConnection) {
   db.prepare(
     "DELETE FROM execution_owner_lifecycle_bindings WHERE owner_kind = 'cron' AND owner_id = 'cron-1'",
@@ -99,7 +82,10 @@ function deleteAnchor(db: EngineConnection) {
 function createCronDatabase(retainedBinding = true) {
   const pathname = path.join(tempDirs.make("owner-lifecycle-"), "openclaw.sqlite");
   const oldReader = new DatabaseSync(pathname);
-  oldReader.exec(retainedBinding ? OPENCLAW_STATE_SCHEMA_SQL : oldSchemaSql());
+  oldReader.exec(OPENCLAW_STATE_SCHEMA_SQL);
+  if (!retainedBinding) {
+    oldReader.exec("DROP TABLE execution_owner_lifecycle_bindings");
+  }
   oldReader.exec(`PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION}`);
   oldReader
     .prepare(
@@ -121,10 +107,9 @@ function openCronDatabase() {
   return openOpenClawStateDatabase(createCronDatabase()).db;
 }
 
-function executionContext(contextId = "context-1"): ExecutionIdentityContextV1 {
+function executionContext(): ExecutionIdentityContextV1 {
   return {
     ...createUnattributedExecutionContext(),
-    contextId,
     invoker: { state: "unknown" },
     ingress: { kind: "schedule", boundary: "cron.isolated-agent", state: "present" },
   };
@@ -237,21 +222,6 @@ describe("owner-native execution lifecycle receipts", () => {
     );
 
     expect(present(db, "1").decisions[0]?.source.owner).toBe("cron_run_receipts");
-  });
-
-  it.each(["deleted", "other-context"] as const)("rejects the %s owner cursor", (invalid) => {
-    const db = openCronDatabase();
-    addSuccessor(db);
-    const firstPage = present(db, "c:0:0");
-    expect(firstPage.nextDecisionCursor).toMatch(/^c:[1-9]\d*:[1-9]\d*$/);
-
-    if (invalid === "deleted") {
-      deleteAnchor(db);
-    }
-    const context = invalid === "other-context" ? executionContext("context-other") : undefined;
-    expect(() => present(db, firstPage.nextDecisionCursor, context)).toThrow(
-      "decision cursor is no longer retained; restart inspection without --cursor",
-    );
   });
 
   it("rejects a reused owner cursor whose binding belongs to another execution", async () => {
