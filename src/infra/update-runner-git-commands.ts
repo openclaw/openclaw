@@ -194,6 +194,7 @@ export async function prepareCandidateCommandEnv(
   // Only the disposable worktree gets this override; retain all operator settings.
   const workspace = parseDocument(original);
   workspace.set("virtualStoreDir", "node_modules/.pnpm");
+  workspace.set("virtualStoreType", "project");
   const isolated = workspace.toString();
   const backupDirectory = await fs.mkdtemp(path.join(path.dirname(cwd), "workspace-original-"));
   const backupFile = path.join(backupDirectory, "pnpm-workspace.yaml");

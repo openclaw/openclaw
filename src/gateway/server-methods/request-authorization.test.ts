@@ -5,6 +5,7 @@ import {
   recordAgentDatabaseAdmissions,
 } from "../../state/agent-database-admission.js";
 import { sendAuthorizationRequest } from "../server-methods.authorization.test-support.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 import type { GatewayRequestHandler } from "./types.js";
 
 const tempDirs = createTempDirTracker();
@@ -102,17 +103,13 @@ it.each([true, false])(
 
     const respond = await send();
     expect(handler).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        retryable: pending,
-        ...(pending
-          ? { details: { reason: "startup-sidecars", method: "send" } }
-          : { details: refusal }),
-      }),
-    );
+    expectRpcError(respond, {
+      code: "UNAVAILABLE",
+      retryable: pending,
+      ...(pending
+        ? { details: { reason: "startup-sidecars", method: "send" } }
+        : { details: refusal }),
+    });
 
     recordAgentDatabaseAdmissions([], { source: "startup" });
     startup.hasPendingAgents = false;

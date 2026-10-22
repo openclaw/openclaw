@@ -14,6 +14,7 @@ import {
   hoisted,
   installThreadBindingLifecycleTestHooks,
 } from "./thread-bindings.lifecycle.test-support.js";
+import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 import type { ThreadBindingRecord } from "./thread-bindings.types.js";
 
 const { autoBindSpawnedDiscordSubagent, reconcileAcpThreadBindingsOnStartup } =
@@ -55,6 +56,34 @@ const expectTarget = (manager: Manager, thread: string, target: string | undefin
   expect(manager.getByThreadId(thread)?.targetSessionKey).toBe(target);
 
 installThreadBindingLifecycleTestHooks();
+
+it.each([false, true])("reuses a channel webhook after unbinding (reload=%s)", async (reload) => {
+  let manager = await createTestThreadBindingManager({ persist: true });
+  let other: Manager | undefined;
+  try {
+    await bindTestThread(manager);
+    if (reload) {
+      await resetThreadBindingsForTests();
+      manager = await createTestThreadBindingManager({ persist: true });
+    }
+    await manager.unbindThread({ threadId: "thread-1", sendFarewell: false });
+    const withoutWebhook = { webhookId: undefined, webhookToken: undefined };
+    await expect(
+      bindTestThread(manager, { threadId: "thread-2", ...withoutWebhook }),
+    ).resolves.toMatchObject({ webhookId: "wh-1", webhookToken: "tok-1" });
+    expect(hoisted.restPost).not.toHaveBeenCalled();
+
+    other = await createTestThreadBindingManager({ accountId: "other", persist: true });
+    await expect(bindTestThread(other, withoutWebhook)).resolves.toMatchObject({
+      webhookId: "wh-created",
+      webhookToken: "tok-created",
+    });
+    expect(hoisted.restPost).toHaveBeenCalledOnce();
+  } finally {
+    await other?.unbindBySessionKey({ targetSessionKey: childSessionKey, sendFarewell: false });
+    await manager.unbindBySessionKey({ targetSessionKey: childSessionKey, sendFarewell: false });
+  }
+});
 
 it.each([false, true])(
   "creates a child using the parent channel (REST lookup=%s)",

@@ -13,6 +13,7 @@ import {
   parseGatewayLockPayload,
   readGatewayLockProcessNamespace,
 } from "./gateway-lock-payload.js";
+import * as gatewayLockProcessModule from "./gateway-lock-process.js";
 import {
   acquireGatewayLock,
   GatewayLockError,
@@ -189,12 +190,18 @@ describe("gateway lock namespaces", () => {
       await expect(resolveGatewayOwnerStatus(2_147_483_647, payload, platform)).resolves.toBe(
         comparable ? "dead" : "unknown",
       );
-      await expect(
-        resolveGatewayOwnerStatus(process.pid, payload, platform, undefined, () => 123),
-      ).resolves.toBe(comparable ? "alive" : "unknown");
-      await expect(
-        resolveGatewayOwnerStatus(process.pid, payload, platform, undefined, () => 124),
-      ).resolves.toBe(comparable ? "dead" : "unknown");
+      vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
+        () => 123,
+      );
+      await expect(resolveGatewayOwnerStatus(process.pid, payload, platform)).resolves.toBe(
+        comparable ? "alive" : "unknown",
+      );
+      vi.spyOn(gatewayLockProcessModule, "readGatewayLockProcessStartTime").mockImplementation(
+        () => 124,
+      );
+      await expect(resolveGatewayOwnerStatus(process.pid, payload, platform)).resolves.toBe(
+        comparable ? "dead" : "unknown",
+      );
     }
   });
 

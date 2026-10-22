@@ -323,7 +323,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
                 class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
                 aria-label={t("common.reload")}
                 disabled={props.configBusy || props.configSchemaLoading}
-                onClick={props.onConfigReload}
+                onClick={() => props.onConfigReload()}
               >
                 <Icon name="refresh" />
               </button>
@@ -361,7 +361,6 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
         <div
           id="plugin-settings-panel"
           role="tabpanel"
-          tabindex="0"
           aria-labelledby={`plugin-settings-tab-${props.tab}`}
         >
           {body}

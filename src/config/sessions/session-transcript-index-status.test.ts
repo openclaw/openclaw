@@ -54,6 +54,14 @@ function createDatabase(filename = ":memory:") {
   return db;
 }
 
+function pairedDatabases(label: string) {
+  const filename = path.join(tempDirs.make(label), "agent.sqlite");
+  const db = createDatabase(filename);
+  const other = openNodeSqliteDatabase(filename);
+  databases.push(other);
+  return { filename, db, other };
+}
+
 function seedCleanSession(db: DatabaseSync, sessionId: string) {
   const key = `agent:main:${sessionId}`;
   db.prepare(`INSERT INTO session_nodes
@@ -71,6 +79,15 @@ function seedCleanSession(db: DatabaseSync, sessionId: string) {
     (session_id, indexed_seq, updated_at) VALUES (?, 0, 1)`).run(sessionId);
 }
 
+function expectStatus(
+  actual: ReturnType<typeof withoutTraversal>,
+  sessionIds: string[] = [],
+  hasMore = false,
+  traversalComplete = !hasMore,
+) {
+  expect(actual).toEqual({ sessionIds, hasMore, traversalComplete });
+}
+
 function maintain(db: DatabaseSync) {
   return withoutTraversal(transaction(db, () => maintainSessionTranscriptIndexStatus(db)));
 }
@@ -82,6 +99,14 @@ function withoutTraversal(result: ReturnType<typeof maintainSessionTranscriptInd
 
 function transaction<T>(db: DatabaseSync, run: () => T): T {
   return withSqlitePostCommitPublications(db, () => runSqliteImmediateTransactionSync(db, run));
+}
+
+function seedSessions(db: DatabaseSync, prefix: string, count = 300) {
+  transaction(db, () => {
+    for (let index = 0; index < count; index++) {
+      seedCleanSession(db, prefix + String(index).padStart(3, "0"));
+    }
+  });
 }
 
 function settle(db: DatabaseSync) {
@@ -105,26 +130,19 @@ it("uses the queue it just rebuilt on admission and still observes subsequent wr
       : null,
   );
   try {
-    expect(maintain(db)).toEqual({
-      sessionIds: ["dirty-a", "dirty-z"],
-      hasMore: false,
-      traversalComplete: true,
-    });
+    expectStatus(maintain(db), ["dirty-a", "dirty-z"]);
     expect(reads.counts.queue).toBe(0);
   } finally {
     reads.restore();
   }
   db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 0");
-  expect(maintain(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
+  expectStatus(maintain(db));
 });
 
 it.each(["preflight", "sweep"] as const)(
   "%s leaves the writer lock free during both host grants and reads subsequent writes",
   (type) => {
-    const filename = path.join(tempDirs.make("index-admission-"), "agent.sqlite");
-    const db = createDatabase(filename);
-    const other = openNodeSqliteDatabase(filename);
-    databases.push(other);
+    const { filename, db, other } = pairedDatabases("index-admission-");
     other.exec("PRAGMA busy_timeout = 0");
     const writable: boolean[] = [];
     const backend = bindSqliteWorkerBackend(undefined, {
@@ -155,10 +173,7 @@ it.each(["preflight", "sweep"] as const)(
 );
 
 it("yields contended maintenance without a transaction and reacquires admission on retry", () => {
-  const filename = path.join(tempDirs.make("index-contention-"), "agent.sqlite");
-  const db = createDatabase(filename);
-  const other = openNodeSqliteDatabase(filename);
-  databases.push(other);
+  const { filename, db, other } = pairedDatabases("index-contention-");
   const admit = vi.fn();
   const backend = bindSqliteWorkerBackend(undefined, {
     database: db,
@@ -199,14 +214,10 @@ it("does not reconcile an empty transcript because of orphaned or another sessio
 
 it("bounds admission, detects writes behind its cursor, and stops reading clean source tables", () => {
   const db = createDatabase();
-  transaction(db, () => {
-    for (let index = 0; index < 300; index++) {
-      seedCleanSession(db, `z-${String(index).padStart(3, "0")}`);
-    }
-  });
+  seedSessions(db, "z-");
   const mainSchemaMutation = vi.fn();
   registerSqliteSchemaMutationListener(db, mainSchemaMutation);
-  expect(maintain(db)).toEqual({ sessionIds: [], hasMore: true, traversalComplete: false });
+  expectStatus(maintain(db), [], true);
   expect(mainSchemaMutation).not.toHaveBeenCalled();
   transaction(db, () => {
     seedCleanSession(db, "a-behind-cursor");
@@ -216,11 +227,11 @@ it("bounds admission, detects writes behind its cursor, and stops reading clean 
   });
   expect(maintain(db).sessionIds).toEqual(["a-behind-cursor"]);
   db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 0");
-  expect(settle(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
+  expectStatus(settle(db));
   const observation = observeSqliteReadSql(StatementSync.prototype);
   try {
     for (let repeat = 0; repeat < 3; repeat++) {
-      expect(maintain(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
+      expectStatus(maintain(db));
     }
     expect(observation.queries.filter((query) => /\bdata_version\b/iu.test(query))).toEqual([]);
     expect(
@@ -270,11 +281,7 @@ it("classifies a pending batch with bounded SQL and preserves later projection c
   });
   const statements = trackSqliteStatementExecutions(db, ["all"], () => "all");
   try {
-    expect(maintain(db)).toEqual({
-      sessionIds,
-      hasMore: false,
-      traversalComplete: true,
-    });
+    expectStatus(maintain(db), sessionIds);
     // Classification and queue consumption are bounded commands, not commands per session.
     expect(statements.counts.all).toBeLessThanOrEqual(16);
   } finally {
@@ -288,11 +295,7 @@ it("classifies a pending batch with bounded SQL and preserves later projection c
       UPDATE session_transcript_active_events SET context_eligible = NULL
         WHERE session_id = 'session-001';`);
   });
-  expect(maintain(db)).toEqual({
-    sessionIds: ["session-000", "session-001", "session-095"],
-    hasMore: false,
-    traversalComplete: true,
-  });
+  expectStatus(maintain(db), ["session-000", "session-001", "session-095"]);
 });
 
 it("rolls back admission and pending facts with raw writes, including nested savepoints", () => {
@@ -304,7 +307,7 @@ it("rolls back admission and pending facts with raw writes, including nested sav
       throw new Error("cancel admission");
     }),
   ).toThrow("cancel admission");
-  expect(settle(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
+  expectStatus(settle(db));
   transaction(db, () => {
     expect(() =>
       transaction(db, () => {
@@ -316,11 +319,7 @@ it("rolls back admission and pending facts with raw writes, including nested sav
     ).toThrow("cancel append");
     const restored = maintainSessionTranscriptIndexStatus(db);
     expect(restored.traversal?.completedTraversals).toBe(1);
-    expect(withoutTraversal(restored)).toEqual({
-      sessionIds: [],
-      hasMore: false,
-      traversalComplete: true,
-    });
+    expectStatus(withoutTraversal(restored));
   });
   db.exec(`INSERT INTO transcript_events
     (session_id, seq, event_json, created_at) VALUES ('seed', 1, '{}', 2)`);
@@ -329,7 +328,7 @@ it("rolls back admission and pending facts with raw writes, including nested sav
     (session_id, seq, event_json, created_at) VALUES ('seed', 1, '{}', 3)`);
   expect(maintain(db).sessionIds).toEqual(["seed"]);
   db.exec("UPDATE session_transcript_index_state SET indexed_seq = 1");
-  expect(maintain(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
+  expectStatus(maintain(db));
 });
 
 it("refreshes worker append, classification, orphan, and deletion receipts without freshness probes", async () => {
@@ -337,7 +336,7 @@ it("refreshes worker append, classification, orphan, and deletion receipts witho
   const db = createDatabase(filename);
   db.exec("PRAGMA journal_mode = WAL");
   seedCleanSession(db, "worker");
-  expect(settle(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
+  expectStatus(settle(db));
   const broker = new SqliteWorkerBroker();
   const probes = trackSqliteStatementExecutions(db, ["fresh"], (sql) =>
     /\bdata_version\b/iu.test(sql) ? "fresh" : null,
@@ -358,7 +357,7 @@ it("refreshes worker append, classification, orphan, and deletion receipts witho
         (session_id, seq, event_json, created_at) VALUES ('worker', 1, '{}', 2);
       INSERT INTO session_transcript_fts_rows (session_id) VALUES ('orphan');
       COMMIT;`);
-    expect(settle(db)).toEqual({ sessionIds: ["worker"], hasMore: false, traversalComplete: true });
+    expectStatus(settle(db), ["worker"]);
     expect(db.prepare("SELECT count(*) AS count FROM session_transcript_fts_rows").get()).toEqual({
       count: 0,
     });
@@ -366,15 +365,15 @@ it("refreshes worker append, classification, orphan, and deletion receipts witho
       UPDATE session_transcript_active_events SET context_eligible = NULL;`);
     expect(settle(db).sessionIds).toEqual(["worker"]);
     await write("UPDATE session_transcript_active_events SET context_eligible = 1");
-    expect(settle(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
+    expectStatus(settle(db));
     db.exec("ALTER TABLE transcript_events ADD COLUMN repaired_note TEXT");
     admitSqliteSchema(db);
-    expect(settle(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
+    expectStatus(settle(db));
     db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 1");
     expect(maintain(db).sessionIds).toEqual(["worker"]);
     await write(`PRAGMA foreign_keys = ON;
       DELETE FROM session_nodes WHERE session_key = 'agent:main:worker';`);
-    expect(settle(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
+    expectStatus(settle(db));
     expect(probes.counts.fresh).toBe(0);
   } finally {
     probes.restore();
@@ -384,7 +383,7 @@ it("refreshes worker append, classification, orphan, and deletion receipts witho
 
 it("limits orphan deletion per table while completing all sessions and FTS content", () => {
   const db = createDatabase();
-  expect(settle(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
+  expectStatus(settle(db));
   // Simulate a foreign repair that left invalid derived rows with FK enforcement disabled.
   db.exec("PRAGMA foreign_keys = OFF");
   transaction(db, () => {
@@ -404,34 +403,25 @@ it("limits orphan deletion per table while completing all sessions and FTS conte
     }
   });
   db.exec("PRAGMA foreign_keys = ON");
-  expect(maintain(db)).toEqual({ sessionIds: [], hasMore: true, traversalComplete: false });
-  for (const table of [
-    "session_transcript_active_events",
-    "session_transcript_fts_rows",
-    "session_transcript_fts",
-  ]) {
-    expect(db.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({ count: 1288 });
-  }
-  expect(settle(db)).toEqual({ sessionIds: [], hasMore: false, traversalComplete: true });
-  for (const table of [
+  expectStatus(maintain(db), [], true);
+  const tables = [
     "session_transcript_active_events",
     "session_transcript_fts_rows",
     "session_transcript_fts",
     "session_transcript_index_state",
-  ]) {
-    expect(db.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
-  }
+  ];
+  const counts = (names: string[]) =>
+    names.map((table) => db.prepare(`SELECT count(*) AS count FROM ${table}`).get());
+  expect(counts(tables.slice(0, 3))).toEqual(Array.from({ length: 3 }, () => ({ count: 1288 })));
+  expectStatus(settle(db));
+  expect(counts(tables)).toEqual(Array.from({ length: 4 }, () => ({ count: 0 })));
 });
 
 it("cleans late orphans during continuous sibling commits and certifies readiness afterward", async () => {
   const filename = path.join(tempDirs.make("projection-status-busy-"), "agent.sqlite");
   const db = createDatabase(filename);
   db.exec("PRAGMA journal_mode = WAL");
-  transaction(db, () => {
-    for (let index = 0; index < 300; index++) {
-      seedCleanSession(db, `session-${String(index).padStart(3, "0")}`);
-    }
-  });
+  seedSessions(db, "session-");
   const peer = openNodeSqliteDatabase(filename);
   databases.push(peer);
   peer.exec("INSERT INTO session_transcript_fts_rows (session_id) VALUES ('zzzz-orphan')");
@@ -445,22 +435,14 @@ it("cleans late orphans during continuous sibling commits and certifies readines
     );
     return maintain(db);
   });
-  expect(result).toEqual({ sessionIds: ["session-000"], hasMore: true, traversalComplete: true });
+  expectStatus(result, ["session-000"], true, true);
   expect(peer.prepare("SELECT session_id FROM session_transcript_fts_rows").all()).toEqual([]);
-  expect(settle(db)).toEqual({
-    sessionIds: ["session-000"],
-    hasMore: false,
-    traversalComplete: true,
-  });
+  expectStatus(settle(db), ["session-000"]);
 });
 
 it("reaches a late dirty session while the sibling write revision stays unknown", async () => {
   const db = createDatabase();
-  transaction(db, () => {
-    for (let index = 0; index < 300; index++) {
-      seedCleanSession(db, `z-${String(index).padStart(3, "0")}`);
-    }
-  });
+  seedSessions(db, "z-");
   db.exec("UPDATE session_transcript_index_state SET needs_rebuild = 1 WHERE session_id = 'z-299'");
   siblingRevision.unknown = true;
   try {

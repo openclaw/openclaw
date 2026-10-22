@@ -236,7 +236,7 @@ describe("Cloud environments", () => {
     },
   );
 
-  it("validates retention minima and patches only the shared plugin policy", async () => {
+  it.each([0, 1])("validates retention minima and saves keepPrevious=%s", async (keepPrevious) => {
     const { page, request } = mountTestPage(methods);
     await waitForSolid(() => expect(input(page, "Refresh after").disabled).toBe(false));
     expect(
@@ -248,13 +248,19 @@ describe("Cloud environments", () => {
     expect(request.mock.calls.some(([method]) => method === "config.patch")).toBe(false);
     change(input(page, "Refresh after"), "2h");
     change(input(page, "Retain unused"), "3d");
+    const select = expectDefined(
+      page.querySelector<HTMLSelectElement>('select[aria-label="Previous generations"]'),
+      "Previous generations",
+    );
+    expect(select.value).toBe("0");
+    change(select, String(keepPrevious));
     click(page, "Save retention policy");
     const patch = await configPatch(request);
     expect(JSON.parse(String(patch?.raw))).toEqual({
       plugins: {
         entries: {
           crabbox: {
-            config: { warmImages: { refreshAfter: "2h", retainUnused: "3d", keepPrevious: 0 } },
+            config: { warmImages: { refreshAfter: "2h", retainUnused: "3d", keepPrevious } },
           },
         },
       },

@@ -31,6 +31,9 @@ export function buildMultiResult(sessions: SessionsListResult["sessions"]): Sess
 export function buildProps(result: SessionsListResult): SessionsProps {
   return {
     loading: false,
+    detailsRead: () => undefined,
+    detailsReadKey: () => null,
+    onRetryDetails: () => undefined,
     refreshing: false,
     refreshDisabled: false,
     agentId: "main",
@@ -47,7 +50,7 @@ export function buildProps(result: SessionsListResult): SessionsProps {
     searchQuery: "",
     transcriptSearchAvailable: true,
     transcriptSearchQuery: "",
-    transcriptSearch: { status: "idle" },
+    transcriptSearch: null,
     agentIdentityById: {},
     sortColumn: "updated",
     sortDir: "desc",
@@ -102,11 +105,6 @@ export function renderSessionsView(initial: SessionsProps, container: HTMLElemen
     sessionViews.set(container, { update: (next) => setProps(next), dispose });
   }
   flush();
-}
-
-export function disposeSessionView(container: HTMLElement) {
-  sessionViews.get(container)?.dispose();
-  sessionViews.delete(container);
 }
 
 export function disposeSessionViews() {

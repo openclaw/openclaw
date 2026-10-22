@@ -23,7 +23,8 @@ export class GatewaySendLimiter {
   ) {}
 
   send(serialized: string, options?: { critical?: boolean }): void {
-    if (options?.critical || this.canSend(Date.now())) {
+    // Critical sends bypass capacity, not expiration of the shared send window.
+    if (this.canSend(Date.now()) || options?.critical) {
       this.sendSerialized(serialized);
       return;
     }

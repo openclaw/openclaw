@@ -27,13 +27,13 @@ import { hasAmbiguousGatewayAuthModeConfig } from "../gateway/auth-mode-policy.j
 import type { SkillStatusEntry } from "../skills/discovery/status.js";
 import { resolveSkillWorkshopConfig } from "../skills/workshop/config.js";
 import { detectSkillWorkshopToolPolicyDiagnostic } from "../skills/workshop/tool-policy-diagnostic.js";
-import { createAcpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
+import { acpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
 import { finalConfigValidationCheck } from "./doctor-config-validation-check.js";
 import { detectGatewayAuthHealth } from "./doctor-gateway-auth.js";
 import { gatewayServicesExtraCheck } from "./doctor-gateway-services-check.js";
 import type { DoctorHealthCheckContext } from "./doctor-health-contribution-types.js";
 import { legacyOwnedRepair } from "./doctor-health-contribution.js";
-import { createModelReferenceCheck } from "./doctor-model-reference-check.js";
+import { modelReferenceCheck } from "./doctor-model-reference-check.js";
 import { removedWorkspacesStateCheck } from "./doctor-removed-workspaces-state-check.js";
 import { runtimeToolSchemaCheck } from "./doctor-tool-schema-check.js";
 import { resolveDoctorWorkspaceSuggestionScopes } from "./doctor-workspace-suggestion-scopes.js";
@@ -753,8 +753,8 @@ export function createCoreHealthChecks(): readonly DoctorHealthCheck[] {
     openAIOAuthTlsCheck,
     hooksModelCheck,
     bootstrapSizeCheck,
-    createModelReferenceCheck(),
-    createAcpAgentModelCheck(),
+    modelReferenceCheck,
+    acpAgentModelCheck,
     {
       id: "core/doctor/provider-catalog-projection",
       description: "Provider catalog hooks project into unified text model catalog rows.",

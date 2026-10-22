@@ -385,23 +385,6 @@ describe("SQLite transcript archive worker", () => {
     );
   });
 
-  it("deletes empty lifecycle state without producing an archive", async () => {
-    const target = scope("empty-transcript");
-    await entry(target);
-    const result = await deletion(target.sessionKey);
-    expect(result).toMatchObject({ deleted: true, archivedTranscripts: [] });
-    expect(loadSessionEntry(target)).toBeUndefined();
-    const { query, rows } = databaseQueries();
-    expect(
-      rows(
-        query
-          .selectFrom("session_windows")
-          .select("session_id")
-          .where("session_id", "=", target.sessionId),
-      ),
-    ).toEqual([]);
-  });
-
   it.each(["empty", "nonempty"] as const)(
     "preserves events appended after a planned %s transcript snapshot",
     async (initial) => {

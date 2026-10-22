@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import { getCurrentSessionControllerOwner } from "../sessions/session-controller.context.js";
 import {
   agentCommand,
   agentCommandFromGatewayIngress,
@@ -37,6 +38,19 @@ registerAgentCommandCompactionTestHooks();
 
 function makeEmbeddedResult(sessionId: string, text: string) {
   return makeResult({ sessionId, text, runner: "embedded", agentHarnessId: "openclaw" });
+}
+
+async function advanceWork(advanceClock: () => void) {
+  advanceClock();
+  const operation = getCurrentSessionControllerOwner();
+  if (!operation) {
+    throw new Error("Expected the simulated command or maintenance owner");
+  }
+  // The mocked model/checkpoint has completed work, not silently stalled.
+  // Sample the real watchdog so its one-second timer cannot decide the test outcome.
+  operation.watchdog.progress("semantic", "fixture:work_completed");
+  await operation.watchdog.tick();
+  operation.abortSignal.throwIfAborted();
 }
 
 describe("agentCommand embedded maintenance", () => {
@@ -125,12 +139,16 @@ describe("agentCommand embedded maintenance", () => {
       let flushTimeout: number | undefined;
       state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
         params.onSuccessfulAuthProfile?.({});
-        now += foregroundMs;
+        await advanceWork(() => {
+          now += foregroundMs;
+        });
         return makeEmbeddedResult(sessionId, text);
       });
       state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
         flushTimeout = params.followupRun.run.timeoutMs;
-        now = startedAt + 600_000;
+        await advanceWork(() => {
+          now = startedAt + 600_000;
+        });
         return { sessionEntry: params.sessionEntry, outcome: "completed" };
       });
       try {
@@ -255,12 +273,16 @@ describe("agentCommand embedded maintenance", () => {
     let flushTimeout: number | undefined;
     state.runAgentAttemptMock.mockImplementationOnce(async (params) => {
       params.onSuccessfulAuthProfile?.({});
-      now += 1_200_000;
+      await advanceWork(() => {
+        now += 1_200_000;
+      });
       return makeEmbeddedResult(sessionId, "unlimited answer");
     });
     state.runMemoryFlushIfNeededMock.mockImplementationOnce(async (params) => {
       flushTimeout = params.followupRun.run.timeoutMs;
-      now += 600_000;
+      await advanceWork(() => {
+        now += 600_000;
+      });
       return { sessionEntry: params.sessionEntry, outcome: "completed" };
     });
     try {

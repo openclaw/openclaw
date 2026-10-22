@@ -21,7 +21,6 @@ import {
 import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { FsSafeError, isPathInside, type OpenResult } from "../infra/fs-safe.js";
-import { retryAsync } from "../infra/retry.js";
 import { writeSiblingTempFile } from "../infra/sibling-temp-file.js";
 import { captureChannelReadScope } from "../shared/channel-read-authority.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -155,32 +154,8 @@ function findErrorWithCode(err: unknown, code: string): NodeJS.ErrnoException | 
   return findErrorWithCode(err.cause, code);
 }
 
-async function retryAfterRecreatingDir<T>(
-  dir: string,
-  run: () => Promise<T>,
-  canRetry: () => boolean = () => true,
-): Promise<T> {
-  return await retryAsync(
-    async () => {
-      try {
-        return await run();
-      } catch (err) {
-        throw findErrorWithCode(err, "ENOSPC") ?? err;
-      }
-    },
-    {
-      attempts: 2,
-      minDelayMs: 0,
-      maxDelayMs: 0,
-      // Only ENOENT from cleanup pruning the directory is repairable by mkdir.
-      shouldRetry: (err) => canRetry() && findErrorWithCode(err, "ENOENT") !== undefined,
-      onRetry: async () => {
-        // Cleanup can prune the directory between mkdir and file open. Recreate
-        // it once; further failures remain terminal instead of looping.
-        await fs.mkdir(dir, { recursive: true, mode: 0o700 });
-      },
-    },
-  );
+function rethrowMediaWriteError(error: unknown): never {
+  throw findErrorWithCode(error, "ENOSPC") ?? error;
 }
 
 async function prunePlaybackTranscodeCacheToSize(): Promise<void> {
@@ -538,30 +513,27 @@ export async function saveMediaBuffer(
   assertCommitAllowed?.();
   const readScope = captureChannelReadScope();
   readScope?.assertCurrent();
-  const writeDir = resolveMediaScopedDir(subdir, "writeSavedMediaBuffer");
   const relativePath = resolveMediaRelativePath(id, subdir, "writeSavedMediaBuffer");
-  await retryAfterRecreatingDir(writeDir, async () => {
-    if (readScope || assertCommitAllowed) {
-      const { writeReadScopeMedia } = await import("./store.read-scope.js");
-      await writeReadScopeMedia({
-        dir: writeDir,
-        tempPrefix: `.${id}`,
-        scope: readScope,
-        assertCommitAllowed,
-        durable: true,
-        write: async (handle) => {
-          readScope?.assertCurrent();
-          assertCommitAllowed?.();
-          await handle.writeFile(buffer);
-          return { id };
-        },
-      });
-      return;
-    }
-    await openMediaStore(buffer.byteLength).write(relativePath, buffer, {
+  if (readScope || assertCommitAllowed) {
+    const { writeReadScopeMedia } = await import("./store.read-scope.js");
+    await writeReadScopeMedia({
+      dir,
       tempPrefix: `.${id}`,
-    });
-  });
+      scope: readScope,
+      assertCommitAllowed,
+      durable: true,
+      write: async (handle) => {
+        readScope?.assertCurrent();
+        assertCommitAllowed?.();
+        await handle.writeFile(buffer);
+        return { id };
+      },
+    }).catch(rethrowMediaWriteError);
+  } else {
+    await openMediaStore(buffer.byteLength)
+      .write(relativePath, buffer, { tempPrefix: `.${id}` })
+      .catch(rethrowMediaWriteError);
+  }
   return { id, path: path.join(dir, id), size: buffer.byteLength, contentType: mime };
 }
 
@@ -582,20 +554,13 @@ export async function saveMediaStream(
   await fs.mkdir(dir, { recursive: true, mode: 0o700 });
   const baseId = crypto.randomUUID();
   const headerExt = extensionForAuthoritativeHeaderMime(contentType);
-  // Directory setup may retry before iteration starts. A consumed stream cannot
-  // be replayed after a write or publication failure.
-  let consumptionStarted = false;
-  const mediaStream = (async function* () {
-    consumptionStarted = true;
-    yield* stream;
-  })();
   const write = async (handle: FileHandle): Promise<Omit<SavedMedia, "path">> => {
     readScope?.assertCurrent();
     options?.assertCommitAllowed?.();
     const sniffBuffer = Buffer.allocUnsafe(16384);
     let sniffLen = 0;
     let size = 0;
-    for await (const chunk of mediaStream) {
+    for await (const chunk of stream) {
       readScope?.assertCurrent();
       options?.assertCommitAllowed?.();
       const chunkBuffer = Buffer.isBuffer(chunk)
@@ -640,40 +605,36 @@ export async function saveMediaStream(
     const id = buildSavedMediaId({ baseId, ext, originalFilename });
     return { id, size, contentType: mime };
   };
-  const result = await retryAfterRecreatingDir(
-    dir,
-    async () => {
-      if (readScope || options?.assertCommitAllowed) {
-        const { writeReadScopeMedia } = await import("./store.read-scope.js");
-        return await writeReadScopeMedia({
-          dir,
-          tempPrefix: `.${baseId}`,
-          scope: readScope,
-          assertCommitAllowed: options?.assertCommitAllowed,
-          durable: options?.durable,
-          write,
-        });
-      }
-      const saved = await writeSiblingTempFile({
-        dir,
-        mode: MEDIA_FILE_MODE,
-        syncTempFile: options?.durable,
-        syncParentDir: options?.durable,
-        tempPrefix: `.${baseId}`,
-        writeTemp: async (tempPath) => {
-          const handle = await fs.open(tempPath, "wx", MEDIA_FILE_MODE);
-          try {
-            return await write(handle);
-          } finally {
-            await handle.close().catch(() => undefined);
-          }
-        },
-        resolveFinalPath: (resultLocal) => path.join(dir, resultLocal.id),
-      });
-      return saved.result;
-    },
-    () => !consumptionStarted,
-  );
+  let result: Omit<SavedMedia, "path">;
+  if (readScope || options?.assertCommitAllowed) {
+    const { writeReadScopeMedia } = await import("./store.read-scope.js");
+    result = await writeReadScopeMedia({
+      dir,
+      tempPrefix: `.${baseId}`,
+      scope: readScope,
+      assertCommitAllowed: options?.assertCommitAllowed,
+      durable: options?.durable,
+      write,
+    }).catch(rethrowMediaWriteError);
+  } else {
+    const saved = await writeSiblingTempFile({
+      dir,
+      mode: MEDIA_FILE_MODE,
+      syncTempFile: options?.durable,
+      syncParentDir: options?.durable,
+      tempPrefix: `.${baseId}`,
+      writeTemp: async (tempPath) => {
+        const handle = await fs.open(tempPath, "wx", MEDIA_FILE_MODE);
+        try {
+          return await write(handle);
+        } finally {
+          await handle.close().catch(() => undefined);
+        }
+      },
+      resolveFinalPath: (resultLocal) => path.join(dir, resultLocal.id),
+    }).catch(rethrowMediaWriteError);
+    result = saved.result;
+  }
   return {
     id: result.id,
     path: path.join(dir, result.id),

@@ -18,7 +18,6 @@ export const PLUGIN_REGISTRY_CHECK_ID = "core/doctor/plugin-registry";
 
 export type StaleManagedNpmInstallGenerationIssue = {
   kind: "stale-managed-npm-install-generation";
-  activePackageDir: string;
   packageDir: string;
   pluginId: string;
   version?: string;
@@ -65,7 +64,6 @@ export async function listStaleManagedNpmInstallGenerations(
       stale.push({
         kind: "stale-managed-npm-install-generation",
         pluginId,
-        activePackageDir: activeRecord.installPath,
         packageDir,
         ...(candidate.installRecord.resolvedVersion
           ? { version: candidate.installRecord.resolvedVersion }

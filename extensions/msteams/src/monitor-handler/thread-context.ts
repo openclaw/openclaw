@@ -194,17 +194,16 @@ export async function resolveMSTeamsThreadContext(params: {
             }).allowed,
         });
       const parentContextEvent = formatParentContextEvent(parentMsg);
-      const visibleParentMessages = parentMsg
-        ? filterSupplementalContextItems({
-            items: [parentMsg],
-            mode: params.contextVisibilityMode,
-            kind: "thread",
-            isSenderAllowed: isThreadSenderAllowed,
-          }).items
-        : [];
+      const { items: threadMessages } = filterSupplementalContextItems({
+        items: parentMsg ? [parentMsg, ...replies] : replies,
+        mode: params.contextVisibilityMode,
+        kind: "thread",
+        isSenderAllowed: isThreadSenderAllowed,
+      });
       if (
         parentContextEvent &&
-        visibleParentMessages.length > 0 &&
+        parentMsg &&
+        threadMessages.includes(parentMsg) &&
         shouldInjectParentContext(route.sessionKey, threadParentId)
       ) {
         core.system.enqueueSystemEvent(parentContextEvent, {
@@ -213,18 +212,11 @@ export async function resolveMSTeamsThreadContext(params: {
         });
         markParentContextInjected(route.sessionKey, threadParentId);
       }
-      const allMessages = parentMsg ? [parentMsg, ...replies] : replies;
       quoteSenderId = parentMsg?.from?.user?.id ?? parentMsg?.from?.application?.id;
       quoteSenderName =
         parentMsg?.from?.user?.displayName ??
         parentMsg?.from?.application?.displayName ??
         params.quoteInfo?.sender;
-      const { items: threadMessages } = filterSupplementalContextItems({
-        items: allMessages,
-        mode: params.contextVisibilityMode,
-        kind: "thread",
-        isSenderAllowed: isThreadSenderAllowed,
-      });
       threadContext = buildThreadContext(threadMessages, activity.id);
     } catch (err) {
       params.log.debug?.("failed to fetch thread history", {

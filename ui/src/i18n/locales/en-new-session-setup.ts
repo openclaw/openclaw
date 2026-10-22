@@ -67,6 +67,10 @@ const enNewSessionSetup = {
     browseDevice: "Browse folders on {device}",
     worktree: "Worktree",
     checkingGit: "Checking Git availability…",
+    folderRequiresScope:
+      "Checking Git for this folder requires {scope} access. Ask the person who manages OpenClaw for access.",
+    gitCheckAccessDenied:
+      "You don't have permission to check Git for this folder. Ask the person who manages OpenClaw for access.",
     gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
     starting: "Starting…",
     followUps: "Follow-up messages",

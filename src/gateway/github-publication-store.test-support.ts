@@ -87,9 +87,9 @@ export function claimRepositoryGitHubPublicationFixture(
   );
   const interruptedStatus = row.owner_profile_id === null ? "requested" : "needs_confirmation";
   const apply = (transition: GitHubPublicationEffectTransition) => {
-    const { values, requireAction } = githubPublicationEffectFacts(transition, interruptedStatus);
+    const values = githubPublicationEffectFacts(transition, interruptedStatus);
     return runOpenClawStateWriteTransaction((database) =>
-      writeRepository(database, row, instanceId, executionId, values, requireAction, authority),
+      writeRepository(database, row, instanceId, executionId, values),
     );
   };
   return {

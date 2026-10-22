@@ -1,5 +1,6 @@
 // Feishu tests cover bot group name plugin behavior.
-import { afterAll, describe, it, expect, vi, beforeEach } from "vitest";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { afterAll, afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { feishuGroupNameCache } from "./bot-group-name-state.js";
 import { resolveGroupName } from "./bot-group-name.js";
 import type { ResolvedFeishuAccount } from "./types.js";
@@ -41,6 +42,8 @@ describe("resolveGroupName", () => {
     vi.resetModules();
   });
 
+  afterEach(() => vi.useRealTimers());
+
   beforeEach(() => {
     vi.clearAllMocks();
     mockGetChatInfo.mockReset();
@@ -53,6 +56,22 @@ describe("resolveGroupName", () => {
     mockGetChatInfo.mockResolvedValue({ name: "   " });
     const result = await resolveGroupName({ account, chatId: "oc_test3", log });
     expect(result).toBeUndefined();
+  });
+
+  it("shares a cold lookup and blocks for a fresh name after expiry", async () => {
+    vi.useFakeTimers();
+    const first = createDeferred<{ name: string }>();
+    mockGetChatInfo.mockReturnValue(first.promise);
+    const params = { account, chatId: "oc_shared", log };
+    const initial = [resolveGroupName(params), resolveGroupName(params)];
+    first.resolve({ name: "Original name" });
+    await expect(Promise.all(initial)).resolves.toEqual(["Original name", "Original name"]);
+    expect(mockGetChatInfo).toHaveBeenCalledOnce();
+
+    vi.advanceTimersByTime(30 * 60_000);
+    mockGetChatInfo.mockResolvedValueOnce({ name: "Updated name" });
+    await expect(resolveGroupName(params)).resolves.toBe("Updated name");
+    expect(mockGetChatInfo).toHaveBeenCalledTimes(2);
   });
 
   it("caches negative result (API failure) and skips retry", async () => {

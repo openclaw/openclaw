@@ -79,7 +79,7 @@ const DEPRECATED_DANGEROUS_FORCE_UNSAFE_UPDATE_WARNING =
   "--dangerously-force-unsafe-install is deprecated and no longer affects plugin updates because built-in install-time dangerous-code scanning has been removed. Configure security.installPolicy for operator-owned install decisions.";
 
 function logPluginUpdateOutcomes(
-  outcomes: readonly Pick<PluginUpdateOutcome, "status" | "message" | "channelFallback" | "code">[],
+  outcomes: readonly Pick<PluginUpdateOutcome, "status" | "message" | "code">[],
 ): 0 | 1 {
   let exitCode: 0 | 1 = 0;
   for (const outcome of outcomes) {
@@ -93,9 +93,6 @@ function logPluginUpdateOutcomes(
       defaultRuntime.log(theme.warn(outcome.message));
     } else {
       defaultRuntime.log(outcome.message);
-    }
-    if (outcome.channelFallback) {
-      defaultRuntime.log(theme.warn(outcome.channelFallback.message));
     }
   }
   return exitCode;

@@ -8,19 +8,14 @@ import * as absoluteDeadline from "../utils/absolute-deadline.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
-  type snapshotUpdateCandidateState,
-  UpdateCandidateSnapshotInventorySchema,
-  UpdateCandidateStateSnapshotSchema,
+  type snapshotUpdateCandidateState as snapshot,
+  UpdateCandidateSnapshotInventorySchema as InventorySchema,
+  UpdateCandidateStateSnapshotSchema as SnapshotSchema,
 } from "./update-candidate-state.js";
 
-type SnapshotInput = Omit<
-  Parameters<typeof snapshotUpdateCandidateState>[0],
-  "pluginPlanPath" | "databaseInventory"
->;
-type Admission = Pick<
-  Parameters<typeof snapshotUpdateCandidateState>[0],
-  "pluginPlanPath" | "databaseInventory"
->;
+type Admission = Pick<Parameters<typeof snapshot>[0], "pluginPlanPath" | "databaseInventory">;
+type Input = Omit<Parameters<typeof snapshot>[0], keyof Admission>;
+const entrypoint = runtimeProcessEntrypoints.updateCandidateState;
 
 /** Wake the inspection deadline without replacing native process-cleanup timers. */
 export function captureUpdateCandidateDeadline(): () => void {
@@ -41,63 +36,48 @@ export function captureUpdateCandidateDeadline(): () => void {
 }
 
 export async function materializeUpdateCandidateStateWorker(candidateRoot: string): Promise<void> {
-  const source = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState);
-  const worker = path.join(
-    candidateRoot,
-    "dist",
-    runtimeProcessEntrypoints.updateCandidateState.distWorkerPath,
-  );
-  await fs.mkdir(path.dirname(worker), { recursive: true });
-  await fs.writeFile(
-    worker,
-    `void (async () => {
-      ${
-        source.pathname.endsWith(".ts")
-          ? `const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
+  const source = resolveRuntimeWorkerUrl(entrypoint);
+  const worker = path.join(candidateRoot, "dist", entrypoint.distWorkerPath);
+  const loader = source.pathname.endsWith(".ts")
+    ? `const { register } = await import(${JSON.stringify(pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm/api")).href)});
       register({ tsconfig: ${JSON.stringify(fileURLToPath(new URL("../../tsconfig.json", import.meta.url)))} });`
-          : ""
-      }
+    : "";
+  const program = `void (async () => {
+      ${loader}
       await import(${JSON.stringify(source.href)});
-    })();`,
-  );
+    })();`;
+  await fs.mkdir(path.dirname(worker), { recursive: true });
+  await fs.writeFile(worker, program);
 }
 
-function runWorker(input: SnapshotInput, mode: "inventory" | "snapshot", admitted?: Admission) {
+async function runWorker(input: Input, mode: "inventory" | "snapshot", admitted?: Admission) {
   // Backup/VACUUM cannot be cancelled in-process; join the worker before fixture cleanup.
-  return runCommandBuffered(
-    [
-      process.execPath,
-      ...resolveRuntimeWorkerArgv(
-        resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.updateCandidateState),
-      ),
-    ],
-    {
-      input: JSON.stringify({ ...input, mode, ...admitted, includeLocalStoreVersions: true }),
-      timeoutMs: 30_000,
-      killGraceMs: 500,
-      maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
-    },
-  );
+  const worker = resolveRuntimeWorkerUrl(entrypoint);
+  const result = await runCommandBuffered([process.execPath, ...resolveRuntimeWorkerArgv(worker)], {
+    input: JSON.stringify({
+      ...input,
+      mode,
+      ...admitted,
+      includeLocalStoreVersions: true,
+      includeClientCredentialStoreVersion: true,
+    }),
+    timeoutMs: 30_000,
+    killGraceMs: 500,
+    maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+  });
+  expect(result.code, result.stderr.toString("utf8")).toBe(0);
+  return JSON.parse(result.stdout.toString("utf8"));
 }
 
-export async function inventoryUpdateCandidateStateWorker(
-  input: SnapshotInput,
-): Promise<Admission> {
-  const result = await runWorker(input, "inventory");
-  expect(result.code, result.stderr.toString("utf8")).toBe(0);
-  const inventory = UpdateCandidateSnapshotInventorySchema.parse(
-    JSON.parse(result.stdout.toString("utf8")),
-  );
+export async function inventoryUpdateCandidateStateWorker(input: Input): Promise<Admission> {
+  const inventory = InventorySchema.parse(await runWorker(input, "inventory"));
   return {
     pluginPlanPath: path.join(input.targetStateDir, inventory.pluginPlan),
     databaseInventory: [...inventory.databases.keys()],
   };
 }
 
-export async function runUpdateCandidateSnapshotWorker(input: SnapshotInput) {
+export async function runUpdateCandidateSnapshotWorker(input: Input) {
   const admitted = await inventoryUpdateCandidateStateWorker(input);
-  const result = await runWorker(input, "snapshot", admitted);
-  expect(result.code, result.stderr.toString("utf8")).toBe(0);
-  return UpdateCandidateStateSnapshotSchema.parse(JSON.parse(result.stdout.toString("utf8")))
-    .versions;
+  return SnapshotSchema.parse(await runWorker(input, "snapshot", admitted)).versions;
 }

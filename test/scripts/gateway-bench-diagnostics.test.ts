@@ -104,3 +104,23 @@ it("reports latency tails, preserves zero, and bounds outliers without changing 
   expect(Object.keys(metrics).toSorted()).toEqual(["pendingBytes", "queueMs", "runMs"]);
   expect(result.collectionErrors).toBe(0);
 });
+
+it("separates transcript hydration and model reads within shared database reservations", () => {
+  const source = channel("openclaw.agent-database.reservation");
+  const finish = startGatewayBenchDiagnostics();
+  try {
+    for (const caller of ["history.hydration", "history.hydration", "history.model-context"]) {
+      source.publish({ operation: "direct", caller, outcome: "ok", writerExecutionMs: 3 });
+    }
+  } finally {
+    const result = finish();
+    expect(result.groups).toMatchObject([
+      { operation: "history.hydration", count: 2, metrics: { writerExecutionMs: { total: 6 } } },
+      {
+        operation: "history.model-context",
+        count: 1,
+        metrics: { writerExecutionMs: { total: 3 } },
+      },
+    ]);
+  }
+});

@@ -382,7 +382,6 @@ export function resolveProviderRequestFailureCopy(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;
-  technicalMessage: string;
 }) {
   const code = resolveProviderRequestFailureCode(params);
   if (!code) {
@@ -391,7 +390,6 @@ export function resolveProviderRequestFailureCopy(params: {
   return {
     code,
     userMessage: PROVIDER_REQUEST_COPY[code],
-    technicalMessage: params.technicalMessage,
   };
 }
 

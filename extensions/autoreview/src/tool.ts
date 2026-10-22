@@ -257,10 +257,9 @@ export function createAutoReviewTool(
         path.join(resolvePreferredOpenClawTmpDir(), "autoreview-"),
       );
       let helperRun: ReturnType<typeof python> | undefined;
-      let helperCompleted = false;
       const helperSettled = new AbortController();
       const finishHelper = async () => {
-        if (!helperCompleted) {
+        if (!helperSettled.signal.aborted) {
           operation.abort();
         }
         await helperRun?.catch((error: unknown) => {
@@ -321,11 +320,9 @@ export function createAutoReviewTool(
         );
         void helperRun.then(
           () => {
-            helperCompleted = true;
             helperSettled.abort();
           },
           () => {
-            helperCompleted = true;
             helperSettled.abort();
           },
         );

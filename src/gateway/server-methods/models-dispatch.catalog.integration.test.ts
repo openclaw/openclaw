@@ -106,6 +106,7 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
     );
     const token = "catalog-dispatch-gateway-token";
     const cfg = {
+      cron: { enabled: false },
       models: {
         providers: {
           [provider]: {
@@ -120,7 +121,6 @@ it("dispatches a discovered model outside the agent workspace and preserves it a
       },
       agents: catalogAgents(state, {
         skipBootstrap: true,
-        heartbeat: { every: "0m" },
         modelPolicy: { allow: [`${provider}/*`] },
       }),
       tools: { profile: "minimal" },

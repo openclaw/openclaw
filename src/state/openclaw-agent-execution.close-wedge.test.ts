@@ -5,6 +5,7 @@ import type { Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createSessionActorFactory } from "../config/sessions/session-actor-durable.js";
 import * as backoff from "../infra/backoff.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
 import type { SqliteWorkerExecutionAuthority } from "../infra/sqlite-worker-contract.js";
@@ -272,6 +273,84 @@ function executionSource(
   };
 }
 const source = executionSource();
+
+it("does not fence an actor when its worker stops before command admission", async () => {
+  const env = makeEnv();
+  const execution = capture(env);
+  await execution.prepare(source);
+  const identity = execution.fileIdentity;
+  if (!identity) {
+    throw new Error("Actor recovery fixture requires its prepared database identity");
+  }
+  const sessionKey = "agent:first:pre-admission-recovery";
+  const scope = {
+    agentId: "first",
+    storePath: execution.path,
+    sessionKey,
+    sessionId: "actor-recovery",
+  };
+  const actor = await createSessionActorFactory({
+    agentId: "first",
+    env,
+    path: execution.path,
+  }).acquire({ database: identity, sessionKey }, { assertCurrent() {}, assertReadable() {} });
+  const authorize = vi.fn();
+  const authority = { assertCurrent() {}, authorize };
+  try {
+    await expect(
+      actor.appendTranscriptEvent(
+        {
+          commandId: "initial-message",
+          phaseId: "setup",
+          append: {
+            kind: "message",
+            input: {
+              scope,
+              cwd: "/synthetic",
+              messageJson: JSON.stringify({ role: "user", content: "hello" }),
+            },
+            initialization: { scope, entry: { sessionId: scope.sessionId, updatedAt: 1 } },
+          },
+        },
+        authority,
+      ),
+    ).resolves.toMatchObject({ kind: "committed" });
+    authorize.mockClear();
+    Atomics.store(faultState, 0, 2);
+    const failed = await actor.patch(
+      {
+        commandId: fault.marker,
+        phaseId: "before-admission",
+        reducers: [{ kind: "activity", updatedAt: 2 }],
+      },
+      authority,
+    );
+    Atomics.store(faultState, 0, 0);
+    expect(authorize).not.toHaveBeenCalled();
+    expect(failed).toMatchObject({ kind: "rolled-back" });
+    expect(await readEntries(execution, sessionKey)).toMatchObject({
+      entries: [{ sessionKey, entry: { updatedAt: 1 } }],
+    });
+    await expect(
+      actor.patch(
+        {
+          commandId: "after-worker-restart",
+          phaseId: "recovery",
+          reducers: [{ kind: "activity", updatedAt: 3 }],
+        },
+        authority,
+      ),
+    ).resolves.toMatchObject({ kind: "committed" });
+    expect(await readEntries(execution, sessionKey)).toMatchObject({
+      entries: [{ sessionKey, entry: { updatedAt: 3 } }],
+    });
+  } finally {
+    Atomics.store(faultState, 0, 0);
+    await actor.release();
+    await execution.release();
+  }
+});
+
 function readEntries(
   execution: ReturnType<typeof captureOpenClawAgentDatabaseExecution>,
   key: string | string[],

@@ -290,10 +290,6 @@ vi.mock("../skills/runtime/remote.js", () => ({
   getRemoteSkillEligibility: vi.fn(() => undefined),
 }));
 
-vi.mock("../plugins/bundle-commands.js", () => ({
-  loadEnabledClaudeBundleCommands: vi.fn(() => []),
-}));
-
 vi.mock("../skills/discovery/agent-filter.js", () => ({
   resolveEffectiveAgentSkillFilter: vi.fn(() => undefined),
 }));

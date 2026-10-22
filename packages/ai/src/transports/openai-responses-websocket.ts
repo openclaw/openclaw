@@ -209,7 +209,12 @@ function prepareWebSocketConnection(client: OpenAI, headers: Record<string, stri
   if (!resolvedApiKey) {
     throw new Error("OpenAI Responses WebSocket requires a resolved API key");
   }
-  const resolvedClient = client.withOptions({ apiKey: resolvedApiKey });
+  // Cached sockets must not retain HTTP hooks, including the SDK logger bound to that client.
+  const resolvedClient = client.withOptions({
+    apiKey: resolvedApiKey,
+    fetch: undefined,
+    logger: undefined,
+  });
   return {
     client: resolvedClient,
     headers: resolvedHeaders,

@@ -226,7 +226,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
   return {
     async loadRoster(cfg) {
       const status = newStatus();
-      const client = new GithubClient(cfg, runtime, status);
+      const client = new GithubClient(cfg, status);
       const people = new Map<string, Person>();
       const add = (login: string) => people.set(login.toLowerCase(), { github: [login] });
       for (const team of cfg.teams) {
@@ -269,7 +269,7 @@ export function createGithubSource(runtime: SourceRuntime): GithubSource {
 
     async collect(cfg, window, roster, emit) {
       const status = newStatus();
-      const client = new GithubClient(cfg, runtime, status);
+      const client = new GithubClient(cfg, status);
       if (window.untilMs <= window.sinceMs) {
         throw new Error("Invalid GitHub activity window");
       }

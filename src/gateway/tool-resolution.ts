@@ -15,6 +15,7 @@ import { nodeExecSchema } from "../agents/bash-tools.schemas.js";
 import { resolveConversationQuestionInputMode } from "../agents/conversation-capability-profile.js";
 import { applyDelegationCapability } from "../agents/delegation-capability.js";
 import { prepareExecDefaults, resolvePreparedExecDefaultsAsync } from "../agents/exec-defaults.js";
+import { applyGatewayToolPolicy } from "../agents/gateway-tool-policy.js";
 import { createLazyExecTool, resolveExecToolConfig } from "../agents/lazy-exec-tool.js";
 import { createOpenClawToolsAsync } from "../agents/openclaw-tools.js";
 import { filterRequesterYieldTools } from "../agents/openclaw-tools.requester-yield.js";
@@ -442,6 +443,7 @@ export async function resolveGatewayScopedTools(
     sessionControlAuthority,
     sandboxSessionRenameOnly,
     conversationReadOrigin: params.conversationReadOrigin,
+    inputProvenance: params.inputProvenance,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
     skillWorkshop: params.skillWorkshop,
     allowMediaInvokeCommands: params.allowMediaInvokeCommands,
@@ -681,15 +683,18 @@ export async function resolveGatewayScopedTools(
     ].map(normalizeToolPolicyName),
   );
   const completeTools = (filtered: AnyAgentTool[]) =>
-    applySwarmCollectorToolContract(
-      applyDelegationCapability(
-        filtered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
-        params.delegationCapability,
+    applyGatewayToolPolicy(
+      applySwarmCollectorToolContract(
+        applyDelegationCapability(
+          filtered.filter((tool) => !gatewayDenySet.has(normalizeToolPolicyName(tool.name))),
+          params.delegationCapability,
+        ),
+        {
+          swarmCollector: Boolean(swarmCollectorContext),
+          structuredOutputTool: openClawTools.find((tool) => tool.name === "structured_output"),
+        },
       ),
-      {
-        swarmCollector: Boolean(swarmCollectorContext),
-        structuredOutputTool: openClawTools.find((tool) => tool.name === "structured_output"),
-      },
+      params.cfg,
     );
   const turnTools = completeTools(policyFiltered);
   // Run-bound CLI catalogs share the session surface; authority only changes executors.

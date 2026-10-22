@@ -32,6 +32,7 @@ import {
   reserveMemoryEntryOrigins,
   type MemoryEntryOrigin,
 } from "./memory-entry-origins.js";
+import { memoryOrigin as origin } from "./memory-forget.suite.test-support.js";
 import {
   ensureMemorySessionTombstones,
   hasMemorySessionTombstone,
@@ -69,17 +70,6 @@ describe("memory entry origins", () => {
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  function origin(entryKey: string, sessionId: string): MemoryEntryOrigin {
-    return {
-      entryKey,
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      originClass: "owner",
-      observedAt: 1_000,
-    };
-  }
-
   const databasePath = () => resolveOpenClawAgentSqlitePath({ agentId: "main" });
   const database = () =>
     requireNativeSqliteDatabase(openOpenClawAgentDatabase({ agentId: "main" }).db);
@@ -91,6 +81,34 @@ describe("memory entry origins", () => {
   ) => listMemoryEntryOrigins({ agentId, ...filter });
   const forgotten = (sessionIds: string[], agentId = "main") =>
     findForgottenMemorySessionIds({ agentId, sessionIds });
+  const row = (sql: string) => database().prepare(sql).get();
+  const table = (name: string) => row(`SELECT name FROM sqlite_schema WHERE name = '${name}'`);
+  const revision = () => row("SELECT revision FROM memory_index_state WHERE id = 1");
+  const reserve = (priorEntry: string, candidateKeys = ["candidate"], agentIds = ["main"]) =>
+    reserveMemoryEntryOrigins({
+      agentIds,
+      previousMemory: `${buildPromotionMarker("prior")}\n${priorEntry}\n`,
+      operations: candidateKeys.map((candidateKey) => ({
+        candidateKey,
+        action: "merged" as const,
+        priorEntries: [priorEntry],
+      })),
+    });
+  const readOrigins = () =>
+    readMemoryOriginsInWorker({
+      agentId: "main",
+      stateDir,
+      databasePath: databasePath(),
+      kind: "origin-rows",
+    });
+  const readTombstones = (sessionIds: string[]) =>
+    readMemoryOriginsInWorker({
+      agentId: "main",
+      stateDir,
+      databasePath: databasePath(),
+      kind: "session-tombstones",
+      sessionIds,
+    });
 
   async function withoutHostOriginSql(run: () => Promise<void>) {
     const db = database();
@@ -152,21 +170,17 @@ describe("memory entry origins", () => {
 
       expect(await list()).toEqual([]);
       await pruneMemoryEntryOrigins(pruning);
-      expect(
-        db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_entry_origins'").get(),
-      ).toBeUndefined();
+      expect(table("memory_entry_origins")).toBeUndefined();
       await expect(
         record([
           origin("rejected", "session-1"),
           { ...origin("rejected", "other"), agentId: "other" },
         ]),
       ).rejects.toThrow("memory entry origin belongs to another agent");
-      expect(
-        db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_entry_origins'").get(),
-      ).toEqual({ name: "memory_entry_origins" });
-      expect(
-        db.prepare("SELECT wr FROM pragma_table_list WHERE name = 'memory_entry_origins'").get(),
-      ).toEqual({ wr: 1 });
+      expect(table("memory_entry_origins")).toEqual({ name: "memory_entry_origins" });
+      expect(row("SELECT wr FROM pragma_table_list WHERE name = 'memory_entry_origins'")).toEqual({
+        wr: 1,
+      });
       expect(await list()).toEqual([]);
       expect(transactionAdmissions).toBe(2);
       await record([origin("candidate", "session-1")]);
@@ -238,18 +252,14 @@ describe("memory entry origins", () => {
   it("lazily persists forgotten sessions without recreating tombstones on reads or repeat writes", async () => {
     const db = database();
     const version = db.prepare("PRAGMA user_version").get();
-    const revisionBefore = db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get();
+    const revisionBefore = revision();
     db.exec("DROP TABLE IF EXISTS memory_session_tombstones");
 
     expect(await forgotten(["session-1"])).toEqual(new Set());
     expect(await forgotten([])).toEqual(new Set());
-    expect(
-      db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_session_tombstones'").get(),
-    ).toBeUndefined();
+    expect(table("memory_session_tombstones")).toBeUndefined();
     await record([origin("candidate", "session-1")]);
-    expect(
-      db.prepare("SELECT name FROM sqlite_schema WHERE name = 'memory_session_tombstones'").get(),
-    ).toBeUndefined();
+    expect(table("memory_session_tombstones")).toBeUndefined();
 
     expect(
       seedMemoryForgetTombstones({
@@ -258,9 +268,7 @@ describe("memory entry origins", () => {
         createdAt: 1_000,
       }),
     ).toBe(2);
-    const deletionRevision = db
-      .prepare("SELECT revision FROM memory_index_state WHERE id = 1")
-      .get();
+    const deletionRevision = revision();
     expect(deletionRevision).not.toEqual(revisionBefore);
     expect(
       seedMemoryForgetTombstones({
@@ -270,9 +278,7 @@ describe("memory entry origins", () => {
         createdAt: 2_000,
       }),
     ).toBe(0);
-    expect(db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get()).toEqual(
-      deletionRevision,
-    );
+    expect(revision()).toEqual(deletionRevision);
     expect(readMemoryForgetTombstonesForTest({ agentId: "main" })).toEqual([
       { sessionId: "session-1", agentId: "main", reason: "forgotten", createdAt: 1_000 },
       { sessionId: "session-2", agentId: "main", reason: "forgotten", createdAt: 1_000 },
@@ -312,7 +318,7 @@ describe("memory entry origins", () => {
     const variableLimit = openOpenClawAgentDatabase({ agentId: "main" })
       .db.prepare("PRAGMA compile_options")
       .all()
-      .map((row) => String(row.compile_options))
+      .map((option) => String(option.compile_options))
       .find((option) => option.startsWith("MAX_VARIABLE_NUMBER="));
     const selected = (prefix: string, ...ids: string[]) => [
       ...ids,
@@ -353,7 +359,6 @@ describe("memory entry origins", () => {
     const first = origin("first", "session-1");
     const second = origin("second", "session-2");
     await record([first]);
-    const target = { agentId: "main", stateDir, databasePath: databasePath() };
     const writer =
       await sqliteRuntime.openOpenClawAgentSqliteWorkerStoreV2<MemoryEntryOriginOperations>(
         { agentId: "main" },
@@ -372,21 +377,15 @@ describe("memory entry origins", () => {
     try {
       await writer.prepare();
       for (let read = 0; read < 2; read += 1) {
-        expect(readMemoryOriginsInWorker({ ...target, kind: "origin-rows" })).toEqual({
+        expect(readOrigins()).toEqual({
           kind: "origin-rows",
           rows: [first],
         });
       }
-      expect(
-        readMemoryOriginsInWorker({
-          ...target,
-          kind: "session-tombstones",
-          sessionIds: ["forgotten"],
-        }),
-      ).toEqual({ kind: "session-tombstones", indices: [] });
+      expect(readTombstones(["forgotten"])).toEqual({ kind: "session-tombstones", indices: [] });
 
       await record([second]);
-      expect(readMemoryOriginsInWorker({ ...target, kind: "origin-rows" })).toEqual({
+      expect(readOrigins()).toEqual({
         kind: "origin-rows",
         rows: [first, second],
       });
@@ -398,13 +397,7 @@ describe("memory entry origins", () => {
           }),
         () => {},
       );
-      expect(
-        readMemoryOriginsInWorker({
-          ...target,
-          kind: "session-tombstones",
-          sessionIds: ["forgotten"],
-        }),
-      ).toEqual({ kind: "session-tombstones", indices: [0] });
+      expect(readTombstones(["forgotten"])).toEqual({ kind: "session-tombstones", indices: [0] });
       expect(readers.size).toBe(1);
       expect([...readers].every((connection) => connection.isOpen)).toBe(true);
     } finally {
@@ -423,15 +416,10 @@ describe("memory entry origins", () => {
       reason: "x".repeat(1024),
       createdAt: 1_000,
     });
-    expect(
-      readMemoryOriginsInWorker({
-        kind: "session-tombstones",
-        agentId: "main",
-        stateDir,
-        databasePath: databasePath(),
-        sessionIds,
-      }),
-    ).toEqual({ kind: "session-tombstones", indices: Array.from({ length: 256 }, (_, i) => i) });
+    expect(readTombstones(sessionIds)).toEqual({
+      kind: "session-tombstones",
+      indices: Array.from({ length: 256 }, (_, i) => i),
+    });
     expect(await forgotten(["missing", ...sessionIds, sessionIds[0]!])).toEqual(
       new Set(sessionIds),
     );
@@ -463,11 +451,7 @@ describe("memory entry origins", () => {
     }
     expect(await list()).toEqual(original);
     await withoutHostOriginSql(async () => {
-      const rollback = await reserveMemoryEntryOrigins({
-        agentIds: ["main"],
-        previousMemory: `${buildPromotionMarker("prior")}\n${priorEntry}\n`,
-        operations: [{ candidateKey: "candidate", action: "merged", priorEntries: [priorEntry] }],
-      });
+      const rollback = await reserve(priorEntry);
       expect(await list({ entryKeys: ["candidate"] })).toEqual([
         ...prior.map((entry) => origin("candidate", entry.sessionId)),
         existing,
@@ -538,15 +522,7 @@ export function bindSqliteWorkerBackend(input, context) {
       try {
         // Each agent's batch is atomic; a later agent failure exercises committed-prefix cleanup.
         await expect(
-          reserveMemoryEntryOrigins({
-            agentIds: ["main", "secondary"],
-            previousMemory: `${buildPromotionMarker("prior")}\n${priorEntry}\n`,
-            operations: ["first", "failing"].map((candidateKey) => ({
-              candidateKey,
-              action: "merged" as const,
-              priorEntries: [priorEntry],
-            })),
-          }),
+          reserve(priorEntry, ["first", "failing"], ["main", "secondary"]),
         ).rejects.toThrow(
           cleanupFails
             ? "fixture reservation cleanup rejected"
@@ -566,11 +542,7 @@ export function bindSqliteWorkerBackend(input, context) {
     const prior = origin("prior", "session-1");
     await record([prior]);
     const priorEntry = "- Keep the original source identity.";
-    const rollback = await reserveMemoryEntryOrigins({
-      agentIds: ["main"],
-      previousMemory: `${buildPromotionMarker("prior")}\n${priorEntry}\n`,
-      operations: [{ candidateKey: "candidate", action: "merged", priorEntries: [priorEntry] }],
-    });
+    const rollback = await reserve(priorEntry);
     const before = await list();
     await closeOpenClawAgentDatabasesAsync(stateDir);
     closeOpenClawAgentDatabasesForTest();

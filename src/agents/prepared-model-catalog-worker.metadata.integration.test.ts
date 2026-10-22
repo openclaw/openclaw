@@ -200,7 +200,8 @@ it("startSerializedSnapshotBuildBatch retains canonical metadata through catalog
       expect(captureSpy).not.toHaveBeenCalled();
       await waitForWorkers();
 
-      const catalog = await prepared.snapshot.loadFullModelCatalog!();
+      // Full-result assertions require acquisition, not the bounded foreground snapshot.
+      const catalog = await prepared.snapshot.loadFullModelCatalog!({ refresh: true, wait: true });
       expect(captureSpy).toHaveBeenCalled();
       expect(catalog.entries).toContainEqual(catalogEntry("plugin-generation-v1"));
       expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\n");

@@ -66,7 +66,6 @@ async function fixture() {
   vi.spyOn(bindingConnection, "resolveCodexBindingAppServerConnection").mockResolvedValue({
     appServer: { ...createAppServerOptions(), start: startOptions! },
     usesSupervisionConnection: false,
-    requestAuthProfileId: undefined,
     clientAuthProfileId: null,
   });
   const bindingStore = createCodexTestBindingStore();

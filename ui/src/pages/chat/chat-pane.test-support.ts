@@ -124,6 +124,7 @@ export function mountBoardPanel(
 export interface TestChatPane extends HTMLElement, PaneTestLifecycle {
   readonly updateComplete: Promise<boolean>;
   readonly element: HTMLElement;
+  readonly headerElement: HTMLElement | null;
   render: ChatPaneRuntime["render"];
   readonly transcript: ChatTranscript;
   readonly history: ChatPaneRuntime["history"];
@@ -471,6 +472,11 @@ export function createSessionContext(
         assistantIdentity: { name: "Molty" },
         terminalEnabled: false,
       },
+    },
+    runtimeConfig: {
+      state: { configNeedsApply: false, configSnapshot: null },
+      ensureLoaded: async () => undefined,
+      subscribe: () => () => {},
     },
     chatSubmissions: createChatSubmissions(),
     nativeChatDrafts: { subscribe: () => () => undefined },

@@ -61,18 +61,14 @@ const REALTIME_VOICE_CONSULT_SYSTEM_PROMPT = [
 ].join(" ");
 
 function mapVoiceCallConsultTranscript(
-  call: {
-    transcript?: Array<{ speaker: "user" | "bot"; text: string }>;
-  },
-  context?: ToolHandlerContext,
+  call: CallRecord,
+  context: ToolHandlerContext,
 ): RealtimeVoiceAgentConsultTranscriptEntry[] {
-  const transcript: RealtimeVoiceAgentConsultTranscriptEntry[] = (call.transcript ?? []).map(
-    (entry) => ({
-      role: entry.speaker === "bot" ? "assistant" : "user",
-      text: entry.text,
-    }),
-  );
-  const partial = context?.partialUserTranscript?.trim();
+  const transcript: RealtimeVoiceAgentConsultTranscriptEntry[] = call.transcript.map((entry) => ({
+    role: entry.speaker === "bot" ? "assistant" : "user",
+    text: entry.text,
+  }));
+  const partial = context.partialUserTranscript?.trim();
   if (partial && transcript.at(-1)?.text !== partial) {
     transcript.push({ role: "user", text: partial });
   }
@@ -545,9 +541,6 @@ export async function createVoiceCallRuntime(params: {
       stop: () => stop(),
     };
   } catch (err) {
-    // If any step after the server started fails, clean up every provisioned
-    // resource (tunnel, tailscale exposure, and webhook server) so retries
-    // don't leak processes or keep the port bound.
     await stop(true);
     throw err;
   }

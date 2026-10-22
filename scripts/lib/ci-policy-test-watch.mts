@@ -324,10 +324,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     testFile: "extensions/team-reports/src/store.test.ts",
     watchGlobs: ["extensions/team-reports/src/store.worker.ts"],
   },
-  ...[
-    "extensions/workboard/src/dispatcher-ownership.test.ts",
-    "extensions/workboard/src/dispatcher.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
+  ...["extensions/workboard/src/dispatcher.test.ts"].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: ["extensions/workboard/src/sqlite-store.worker.ts"],
   })),
@@ -938,10 +935,7 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
       "src/infra/sqlite-store.worker.ts",
     ],
   })),
-  ...[
-    "src/gateway/session-row-projection.membership.test.ts",
-    "src/gateway/session-utils.single-row-cache.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
+  ...["src/gateway/session-utils.single-row-cache.test.ts"].map((testFile): PolicyTestWatch => ({
     testFile,
     watchGlobs: [
       "src/config/sessions/session-transcript.worker.ts",

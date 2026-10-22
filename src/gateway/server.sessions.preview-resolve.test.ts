@@ -300,40 +300,26 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
   const hiddenCollisionKey = "agent:main:thread:12345678-0bbb-4000-8000-000000000002";
   const hiddenOnlyKey = "agent:main:thread:deadbeef-0aaa-4000-8000-000000000003";
   const incognitoKey = "agent:main:dashboard:incognito-cafebabe-0aaa-4000-8000-000000000004";
+  const entry = (
+    id: string,
+    updatedAt: number,
+    displayName: string,
+    visibility: "shared" | "draft",
+    label = id,
+  ) => ({
+    sessionId: `sess-${id}`,
+    label,
+    displayName,
+    updatedAt,
+    visibility,
+    createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
+  });
   await writeSessionStore({
     entries: {
-      [visibleKey]: {
-        sessionId: "sess-collision",
-        label: "collision-label",
-        displayName: "Visible session",
-        updatedAt: 40,
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: "owner" },
-      },
-      [hiddenCollisionKey]: {
-        sessionId: "sess-collision",
-        label: "collision-label",
-        displayName: "Hidden collision",
-        updatedAt: 30,
-        visibility: "draft",
-        createdActor: { type: "human", source: "profile", id: "owner" },
-      },
-      [secondVisibleKey]: {
-        sessionId: "sess-second-visible",
-        label: "second-visible",
-        displayName: "Second visible session",
-        updatedAt: 35,
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: "owner" },
-      },
-      [hiddenOnlyKey]: {
-        sessionId: "sess-hidden-only",
-        label: "hidden-only",
-        displayName: "Hidden only",
-        updatedAt: 20,
-        visibility: "draft",
-        createdActor: { type: "human", source: "profile", id: "owner" },
-      },
+      [visibleKey]: entry("collision", 40, "Visible session", "shared", "collision-label"),
+      [hiddenCollisionKey]: entry("collision", 30, "Hidden collision", "draft", "collision-label"),
+      [secondVisibleKey]: entry("second-visible", 35, "Second visible session", "shared"),
+      [hiddenOnlyKey]: entry("hidden-only", 20, "Hidden only", "draft"),
     },
   });
   const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });

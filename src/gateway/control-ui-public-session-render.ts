@@ -105,6 +105,12 @@ const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
     button.copiedTimer=setTimeout(()=>{delete button.dataset.copied},1600);
   });
   enhance(document);
+  window.addEventListener("message",event=>{
+    if(event.data?.type!=="openclaw:widget-size"||typeof event.data.height!=="number"||!Number.isFinite(event.data.height))return;
+    for(const frame of document.querySelectorAll("iframe[data-public-widget]")){
+      if(frame.contentWindow===event.source){frame.style.height=Math.max(48,Math.min(8000,event.data.height))+"px";break}
+    }
+  });
   const pending=document.querySelector("main[data-entry-pending]");
   function showUnavailable(main){
     if(!main?.hasAttribute("data-entry-pending"))return;
@@ -156,6 +162,38 @@ const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
     if(event.target.closest?.("[data-public-latest]")){following=enabled();scrollLatest();updateControls()}
     if(event.target.closest?.("[data-public-refresh-now]")&&enabled()&&!event.ctrlKey&&!event.metaKey&&!event.shiftKey&&!event.altKey){event.preventDefault();schedule(0)}
   });
+  function carryWidgetHeights(root,heights){
+    for(const frame of root.querySelectorAll("iframe[data-public-widget]")){const height=heights.get(frame.dataset.publicWidget);if(height)frame.style.height=height}
+  }
+  function reconcile(current,next,heights){
+    const page=current.querySelector(".page"),nextPage=next.querySelector(".page");
+    const previous=page?.querySelector(":scope > .transcript"),incoming=nextPage?.querySelector(":scope > .transcript");
+    if(!previous||!incoming)return false;
+    const oldRows=[...previous.children],newRows=[...incoming.children];
+    const keyed=rows=>rows.every(row=>row.dataset.publicItem&&row.dataset.publicRevision)&&new Set(rows.map(row=>row.dataset.publicItem)).size===rows.length;
+    if(!keyed(oldRows)||!keyed(newRows))return false;
+    const oldByKey=new Map(oldRows.map(row=>[row.dataset.publicItem,row]));
+    const kept=new Map(newRows.filter(row=>oldByKey.get(row.dataset.publicItem)?.dataset.publicRevision===row.dataset.publicRevision).map(row=>[row.dataset.publicItem,oldByKey.get(row.dataset.publicItem)]));
+    const keptOrder=oldRows.filter(row=>kept.has(row.dataset.publicItem));
+    if([...kept.values()].some((row,index)=>row!==keptOrder[index]))return false;
+    // Never detach a retained row: moving an iframe destroys its browsing context.
+    for(const node of [...previous.childNodes])if(kept.get(node.dataset?.publicItem)!==node)node.remove();
+    let cursor=previous.firstChild;
+    for(const row of newRows){
+      const retained=kept.get(row.dataset.publicItem);
+      if(retained)cursor=retained.nextSibling;
+      else{carryWidgetHeights(row,heights);previous.insertBefore(row,cursor)}
+    }
+    for(const node of [...page.childNodes])if(node!==previous)node.remove();
+    let before=true;
+    for(const node of [...nextPage.childNodes]){
+      if(node===incoming){before=false;continue}
+      page.insertBefore(node,before?previous:null);
+    }
+    for(const attribute of [...current.attributes])current.removeAttribute(attribute.name);
+    for(const attribute of next.attributes)current.setAttribute(attribute.name,attribute.value);
+    return true;
+  }
   async function refresh(){
     if(document.hidden||!enabled()||running)return;
     running=true;
@@ -168,7 +206,7 @@ const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
       if(response.status===304){status("upToDate");return}
       if(response.status!==200&&response.status!==404)throw new Error("Refresh failed");
       const next=new DOMParser().parseFromString(await response.text(),"text/html");
-      const main=next.querySelector("main[data-public-session]");
+      let main=next.querySelector("main[data-public-session]");
       const current=document.querySelector("main[data-public-session]");
       if(document.hidden||!current)return;
       if(!main){
@@ -182,7 +220,9 @@ const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
       const anchorTop=anchor?.getBoundingClientRect().top;
       const expanded=new Set([...current.querySelectorAll("details[open][data-public-item]")].map(row=>row.dataset.publicItem));
       for(const row of main.querySelectorAll("details[data-public-item]"))row.open=expanded.has(row.dataset.publicItem);
-      current.replaceWith(main);
+      const heights=new Map([...current.querySelectorAll("iframe[data-public-widget]")].map(frame=>[frame.dataset.publicWidget,frame.style.height]));
+      if(reconcile(current,main,heights))main=current;
+      else{carryWidgetHeights(main,heights);current.replaceWith(main)}
       localize(main);enhance(main);
       document.title=next.title;syncTitle();
       // A revoked public read is already resolved; its inert script will not run here.
@@ -205,7 +245,7 @@ const PUBLIC_SESSION_ENTRY_SCRIPT = `(()=>{
 const ENTRY_SCRIPT_HASH = createHash("sha256").update(PUBLIC_SESSION_ENTRY_SCRIPT).digest("base64");
 /** Both public routes serve this document, so they share one policy. Fonts and the
  * font stylesheet are the Control UI's own root assets, served under the same mount. */
-export const PUBLIC_SESSION_CONTENT_SECURITY_POLICY = `default-src 'none'; img-src 'self'; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'sha256-${ENTRY_SCRIPT_HASH}'; connect-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`;
+export const PUBLIC_SESSION_CONTENT_SECURITY_POLICY = `default-src 'none'; img-src 'self'; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'sha256-${ENTRY_SCRIPT_HASH}'; connect-src 'self'; frame-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'`;
 
 const MAX_ITEMS = 51;
 const MAX_MESSAGE_CHARS = 32_768;
@@ -253,7 +293,7 @@ const PUBLIC_SESSION_STYLES = `:root{color-scheme:dark;--bg:#0e1015;--bg-muted:#
 .article-head{padding:56px 0 32px;margin-bottom:40px;border-bottom:1px solid var(--border)}.article-head:last-child{border-bottom:0}.eyebrow{display:flex;flex-wrap:wrap;align-items:center;gap:0 8px;margin:0 0 16px;color:var(--muted);font-size:13px;font-weight:500}.eyebrow .sep{color:var(--border-strong)}.live{display:inline-flex;align-items:center;gap:7px;color:var(--ok);font-weight:600}.live::before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 h1{margin:0 0 16px;color:var(--text-strong);font-size:clamp(30px,5vw,40px);font-weight:650;line-height:1.12;letter-spacing:-.035em;overflow-wrap:anywhere;text-wrap:balance}.intro{max-width:600px;margin:0;color:var(--muted);font-size:14px;line-height:1.65}.intro strong{color:var(--text);font-weight:600}
 .notice,.pagination{position:relative;margin:0 0 28px;color:var(--muted);font-size:13px;line-height:1.6}.notice{padding-inline-start:14px}.notice::before{content:"";position:absolute;top:3px;bottom:3px;inset-inline-start:0;width:3px;border-radius:9999px;background:var(--border-strong)}.pagination a{color:var(--muted);font-weight:500;text-decoration:none}.pagination a:hover{color:var(--text-strong)}.transcript+.pagination{margin:36px 0 0}
-.tools{min-width:0;padding:10px 14px;border:1px solid var(--border);border-radius:10px;color:var(--muted);font-size:13px;overflow-wrap:anywhere}.tools summary{cursor:pointer;font-weight:600}.tools ul{margin:12px 0 0;padding-inline-start:20px}.tools li{margin:6px 0}.tools code{color:var(--text-strong);font-family:var(--mono)}.image{display:block;margin-top:12px}.image img{display:block;max-width:100%;height:auto;border-radius:8px}.attachment{display:inline-block;max-width:100%;margin:8px 8px 0 0;padding:4px 9px;border:1px solid var(--border-strong);border-radius:7px;font-size:13px;overflow-wrap:anywhere}
+.tools{min-width:0;padding:10px 14px;border:1px solid var(--border);border-radius:10px;color:var(--muted);font-size:13px;overflow-wrap:anywhere}.tools summary{cursor:pointer;font-weight:600}.tools ul{margin:12px 0 0;padding-inline-start:20px}.tools li{margin:6px 0}.tools code{color:var(--text-strong);font-family:var(--mono)}.image{display:block;margin-top:12px}.image img{display:block;max-width:100%;height:auto;border-radius:8px}.widget{display:block;width:100%;border:0;background:transparent;margin-top:12px;border-radius:8px}.attachment{display:inline-block;max-width:100%;margin:8px 8px 0 0;padding:4px 9px;border:1px solid var(--border-strong);border-radius:7px;font-size:13px;overflow-wrap:anywhere}
 .transcript{display:flex;flex-direction:column;gap:28px}.message.continued{margin-top:-18px}.speaker{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%);white-space:nowrap}
 .assistant{display:grid;grid-template-columns:28px minmax(0,1fr);gap:0 12px}.avatar{display:grid;place-items:center;width:28px;height:28px;margin-top:2px;border:1px solid var(--border);border-radius:50%;background:var(--panel)}.avatar .mark{width:17px;height:17px}.assistant .content{grid-column:2}
 .user{display:flex;justify-content:flex-end}.user .content{max-width:min(78%,560px);padding:12px 16px;border-radius:10px;background:var(--bubble);color:var(--bubble-ink);font-size:15px}
@@ -280,6 +320,7 @@ export function publicSessionTitle(title: string): string {
 export function renderPublicSessionDocument(params: {
   messages: unknown[];
   mediaBaseUrl?: string;
+  widgetUrls?: ReadonlyMap<string, string>;
   title: string;
   truncated: boolean;
   latestUrl: string;
@@ -348,6 +389,20 @@ export function renderPublicSessionDocument(params: {
       remaining -= html.length;
       media.push(html);
     }
+    for (const widget of item.widgets) {
+      const widgetUrl = params.widgetUrls?.get(widget.docId);
+      if (!widgetUrl) {
+        continue;
+      }
+      const url = escapeHtml(widgetUrl);
+      const html = `<iframe class="widget" src="${url}" title="${widget.title ? escapeHtml(widget.title) : title}" sandbox="allow-scripts" referrerpolicy="no-referrer" loading="lazy" data-public-widget="${escapeHtml(widget.docId)}" style="height:${widget.height ?? 420}px"></iframe>`;
+      if (html.length > remaining) {
+        truncated = true;
+        break;
+      }
+      remaining -= html.length;
+      media.push(html);
+    }
     entries.push({
       role: item.role,
       key: entryId,
@@ -360,14 +415,19 @@ export function renderPublicSessionDocument(params: {
       .update(entry.key ?? `${entry.role}:${entry.html}`)
       .digest("hex")
       .slice(0, 24);
-    if (entry.role === "tools") {
-      return entry.html.replace(
-        '<details class="tools"',
-        `<details class="tools" data-public-item="${key}"`,
-      );
-    }
     const continued = ordered[index - 1]?.role === entry.role;
-    return `<article class="message ${entry.role}${continued ? " continued" : ""}" data-public-item="${key}" ${copyLabel(entry.role === "user" ? "userMessage" : "assistantMessage")}><h2 class="speaker">${entry.role === "user" ? copyMarkup("user") : "OpenClaw"}</h2>${entry.role === "assistant" && !continued ? `<span class="avatar" aria-hidden="true">${LOBSTER_MARK}</span>` : ""}<div class="content" dir="auto">${entry.html}</div></article>`;
+    const html =
+      entry.role === "tools"
+        ? entry.html.replace(
+            '<details class="tools"',
+            `<details class="tools" data-public-item="${key}"`,
+          )
+        : `<article class="message ${entry.role}${continued ? " continued" : ""}" data-public-item="${key}" ${copyLabel(entry.role === "user" ? "userMessage" : "assistantMessage")}><h2 class="speaker">${entry.role === "user" ? copyMarkup("user") : "OpenClaw"}</h2>${entry.role === "assistant" && !continued ? `<span class="avatar" aria-hidden="true">${LOBSTER_MARK}</span>` : ""}<div class="content" dir="auto">${entry.html}</div></article>`;
+    const revision = createHash("sha256").update(html).digest("hex").slice(0, 24);
+    return html.replace(
+      `data-public-item="${key}"`,
+      `data-public-item="${key}" data-public-revision="${revision}"`,
+    );
   });
   const description = params.unavailable
     ? "Log in to open conversations you have access to."

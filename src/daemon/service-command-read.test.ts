@@ -190,7 +190,11 @@ describe("native service command inspection", () => {
   });
 
   describe("Windows aggregate Scheduler timeout transport", () => {
-    async function windowsFixture(present: boolean, onRead: () => void) {
+    async function windowsFixture(
+      present: boolean,
+      onRead: () => void,
+      content = buildTaskScript({ programArguments }),
+    ) {
       mockProcessPlatform("win32");
       const windowsEnv = {
         ...env,
@@ -200,7 +204,7 @@ describe("native service command inspection", () => {
       const scriptPath = resolveTaskScriptPath(windowsEnv);
       const backingScriptPath = path.join(root, "gateway.cmd");
       if (present) {
-        await writeFile(backingScriptPath, buildTaskScript({ programArguments }));
+        await writeFile(backingScriptPath, content);
       }
       const inspectedPath = present ? scriptPath : resolveStartupEntryPaths(windowsEnv)[0];
       const readFile = fs.readFile;
@@ -220,7 +224,7 @@ describe("native service command inspection", () => {
           requireLoadedCommand: true,
           ...(timeoutMs === undefined ? {} : { timeoutMs }),
         });
-      return { scriptPath, run, observe };
+      return { scriptPath, run, observe, windowsEnv };
     }
     const registeredTask = (scriptPath: string, state: number) => ({
       status: 0,
@@ -231,6 +235,38 @@ describe("native service command inspection", () => {
         actions: [{ type: 0, path: scriptPath, arguments: "", workingDirectory: "" }],
       }),
       stderr: "",
+    });
+    it.each([
+      ['set "TOKEN=%launcher-secret-canary%"', 4, "invalid environment assignment"],
+      ['node "%launcher-secret-canary%"', 4, "dynamic command"],
+      ["node gateway.js & echo launcher-secret-canary", 4, "ambiguous command"],
+      ['cd /d "C:\\launcher-secret-canary" extra', 4, "ambiguous working directory"],
+      ["node gateway.js\r\necho launcher-secret-canary", 5, "multiple commands"],
+    ] as const)("preserves safe physical-line diagnostics for %s", async (body, line, reason) => {
+      const content = `@echo off\r\n\r\nrem fixture header\r\n${body}\r\n`;
+      const { scriptPath, observe, windowsEnv } = await windowsFixture(
+        true,
+        () => undefined,
+        content,
+      );
+      native.scheduler.mockReturnValue(registeredTask(scriptPath, 3));
+      const detail = `Launcher line ${line}: ${reason}.`;
+      const state = await readGatewayServiceState(resolveGatewayService(), { env: windowsEnv });
+      expect(state).toMatchObject({
+        command: null,
+        runtime: {
+          status: "unknown",
+          inspectionFailure: {
+            code: "service-runtime-inspection-failed",
+            detail: expect.stringContaining(detail),
+          },
+        },
+      });
+      const error = await observe().catch((caughtError: unknown) => caughtError);
+      expect(sanitizeServiceInspectionError(error).message).toContain(detail);
+      expect(state.runtime?.inspectionFailure?.detail).toContain("Review the launcher");
+      expect(inspect({ state, error })).not.toContain("launcher-secret-canary");
+      expect(await fs.readFile(path.join(root, "gateway.cmd"), "utf8")).toBe(content);
     });
     it.each([
       ["parallel", "absent", false, false],

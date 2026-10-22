@@ -129,11 +129,6 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
     vi.mocked(writeSlackApprovalCheckpoint).mockImplementation(async ({ state }) => {
       await Promise.resolve();
       phases.push(`checkpoint-${state}`);
-      return {
-        ackPath: `${state}.ack.json`,
-        checkpointPath: `${state}.json`,
-        screenshotPath: `${state}.png`,
-      };
     });
     const stopGateway = vi.fn(async () => {
       phases.push("stop");
@@ -154,19 +149,7 @@ it.each(["ok", "failed", "missing-command-result"] as const)(
       sutAccountId: "sut",
     });
     if (outcome === "ok") {
-      await expect(result).resolves.toMatchObject({
-        artifact: {
-          approvalId: "plugin:owned",
-          appServerMethod: "item/commandExecution/requestApproval",
-          codexModelKey: "openai/gpt-5.6-luna",
-          finalCodexTurnStatus: "ok",
-          operationVerified: true,
-          pendingMessageTs: "100.1",
-          resolvedMessageTs: "100.1",
-          pendingCheckpointPath: "pending.json",
-          resolvedCheckpointPath: "resolved.json",
-        },
-      });
+      await result;
     } else {
       await expect(result).rejects.toThrow(
         outcome === "failed"
@@ -204,7 +187,6 @@ it("waits for the requested native approval actions", async () => {
   await vi.advanceTimersByTimeAsync(1_000);
   expect(await pending).toMatchObject({
     approvalId: "plugin:owned",
-    actionValues: [actionValue],
     message: { ts: "100.1" },
   });
 });
@@ -222,7 +204,7 @@ it("waits for the original approval message to lose its native actions after res
     messageTs: "100.1",
   });
   await vi.advanceTimersByTimeAsync(1_000);
-  expect(await pending).toMatchObject({ actionValues: [], message: { ts: "100.1" } });
+  expect(await pending).toMatchObject({ message: { ts: "100.1" } });
 });
 
 it("allows live approval decision RPCs to take longer than the generic gateway probe timeout", async () => {

@@ -7,12 +7,6 @@ import { readSubagentRunsInWorker } from "../agents/subagents/registry/subagent-
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { isChannelIngressReadCommand } from "../channels/message/ingress-queue-read-contract.js";
 import { readChannelIngressInDatabase } from "../channels/message/ingress-queue-read.worker.js";
-import {
-  readClawInstallRecordFromDatabase,
-  readClawInstallRecordsInDatabase,
-  readClawOrphanWorkspaceInDatabase,
-  readClawPackageRefsInDatabase,
-} from "../claws/provenance-read.kernel.js";
 import { readClawStateCommandInDatabase } from "../claws/state-read.kernel.js";
 import {
   isCronStateReadCommand,
@@ -131,22 +125,6 @@ export function readOpenClawStateDatabaseCommand(
 ) {
   if (command.type === "claws.inventory") {
     return readClawStateCommandInDatabase(db, command);
-  }
-  if (command.type === "claws.packageOwnership") {
-    const install =
-      command.agentId === undefined
-        ? undefined
-        : readClawInstallRecordFromDatabase(db, command.agentId);
-    return {
-      type: command.type,
-      install,
-      installs: command.includeInstalls ? readClawInstallRecordsInDatabase(db) : [],
-      packageRefs: readClawPackageRefsInDatabase(db, { agentId: command.agentId }),
-      orphanWorkspace:
-        command.agentId !== undefined && !install
-          ? readClawOrphanWorkspaceInDatabase(db, command.agentId)
-          : undefined,
-    };
   }
   if (command.type === "agentDatabaseDeletion.snapshot") {
     return {

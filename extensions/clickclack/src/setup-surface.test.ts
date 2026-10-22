@@ -16,7 +16,8 @@ const mocks = vi.hoisted(() => ({
   workspaces: vi.fn(),
 }));
 
-vi.mock("./http-client.js", () => ({
+vi.mock("./http-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./http-client.js")>()),
   createClickClackClient: (options: unknown) => {
     mocks.createClient(options);
     return {
@@ -27,6 +28,7 @@ vi.mock("./http-client.js", () => ({
 }));
 
 import { clickClackSetupPlugin } from "./channel.setup.js";
+import { ClickClackHttpError } from "./http-client.js";
 import { clickClackSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
@@ -172,7 +174,7 @@ describe("ClickClack setup wizard", () => {
   });
 
   it("keeps setup saved when the token is rejected", async () => {
-    mocks.me.mockRejectedValue({ status: 401 });
+    mocks.me.mockRejectedValue(new ClickClackHttpError(401, "unauthorized", new Headers()));
     await expectValidationNote(
       "ClickClack rejected the bot token (401). Copy a current token and rerun setup.",
     );

@@ -16,7 +16,6 @@ import {
   isMatrixQaMessageLikeKind,
   MATRIX_QA_TOOL_PROGRESS_TASK_FILENAME,
   primeMatrixQaDriverScenarioClient,
-  truncateMatrixQaPreview,
   type MatrixQaScenarioContext,
 } from "./scenario-runtime-shared.js";
 import {
@@ -79,28 +78,9 @@ async function runMatrixToolProgressScenario(
     mentionUserIds: [context.sutUserId],
     roomId: context.roomId,
   });
-  const finish = (result: {
-    final: MatrixQaObservedEvent;
-    progress?: MatrixQaObservedEvent;
-    previewEventId?: string;
-    details: string[];
-  }) => {
+  const finish = (result: { final: MatrixQaObservedEvent; details: string[] }) => {
     const finalReply = buildMatrixReplyArtifact(result.final, params.finalText);
     return {
-      artifacts: {
-        driverEventId,
-        ...(result.progress
-          ? {
-              previewBodyPreview: truncateMatrixQaPreview(result.progress.body),
-              previewEventId: result.previewEventId,
-              previewFormattedBodyPreview: truncateMatrixQaPreview(result.progress.formattedBody),
-              previewMentions: result.progress.mentions,
-            }
-          : { previewEventId: undefined }),
-        reply: finalReply,
-        token: params.finalText,
-        triggerBody,
-      },
       details: [
         `driver event: ${driverEventId}`,
         `scenario: ${params.label}`,
@@ -203,8 +183,6 @@ async function runMatrixToolProgressScenario(
       }
       return finish({
         final: preview.event,
-        progress: progressAfterFinal.event,
-        previewEventId: progressPreviewEventId,
         details: [
           `preview event: ${progressPreviewEventId}`,
           `preview kind: ${progressAfterFinal.event.kind}`,
@@ -305,8 +283,6 @@ async function runMatrixToolProgressScenario(
   assertProgressStaysInPreview(finalized.event.eventId, previewRootEventId);
   return finish({
     final: finalized.event,
-    progress: progress.event,
-    previewEventId: previewRootEventId,
     details: [
       `preview event: ${preview.event.eventId}`,
       `preview kind: ${progress.event.kind}`,
@@ -427,12 +403,6 @@ export async function runToolProgressPreviewOptOutScenario(context: MatrixQaScen
   }
   const finalReply = buildMatrixReplyArtifact(finalized.event, finalText);
   return {
-    artifacts: {
-      driverEventId,
-      reply: finalReply,
-      token: finalText,
-      triggerBody,
-    },
     details: [
       `driver event: ${driverEventId}`,
       "scenario: tool progress preview opt-out",

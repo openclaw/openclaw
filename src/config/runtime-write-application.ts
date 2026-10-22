@@ -170,7 +170,6 @@ export function publishRuntimeConfigWrite(params: {
       revision: metadata.revision,
       fingerprint: metadata.fingerprint,
       sourceFingerprint: metadata.sourceFingerprint,
-      writtenAtMs: Date.now(),
       afterWrite: params.afterWrite ?? params.writeOptions?.afterWrite,
       ...(params.writeOptions?.runtimeRefresh
         ? { runtimeRefresh: params.writeOptions.runtimeRefresh }

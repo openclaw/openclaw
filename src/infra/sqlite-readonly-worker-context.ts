@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { runWithAsyncStore } from "../shared/async-store.js";
 import type { SqliteReadOnlyWorkerSession } from "./sqlite-readonly-worker-session-types.js";
 
 export type SqliteReadOnlyWorkerScope = {
@@ -20,6 +21,50 @@ export class SqliteReadOnlyWorkerScopeClosedError extends Error {
   }
 }
 
+/** Reuse child imports until the lifecycle owner closes; reads reacquire source admission. */
+export function createSqliteReadOnlyWorkerScope(options?: {
+  signal: AbortSignal;
+  deadlineOwnedByCaller: boolean;
+}) {
+  const scope: SqliteReadOnlyWorkerScope = {
+    active: true,
+    busy: false,
+    controller: new AbortController(),
+    pending: new Set(),
+    deadlineOwnedByCaller: options?.deadlineOwnedByCaller ?? false,
+  };
+  const abort = () => scope.controller.abort(options?.signal.reason);
+  options?.signal.addEventListener("abort", abort, { once: true });
+  if (options?.signal.aborted) {
+    abort();
+  }
+  let closing: Promise<void> | undefined;
+  return {
+    run<T>(operation: () => T): T {
+      return runWithAsyncStore(readOnlyWorkerScope, scope, operation);
+    },
+    close(): Promise<void> {
+      closing ??= (async () => {
+        options?.signal.removeEventListener("abort", abort);
+        scope.active = false;
+        scope.controller.abort(new SqliteReadOnlyWorkerScopeClosedError());
+        await Promise.allSettled(scope.pending);
+        const closed = await Promise.allSettled([
+          scope.worker?.close(),
+          scope.releaseReadWorker?.(),
+        ]);
+        const failures = closed.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "SQLite read-only worker scope cleanup failed");
+        }
+      })();
+      return closing;
+    },
+  };
+}
+
 /** Carry the owning readers into callbacks without retaining startup or request authority. */
 export function captureSqliteReadOnlyWorkerScope(): <T>(operation: () => T) => T {
   const scope = readOnlyWorkerScope.getStore();
@@ -33,8 +78,6 @@ export function captureSqliteReadOnlyWorkerScope(): <T>(operation: () => T) => T
       throw new SqliteReadOnlyWorkerScopeClosedError();
     }
     scope.controller.signal.throwIfAborted();
-    return readOnlyWorkerScope.getStore() === scope
-      ? operation()
-      : readOnlyWorkerScope.run(scope, operation);
+    return runWithAsyncStore(readOnlyWorkerScope, scope, operation);
   };
 }

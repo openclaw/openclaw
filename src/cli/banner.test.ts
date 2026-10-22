@@ -67,6 +67,23 @@ describe("formatCliBannerLine", () => {
 });
 
 describe("emitCliBanner", () => {
+  it.each([
+    { args: ["--json"], suppressed: true },
+    { args: ["--json=true"], suppressed: true },
+    { args: ["--version"], suppressed: true },
+    { args: ["-V"], suppressed: true },
+    { args: ["-v"], suppressed: true },
+    { args: ["acp", "-v"], suppressed: false },
+  ])("respects banner suppression for $args", async ({ args, suppressed }) => {
+    const { emitCliBanner, hasEmittedCliBanner } = await importFreshBannerModule();
+    const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+
+    emitCliBanner("2026.3.7", { ...bannerOptions, argv: ["node", "openclaw", ...args] });
+
+    expect(writeSpy).toHaveBeenCalledTimes(suppressed ? 0 : 1);
+    expect(hasEmittedCliBanner()).toBe(!suppressed);
+  });
+
   it("does not write a banner without a TTY", async () => {
     const { emitCliBanner, hasEmittedCliBanner } = await importFreshBannerModule();
     setStdoutIsTty(false);

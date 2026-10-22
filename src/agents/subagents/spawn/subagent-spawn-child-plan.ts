@@ -1,5 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { inheritSessionCreationPolicy } from "../../../config/sessions/session-entry-provenance.js";
+import {
+  attributeDelegatedSessionCreator,
+  inheritSessionCreationPolicy,
+} from "../../../config/sessions/session-entry-provenance.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isIncognitoSessionKey } from "../../../routing/session-key.js";
@@ -46,6 +49,8 @@ export async function resolveSubagentChildPlan(params: {
   /** Active requester sandbox classification from the spawn tool, preferred over key-derived
    * status so durable-lineage key substitution does not weaken sandbox admission. */
   requesterSandboxed?: boolean;
+  /** Captured by the trusted caller before any spawn preparation awaits. */
+  creatorProfileId?: string;
 }) {
   const requestedCwd = normalizeOptionalString(params.request.cwd);
   const senderRestricted = params.ctx.inheritedToolPolicySource === "sender";
@@ -107,6 +112,11 @@ export async function resolveSubagentChildPlan(params: {
       createdActor: requesterRuntime.createdActor,
     },
     { type: "agent", id: params.requesterAgentId },
+  );
+  creationPolicy.actor = attributeDelegatedSessionCreator(
+    creationPolicy.actor,
+    params.creatorProfileId,
+    params.requesterAgentId,
   );
   // A fresh child has no stored row yet; admission must include its inherited isolation.
   const childRuntimeSandboxed =

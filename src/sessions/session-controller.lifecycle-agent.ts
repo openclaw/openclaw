@@ -79,11 +79,10 @@ export function collectActiveAgentSessionWorkAdmissions(
 
 export function startAgentWorkAdmissionInterruption(
   params: AgentWorkAdmissionTarget & { reason?: Error; assertCurrent?: () => void },
-): { released: Promise<void>; interruptedRunIds: ReadonlySet<string> } {
+): { released: Promise<void> } {
   const effects = agentEffects(params);
   const current = ownerContext.getStore();
   const selected = [...effects].filter((effect) => !current?.effects.has(effect));
-  const interruptedRunIds = new Set<string>();
   const failures: unknown[] = [];
   const settlements: Promise<void>[] = [];
   for (const effect of selected) {
@@ -100,10 +99,7 @@ export function startAgentWorkAdmissionInterruption(
       }
       effect.interrupted = params.reason ?? createAgentRunDirectAbortError();
       try {
-        const receipt = effect.interrupt?.(effect.interrupted);
-        if (receipt) {
-          interruptedRunIds.add(receipt.runId);
-        }
+        effect.interrupt?.(effect.interrupted);
       } finally {
         effect.cancel.abort(effect.interrupted);
       }
@@ -112,7 +108,6 @@ export function startAgentWorkAdmissionInterruption(
     }
   }
   return {
-    interruptedRunIds,
     released: Promise.all(settlements).then(() => {
       if (failures.length === 1) {
         throw failures[0];

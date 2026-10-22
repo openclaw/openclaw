@@ -8,6 +8,7 @@ import {
 } from "../../../../packages/gateway-protocol/src/client-info.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { resolveMacFormFactor } from "../../lib/mac-form-factor.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
@@ -181,14 +182,7 @@ export function DeviceIdentityFacts(props: { id: string; remoteIp?: string }) {
 
 function DeviceGlyph(props: { kind: "watch" | "tablet" | "laptop" | "macMini" | "pcCase" }) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      stroke-width="2"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    >
+    <StrokeIcon>
       <Switch>
         <Match when={props.kind === "watch"}>
           <circle cx="12" cy="12" r="6" />
@@ -213,6 +207,6 @@ function DeviceGlyph(props: { kind: "watch" | "tablet" | "laptop" | "macMini" | 
           <path d="M21.946 12.013H2.054M6 16h.01M10 16h.01" />
         </Match>
       </Switch>
-    </svg>
+    </StrokeIcon>
   );
 }

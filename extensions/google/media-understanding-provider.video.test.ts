@@ -175,3 +175,15 @@ it("formats Google audio transcription HTTP errors with provider details", async
     "Audio transcription failed (400): Unsupported audio [code=INVALID_ARGUMENT] [request_id=google_audio_req]",
   );
 });
+
+it("redacts the actual request credential from Google media errors", async () => {
+  const credential = "fixture-google-opaque-credential";
+  const failure = describeVideo({
+    headers: { "X-Goog-Api-Key": credential },
+    fetchFn: async () =>
+      Response.json({ error: { message: `Rejected ${credential}` } }, { status: 400 }),
+  });
+
+  await expect(failure).rejects.toMatchObject({ status: 400, statusCode: 400 });
+  await expect(failure).rejects.not.toThrow(credential);
+});

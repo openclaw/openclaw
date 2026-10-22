@@ -485,7 +485,8 @@ export const startSubagentAnnounceCleanupFlow = (
       }
       if (
         !delivery.delivered &&
-        delivery.reason === "message_tool_delivery_missing" &&
+        (delivery.reason === "message_tool_delivery_missing" ||
+          delivery.reason === "visible_reply_missing") &&
         delivery.disposition === "permanent_failure" &&
         shouldSuspendPendingFinalDelivery(entry)
       ) {

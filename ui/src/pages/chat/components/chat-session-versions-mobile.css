@@ -1,0 +1,159 @@
+.chat-session-versions-mobile--empty {
+  display: grid;
+  min-height: 100%;
+  align-content: center;
+}
+
+.chat-session-versions-mobile__help {
+  margin: 12px 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.chat-session-versions-mobile__note {
+  margin: 12px 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 18px;
+}
+
+.chat-session-versions-mobile__note p {
+  margin: 0 0 8px;
+}
+
+.chat-session-versions-mobile__list {
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  border-radius: var(--mobile-list-radius, 14px);
+  background: var(--mobile-list-surface, var(--bg-hover));
+  list-style: none;
+}
+
+.chat-session-versions-mobile__row {
+  position: relative;
+  display: flex;
+  min-height: 72px;
+  align-items: center;
+}
+
+.chat-session-versions-mobile__row + .chat-session-versions-mobile__row::before {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline: 48px 0;
+  height: 1px;
+  background: var(--mobile-list-separator, var(--border-strong));
+  content: "";
+}
+
+.chat-session-versions-mobile__select {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 72px;
+  align-items: center;
+  gap: 13px;
+  padding: 14px 0 14px 16px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
+.chat-session-versions-mobile__select:last-child {
+  padding-inline-end: 16px;
+}
+
+.chat-session-versions-mobile__select:active:not([aria-disabled="true"]) {
+  background: color-mix(in srgb, var(--text) 7%, transparent);
+}
+
+.chat-session-versions-mobile__select:focus-visible {
+  outline: var(--control-ui-focus-ring);
+  outline-offset: -3px;
+}
+
+.chat-session-versions-mobile__radio {
+  box-sizing: border-box;
+  width: 19px;
+  height: 19px;
+  flex: none;
+  border: 1.5px solid var(--muted);
+  border-radius: 50%;
+}
+
+.chat-session-versions-mobile__select[aria-checked="true"] .chat-session-versions-mobile__radio {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: inset 0 0 0 4px var(--bg-hover);
+}
+
+.chat-session-versions-mobile__copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.chat-session-versions-mobile__title {
+  display: block;
+  font-size: 14px;
+  font-weight: 400;
+  line-height: 20px;
+  letter-spacing: normal;
+  overflow-wrap: anywhere;
+}
+
+.chat-session-versions-mobile__meta {
+  display: block;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Preserve the quiet management affordance without exposing deferred actions. */
+.chat-session-versions-mobile__more {
+  display: grid;
+  width: 44px;
+  height: 44px;
+  flex: none;
+  place-items: center;
+  margin-inline: 6px 3px;
+  color: var(--muted);
+}
+
+.chat-session-versions-mobile__more svg {
+  width: 20px;
+  height: 20px;
+}
+
+.chat-session-versions-mobile__empty {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  padding: 24px;
+  text-align: center;
+}
+
+.chat-session-versions-mobile__empty > svg {
+  width: 36px;
+  height: 36px;
+  margin-bottom: 16px;
+  color: var(--muted);
+}
+
+.chat-session-versions-mobile__empty strong {
+  font-size: 20px;
+  font-weight: 500;
+  line-height: 26px;
+}
+
+.chat-session-versions-mobile__empty p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 14px;
+  line-height: 20px;
+}

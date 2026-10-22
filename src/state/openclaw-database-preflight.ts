@@ -3,7 +3,6 @@ import nodePath from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { listGatewayOwnedAgentIds } from "../agents/agent-roster.js";
 import {
-  isConfiguredAgentDatabaseTarget,
   listConfiguredSessionStoreAgentIds,
   resolveConfiguredAgentDatabaseCandidatePaths,
 } from "../config/sessions/targets.js";
@@ -43,6 +42,7 @@ import {
   collectAgentDatabasePreflightTargets,
   inspectDatabaseCandidatePresence,
   recordAgentDatabaseRecoveryInspection,
+  selectAgentDatabaseInspectionTargets,
 } from "./openclaw-database-preflight-targets.js";
 import {
   formatIndeterminateDatabaseReadiness,
@@ -235,6 +235,29 @@ export async function preflightOpenClawDatabaseSchemas(
       : [],
     admittedAgentIds,
   );
+  let prestartedReader: ReturnType<typeof createAgentSchemaInspectionWorker> | undefined;
+  await using readerCustody = {
+    take(this: void) {
+      const reader = prestartedReader;
+      prestartedReader = undefined;
+      return reader;
+    },
+    async [Symbol.asyncDispose]() {
+      await prestartedReader?.[Symbol.asyncDispose]();
+    },
+  };
+  if (
+    options.requireStartupMigrationReadiness &&
+    options.scope !== "state" &&
+    getDatabaseEngineInput("agent")
+  ) {
+    prestartedReader = createAgentSchemaInspectionWorker();
+    prestartedReader.prestart(
+      scheduling && options.signal
+        ? AbortSignal.any([scheduling.signal, options.signal])
+        : (scheduling?.signal ?? options.signal),
+    );
+  }
   const prepareSchemaHeader = startup?.prepareSchemaHeaders(options.env);
   const preparedStartup =
     options.reuseStartupSchemaPreparation &&
@@ -404,9 +427,6 @@ export async function preflightOpenClawDatabaseSchemas(
       registeredDatabases,
       deletionJournal,
       purpose,
-      inspectCandidateOwners: Boolean(
-        options.requireStartupMigrationReadiness || options.agentAdmissionConfig,
-      ),
     });
   const recordRecoveryFailure = (pathname: string, reason: string) => {
     preparedDiscovery?.discovery.failures.push({ path: pathname, reason });
@@ -414,19 +434,11 @@ export async function preflightOpenClawDatabaseSchemas(
   for (const failure of failures) {
     result.indeterminate.push({ kind: "agent", ...failure });
   }
-  const admissionTargets =
-    admissionConfig &&
-    (purpose === "runtime" ||
-      options.requireStartupMigrationReadiness ||
-      options.reuseStartupSchemaPreparation)
-      ? [
-          ...configuredTargets,
-          ...(
-            options.configuredAgentDatabaseCandidatePaths ??
-            resolveConfiguredAgentDatabaseCandidatePaths(admissionConfig, { env: options.env })
-          ).map((pathname) => ({ path: pathname })),
-        ]
-      : undefined;
+  const { admissionTargets, inspectionTargets } = selectAgentDatabaseInspectionTargets(
+    { ...options, purpose },
+    candidates,
+    configuredTargets,
+  );
   const recordInspectionFailure = (
     row: { agentId?: string; path: string },
     inspection: OpenClawDatabaseSchemaPreflight,
@@ -454,26 +466,7 @@ export async function preflightOpenClawDatabaseSchemas(
     );
     return true;
   };
-  const skipped = new Set<string>();
   let recoveryHolds: ReturnType<typeof readAgentDeletionRecoveryHoldsInWorker> | undefined;
-  const inspectionTargets = candidates
-    .filter((row) => {
-      if (
-        !admissionTargets ||
-        isConfiguredAgentDatabaseTarget(admissionTargets, row.agentId, row.path)
-      ) {
-        return true;
-      }
-      if (options.requireStartupMigrationReadiness && !skipped.has(row.path)) {
-        createSubsystemLogger("state/agent-admission").warn(
-          `Skipped ${nodePath.basename(row.path)}: database is not a configured target; run openclaw doctor to inspect retained data.`,
-        );
-        skipped.add(row.path);
-      }
-      return false;
-    })
-    .map((row) => Object.assign({}, row, { presence: inspectDatabaseCandidatePresence(row.path) }))
-    .filter((row) => row.presence.status !== "absent");
   const stats = await preflightAgentDatabasesBounded(
     inspectionTargets,
     async (row, inspection, claimAgentTarget, inspectSchema) => {
@@ -722,10 +715,12 @@ export async function preflightOpenClawDatabaseSchemas(
     result,
     options.signal,
     scheduling,
+    readerCustody.take,
   );
   if (preparedDiscovery) {
     options.onAgentDatabaseDiscovery?.(preparedDiscovery);
   }
+  stats.schemaProcessCount += prestartedReader?.processCount ?? 0;
   options.onAgentInspection?.(stats);
   options.onRegisteredAgentDatabases?.(registeredDatabases);
   return result;

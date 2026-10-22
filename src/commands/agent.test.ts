@@ -54,7 +54,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getBootEchoContextForSession } from "../gateway/boot-echo-guard.js";
 import { runBootOnce } from "../gateway/boot.js";
 import { emitAgentEvent, onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
-import { loadEnabledClaudeBundleCommands } from "../plugins/bundle-commands.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginProviderRegistration } from "../plugins/registry.test-fixtures.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE } from "../sessions/agent-harness-session-key.js";
@@ -444,7 +444,6 @@ beforeEach(() => {
   vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([]);
   vi.mocked(readPreparedModelCatalog).mockResolvedValue([]);
   vi.mocked(resolveEffectiveAgentRuntime).mockReturnValue("openclaw");
-  vi.mocked(loadEnabledClaudeBundleCommands).mockReturnValue([]);
   vi.mocked(modelSelectionModule.isCliProvider).mockImplementation(() => false);
   configIoMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
     snapshot: { valid: false, resolved: {} as OpenClawConfig },
@@ -845,16 +844,17 @@ describe("agentCommand", () => {
     expect(skillRoots?.executionWorkspaceDir).toBe(canonicalWorkspace);
   });
 
-  it("renders a Claude bundle command template on Gateway ingress", async ({ cfg: _cfg }) => {
-    vi.mocked(loadEnabledClaudeBundleCommands).mockReturnValue([
-      {
-        pluginId: "test-bundle",
-        rawName: "workflows-review",
-        description: "Review a workflow",
-        promptTemplate: "Review this workflow carefully.\n\nFocus on:\n$ARGUMENTS",
-        sourceFilePath: "/tmp/plugin/commands/workflows-review.md",
-      },
-    ]);
+  it("renders a Claude bundle command template on Gateway ingress", async ({ home, cfg }) => {
+    const pluginRoot = path.join(home, "openclaw", ".openclaw", "extensions", "test-bundle");
+    fs.mkdirSync(path.join(pluginRoot, ".claude-plugin"), { recursive: true });
+    fs.mkdirSync(path.join(pluginRoot, "commands"), { recursive: true });
+    fs.writeFileSync(path.join(pluginRoot, ".claude-plugin/plugin.json"), '{"name":"test-bundle"}');
+    fs.writeFileSync(
+      path.join(pluginRoot, "commands", "workflows-review.md"),
+      "---\nname: workflows-review\ndescription: Review a workflow\n---\nReview this workflow carefully.\n\nFocus on:\n$ARGUMENTS\n",
+    );
+    cfg.plugins = { entries: { "test-bundle": { enabled: true } } };
+    clearPluginMetadataLifecycleCaches();
 
     await runIngress({ message: "/workflows_review retries and cleanup", agentId: "main" });
 

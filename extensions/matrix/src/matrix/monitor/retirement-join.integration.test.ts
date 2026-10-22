@@ -1,11 +1,10 @@
-import http from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { RuntimeEnv } from "../../../runtime-api.js";
 import { setMatrixRuntime } from "../../runtime.js";
 import { MatrixClient } from "../sdk.js";
 import { registerMatrixAutoJoin } from "./auto-join.js";
-import { createMatrixMonitorTaskRunner } from "./task-runner.js";
+import { createRetirementTaskRunner, useRetirementServer } from "./retirement.test-support.js";
 
 class DrainHoldClient extends MatrixClient {
   holdNextDrain(): { entered: Promise<void>; release: () => void } {
@@ -19,65 +18,27 @@ class DrainHoldClient extends MatrixClient {
       await released.promise;
       await original();
     };
-    return {
-      entered: entered.promise,
-      release: () => {
-        released.resolve();
-      },
-    };
+    return { entered: entered.promise, release: () => released.resolve() };
   }
 }
 
 describe("Matrix auto-join retirement", () => {
-  let server: http.Server | undefined;
-  let client: DrainHoldClient | undefined;
-
-  afterEach(async () => {
-    vi.useRealTimers();
-    await client?.stopWithoutPersist().catch(() => {});
-    client = undefined;
-    if (!server) {
-      return;
-    }
-    await new Promise<void>((resolve, reject) => {
-      server?.close((error) => (error ? reject(error) : resolve()));
-    });
-    server = undefined;
+  const { seen, start } = useRetirementServer({
+    room_id: "!room:example.org",
+    displayname: "active",
   });
 
   it("does not post a join that is waiting on recovery-key persistence when the monitor retires", async () => {
-    const seen: string[] = [];
-    server = http.createServer((request, response) => {
-      seen.push(`${request.method ?? "GET"} ${decodeURIComponent(request.url ?? "/")}`);
-      request.resume();
-      response.setHeader("content-type", "application/json");
-      response.end(JSON.stringify({ room_id: "!room:example.org", displayname: "active" }));
-    });
-    await new Promise<void>((resolve) => {
-      server?.listen(0, "127.0.0.1", () => resolve());
-    });
-    const address = server.address();
-    if (address === null || typeof address === "string") {
-      throw new Error("proof server did not bind");
-    }
     setMatrixRuntime({
       logging: {
         shouldLogVerbose: () => false,
         getChildLogger: () => ({ warn: () => {} }),
       },
     } as never);
-    client = new DrainHoldClient(`http://127.0.0.1:${address.port}`, "fixture-token", {
-      userId: "@bot:example.org",
-      deviceId: "fixture",
-      encryption: false,
-      autoBootstrapCrypto: false,
-      ssrfPolicy: { allowPrivateNetwork: true },
-    });
-    const matrixClient = client;
+    const { client: matrixClient } = await start(DrainHoldClient);
     const hold = matrixClient.holdNextDrain();
-    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
-    const owner = createMatrixMonitorTaskRunner({ logger, logVerboseMessage: vi.fn() });
-    const sibling = createMatrixMonitorTaskRunner({ logger, logVerboseMessage: vi.fn() });
+    const owner = createRetirementTaskRunner();
+    const sibling = createRetirementTaskRunner();
     registerMatrixAutoJoin({
       client: matrixClient,
       accountConfig: { autoJoin: "always" },

@@ -31,6 +31,10 @@ export {
   type AgentHarnessMessagingDeliveryFacts,
   type AgentHarnessToolMediaFacts,
 } from "../agents/harness/tool-result-facts.js";
+export {
+  applyGatewayToolPolicy,
+  createGatewayToolPolicyAssertion,
+} from "../agents/gateway-tool-policy.js";
 export { runAgentHarnessToolInvocation } from "../agents/harness/tool-invocation.js";
 export { runWithToolExecutionValidation } from "../agents/agent-tools.execution-validation.js";
 export {

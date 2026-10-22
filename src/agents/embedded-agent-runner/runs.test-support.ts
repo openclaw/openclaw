@@ -16,7 +16,7 @@ import {
 } from "../../sessions/session-controller.lifecycle.js";
 import { getSessionControllerEntryForOperation } from "../../sessions/session-controller.state.js";
 import { steerSessionControllerOperation } from "../../sessions/session-controller.steer.js";
-import { getActiveNativeAttempt } from "./run-state.js";
+import { getActiveNativeAttempt, type EmbeddedAgentQueueHandle as RunHandle } from "./run-state.js";
 import { attachActiveEmbeddedRun, detachActiveEmbeddedRun } from "./runs.js";
 const fixtureOperations = new Set<ReplyOperation>();
 /** Native boundary fixtures explicitly reserve their logical turn before publication. */
@@ -117,10 +117,6 @@ export function clearTestEmbeddedRun(...args: Parameters<typeof detachActiveEmbe
     operation.complete();
   }
 }
-import type { EmbeddedAgentQueueHandle } from "./run-state.js";
-
-type RunHandle = EmbeddedAgentQueueHandle;
-
 export function createEmbeddedRunHandle(
   overrides: {
     abort?: RunHandle["abort"];
@@ -138,41 +134,37 @@ export function createEmbeddedRunHandle(
     supportsTranscriptCommitWait?: boolean;
   } = {},
 ): RunHandle {
-  // Minimal handle fixture with overrideable lifecycle probes for registry
-  // behavior; individual tests supply queue/abort behavior when needed.
-  const abort = overrides.abort ?? (() => {});
   const queueMessage = overrides.queueMessage ?? (async () => {});
-  return {
+  const handle: RunHandle = {
     runId: overrides.runId,
     toolAuthorityFingerprint: overrides.toolAuthorityFingerprint,
     queueMessage,
-    ...(overrides.messageInjection ? { messageInjection: overrides.messageInjection } : {}),
-    ...(overrides.guarded
-      ? {
-          messageInjectionV2: {
-            version: 2 as const,
-            isAvailable: () => true,
-            queueMessage: async (
-              text: string,
-              options: Parameters<RunHandle["queueMessage"]>[1],
-              assertCurrent: () => void,
-            ) => {
-              assertCurrent();
-              return queueMessage(text, options);
-            },
-          },
-        }
-      : {}),
     isStreaming: () => overrides.isStreaming ?? true,
-    ...(overrides.isStopped ? { isStopped: overrides.isStopped } : {}),
-    ...(overrides.isAbortable !== undefined
-      ? { isAbortable: () => overrides.isAbortable !== false }
-      : {}),
     isCompacting: () => overrides.isCompacting ?? false,
     supportsQueueMessageImages: overrides.supportsQueueMessageImages,
     supportsTranscriptCommitWait: overrides.supportsTranscriptCommitWait,
-    abort,
+    abort: overrides.abort ?? (() => {}),
   };
+  if (overrides.messageInjection) {
+    handle.messageInjection = overrides.messageInjection;
+  }
+  if (overrides.isStopped) {
+    handle.isStopped = overrides.isStopped;
+  }
+  if (overrides.isAbortable !== undefined) {
+    handle.isAbortable = () => overrides.isAbortable !== false;
+  }
+  if (overrides.guarded) {
+    handle.messageInjectionV2 = {
+      version: 2,
+      isAvailable: () => true,
+      queueMessage: async (text, options, assertCurrent) => {
+        assertCurrent();
+        return queueMessage(text, options);
+      },
+    };
+  }
+  return handle;
 }
 
 type EmbeddedRunsTestApi = {

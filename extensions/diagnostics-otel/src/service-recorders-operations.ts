@@ -11,7 +11,7 @@ import type {
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { assignOptionalNumberAttrs } from "./service-attributes.js";
 import {
-  normalizeOtelContentValue,
+  assignOtelContentAttr,
   normalizeOtelErrorMessage,
 } from "./service-content-normalization.js";
 import type { DiagnosticsRecorderRuntime } from "./service-recorder-runtime.js";
@@ -388,17 +388,9 @@ export function createOperationsRecorders(runtime: DiagnosticsRecorderRuntime) {
       if (redactedError) {
         spanAttrs["openclaw.error"] = redactedError;
       }
-      const inputValue = runtime.captureContent
-        ? normalizeOtelContentValue(privateData.messageContent?.userPrompt)
-        : undefined;
-      if (inputValue) {
-        spanAttrs["input.value"] = inputValue;
-      }
-      const outputValue = runtime.captureContent
-        ? normalizeOtelContentValue(privateData.messageContent?.finalResponse)
-        : undefined;
-      if (outputValue) {
-        spanAttrs["output.value"] = outputValue;
+      if (runtime.captureContent) {
+        assignOtelContentAttr(spanAttrs, "input.value", privateData.messageContent?.userPrompt);
+        assignOtelContentAttr(spanAttrs, "output.value", privateData.messageContent?.finalResponse);
       }
       const trustedTrace = runtime.trustedTraceContext(evt, metadata);
       const trackedSpan = trustedTrace?.spanId

@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import {
   createCodexManagedThreadStore,
   type StoredCodexManagedThread,
@@ -66,71 +66,56 @@ async function fixture(count: number, matching: Set<number>) {
   };
 }
 
-describe("resident Codex catalog search and exclusion bounds", () => {
-  it("captures each query before asynchronous pinned setup without rediscovering native rows", async () => {
-    const native = nativeCatalogFixture(6);
-    for (const [index, row] of native.rows.entries()) {
-      row.name = index % 2 === 0 ? "Wanted" : "Other";
-    }
-    const control = createCodexSessionCatalogControl({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => config,
-    });
-    await control.withPinnedConnection(async (active) => {
-      const query = { limit: 1, searchTerm: "Wanted" };
-      const firstReading = active.listPage(query);
-      query.limit = 2;
-      query.searchTerm = "Other";
-
-      const first = await firstReading;
-      expect(first.sessions.map((session) => session.threadId)).toEqual([native.rows[0]!.id]);
-      expect(first.nextCursor).toBeTypeOf("string");
-      await active.initialize();
-      expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
-      expect(native.fetched).toEqual([native.rows.map((row) => row.id)]);
-      commandRpcMocks.codexControlRequest.mockClear();
-
-      const secondReading = active.listPage(query);
-      query.limit = 3;
-      query.searchTerm = "Wanted";
-      const second = await secondReading;
-      expect(second.sessions.map((session) => session.threadId)).toEqual([
-        native.rows[1]!.id,
-        native.rows[3]!.id,
-      ]);
-      expect(second.nextCursor).toBeTypeOf("string");
-
-      const third = await active.listPage(query);
-      expect(third.sessions.map((session) => session.threadId)).toEqual([
-        native.rows[0]!.id,
-        native.rows[2]!.id,
-        native.rows[4]!.id,
-      ]);
-      expect(third.nextCursor).toBeUndefined();
-      expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
-      expect(pinnedConnectionMocks.request).not.toHaveBeenCalled();
-    });
+it("captures each query before asynchronous pinned setup without rediscovering native rows", async () => {
+  const native = nativeCatalogFixture(6);
+  for (const [index, row] of native.rows.entries()) {
+    row.name = index % 2 === 0 ? "Wanted" : "Other";
+  }
+  const control = createCodexSessionCatalogControl({
+    getPluginConfig: () => ({ supervision: { enabled: true } }),
+    getRuntimeConfig: () => config,
   });
-
-  it("bounds resident exclusion filling and continues without skipping the later visible match", async () => {
-    const matching = Array.from({ length: 21 }, (_, index) => index * 64 + 1);
-    const f = await fixture(21 * 64, new Set(matching));
-    await f.hide(matching.slice(0, 20));
-
-    const first = await f.list();
-
-    expect(first[0]?.sessions).toEqual([]);
-    const cursor = first[0]?.nextCursor;
-    expect(cursor).toBeTypeOf("string");
-    if (!cursor) {
-      throw new Error("Expected continuation after the bounded exclusion fill");
+  await control.withPinnedConnection(async (active) => {
+    const query = { limit: 1, searchTerm: "Wanted" };
+    for (const [step, positions] of [[0], [1, 3], [0, 2, 4]].entries()) {
+      const reading = active.listPage(query);
+      Object.assign(query, { limit: step + 2, searchTerm: step === 0 ? "Other" : "Wanted" });
+      const page = await reading;
+      expect(page.sessions.map(({ threadId }) => threadId)).toEqual(
+        positions.map((i) => native.rows[i]!.id),
+      );
+      if (step < 2) {
+        expect(page.nextCursor).toBeTypeOf("string");
+      } else {
+        expect(page.nextCursor).toBeUndefined();
+      }
+      if (step === 0) {
+        await active.initialize();
+        expect(commandRpcMocks.codexControlRequest).toHaveBeenCalledOnce();
+        expect(native.fetched).toEqual([native.rows.map(({ id }) => id)]);
+        commandRpcMocks.codexControlRequest.mockClear();
+      }
     }
     expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
-
-    const second = await f.list(cursor);
-
-    expect(second[0]?.sessions.map((session) => session.threadId)).toEqual([f.rows[1280]!.id]);
-    expect(second[0]?.nextCursor).toBeUndefined();
-    expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+    expect(pinnedConnectionMocks.request).not.toHaveBeenCalled();
   });
+});
+
+it("bounds resident exclusion filling and continues without skipping the later visible match", async () => {
+  const matching = Array.from({ length: 21 }, (_, index) => index * 64 + 1);
+  const f = await fixture(21 * 64, new Set(matching));
+  await f.hide(matching.slice(0, 20));
+
+  const first = await f.list();
+
+  expect(first[0]?.sessions).toEqual([]);
+  const cursor = first[0]?.nextCursor;
+  expect(cursor).toBeTypeOf("string");
+  expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
+
+  const second = await f.list(cursor);
+
+  expect(second[0]?.sessions.map((session) => session.threadId)).toEqual([f.rows[1280]!.id]);
+  expect(second[0]?.nextCursor).toBeUndefined();
+  expect(commandRpcMocks.codexControlRequest).not.toHaveBeenCalled();
 });

@@ -2,6 +2,7 @@ import { cleanup, render } from "@solidjs/testing-library";
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
 import { page, userEvent } from "vitest/browser";
+import { finishElementAnimations } from "../../test-helpers/animations.ts";
 import { emulateOverlayMedia } from "../../test-helpers/overlay-browser-media.ts";
 import {
   item,
@@ -153,8 +154,68 @@ describe("native overlay presentation", () => {
   });
 
   it.each(["ltr", "rtl"] as const)(
-    "flips a large nested menu within the viewport in %s at enlarged text",
+    "uses space above a low submenu trigger before scrolling its actions in %s",
     async (dir) => {
+      await page.viewport(800, 600);
+      mountMenu({
+        dir,
+        items: [
+          {
+            id: "gateways",
+            label: "Gateways",
+            children: Array.from({ length: 10 }, (_, index) => ({
+              id: `gateway-${index}`,
+              label: `Gateway ${index + 1}`,
+            })),
+          },
+        ],
+      });
+      Object.assign(trigger().style, { position: "fixed", left: "350px", top: "400px" });
+      await openMenu();
+      await openMenu("people-gateways");
+      const child = surface("people-gateways");
+      expectWithinViewport(child);
+      expect(child.scrollHeight).toBe(child.clientHeight);
+      expectItemVisible(item("Gateway 10", "people-gateways"), child);
+    },
+  );
+
+  it("preserves a consumer height budget when its stylesheet loads before the overlay", async () => {
+    await page.viewport(800, 700);
+    const style = document.createElement("style");
+    style.textContent = ".oc-menu.consumer-sized-menu { max-height: 500px; }";
+    document.head.prepend(style);
+    try {
+      mountMenu({
+        placement: "right-start",
+        panelClass: "consumer-sized-menu",
+        items: Array.from({ length: 24 }, (_, index) => ({
+          id: `action-${index}`,
+          label: `Action ${index + 1}`,
+        })),
+      });
+      Object.assign(trigger().style, { position: "fixed", left: "200px", top: "50px" });
+      await openMenu();
+      // Measure the consumer budget, not WebKit's in-flight entry scale.
+      finishElementAnimations(surface());
+      expect(expectWithinViewport(surface()).height).toBe(500);
+      await userEvent.keyboard("{End}");
+      expect(document.activeElement).toBe(item("Action 24"));
+      const last = item("Action 24").getBoundingClientRect();
+      expect(last.bottom).toBeLessThanOrEqual(surface().getBoundingClientRect().bottom);
+    } finally {
+      style.remove();
+    }
+  });
+
+  it.each([
+    ["ltr", "bottom"],
+    ["rtl", "bottom"],
+    ["ltr", "middle"],
+    ["rtl", "middle"],
+  ] as const)(
+    "fits a large nested menu within the viewport in %s near the %s at enlarged text",
+    async (dir, position) => {
       await page.viewport(800, 600);
       root.style.fontSize = "24px";
       mountMenu({
@@ -170,10 +231,16 @@ describe("native overlay presentation", () => {
           },
         ],
       });
-      Object.assign(trigger().style, { position: "fixed", right: "8px", bottom: "8px" });
+      Object.assign(trigger().style, {
+        position: "fixed",
+        right: "8px",
+        bottom: position === "bottom" ? "8px" : "250px",
+      });
       await openMenu();
       const parentBox = expectWithinViewport(surface());
-      expect(parentBox.bottom).toBeLessThanOrEqual(trigger().getBoundingClientRect().top);
+      if (position === "bottom") {
+        expect(parentBox.bottom).toBeLessThanOrEqual(trigger().getBoundingClientRect().top);
+      }
       await openMenu("people-large");
       const childBox = expectWithinViewport(surface("people-large"));
       expect(childBox.height).toBeLessThanOrEqual(420);

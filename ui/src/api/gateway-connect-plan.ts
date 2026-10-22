@@ -1,3 +1,4 @@
+import { etc } from "@noble/ed25519";
 import {
   buildGatewayConnectAuth,
   buildDeviceAuthPayload,
@@ -72,6 +73,18 @@ function browserDeviceFamily(): string | undefined {
   }
   // Desktop-mode iPads share the Mac platform string; keep that pairing identity unchanged.
   return navigator.maxTouchPoints > 1 || /iPad/u.test(navigator.userAgent) ? "iPad" : "Mac";
+}
+
+export async function deriveLegacyV4RecoveryScope(material: string | undefined): Promise<string> {
+  if (!material || typeof crypto === "undefined" || !crypto.subtle) {
+    return "";
+  }
+  try {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(material));
+    return etc.bytesToHex(new Uint8Array(digest));
+  } catch {
+    return "";
+  }
 }
 
 export async function buildBrowserGatewayConnectPlan({

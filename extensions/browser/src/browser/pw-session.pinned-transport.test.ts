@@ -2,11 +2,12 @@ import { createServer } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { rawDataToString } from "openclaw/plugin-sdk/webhook-ingress";
 import { type WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
-import { type Browser, type ConnectOverCDPTransport, chromium } from "playwright-core";
+import { type ConnectOverCDPTransport, chromium } from "playwright-core";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
 import { pwAi } from "./pw-ai.js";
 import { connectOverCdpTransport } from "./pw-session-cdp-transport.js";
+import { makeTargetBrowser } from "./pw-session.browser.test-support.js";
 
 const { registerManagedProxyBrowserCdpBypassMock } = vi.hoisted(() => ({
   registerManagedProxyBrowserCdpBypassMock: vi.fn<(url: string) => (() => void) | undefined>(
@@ -19,33 +20,6 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime-internal", () => ({
 const { closePlaywrightBrowserConnection, listPagesViaPlaywright } = pwAi;
 const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
-
-function makeBrowser(): Browser {
-  const page = {
-    on: vi.fn(),
-    context: () => context,
-    title: vi.fn(async () => "title:A"),
-    url: vi.fn(() => "https://example.com"),
-  } as unknown as import("playwright-core").Page;
-  const context = {
-    pages: () => [page],
-    on: vi.fn(),
-    newCDPSession: vi.fn(async () => ({
-      send: vi.fn(async (method: string) =>
-        method === "Target.getTargetInfo"
-          ? { targetInfo: { targetId: "A", title: "title:A" } }
-          : {},
-      ),
-      detach: vi.fn(async () => {}),
-    })),
-  } as unknown as import("playwright-core").BrowserContext;
-  return {
-    contexts: () => [context],
-    on: vi.fn(),
-    off: vi.fn(),
-    close: vi.fn(async () => {}),
-  } as unknown as Browser;
-}
 
 function pinnedLoopbackLookup() {
   return ((_hostname: string, options: unknown, callback?: unknown) => {
@@ -60,7 +34,7 @@ function inspectTransport(inspect: (transport: ConnectOverCDPTransport) => Promi
   connectOverCdpSpy.mockImplementationOnce(async (value: unknown) => {
     expect(typeof value).not.toBe("string");
     await inspect(value as ConnectOverCDPTransport);
-    return makeBrowser();
+    return makeTargetBrowser("A", "https://example.com").browser;
   });
 }
 

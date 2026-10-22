@@ -8,12 +8,13 @@ import {
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SlackMessageEvent } from "../types.js";
+import * as dedupe from "./message-dispatch-dedupe.js";
 import { buildSlackDebounceKey } from "./message-handler/debounce-key.js";
 import { createInboundSlackTestContext } from "./message-handler/prepare.test-helpers.js";
 import type { PreparedSlackMessage } from "./message-handler/types.js";
 
 type HandlerParams = Parameters<typeof createSlackMessageHandler>[0];
-type DispatchReplayGuard = NonNullable<HandlerParams["dispatchReplayGuard"]>;
+type DispatchReplayGuard = ReturnType<typeof dedupe.createSlackMessageDispatchReplayGuard>;
 
 function makeMessage(
   ts: string,
@@ -110,7 +111,7 @@ vi.mock("./message-handler/pipeline.runtime.js", () => ({
   dispatchPreparedSlackMessage: dispatchMock,
 }));
 
-type HandlerOverrides = Pick<HandlerParams, "abortSignal" | "dispatchReplayGuard"> & {
+type HandlerOverrides = Pick<HandlerParams, "abortSignal"> & {
   cfg?: OpenClawConfig;
   rememberSlackChannelType?: HandlerParams["ctx"]["rememberSlackChannelType"];
 };
@@ -137,7 +138,6 @@ function createHandlerWithTracker(overrides?: HandlerOverrides) {
   const handler = createSlackMessageHandler({
     ctx,
     abortSignal: overrides?.abortSignal,
-    dispatchReplayGuard: overrides?.dispatchReplayGuard,
     trackEvent,
   });
   return { handler, trackEvent, ctx };
@@ -156,6 +156,7 @@ describe("createSlackMessageHandler", () => {
   });
 
   afterEach(clearRuntimeConfigSnapshot);
+  afterEach(() => vi.restoreAllMocks());
 
   it("keeps each in-flight message on its captured config snapshot", async () => {
     const startupConfig: OpenClawConfig = { agents: { defaults: { thinkingDefault: "max" } } };
@@ -436,9 +437,9 @@ describe("createSlackMessageHandler", () => {
       buildReplayKey: (event) => event.keys,
     });
     guard.claim = claim;
+    vi.spyOn(dedupe, "createSlackMessageDispatchReplayGuard").mockReturnValueOnce(guard);
     const { handler } = createHandlerWithTracker({
       abortSignal: controller.signal,
-      dispatchReplayGuard: guard,
     });
     for (const ts of ["1709000000.004001", "1709000000.004002"]) {
       await handler(
@@ -465,12 +466,10 @@ describe("createSlackMessageHandler", () => {
   it("defers ingress before waiting for a duplicate's dispatch claim", async () => {
     const duplicate = createDeferred<boolean>();
     const onDispatchWaiting = vi.fn();
-    const handler = createSlackMessageHandler({
-      ctx: createContext(),
-      dispatchReplayGuard: {
-        claim: async () => ({ kind: "inflight", pending: duplicate.promise }),
-      } as unknown as DispatchReplayGuard,
-    });
+    vi.spyOn(dedupe, "createSlackMessageDispatchReplayGuard").mockReturnValueOnce({
+      claim: async () => ({ kind: "inflight", pending: duplicate.promise }),
+    } as unknown as DispatchReplayGuard);
+    const handler = createSlackMessageHandler({ ctx: createContext() });
     const handled = handler(
       { type: "message", channel: "C_TEST", ts: "1709000000.009999", text: "hello" } as never,
       {
@@ -524,9 +523,10 @@ describe("createSlackMessageHandler", () => {
       .mockResolvedValue({ kind: "claimed", handle: { commit: vi.fn(), release: vi.fn() } })
       .mockResolvedValueOnce({ kind: "claimed", handle: { commit: vi.fn(), release } })
       .mockResolvedValueOnce({ kind: "inflight", pending: owner.promise });
-    const { handler } = createHandlerWithTracker({
-      dispatchReplayGuard: { claim } as unknown as DispatchReplayGuard,
-    });
+    vi.spyOn(dedupe, "createSlackMessageDispatchReplayGuard").mockReturnValueOnce({
+      claim,
+    } as unknown as DispatchReplayGuard);
+    const { handler } = createHandlerWithTracker();
     for (const ts of ["1709000000.000701", "1709000000.000702"]) {
       await handler(
         { type: "message", channel: "C111", user: "U111", ts, text: "retry me" } as never,

@@ -8,10 +8,14 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { makeCronJob } from "../../cron/delivery.test-helpers.js";
-import { upsertCronJobRow } from "../../cron/store/row-codec.js";
+import { deleteCronJobRowInDatabase, upsertCronJobRow } from "../../cron/store/row-codec.js";
 import { makeCronStreamSandboxTarget } from "../../cron/stream-sandbox.test-support.js";
 import { cronStreamScheduleKey } from "../../cron/stream-schedule.js";
 import { withSettledLocalWorkspaceProjectionPath } from "../../gateway/worker-environments/local-workspace-settlement.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../../infra/diagnostic-events.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -557,6 +561,60 @@ it.each(["caller", "retirement"] as const)(
     expect(await f.store.list()).toEqual([]);
   },
 );
+
+it("reads recovery custody once and observes reservations from a later lifecycle", async () => {
+  const f = await fixture();
+  await waitForDiagnosticEventsDrained();
+  let reads = 0;
+  const unsubscribe = onInternalDiagnosticEvent(
+    (event) => {
+      if (event.type === "worker.request" && event.phase === "queued") {
+        reads++;
+      }
+    },
+    { include: ["worker.request"] },
+  );
+  try {
+    await f.owner.recover();
+    await waitForDiagnosticEventsDrained();
+    expect(reads).toBe(2); // One custody observation and one registry read.
+  } finally {
+    unsubscribe();
+  }
+  replaceProcessOwner(await f.seedCustody("running"));
+  await f.owner.recover();
+  expect(stopDockerPersistentExec).toHaveBeenCalledExactlyOnceWith(f.receipt, expect.any(Function));
+  expect(await f.store.list()).toEqual([]);
+});
+
+it("recovers removed-job custody even when orphan discovery fails", async () => {
+  const f = await fixture();
+  replaceProcessOwner(await f.seedCustody("running"));
+  runOpenClawStateWriteTransaction(({ db }) => {
+    deleteCronJobRowInDatabase(db, f.input.source.storeKey, f.job.id);
+  });
+  vi.mocked(listDockerPersistentExecContainers).mockRejectedValueOnce(
+    new Error("discovery failed"),
+  );
+  await expect(f.owner.recover()).rejects.toThrow("cleanup is incomplete");
+  expect(stopDockerPersistentExec).toHaveBeenCalledExactlyOnceWith(f.receipt, expect.any(Function));
+  expect(await f.store.list()).toEqual([]);
+  // A late allocation still needs cleanup after its job and custody have gone.
+  vi.mocked(listDockerPersistentExecContainers).mockResolvedValueOnce([f.receipt]);
+  await f.owner.recover();
+  expect(stopDockerPersistentExec).toHaveBeenCalledTimes(2);
+});
+
+it("keeps live custody acquired while orphan discovery is pending", async () => {
+  const f = await fixture();
+  vi.mocked(listDockerPersistentExecContainers).mockImplementationOnce(async () => {
+    await f.seedCustody("reserved");
+    return [f.receipt];
+  });
+  await f.owner.recover();
+  expect(stopDockerPersistentExec).not.toHaveBeenCalled();
+  expect(await f.store.list()).toEqual([expect.objectContaining({ phase: "reserved" })]);
+});
 
 it.each([
   { status: "live", phase: "running" },

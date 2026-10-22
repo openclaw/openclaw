@@ -119,6 +119,27 @@ describe("agentsListCommand", () => {
     );
     expect(mocks.plugins).not.toHaveBeenCalled();
   });
+  it("shows requested routing rules beneath their agent in tree output", async () => {
+    setEntries({ main: { name: "Main" }, child: { name: "Child" }, unbound: { name: "Unbound" } }, [
+      { agentId: "child", match: { channel: "telegram" } },
+    ]);
+    mocks.provenance.mockResolvedValue([
+      { agentId: "child", createdVia: "agent", creatorAgentId: "main", createdAtMs: 2 },
+    ]);
+
+    const plainTree = (await list({ tree: true })).text;
+    const treeWithBindings = (await list({ tree: true, bindings: true })).text;
+    expect(plainTree).toBe("Agents:\n- main (Main)\n  - child (Child)\n- unbound (Unbound)");
+    expect(treeWithBindings).toBe(
+      "Agents:\n- main (Main)\n  - child (Child)\n    Routing rules:\n      - telegram\n- unbound (Unbound)",
+    );
+    expect((await list({ bindings: true })).text).toContain("    - telegram");
+    expect((await list({ json: true, bindings: true })).json).toMatchObject([
+      { id: "main" },
+      { id: "child", bindingDetails: ["telegram"] },
+      { id: "unbound" },
+    ]);
+  });
   it("lists configured, inherited, and local avatar identities without changing the workspace", async () => {
     await withTestDir({ prefix: "openclaw-agent-identity-list-" }, async (workspace) => {
       const identityPath = path.join(workspace, "IDENTITY.md");

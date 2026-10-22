@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import { showInputDialog } from "../../components/input-dialog.ts";
+import * as sessionMenuWork from "../../components/session-menu-work.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
   createTestSessionCapability,
@@ -28,6 +29,7 @@ import {
   selectMenuValue,
   settleSessionMenu,
 } from "../../test-helpers/session-menu.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { page as sessionsRoute, type SessionsRouteData } from "./route.ts";
 import {
   createContext,
@@ -126,7 +128,7 @@ async function createDeletionPage(rows: GatewaySessionRow[], agentId = "main") {
   context.agentSelection.state.selectedId = agentId;
   context.agentSelection.state.scopeId = agentId;
   const page = await createRenderedPage(context, sessionsResult(rows, 1), "all");
-  await vi.waitFor(() => expect(page.loading).toBe(false));
+  await waitForFast(() => expect(page.loading).toBe(false));
   return {
     page,
     sessions,
@@ -149,7 +151,7 @@ describe("sessions page lifecycle", () => {
     const { page, connection, sessions } = await mountMutation();
     const refreshList = vi.mocked(sessions.refreshList);
     const refresh = () => page.querySelector<HTMLButtonElement>('button[aria-label="Refresh"]')!;
-    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await waitForFast(() => expect(refresh().disabled).toBe(false));
     for (const phase of ["reconnecting", "offline"] as const) {
       connection.emit({ phase });
       await page.updateComplete;
@@ -159,10 +161,10 @@ describe("sessions page lifecycle", () => {
       expect(refreshList).toHaveBeenCalledTimes(requests);
     }
     connection.emit({ phase: "connected", hello: sessionMutationGatewayHello() });
-    await vi.waitFor(() => expect(refresh().disabled).toBe(false));
+    await waitForFast(() => expect(refresh().disabled).toBe(false));
     const requests = refreshList.mock.calls.length;
     refresh().click();
-    await vi.waitFor(() => expect(refreshList).toHaveBeenCalledTimes(requests + 1));
+    await waitForFast(() => expect(refreshList).toHaveBeenCalledTimes(requests + 1));
   });
 
   it("pins from the page menu without changing shared pin metadata", async () => {
@@ -207,11 +209,11 @@ describe("sessions page lifecycle", () => {
         ],
       };
       const page = await createRenderedPage(context, sessionsResult([row], 1));
-      await vi.waitFor(() => expect(page.loading).toBe(false));
+      await waitForFast(() => expect(page.loading).toBe(false));
       const menu = await openRowMenu(page, row);
       await openSubmenu(menu, "Assign to…");
       await selectMenuValue(menu, "assign-owner:agent:reviewer");
-      await vi.waitFor(() =>
+      await waitForFast(() =>
         expect(request).toHaveBeenCalledWith("sessions.assignOwner", {
           key: row.key,
           owner: { type: "agent", id: "reviewer" },
@@ -226,7 +228,7 @@ describe("sessions page lifecycle", () => {
         await page.updateComplete;
         expect(page.textContent).not.toContain(failure);
       } else {
-        await vi.waitFor(() => expect(page.textContent).toContain(failure));
+        await waitForFast(() => expect(page.textContent).toContain(failure));
         expect(page.textContent).toContain("Assignment fixture");
       }
     },
@@ -262,12 +264,12 @@ describe("sessions page lifecycle", () => {
       connection.emit({ phase: "connected" });
       const page = await createPage(context);
       try {
-        await vi.waitFor(() => expect(page.result?.sessions[0]?.key).toBe("agent:main:current-1"));
+        await waitForFast(() => expect(page.result?.sessions[0]?.key).toBe("agent:main:current-1"));
         if (ordering === "same-client reconnect") {
           connection.emit({ phase: "reconnecting" });
           connection.emit({ phase: "connected", hello: sessionMutationGatewayHello() });
           sidebar.resolve(result("agent:main:sidebar"));
-          await vi.waitFor(() =>
+          await waitForFast(() =>
             expect(page.result?.sessions[0]?.key).toBe("agent:main:current-2"),
           );
         }
@@ -280,7 +282,7 @@ describe("sessions page lifecycle", () => {
         expect(pageRequests).toBe(expectedRequests);
 
         sidebar.resolve(result("agent:main:sidebar"));
-        await vi.waitFor(() =>
+        await waitForFast(() =>
           expect(sessions.state.result?.sessions[0]?.key).toBe("agent:main:sidebar"),
         );
         connection.emit({ sessionKey: "agent:main:other" });
@@ -327,7 +329,7 @@ describe("sessions page lifecycle", () => {
     expect(item.hasAttribute("disabled")).toBe(false);
     managed.refreshList.mockClear();
     await selectMenuValue(menu, "toggle-involving-me");
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(request).toHaveBeenCalledWith(
         "sessions.setInvolvement",
         expect.objectContaining({
@@ -337,7 +339,7 @@ describe("sessions page lifecycle", () => {
         }),
       ),
     );
-    await vi.waitFor(() => expect(managed.refreshList).toHaveBeenCalled());
+    await waitForFast(() => expect(managed.refreshList).toHaveBeenCalled());
     expect(managed.sessions.patch).not.toHaveBeenCalled();
   });
 
@@ -433,7 +435,7 @@ describe("sessions page lifecycle", () => {
     selectRows(page, target);
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
     const deleting = page.deleteSelected();
-    await vi.waitFor(() => expect(deleteRequest).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(deleteRequest).toHaveBeenCalledOnce());
     expect(page.result?.sessions).toEqual([]);
     setRows([target, arrived]);
     await sessions.refreshList({ ...query, force: true });
@@ -518,7 +520,7 @@ describe("sessions page lifecycle", () => {
       managed.refreshList.mockClear();
       vi.mocked(showConfirmDialog).mockResolvedValue(true);
       const stopping = page.stopCloudWorker(target);
-      await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
       publishRows(managed, [{ ...target, label: "Updated while stopping" }]);
       expect(page.result?.sessions[0]?.label).toBe("Updated while stopping");
       stopped.resolve({ ok: true });
@@ -556,7 +558,7 @@ describe("sessions page lifecycle", () => {
       page.forkSession("main"),
       page.rememberCustomGroup("Stale group"),
     ];
-    await vi.waitFor(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(sessions.deleteMany).toHaveBeenCalledOnce());
     connection.emit({ phase: "reconnecting" });
     deleted.resolve({
       deleted: ["main"],
@@ -630,9 +632,9 @@ describe("sessions page new group", () => {
       return null;
     });
     const first = page.requestNewCategory(key);
-    await vi.waitFor(() => expect(signals).toHaveLength(1));
+    await waitForFast(() => expect(signals).toHaveLength(1));
     const second = page.requestNewCategory(key);
-    await vi.waitFor(() => expect(signals).toHaveLength(2));
+    await waitForFast(() => expect(signals).toHaveLength(2));
     page.remove();
     await Promise.all([first, second]);
     expect(signals[0]?.aborted).toBe(true);
@@ -647,7 +649,7 @@ describe("sessions page new group", () => {
       .mockReturnValueOnce(pending.promise);
     const { connection, page, sessions, messages } = await mount(groupsPut);
     const created = page.requestNewCategory(key);
-    await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(sessions.groupsPut).toHaveBeenCalledOnce());
     connection.emit({ client: createTestGatewayClient(async () => ({ profiles: [] })) });
     pending.resolve("completed");
     await created;
@@ -673,7 +675,7 @@ describe("sessions page new group", () => {
     });
     const created = page.requestNewCategory(key);
     page.result = sessionsResult([{ ...row, sessionId: "replacement-session" }], 2);
-    await vi.waitFor(() => expect(sessions.groupsPut).toHaveBeenCalledWith([group]));
+    await waitForFast(() => expect(sessions.groupsPut).toHaveBeenCalledWith([group]));
     expect(sessions.patch).not.toHaveBeenCalled();
     pending.resolve("completed");
     await created;
@@ -751,6 +753,48 @@ describe("sessions page plugin actions", () => {
     expect(menu.pluginActions[0]?.label).toBe("Review Latest");
   });
 
+  it("keeps the menu mounted and masks stale destinations while a reopened lookup resolves", async () => {
+    type Work = Awaited<ReturnType<typeof sessionMenuWork.fetchSessionMenuWork>>;
+    const earlier = createDeferred<Work>();
+    const current = createDeferred<Work>();
+    const reopened = createDeferred<Work>();
+    const load = vi
+      .spyOn(sessionMenuWork, "fetchSessionMenuWork")
+      .mockReturnValueOnce(earlier.promise)
+      .mockReturnValueOnce(current.promise)
+      .mockReturnValueOnce(reopened.promise);
+    const rows = ["earlier", "current"].map((id) =>
+      sessionRow(id, {
+        worktree: { id, branch: `feature/${id}`, repoRoot: "/synthetic/repo" },
+      }),
+    );
+    const managed = createManagedSessions();
+    const context = createContext(createGateway().gateway, managed.sessions);
+    const page = await createRenderedPage(context, sessionsResult(rows, 1), "all");
+    const menu = await openRowMenu(page, rows[0]!);
+    expect(menu.querySelector('[value="open-pr"]')).toBeNull();
+    expect(await openRowMenu(page, rows[1]!)).toBe(menu);
+
+    earlier.resolve({ pullRequestUrl: "https://example.test/earlier", worktreePath: null });
+    await earlier.promise;
+    await page.updateComplete;
+    expect(menu.querySelector('[value="open-pr"]')).toBeNull();
+
+    current.resolve({ pullRequestUrl: "https://example.test/current", worktreePath: null });
+    await waitForFast(() => expect(menu.work?.pullRequestUrl).toBe("https://example.test/current"));
+    expect(page.querySelector("openclaw-session-menu")).toBe(menu);
+    expect(menu.querySelector('[value="open-pr"]')).not.toBeNull();
+
+    expect(await openRowMenu(page, rows[0]!)).toBe(menu);
+    expect(menu.querySelector('[value="open-pr"]')).toBeNull();
+    reopened.resolve({ pullRequestUrl: "https://example.test/reopened", worktreePath: null });
+    await waitForFast(() =>
+      expect(menu.work?.pullRequestUrl).toBe("https://example.test/reopened"),
+    );
+    expect(page.querySelector("openclaw-session-menu")).toBe(menu);
+    expect(load).toHaveBeenCalledTimes(3);
+  });
+
   it("uses current scoped session state when invoking plugin menu actions", async () => {
     const { page, row, run, publish, openMenu, actionSelector } =
       await createPluginSessionMenuPage();
@@ -770,7 +814,7 @@ describe("sessions page plugin actions", () => {
     menu.querySelector<HTMLElement>(actionSelector)!.click();
     await settleSessionMenu(menu);
     expect(run.mock.calls.length).toBe(1);
-    await vi.waitFor(() => expect(page.textContent).toContain("Reopen the session menu."));
+    await waitForFast(() => expect(page.textContent).toContain("Reopen the session menu."));
 
     publish([{ ...current, archived: true }]);
     await page.updateComplete;
@@ -789,7 +833,7 @@ describe("sessions page plugin actions", () => {
       menu.querySelector<HTMLElement>(actionSelector)!.click();
       await settleSessionMenu(menu);
       expect(run.mock.calls.length).toBe(0);
-      await vi.waitFor(() => expect(page.textContent).toContain("Reopen the session menu."));
+      await waitForFast(() => expect(page.textContent).toContain("Reopen the session menu."));
     }
 
     expect(page.querySelector(actionSelector)).toBeNull();

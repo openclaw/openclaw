@@ -1,5 +1,6 @@
 import type { SecretRef } from "../../config/types.secrets.js";
 import { WorkerProviderError, type WorkerProvider } from "../../plugins/types.js";
+import { measureGatewayRestartTrace } from "../restart-trace.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import {
   hasForcedWorkerEnvironmentAbandonment,
@@ -137,10 +138,16 @@ export function createWorkerProviderOwnerLifecycle(
     });
     // Only a dedicated node lease makes provider teardown proof of worker termination.
     // Shared or unknown host isolation still requires the exact worker's stop acknowledgement.
-    await tunnels?.stop(
-      record.environmentId,
-      record.ownerEpoch,
-      record.nodeDeviceId !== null && record.sharedHost === false ? reason : undefined,
+    await measureGatewayRestartTrace(
+      "worker-environments.stop-transports",
+      () =>
+        tunnels?.stop(
+          record.environmentId,
+          record.ownerEpoch,
+          record.nodeDeviceId !== null && record.sharedHost === false ? reason : undefined,
+        ),
+      undefined,
+      true,
     );
     return requireCurrentOwner(record);
   };

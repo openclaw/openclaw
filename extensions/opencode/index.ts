@@ -1,3 +1,9 @@
+import type { ProviderStreamOptions } from "openclaw/plugin-sdk/llm";
+import {
+  describeImageWithModelPayloadTransform,
+  describeImagesWithModelPayloadTransform,
+  type MediaUnderstandingProvider,
+} from "openclaw/plugin-sdk/media-understanding";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveFirstProviderCatalogAuth } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
@@ -5,8 +11,10 @@ import {
   buildProviderReplayFamilyHooks,
   matchesExactOrPrefix,
 } from "openclaw/plugin-sdk/provider-model-shared";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { opencodeMediaUnderstandingProvider } from "./media-understanding-provider.js";
+import {
+  isRecord,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { applyOpencodeZenProviderConfig, OPENCODE_ZEN_DEFAULT_MODEL_REF } from "./onboard.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
@@ -24,6 +32,28 @@ import { wrapOpencodeProviderStream } from "./stream.js";
 
 const PROVIDER_ID = "opencode";
 const MINIMAX_MODERN_MODEL_MATCHERS = ["minimax-m2.7"] as const;
+
+const stripDisabledResponsesReasoning: ProviderStreamOptions["onPayload"] = (payload) => {
+  if (!isRecord(payload)) {
+    return;
+  }
+  const reasoning = payload.reasoning;
+  if (reasoning === "none" || (isRecord(reasoning) && reasoning.effort === "none")) {
+    delete payload.reasoning;
+  }
+};
+
+const opencodeMediaUnderstandingProvider: MediaUnderstandingProvider = {
+  id: "opencode",
+  capabilities: ["image"],
+  defaultModels: {
+    image: "minimax-m3",
+  },
+  describeImage: (request) =>
+    describeImageWithModelPayloadTransform(request, stripDisabledResponsesReasoning),
+  describeImages: (request) =>
+    describeImagesWithModelPayloadTransform(request, stripDisabledResponsesReasoning),
+};
 
 function isModernOpencodeModel(modelId: string): boolean {
   const lower = normalizeLowercaseStringOrEmpty(modelId);

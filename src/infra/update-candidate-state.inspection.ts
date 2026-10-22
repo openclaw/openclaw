@@ -99,6 +99,7 @@ export async function runUpdateStateInspectionWorker(params: {
             : JSON.stringify({
                 ...params.input,
                 includeLocalStoreVersions: true,
+                includeClientCredentialStoreVersion: true,
                 env: {
                   HOME: params.sourceEnv.HOME,
                   OPENCLAW_HOME: params.sourceEnv.OPENCLAW_HOME,

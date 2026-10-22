@@ -47,7 +47,6 @@ type CodexComputerUseServiceIdentity = {
 /** Finds the first signed native service from one ordered desktop owner set. */
 export async function resolveCodexComputerUseServiceAppSourcePath(params: {
   platform?: NodeJS.Platform;
-  appServerCommand?: string;
   sourceAppCandidates?: readonly string[];
   inspectServiceApp?: InspectServiceApp;
 }): Promise<string | undefined> {
@@ -56,8 +55,7 @@ export async function resolveCodexComputerUseServiceAppSourcePath(params: {
     return undefined;
   }
   const candidates =
-    params.sourceAppCandidates ??
-    resolveMacOSDesktopCodexComputerUseServiceAppCandidates(platform, params.appServerCommand);
+    params.sourceAppCandidates ?? resolveMacOSDesktopCodexComputerUseServiceAppCandidates(platform);
   return (
     await findUsableServiceApp(candidates, params.inspectServiceApp ?? inspectTrustedServiceApp)
   )?.path;
@@ -134,7 +132,7 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
     return;
   }
 
-  await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+  assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
   const stagingRoot = await fs.mkdtemp(path.join(ownedParent.realPath, ".service-app.staging-"));
   const stagingRootIdentity = await readRealDirectoryIdentity(
     stagingRoot,
@@ -148,11 +146,8 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   let backupCreated = false;
   try {
     await (params.copyServiceApp ?? copyServiceAppWithDitto)(sourcePath, stagedPath);
-    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
-    await assertDirectoryIdentityStable(
-      stagingRootIdentity,
-      "Computer Use service staging directory",
-    );
+    assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+    assertDirectoryIdentityStable(stagingRootIdentity, "Computer Use service staging directory");
     await assertNotSymlink(stagedPath, "Copied Computer Use service app");
     const stagedIdentity = await inspectServiceApp(stagedPath);
     if (!stagedIdentity || !identitiesMatch(stagedIdentity, sourceIdentity)) {
@@ -160,32 +155,29 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
         `Copied Computer Use service app at ${stagedPath} does not match its selected signed source.`,
       );
     }
-    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
-    await assertDirectoryIdentityStable(
-      stagingRootIdentity,
-      "Computer Use service staging directory",
-    );
+    assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+    assertDirectoryIdentityStable(stagingRootIdentity, "Computer Use service staging directory");
     await assertNotSymlink(operationTargetPath, "Computer Use service target");
     if (await pathExists(operationTargetPath)) {
-      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+      assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       params.assertCurrent?.();
       await fs.rename(operationTargetPath, backupPath);
       backupCreated = true;
     }
-    await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+    assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
     params.assertCurrent?.();
     await fs.rename(stagedPath, operationTargetPath);
     await assertNotSymlink(operationTargetPath, "Installed Computer Use service app");
     const installedIdentity = await inspectServiceApp(operationTargetPath);
     if (!installedIdentity || !identitiesMatch(installedIdentity, sourceIdentity)) {
-      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+      assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       await fs.rm(operationTargetPath, { recursive: true, force: true });
       throw new Error(
         "Installed Computer Use service app failed post-install identity verification.",
       );
     }
     if (backupCreated) {
-      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+      assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       await assertNotSymlink(backupPath, "Computer Use service backup");
       await fs.rm(backupPath, { recursive: true, force: true });
       backupCreated = false;
@@ -193,18 +185,15 @@ async function ensureCodexComputerUseServiceAppOnce(params: {
   } catch (error) {
     if (
       backupCreated &&
-      (await directoryIdentityIsStable(ownedParent)) &&
+      directoryIdentityIsStable(ownedParent) &&
       !(await pathExists(operationTargetPath))
     ) {
-      await assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
+      assertDirectoryIdentityStable(ownedParent, SERVICE_PARENT_LABEL);
       await fs.rename(backupPath, operationTargetPath);
     }
     throw error;
   } finally {
-    if (
-      (await directoryIdentityIsStable(ownedParent)) &&
-      (await directoryIdentityIsStable(stagingRootIdentity))
-    ) {
+    if (directoryIdentityIsStable(ownedParent) && directoryIdentityIsStable(stagingRootIdentity)) {
       await fs.rm(stagingRoot, { recursive: true, force: true });
     }
   }

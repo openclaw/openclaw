@@ -212,6 +212,10 @@ join it; once ready, an unused client retires after the idle grace. Isolated
 startup remains caller-owned. See
 [startup budgets](/plugins/codex-harness-reference/timeouts#timeouts).
 
+Temporary capability, native-hook, and tool-catalog probes wait for their isolated
+app-server to close before returning, including after a failed or timed-out read.
+Probes using a shared connection release their lease so other work can continue.
+
 OpenClaw preserves assistant text supplied with the initial native item and
 reasoning supplied with a completed item, even when Codex sends no text deltas.
 Completed items, including empty messages, reconcile the transcript with Codex's

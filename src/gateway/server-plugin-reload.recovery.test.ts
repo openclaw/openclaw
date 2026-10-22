@@ -285,7 +285,6 @@ it.each(["commit", "rollback"] as const)(
         cronEnabled: false,
         log: mocks.log,
         enqueueSystemEvent: () => {},
-        requestHeartbeat: () => {},
         runIsolatedAgentJob: async () => ({ status: "ok" as const }),
       });
       const list = vi.spyOn(cron, "list").mockResolvedValue([]);
@@ -757,8 +756,6 @@ it.for([
           if (outcome === "manual stop") {
             const tool = createTranscriptsTool({
               config,
-              stateDir,
-              logger: mocks.log,
               caller: { kind: "operator", source: "local" },
             });
             manualStop = withPluginRuntimeRegistryScope(fixture.registryOwner.registry, () =>

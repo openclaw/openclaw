@@ -941,13 +941,13 @@ describe("resolveBuildStepCacheState", () => {
     const f = buildCacheFixture();
     const state = f.publish();
     fs.writeFileSync(f.outputPath, "changed bytes");
-    const rename = fs.renameSync.bind(fs);
-    const fail = vi.spyOn(fs, "renameSync").mockImplementation((source, target) => {
+    const copy = fs.copyFileSync.bind(fs);
+    const fail = vi.spyOn(fs, "copyFileSync").mockImplementation((source, target, mode) => {
       if (String(target).startsWith(state.outputRoot!)) {
         expect(fs.existsSync(state.stampPath!)).toBe(false);
         throw new Error("fixture copy failure");
       }
-      return rename(source, target);
+      return copy(source, target, mode);
     });
     try {
       expect(() => f.publish()).toThrow("fixture copy failure");
@@ -956,6 +956,51 @@ describe("resolveBuildStepCacheState", () => {
     }
     expect(fs.existsSync(state.stampPath!)).toBe(false);
     expect(f.lookup()).toMatchObject({ fresh: false, restorable: false });
+  });
+
+  it("restores validated bytes into private staging without per-file publication", () => {
+    const f = buildCacheFixture({ restore: "always" });
+    f.publish();
+    const staging = tempDirs.make("openclaw-cache-private-stage-");
+    const rename = vi.spyOn(fs, "renameSync");
+    try {
+      expect(
+        restoreOutputs(f.lookup(), { ...f.params, artifactRoot: staging, staging: true }),
+      ).toBe(true);
+      expect(readText(path.join(staging, "dist/output.js"))).toBe("output");
+      expect(rename.mock.calls.filter(([, target]) => String(target).startsWith(staging))).toEqual(
+        [],
+      );
+      fs.writeFileSync(path.join(staging, "dist/output.js"), "private change");
+      expect(readText(f.outputPath)).toBe("output");
+      expect(f.lookup().fresh).toBe(true);
+    } finally {
+      rename.mockRestore();
+    }
+  });
+
+  it("keeps live outputs and the cache valid when a private staging copy fails", () => {
+    const f = buildCacheFixture({ restore: "always" });
+    writeFixture(f.rootDir, "dist/second.js", "second");
+    f.publish();
+    const staging = tempDirs.make("openclaw-cache-failed-stage-");
+    const copy = fs.copyFileSync.bind(fs);
+    const fail = vi.spyOn(fs, "copyFileSync").mockImplementation((source, target, mode) => {
+      if (String(target).startsWith(staging) && String(target).includes("second.js")) {
+        throw new Error("fixture staging copy failure");
+      }
+      return copy(source, target, mode);
+    });
+    try {
+      expect(() =>
+        restoreOutputs(f.lookup(), { ...f.params, artifactRoot: staging, staging: true }),
+      ).toThrow("fixture staging copy failure");
+    } finally {
+      fail.mockRestore();
+    }
+    expect(readText(f.outputPath)).toBe("output");
+    expect(readText(path.join(f.rootDir, "dist/second.js"))).toBe("second");
+    expect(f.lookup().fresh).toBe(true);
   });
 
   it("restores exact declaration snapshots across checkout roots", () => {

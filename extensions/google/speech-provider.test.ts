@@ -412,6 +412,27 @@ describe("Google speech provider", () => {
     expect(post).toHaveBeenCalledOnce();
   });
 
+  it("redacts the active request credential from speech errors", async () => {
+    const credential = "fixture-google-speech-credential";
+    const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/provider-http")>(
+      "openclaw/plugin-sdk/provider-http",
+    );
+    await assertOkOrThrowProviderErrorMock.withImplementation(
+      actual.assertOkOrThrowProviderError,
+      async () => {
+        post.mockResolvedValue(
+          responseResult(
+            Response.json({ error: { message: `Rejected ${credential}` } }, { status: 400 }),
+          ),
+        );
+        const failure = synthesize({ providerConfig: { apiKey: credential } });
+        await expect(failure).rejects.toMatchObject({ status: 400, statusCode: 400 });
+        await expect(failure).rejects.not.toThrow(credential);
+        expect(post).toHaveBeenCalledOnce();
+      },
+    );
+  });
+
   it("sends Gemini 3.8 style as metadata and preserves the transcript verbatim", async () => {
     const text = "[whispers] Status.";
     const model = "gemini-3.8-flash-lite-tts";

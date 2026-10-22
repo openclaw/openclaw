@@ -17,7 +17,8 @@ const createConfig = (input, file) => ({
   input: path.resolve(here, input),
   platform: "browser",
   experimental: { attachDebugInfo: "none" },
-  treeshake: false,
+  // Keep only the used Solid and headless catalog APIs from both dialects' barrels.
+  treeshake: true,
   plugins: [
     {
       name: "canvas-solid",

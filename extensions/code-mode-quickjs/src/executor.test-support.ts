@@ -35,11 +35,17 @@ type Input =
 export async function runQuickJsExecutor(
   input: Input,
   timeoutMs: number,
-  workerUrl = processRuntime.resolveRuntimeWorkerUrl(quickJsWorkerTestEntrypoint),
+  workerUrl?: URL,
   signal?: AbortSignal,
   inlineHost?: CodeModeExecutorInlineHost,
 ) {
-  const resolver = vi.spyOn(processRuntime, "resolveRuntimeWorkerUrl").mockReturnValue(workerUrl);
+  const fixturePool = workerUrl
+    ? new processRuntime.WorkerTaskPool({ workerUrl, workerClass: "compute", sharedCompute: true })
+    : undefined;
+  const fixtureRun = fixturePool?.run.bind(fixturePool);
+  const run = fixtureRun
+    ? vi.spyOn(processRuntime.WorkerTaskPool.prototype, "run").mockImplementation(fixtureRun)
+    : undefined;
   try {
     const options = { timeoutMs, signal, inlineHost };
     let result: CodeModeWorkerResult;
@@ -57,7 +63,8 @@ export async function runQuickJsExecutor(
     }
     return result;
   } finally {
-    resolver.mockRestore();
+    run?.mockRestore();
+    await fixturePool?.close();
   }
 }
 

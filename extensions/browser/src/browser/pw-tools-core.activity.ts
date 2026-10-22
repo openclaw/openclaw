@@ -20,9 +20,6 @@ export async function getPageTextViaPlaywright(opts: {
     opts.maxChars ?? DEFAULT_AI_SNAPSHOT_MAX_CHARS,
     DEFAULT_AI_SNAPSHOT_MAX_CHARS,
   );
-  if (!Number.isSafeInteger(maxChars) || maxChars <= 0) {
-    throw new Error("maxChars must be a positive integer.");
-  }
   const timeout = DEFAULT_BROWSER_SNAPSHOT_TIMEOUT_MS;
   const deadline = Date.now() + timeout;
   const controller = new AbortController();

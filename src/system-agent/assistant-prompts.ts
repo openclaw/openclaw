@@ -1,5 +1,4 @@
 import { extractBalancedJsonPrefix, safeParseJsonRecord } from "@openclaw/normalization-core";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SystemAgentGreetingFacts } from "./greeting.js";
 import type { SystemAgentOverview } from "./overview.js";
 
@@ -180,32 +179,9 @@ export type SystemAgentAssistantPlan = {
   modelLabel?: string;
 };
 
-const HISTORY_TURN_LIMIT = 12;
-const HISTORY_TURN_MAX_CHARS = 500;
-
-function formatHistory(history: SystemAgentAssistantTurn[] | undefined): string[] {
-  if (!history || history.length === 0) {
-    return [];
-  }
-  const recent = history.slice(-HISTORY_TURN_LIMIT);
-  return [
-    "Conversation so far:",
-    ...recent.map((turn) => {
-      const text =
-        turn.text.length > HISTORY_TURN_MAX_CHARS
-          ? `${truncateUtf16Safe(turn.text, HISTORY_TURN_MAX_CHARS)}…`
-          : turn.text;
-      return `${turn.role === "user" ? "User" : "OpenClaw"}: ${text}`;
-    }),
-    "",
-  ];
-}
-
 export function buildSystemAgentAssistantUserPrompt(params: {
   input: string;
   overview: SystemAgentOverview;
-  history?: SystemAgentAssistantTurn[];
-  pendingOperation?: string;
 }): string {
   const agents = params.overview.agents
     .map((agent) => {
@@ -220,12 +196,8 @@ export function buildSystemAgentAssistantUserPrompt(params: {
     })
     .join("\n");
   return [
-    ...formatHistory(params.history),
     `User request: ${params.input}`,
     "",
-    ...(params.pendingOperation
-      ? [`Pending proposal awaiting the user's yes: ${params.pendingOperation}`, ""]
-      : []),
     `Default agent: ${params.overview.defaultAgentId}`,
     `Default model: ${params.overview.defaultModel ?? "not configured"}`,
     ...(params.overview.setupModel ? [`Setup model: ${params.overview.setupModel}`] : []),

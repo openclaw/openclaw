@@ -379,3 +379,29 @@ plugin transport effects and disclosure; pass its assertion into the plugin's
 database writer and file publication boundaries too. Versioned owner-bound RPC
 names let CLI callers require updated plugin handlers without assuming that an
 updated Gateway also upgraded an independently installed plugin.
+
+## OpenAI-compatible Decisions runtime
+
+`openclaw/plugin-sdk/decisions-openai-runtime` supplies the shared native
+Decisions codec and HTTP executor used by OpenAI and ClawRouter. Import it
+only from a lazy decision runtime, not a plugin's eager entrypoint.
+
+`evaluateOpenAICompatibleDecision(batch, context, route)` accepts a host-prepared
+V2 context and a provider-owned `{ provider, baseUrl, modelId? }` route. The
+base URL is the API prefix before `/decisions`; an optional upstream model ID
+changes only the wire model, preserving the prepared model's transport binding.
+The helper uses the prepared credential, headers, proxy/TLS policy, abort signal,
+deadline, and live admission assertion. It never discovers credentials or
+constructs conversation history. Consumers own endpoint eligibility and any
+account-specific route grant before calling it.
+
+`supportsOpenAIDecisionBatch(batch, reasoning)` gates protocol kinds, image and
+question bounds, and automatic reasoning before transport/discovery. Malformed
+caller contracts throw; structurally valid requests outside protocol support or
+bounds return `false`. Results preserve Boolean/choice/score distributions, token usage, and
+per-question refusals; invalid or credential-reflecting responses fail closed.
+
+The lightweight `decisions` subpath exports
+`ModelInferenceCapabilitiesSchema` for provider-owned catalog augmentation using
+the canonical capability schema rather than a competing normalizer. Static
+capability declarations do not confer account entitlement.

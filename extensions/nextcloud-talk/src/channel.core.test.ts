@@ -14,6 +14,39 @@ function safeParseNextcloudTalkConfig(value: unknown) {
 }
 
 describe("nextcloud talk channel core", () => {
+  it("marks ambiguous room-token session routes as best-effort", () => {
+    const resolveSessionRoute = nextcloudTalkPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveSessionRoute) {
+      throw new Error("Nextcloud Talk outbound session routing unavailable");
+    }
+    const route = resolveSessionRoute({
+      cfg: {},
+      agentId: "main",
+      accountId: "acct-1",
+      target: "nextcloud-talk:room-123",
+    });
+
+    expect(route).toEqual({
+      sessionKey: "agent:main:nextcloud-talk:group:room-123",
+      baseSessionKey: "agent:main:nextcloud-talk:group:room-123",
+      recipientSessionExact: false,
+      peer: { kind: "group", id: "room-123" },
+      chatType: "group",
+      from: "nextcloud-talk:room:room-123",
+      to: "nextcloud-talk:room-123",
+    });
+  });
+
+  it("returns null when the target cannot be normalized to a room id", () => {
+    const resolveSessionRoute = nextcloudTalkPlugin.messaging?.resolveOutboundSessionRoute;
+    if (!resolveSessionRoute) {
+      throw new Error("Nextcloud Talk outbound session routing unavailable");
+    }
+    expect(
+      resolveSessionRoute({ cfg: {}, agentId: "main", accountId: "acct-1", target: "" }),
+    ).toBeNull();
+  });
+
   it.each([
     ["omitted media allowlist", {}, true],
     ["explicit sender", { mediaAllowFrom: ["users/alice"] }, false],
@@ -63,7 +96,7 @@ describe("nextcloud talk channel core", () => {
     expect(result.success).toBe(true);
   });
 
-  it("normalizes trimmed DM allowlist prefixes to lowercase ids", () => {
+  it("normalizes comparisons without rewriting pairing mutation keys", () => {
     const resolveDmPolicy = nextcloudTalkPlugin.security?.resolveDmPolicy;
     if (!resolveDmPolicy) {
       throw new Error("resolveDmPolicy unavailable");
@@ -90,9 +123,20 @@ describe("nextcloud talk channel core", () => {
 
     expect(result.policy).toBe("allowlist");
     expect(result.allowFrom).toEqual(["  nc:User-Id  "]);
-    expect(result.normalizeEntry?.("  nc:User-Id  ")).toBe("user-id");
+    expect(result.normalizeEntry?.("  nc:User-Id  ")).toBe("users/user-id");
+    expect(result.normalizeEntry?.("  nc:Users/User-Id  ")).toBe("users/user-id");
+    expect(
+      nextcloudTalkPlugin.config.formatAllowFrom?.({
+        cfg,
+        accountId: "default",
+        allowFrom: ["  nc:User-Id  ", "guests/user-id"],
+      }),
+    ).toEqual(["users/user-id", "guests/user-id"]);
     expect(nextcloudTalkPlugin.pairing?.normalizeAllowEntry?.("  nextcloud-talk:User-Id  ")).toBe(
       "user-id",
     );
+    expect(
+      nextcloudTalkPlugin.pairing?.normalizeAllowEntry?.("  nextcloud-talk:users/User-Id  "),
+    ).toBe("users/user-id");
   });
 });

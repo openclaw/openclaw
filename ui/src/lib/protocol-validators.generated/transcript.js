@@ -25,7 +25,6 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 */
-// node_modules/.pnpm/typebox@1.3.36/node_modules/typebox/build/guard/unicode/unicode.mjs
 function CodePointCount(value) {
   let result = 0,
     index = 0,
@@ -36,9 +35,7 @@ function CodePointCount(value) {
   }
   return result;
 }
-
-// <stdin>
-var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
+var isChatTranscriptMetadata = (() => {
     let External = [
         new RegExp("(^actor$|^assignedBy$|^assignedAt$)", "u"),
         new RegExp("(^type$|^id$|^label$|^avatarUrl$|^identity$)", "u"),
@@ -232,7 +229,7 @@ var isChatTranscriptMetadata = /* @__PURE__ */ (() => {
         value.length <= 32;
     return (value) => check_0(value);
   })(),
-  isProgressCard = /* @__PURE__ */ (() => {
+  isProgressCard = (() => {
     let External = [new RegExp("(^sessionKey$|^revision$|^updatedAt$|^markdown$|^steps$)", "u")],
       check_0 = (value) =>
         typeof value == "object" &&

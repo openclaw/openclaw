@@ -7,6 +7,7 @@ import { t } from "../../i18n/index.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { renderChatComposerNotices, renderChatTopbarNotices } from "./chat-view-notices.tsx";
+import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
 
 const model = "<img src=x onerror=alert(1)>";
 type ComposerProps = Parameters<typeof renderChatComposerNotices>[0];
@@ -16,8 +17,15 @@ function publishedNotices<P extends object>(Notices: (props: P) => JSX.Element, 
   const [props, publish] = createSignal<P>(() => initial);
   return { ...mountSolid(() => <Notices {...props()} />), publish };
 }
-const publishedComposer = (initial: Omit<ComposerProps, "messages">) =>
-  publishedNotices<ComposerProps>(renderChatComposerNotices, { messages: [], ...initial });
+const publishedComposer = (initial: Omit<ComposerProps, "messages">, mobile = false) =>
+  publishedNotices<ComposerProps>(
+    (props) => (
+      <ChatConversationMobile value={() => mobile}>
+        {renderChatComposerNotices(props)}
+      </ChatConversationMobile>
+    ),
+    { messages: [], ...initial },
+  );
 function publishHistory(
   publish: (props: ComposerProps) => void,
   initial: ComposerProps,
@@ -160,14 +168,18 @@ it.each([
   }
 });
 
-it.each(["run", "placement"] as const)("preserves expanded diagnostics and focus (%s)", (kind) => {
+it.each([
+  ["run", false],
+  ["run", true],
+  ["placement", false],
+] as const)("preserves expanded diagnostics and focus (%s, mobile=%s)", (kind, mobile) => {
   const diagnostic = "Synthetic failure\n  at workspace/session.ts:42";
   const initial: ComposerProps = {
     messages: [],
     runError: kind === "run" ? { summary: diagnostic } : undefined,
     placementStartup: kind === "placement" ? failedPlacement(diagnostic) : undefined,
   };
-  const { container, publish } = publishedComposer(initial);
+  const { container, publish } = publishedComposer(initial, mobile);
   const details = container.querySelector("details")!;
   const summary = details.querySelector("summary")!;
   details.open = true;
@@ -213,6 +225,49 @@ it.each(["chatgpt_business_usage_limit", "chatgpt_consumer_usage_limit"] as cons
     } finally {
       view.unmount();
       restoreDialog();
+    }
+  },
+);
+
+it.each(["refresh", "details", "message"] as const)(
+  "keeps available mobile error actions and diagnostics (%s)",
+  (variant) => {
+    const onRefresh = vi.fn();
+    const diagnostic =
+      variant === "message" ? "Stopped." : "Request interrupted.\nPlease check the conversation.";
+    const { container } = publishedComposer(
+      {
+        connected: true,
+        runError: { kind: "stop", summary: diagnostic },
+        onRefresh: variant === "refresh" ? onRefresh : undefined,
+      },
+      true,
+    );
+    const notice = container.querySelector(".chat-error")!;
+    expect(notice.textContent).toContain(
+      diagnostic === "Stopped." ? diagnostic : "Request interrupted.",
+    );
+    expect(notice.querySelector(".chat-error__dismiss")).toBeNull();
+    const details = notice.querySelector("details");
+    if (variant === "message") {
+      expect(details).toBeNull();
+      expect(notice.querySelector("button")).toBeNull();
+      return;
+    }
+    expect(details?.open).toBe(false);
+    expect(details?.querySelector("summary .chat-copy-btn")).toBeNull();
+    details!.open = true;
+    expect(details?.querySelector("pre")?.textContent).toBe(diagnostic);
+    expect(details?.querySelector(".chat-copy-btn")?.getAttribute("aria-label")).toBe(
+      t("chat.copyError"),
+    );
+    const refresh = notice.querySelector<HTMLButtonElement>(".chat-error__refresh");
+    if (variant === "refresh") {
+      refresh!.click();
+      expect(onRefresh).toHaveBeenCalledOnce();
+      expect(details?.open).toBe(true);
+    } else {
+      expect(refresh).toBeNull();
     }
   },
 );

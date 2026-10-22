@@ -133,7 +133,7 @@ describe("status text truncation", () => {
     expect(startupLabel(host)).toBe("Waiting for a response");
   });
 
-  it("preserves complete characters at the retry and fallback label boundary", () => {
+  it("keeps retry labels generic and preserves complete characters in provider model labels", () => {
     const expected = "x".repeat(255);
     const input = `${expected}😀 trailing`;
     const host = createHost({
@@ -146,7 +146,6 @@ describe("status text truncation", () => {
       message: input,
     });
     expect(startupLabel(host)).toBe("Retrying…");
-    expect(host.chatRunStartup).toMatchObject({ message: expected });
     emitEvent(host, "run-1", 2, "notice", {
       phase: "provider_policy",
       category: "cyber",

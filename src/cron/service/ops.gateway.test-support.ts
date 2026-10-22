@@ -18,6 +18,7 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { CronService, type CronEvent } from "../service.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { createHeldCronRunner } from "./ops.test-support.js";
 import type { CronServiceDeps } from "./state.js";
 
 export type CronGatewayFixture = Parameters<Parameters<typeof withCronGatewayState>[0]>[0];
@@ -82,7 +83,6 @@ export async function withCronGatewayState(
       defaultAgentId: "main",
       log: logger,
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob,
       listConfiguredChannels,
       onEvent: (event) => {
@@ -134,21 +134,13 @@ export async function occupyWorkers(
     createDueIsolatedJob({ id: `capacity-${index}`, nowMs: now, nextRunAtMs: now }),
   );
   await saveCronStore(fixture.storePath, { version: 1, jobs: [...blockerJobs, job] });
-  const started = createDeferredCore();
-  const releaseBlocker = createDeferredCore();
-  let count = 0;
-  vi.mocked(fixture.runIsolatedAgentJob).mockImplementation(async (input) => {
-    if (input.job.id === job.id) {
-      return await runTarget(input);
-    }
-    if (++count === blockerJobs.length) {
-      started.resolve();
-    }
-    await releaseBlocker.promise;
-    return { status: "ok" };
-  });
+  const held = createHeldCronRunner(blockerJobs.length);
+  vi.mocked(fixture.runIsolatedAgentJob).mockImplementation((input) =>
+    input.job.id === job.id ? runTarget(input) : held.runner(input),
+  );
   const blocker = Promise.all(blockerJobs.map((entry) => fixture.cron.run(entry.id, "force")));
-  await started.promise;
+  await held.started;
+  const releaseBlocker = { resolve: () => held.release.resolve({ status: "ok" }) };
   const targetCalls = () =>
     vi.mocked(fixture.runIsolatedAgentJob).mock.calls.filter(([input]) => input.job.id === job.id);
   return { blocker, releaseBlocker, targetCalls };

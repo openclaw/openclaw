@@ -387,7 +387,11 @@ export function createSqliteSessionActorExecutor(
                   settled.kind !== "completed" ? settled.error : undefined,
                 );
               }
-            } else if (reply.ok && reply.value.kind === "rolled-back") {
+            } else if (!reply.ok) {
+              // Actor mutations require host admission after hydration. A worker
+              // lost before that grant cannot have applied this command.
+              result = { kind: "rolled-back", error: errorFacts(reply.error) };
+            } else if (reply.value.kind === "rolled-back") {
               result = reply.value;
             } else {
               result = unconfirmed("Actor command omitted native settlement");

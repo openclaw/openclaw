@@ -15,53 +15,30 @@ afterEach(resetProcessRegistryForTests);
 const stateOptions = { scenario: "minimal", prepareProfileCatalog: true } as const;
 
 it.each([
-  {
-    role: "view" as const,
-    scopes: ["operator.read", "operator.write"],
-    own: false,
-    allowed: false,
-  },
-  { role: "write" as const, scopes: ["operator.read"], own: false, allowed: false },
-  {
-    role: "write" as const,
-    scopes: ["operator.read", "operator.write"],
-    own: false,
-    allowed: true,
-  },
-  {
-    role: "write" as const,
-    scopes: ["operator.read", "operator.sessions.write"],
-    own: false,
-    allowed: false,
-  },
-  {
-    role: "write" as const,
-    scopes: ["operator.read", "operator.sessions.write"],
-    own: true,
-    allowed: true,
-  },
-])(
-  "projects and enforces process controls for $role with $scopes (own=$own)",
-  async ({ role, scopes, own, allowed }) => {
+  ["view", "operator.write", false, false],
+  ["write", undefined, false, false],
+  ["write", "operator.write", false, true],
+  ["write", "operator.sessions.write", false, false],
+  ["write", "operator.sessions.write", true, true],
+] as const)(
+  "projects and enforces process controls for %s with %s (own=%s, allowed=%s)",
+  async (role, writeScope, own, allowed) => {
     await withOpenClawTestState(stateOptions, async (state) => {
       const cfg = rolePolicyConfig();
       await state.writeConfig(cfg);
       setRuntimeConfigSnapshot(cfg);
       const owner = roleClient("write", "process-owner");
       const viewer = roleClient(role, "process-viewer");
-      viewer.connect.scopes = scopes;
+      viewer.connect.scopes = ["operator.read", ...(writeScope ? [writeScope] : [])];
       const key = "agent:main:process-test";
+      const ownerId = (own ? viewer : owner).authenticatedUserProfile!.profileId;
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey: key },
         {
           sessionId: "session-process-test",
           updatedAt: 1,
           visibility: "shared",
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: (own ? viewer : owner).authenticatedUserProfile!.profileId,
-          },
+          createdActor: { type: "human", source: "profile", id: ownerId },
         },
       );
       const record = createProcessSessionFixture({ id: "visible-build", backgrounded: true });
@@ -83,7 +60,6 @@ it.each([
         return respond;
       };
       const listed = await dispatch("sessions.processes.list", { key });
-      // A stale incarnation cannot stop any process, even when the viewer can control the session.
       const stopped = await dispatch("sessions.processes.stop", {
         key,
         sessionId: "session-process-test",
@@ -95,12 +71,8 @@ it.each([
         expect(stopped).toHaveBeenCalledWith(true, { requested: false });
       }
       expect(record.cancellationRequested).toBeUndefined();
-      expect(listed).toHaveBeenCalledWith(
-        true,
-        expect.objectContaining({
-          processes: [expect.objectContaining({ processId: record.id, canStop: allowed })],
-        }),
-      );
+      const process = expect.objectContaining({ processId: record.id, canStop: allowed });
+      expect(listed).toHaveBeenCalledWith(true, expect.objectContaining({ processes: [process] }));
     });
   },
 );

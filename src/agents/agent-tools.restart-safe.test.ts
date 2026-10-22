@@ -145,6 +145,11 @@ function construct(options: Partial<OpenClawCodingToolsOptions> = {}) {
     tools,
     retained,
     catalogRef,
+    automation: () =>
+      expectDefined(
+        tools.find((tool) => tool.name === "automations"),
+        "automations",
+      ),
     call: (args: Record<string, unknown>, id = "automations") =>
       call.execute("recovery-inspection", { id, args }),
   };
@@ -200,10 +205,7 @@ describe("restart-safe automation inspection", () => {
 
   it("rejects global status and every automation mutation at the owner even with open admission", async () => {
     const surface = construct();
-    const automation = expectDefined(
-      surface.tools.find((tool) => tool.name === "automations"),
-      "automations",
-    );
+    const automation = surface.automation();
     expect(Value.Check(automation.parameters, { action: "get", jobId: job.id })).toBe(true);
     for (const args of unavailableRecoveryInputs) {
       expect(Value.Check(automation.parameters, args), args.action).toBe(false);
@@ -226,10 +228,7 @@ describe("restart-safe automation inspection", () => {
     initializeGlobalHookRunner(
       createMockPluginRegistry([{ hookName: "before_tool_call", handler: rewrite }]),
     );
-    const automation = expectDefined(
-      surface.tools.find((tool) => tool.name === "automations"),
-      "automations",
-    );
+    const automation = surface.automation();
     await expect(
       automation.execute("rewritten-read", { action: "get", jobId: job.id }),
     ).rejects.toThrow(/read-only/i);
@@ -257,20 +256,13 @@ describe("restart-safe automation inspection", () => {
   it("requires caller identity for recovery reads and owner authority for normal writes", async () => {
     for (const options of [{ sessionKey: undefined }, { forceRestartSafeTools: false }]) {
       const denied = construct(options);
-      const automation = expectDefined(
-        denied.tools.find((tool) => tool.name === "automations"),
-        "automations",
-      );
       await expect(
-        automation.execute("denied-recovery-read", { action: "get", jobId: job.id }),
+        denied.automation().execute("denied-recovery-read", { action: "get", jobId: job.id }),
       ).resolves.toMatchObject({ details: { gated: true } });
     }
     expect(gatewayCall).not.toHaveBeenCalled();
     const surface = construct({ forceRestartSafeTools: false, senderIsOwner: true });
-    const automation = expectDefined(
-      surface.tools.find((tool) => tool.name === "automations"),
-      "automations",
-    );
+    const automation = surface.automation();
     expect(isAgentToolRestartSafe(automation)).toBe(false);
     expect(Value.Check(automation.parameters, { action: "remove", jobId: job.id })).toBe(true);
     gatewayCall

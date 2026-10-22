@@ -258,6 +258,10 @@ Official harnesses use the private JavaScript-only
 existing execution boundary, monotonic execution snapshots, middleware, and
 cleanup. Its result and failure callbacks carry those facts to native adapters
 without taking over their receipt or timeout owner.
+Execution argument snapshots are readonly and shared by progress and terminal
+observers. Tool execution and result middleware receive separate mutable inputs;
+terminal formatters retain their own post-execution capture so they can observe
+changes made by the tool without aliasing later middleware.
 `recordAgentHarnessToolResultTelemetry` collects host-tool delivery, media, TTS,
 cron, and heartbeat facts using the caller's prepared source-reply projection.
 The invocation preserves execution failures when presentation middleware

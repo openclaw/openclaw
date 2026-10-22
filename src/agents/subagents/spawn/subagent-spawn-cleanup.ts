@@ -20,7 +20,6 @@ type AcceptedRunAbortParams = {
   isCurrent?: () => boolean;
   callGateway?: GatewayCall;
   timeoutMs?: number;
-  signal?: AbortSignal;
 };
 type AcceptedRunTerminationResult = { status: "settled" } | { status: "failed"; error: unknown };
 
@@ -287,14 +286,12 @@ export async function terminateFailedRegistrationRun(params: {
 
 async function requestAcceptedRunAbort(params: AcceptedRunAbortParams): Promise<unknown> {
   const call = params.callGateway ?? callSubagentGateway;
-  params.signal?.throwIfAborted();
   return await call({
     method: "chat.abort",
     params: { sessionKey: params.childSessionKey, runId: params.gatewayRunId },
-    ...(params.isCurrent || params.signal
+    ...(params.isCurrent
       ? {
           assertDispatchCurrent: () => {
-            params.signal?.throwIfAborted();
             if (params.isCurrent && !params.isCurrent()) {
               throw new Error("Subagent spawn no longer owns this accepted run");
             }
@@ -302,7 +299,6 @@ async function requestAcceptedRunAbort(params: AcceptedRunAbortParams): Promise<
         }
       : {}),
     timeoutMs: params.timeoutMs ?? SUBAGENT_CONTROL_GATEWAY_TIMEOUT_MS,
-    ...(params.signal ? { signal: params.signal } : {}),
   });
 }
 

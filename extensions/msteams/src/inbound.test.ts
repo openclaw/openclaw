@@ -1,4 +1,3 @@
-// Msteams tests cover inbound plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
   extractMSTeamsQuoteInfo,
@@ -8,78 +7,51 @@ import {
 } from "./inbound.js";
 
 describe("msteams inbound", () => {
-  describe("stripMSTeamsMentionTags", () => {
-    it("removes <at ...> tags with attributes", () => {
-      expect(stripMSTeamsMentionTags('<at id="1">Bot</at> hi')).toBe("hi");
-      expect(stripMSTeamsMentionTags('hi <at itemid="2">Bot</at>')).toBe("hi");
-    });
+  it("removes <at ...> tags with attributes", () => {
+    expect(stripMSTeamsMentionTags('<at id="1">Bot</at> hi')).toBe("hi");
+    expect(stripMSTeamsMentionTags('hi <at itemid="2">Bot</at>')).toBe("hi");
   });
 
   describe("parseMSTeamsActivityTimestamp", () => {
+    const timestamp = "2024-01-01T00:00:00.000Z";
     it("returns undefined for empty/invalid values", () => {
       expect(parseMSTeamsActivityTimestamp(undefined)).toBeUndefined();
       expect(parseMSTeamsActivityTimestamp("not-a-date")).toBeUndefined();
     });
 
     it("parses string timestamps", () => {
-      const ts = parseMSTeamsActivityTimestamp("2024-01-01T00:00:00.000Z");
-      if (!ts) {
-        throw new Error("expected MSTeams timestamp parser to return a Date");
-      }
-      expect(ts.toISOString()).toBe("2024-01-01T00:00:00.000Z");
+      expect(parseMSTeamsActivityTimestamp(timestamp)?.toISOString()).toBe(timestamp);
     });
 
     it("passes through Date instances", () => {
-      const d = new Date("2024-01-01T00:00:00.000Z");
+      const d = new Date(timestamp);
       expect(parseMSTeamsActivityTimestamp(d)).toBe(d);
     });
   });
 
-  describe("wasMSTeamsBotMentioned", () => {
-    it("returns true when a mention entity matches recipient.id", () => {
-      expect(
-        wasMSTeamsBotMentioned({
-          recipient: { id: "bot" },
-          entities: [{ type: "mention", mentioned: { id: "bot" } }],
-        }),
-      ).toBe(true);
-    });
+  it("returns true when a mention entity matches recipient.id", () => {
+    expect(
+      wasMSTeamsBotMentioned({
+        recipient: { id: "bot" },
+        entities: [{ type: "mention", mentioned: { id: "bot" } }],
+      }),
+    ).toBe(true);
   });
 
   describe("extractMSTeamsQuoteInfo", () => {
-    const replyAttachment = (overrides?: { content?: string; contentType?: string }) => ({
-      contentType: overrides?.contentType ?? "text/html",
-      content:
-        overrides?.content ??
-        '<blockquote itemtype="http://schema.skype.com/Reply" itemscope>' +
-          '<strong itemprop="mri">Alice</strong>' +
-          '<p itemprop="copy">Hello world</p>' +
-          "</blockquote>",
-    });
+    const quote = (body: string) =>
+      `<blockquote itemtype="http://schema.skype.com/Reply" itemscope>${body}</blockquote>`;
+    const sender = (name: string) => `<strong itemprop="mri">${name}</strong>`;
+    const copy = (text: string) => `<p itemprop="copy">${text}</p>`;
+    const attachment = (content: unknown) => ({ contentType: "text/html", content });
 
     it("uses 'unknown' as sender when sender element is absent", () => {
-      const result = extractMSTeamsQuoteInfo([
-        {
-          contentType: "text/html",
-          content:
-            '<blockquote itemtype="http://schema.skype.com/Reply" itemscope>' +
-            '<p itemprop="copy">quoted text</p>' +
-            "</blockquote>",
-        },
-      ]);
+      const result = extractMSTeamsQuoteInfo([attachment(quote(copy("quoted text")))]);
       expect(result).toEqual({ sender: "unknown", body: "quoted text" });
     });
 
     it("returns undefined when body element is absent", () => {
-      const result = extractMSTeamsQuoteInfo([
-        {
-          contentType: "text/html",
-          content:
-            '<blockquote itemtype="http://schema.skype.com/Reply" itemscope>' +
-            '<strong itemprop="mri">Alice</strong>' +
-            "</blockquote>",
-        },
-      ]);
+      const result = extractMSTeamsQuoteInfo([attachment(quote(sender("Alice")))]);
       expect(result).toBeUndefined();
     });
 
@@ -90,34 +62,25 @@ describe("msteams inbound", () => {
     });
 
     it("handles object content with .text property containing the reply HTML", () => {
-      const htmlContent =
-        '<blockquote itemtype="http://schema.skype.com/Reply" itemscope>' +
-        '<strong itemprop="mri">Dave</strong>' +
-        '<p itemprop="preview">short preview</p>' +
-        '<p itemprop="copy">hello &amp; goodbye\nfrom object</p>' +
-        "</blockquote>";
-      const result = extractMSTeamsQuoteInfo([
-        { contentType: "text/html", content: { text: htmlContent } },
-      ]);
+      const htmlContent = quote(
+        sender("Dave") +
+          '<p itemprop="preview">short preview</p>' +
+          copy("hello &amp; goodbye\nfrom object"),
+      );
+      const result = extractMSTeamsQuoteInfo([attachment({ text: htmlContent })]);
       expect(result).toEqual({ sender: "Dave", body: "hello & goodbye from object" });
     });
 
     it("handles object content with .body property containing the reply HTML", () => {
-      const htmlContent =
-        '<blockquote itemtype="http://schema.skype.com/Reply" itemscope>' +
-        '<strong itemprop="mri">Eve</strong>' +
-        '<p itemprop="copy">hello from body field</p>' +
-        "</blockquote>";
-      const result = extractMSTeamsQuoteInfo([
-        { contentType: "text/html", content: { body: htmlContent } },
-      ]);
+      const htmlContent = quote(sender("Eve") + copy("hello from body field"));
+      const result = extractMSTeamsQuoteInfo([attachment({ body: htmlContent })]);
       expect(result).toEqual({ sender: "Eve", body: "hello from body field" });
     });
 
     it("finds quote in second attachment when first has no quote", () => {
       const result = extractMSTeamsQuoteInfo([
         { contentType: "text/plain", content: "plain text" },
-        replyAttachment(),
+        attachment(quote(sender("Alice") + copy("Hello world"))),
       ]);
       expect(result).toEqual({ sender: "Alice", body: "Hello world" });
     });

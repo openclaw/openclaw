@@ -49,6 +49,21 @@ it.each([
   });
 });
 
+it("reads exact argv without the environment a marker-free caller does not use", () => {
+  // Some macOS argument images end without the separator that bounds envp.
+  readCommand.mockImplementation((_pid: number, options: { environmentKeys?: string[] }) => {
+    if (options.environmentKeys?.length) {
+      throw new ProcSafeError("incomplete", "unterminated Darwin environment");
+    }
+    return { executable: "/bin/sleep", argv: Object.freeze(["/bin/sleep", "30"]), environment: {} };
+  });
+  expect(() => readDarwinProcessCommand(12, "same")).toThrow("unterminated Darwin environment");
+  expect(readDarwinProcessCommand(12, "same", { serviceMarker: false })).toEqual({
+    argv: ["/bin/sleep", "30"],
+    executable: "/bin/sleep",
+  });
+});
+
 it("returns no command for proven absence", () => {
   readCommand.mockReturnValue(null);
   expect(readDarwinProcessCommand(12, "same")).toBeUndefined();

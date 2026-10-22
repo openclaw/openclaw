@@ -18,7 +18,7 @@ import {
 } from "./current-conversation-bindings.js";
 import {
   readCurrentConversationBindingListsInDatabase as readLists,
-  readCurrentConversationBindingSelectionInDatabase as readSelection,
+  inspectCurrentConversationBindingRecordsInDatabase as readSelection,
 } from "./current-conversation-bindings.kernel.js";
 import { currentConversationBindingPublication as publication } from "./current-conversation-bindings.publication.js";
 import type { SessionBindingRecord } from "./session-binding.types.js";

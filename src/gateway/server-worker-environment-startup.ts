@@ -51,7 +51,6 @@ import {
 import type { WorkerPlacementDispatchContract } from "./worker-environments/service-contract.js";
 import type { WorkerEnvironmentService } from "./worker-environments/service.js";
 import type { WorkerEnvironmentServiceOptions } from "./worker-environments/service.types.js";
-import type { WorkerTunnelManager } from "./worker-environments/tunnel.js";
 import { listRetainedWorkerBundleHashes } from "./worker-environments/worker-bundle-retention.js";
 
 type WorkerEnvironmentLogger = {
@@ -68,7 +67,6 @@ export type GatewayWorkerEnvironmentStartupState = Awaited<
 export type GatewayWorkerEnvironmentRuntime = {
   workerEnvironmentService?: WorkerEnvironmentService;
   workerLiveEvents?: WorkerLiveEventReceiver;
-  workerTunnelManager?: WorkerTunnelManager;
   nodeWorkerGatewayNamespace?: string;
   nodeWorkerBundleRetention?: NodeWorkerBundleRetention;
   runtimeInstall?: WorkerPlacementRuntimeInstallReader;
@@ -647,7 +645,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
   return {
     workerEnvironmentService,
     workerLiveEvents,
-    workerTunnelManager,
     nodeWorkerGatewayNamespace,
     nodeWorkerBundleRetention,
     runtimeInstall: createWorkerPlacementRuntimeInstallReader({

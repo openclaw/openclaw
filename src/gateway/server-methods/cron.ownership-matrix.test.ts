@@ -272,7 +272,6 @@ describe("cron ownership access matrix", () => {
             defaultAgentId: "ops",
             log: createNoopLogger(),
             enqueueSystemEvent: vi.fn(),
-            requestHeartbeat: vi.fn(),
             runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
           });
           const context = createCronTestContext(undefined, getRuntimeConfig);

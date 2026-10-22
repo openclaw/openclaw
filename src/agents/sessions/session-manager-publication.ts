@@ -47,7 +47,7 @@ export function unwrapSessionManagerPublication(
 export function createSessionManagerPublicationHooks(params: {
   agentId: string;
   storePath: string;
-  databaseIdentity: string | (() => string | undefined);
+  databaseIdentity: () => string | undefined;
   initialWriter?: InitialSessionTranscriptWriter;
   beforeIdentityPublication?: (publication: SessionManagerAuthorityPublication) => void;
 }) {
@@ -76,10 +76,7 @@ export function createSessionManagerPublicationHooks(params: {
       const conversationPublication = parseConversationPublications(
         request.facts.conversationPublication,
       );
-      const databaseIdentity =
-        typeof params.databaseIdentity === "function"
-          ? params.databaseIdentity()
-          : params.databaseIdentity;
+      const databaseIdentity = params.databaseIdentity();
       if (
         !transcriptPublication ||
         !entryPublication ||

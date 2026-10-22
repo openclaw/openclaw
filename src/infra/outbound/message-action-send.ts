@@ -1,3 +1,4 @@
+import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
@@ -26,6 +27,9 @@ import {
   type ReplyPayloadDelivery,
 } from "../../interactive/payload.js";
 import type { AssistantDeliveryTtsFacts } from "../../llm/types.js";
+import { resolveOutboundMediaMaxBytes } from "../../media/configured-max-bytes.js";
+import { resolveLocalMediaPath } from "../../media/local-media-path.js";
+import { resolveOutboundAttachmentFromUrl } from "../../media/outbound-attachment.js";
 import { resolveAgentScopedOutboundMediaAccess } from "../../media/read-capability.js";
 import { readBooleanParam } from "../../plugin-sdk/boolean-param.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
@@ -37,7 +41,9 @@ import { stripFormattedReasoningMessage } from "../../shared/text/formatted-reas
 import { shouldAttemptTtsPayload } from "../../tts/tts-config.js";
 import { prepareTtsPreferences } from "../../tts/tts-preferences.js";
 import { parseInlineDirectives } from "../../utils/directive-tags.js";
+import { isPathInside } from "../path-guards.js";
 import { throwIfAborted } from "./abort.js";
+import { mirrorDeliveredPayloads } from "./deliver-transcript.js";
 import {
   messageActionRequesterMediaContext,
   type MessageActionInput,
@@ -48,7 +54,6 @@ import {
   applyMessageCrossContextMarker,
   executeGatewayAction,
 } from "./message-action-execution.js";
-import { stageGatewayWorkspaceMedia } from "./message-action-gateway-media.js";
 import { collectAttachmentSources, normalizeSandboxMediaSource } from "./message-action-params.js";
 import { annotateSourceDelivery } from "./message-action-result-acceptance.js";
 import {
@@ -62,12 +67,14 @@ import {
   resolveAndApplyOutboundReplyToId,
   resolveAndApplyOutboundThreadId,
 } from "./message-action-threading.js";
+import type { OutboundMirror } from "./mirror.js";
 import {
   executeSendAction,
   hasCorePresentationDelivery,
   materializeMessagePresentationFallback,
 } from "./outbound-send-service.js";
 import { ensureOutboundSessionEntry, resolveOutboundSessionRoute } from "./outbound-session.js";
+import { summarizeOutboundPayloadForTransport } from "./payloads.js";
 
 // Keep the TTS runtime lazy so ordinary sends do not pay the provider import cost.
 const loadMessageActionTtsRuntime = createLazyRuntimeModule(
@@ -540,15 +547,38 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
     (channelPlugin?.actions?.resolveExecutionMode?.({ action }) === "gateway" ||
       channelPlugin?.outbound?.deliveryMode === "gateway");
   if (usesGatewayAction && !dryRun) {
-    const stagedPayload = await stageGatewayWorkspaceMedia({
-      cfg,
-      channel,
-      accountId,
-      payload: sendPayload.payload,
-      mediaUrls: sendPayload.mediaUrls,
-      mediaAccess,
-      workspaceMediaAccess: input.workspaceMediaAccess,
-    });
+    let stagedPayload = sendPayload.payload;
+    const mediaUrls = sendPayload.mediaUrls;
+    const workspaceRoots = input.workspaceMediaAccess?.localRoots ?? [];
+    if (mediaUrls?.length && workspaceRoots.length > 0) {
+      const maxBytes = resolveOutboundMediaMaxBytes({ cfg, channel, accountId });
+      const stagedMediaUrls = await Promise.all(
+        mediaUrls.map(async (mediaUrl) => {
+          const localPath = resolveLocalMediaPath(mediaUrl);
+          if (
+            !localPath ||
+            !workspaceRoots.some((root) =>
+              isPathInside(path.resolve(root), path.resolve(localPath)),
+            )
+          ) {
+            return mediaUrl;
+          }
+          return (await resolveOutboundAttachmentFromUrl(mediaUrl, maxBytes, { mediaAccess })).path;
+        }),
+      );
+      if (!stagedMediaUrls.every((mediaUrl, index) => mediaUrl === mediaUrls[index])) {
+        const stagedAttachments = stagedPayload.attachments?.map((attachment, index) => {
+          const { url: _url, mediaUrl: _mediaUrl, filePath: _filePath, ...metadata } = attachment;
+          return { ...metadata, path: stagedMediaUrls[index] };
+        });
+        stagedPayload = {
+          ...stagedPayload,
+          mediaUrl: stagedMediaUrls[0],
+          mediaUrls: stagedMediaUrls,
+          ...(stagedAttachments ? { attachments: stagedAttachments } : {}),
+        };
+      }
+    }
     sendPayload = updateSendPayloadPartsFromReplyPayload(sendPayload, stagedPayload);
     applySendPayloadPartsToActionParams(params, sendPayload);
   }
@@ -570,10 +600,36 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
           dryRun,
         }),
       });
+  const resolveTranscriptMirror = (): OutboundMirror | undefined =>
+    !dryRun && input.transcriptMirror
+      ? {
+          ...input.transcriptMirror,
+          text: sendPayload.message,
+          mediaUrls: sendPayload.mediaUrls,
+        }
+      : outboundRoute && !dryRun && input.suppressTranscriptMirror !== true
+        ? {
+            sessionKey: outboundRoute.sessionKey,
+            agentId,
+            text: sendPayload.message,
+            mediaUrls: sendPayload.mediaUrls,
+            idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
+          }
+        : undefined;
   if (gatewayPluginAction) {
     const deliveryFact = projectPluginMessageDeliveryFact(gatewayPluginAction.payload);
     if (!deliveryFact || deliveryFact.status === "settled") {
       await commitOutboundSessionRoute();
+      // The Gateway owns source-reply mirroring; other conversations use the
+      // delivery owner's destination controller, outside the sending turn's fence.
+      const mirror = resolveTranscriptMirror();
+      const sourceSessionKey = input.sourceReplySessionKey ?? input.sessionKey;
+      if (mirror && !deliveryFact?.partialDelivery && mirror.sessionKey !== sourceSessionKey) {
+        await mirrorDeliveredPayloads({
+          delivery: { cfg, channel, to, mirror: { ...mirror, deferToSessionLane: true } },
+          payloads: [summarizeOutboundPayloadForTransport(sendPayload.payload)],
+        });
+      }
     }
     return await annotateSourceDelivery(
       withSendNormalization(gatewayPluginAction, sendPayload.normalization),
@@ -608,22 +664,7 @@ export async function executeMessageSend(ctx: ResolvedActionContext): Promise<Me
       deliveryRetryOwner: input.actionOrigin === "message-tool" ? "caller" : undefined,
       // Both delivery paths must commit a first-contact route before mirroring.
       onSendAccepted: commitOutboundSessionRoute,
-      mirror:
-        !dryRun && input.transcriptMirror
-          ? {
-              ...input.transcriptMirror,
-              text: sendPayload.message,
-              mediaUrls: sendPayload.mediaUrls,
-            }
-          : outboundRoute && !dryRun && input.suppressTranscriptMirror !== true
-            ? {
-                sessionKey: outboundRoute.sessionKey,
-                agentId,
-                text: sendPayload.message,
-                mediaUrls: sendPayload.mediaUrls,
-                idempotencyKey: normalizeOptionalString(params.idempotencyKey) ?? undefined,
-              }
-            : undefined,
+      mirror: resolveTranscriptMirror(),
       silent: sendPayload.silent ?? undefined,
     },
     to,

@@ -38,17 +38,6 @@ export function markProbeAttempt(now: number, throttleKey: string): void {
   }
 }
 
-/** @internal – exposed for unit tests only */
-export const probeThrottleInternals = {
-  lastProbeAttempt,
-  MIN_PROBE_INTERVAL_MS,
-  PROBE_MARGIN_MS,
-  MAX_PROBE_KEYS,
-  resolveProbeThrottleKey,
-  isProbeThrottleOpen,
-  markProbeAttempt,
-} as const;
-
 type CooldownDecision =
   | { type: "skip"; reason: FailoverReason; error: string }
   | { type: "attempt"; reason: FailoverReason; markProbe: boolean }

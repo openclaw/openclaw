@@ -17,6 +17,7 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../../agents/media-generation-activity.js";
 import { findModelInCatalog } from "../../agents/model-catalog-lookup.js";
+import { recordModelFallbackStop } from "../../agents/model-fallback-stop.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../sessions/input-provenance.js";
 import { createAgentLifecycleTerminalBackstop } from "./agent-lifecycle-terminal.js";
@@ -34,6 +35,7 @@ import {
   buildFallbackCandidateTurnParams,
   buildReplyRunStateParams,
   resolveRunModelHasVision,
+  resolveReplyScheduledToolPolicy,
 } from "./agent-runner-run-params.js";
 import { buildReplyRouteThreadingToolContext } from "./agent-runner-utils.js";
 import { prepareCliReplyPayload } from "./cli-reply-payload.js";
@@ -51,6 +53,7 @@ export async function runCliFallbackCandidate(
   },
 ): ReturnType<typeof runCliAgentWithLifecycle> {
   const turn = params.turn;
+  params.scheduledInference?.assertCandidate(params.provider, true);
   const onPreparedBlockReply = turn.opts?.onPreparedBlockReply;
   const onNativeBlockReply: NonNullable<typeof turn.opts>["onBlockReply"] =
     turn.opts?.onBlockReply ??
@@ -209,6 +212,13 @@ export async function runCliFallbackCandidate(
           : resolveRunAuthProfile(params.candidateRun, params.cliExecutionProvider, {
               config: params.runtimeConfig,
             }).authProfileId;
+        if (turn.followupRun.run.scheduledAutomation && authProfileId) {
+          const refusal = new Error(
+            "Automation has no recorded inference account. Explicitly select its account with a model@profile update before running it.",
+          );
+          recordModelFallbackStop(refusal);
+          throw refusal;
+        }
         const diagnosticOwner = params.deferredLifecycle.handoffToCli();
         // A forked child carries the parent's binding with a one-shot fork marker;
         // honor it here or the child resumes inside the parent's native thread.
@@ -243,6 +253,9 @@ export async function runCliFallbackCandidate(
           lifecycleGeneration: params.lifecycleGeneration,
           startedAt: cliLifecycleStartedAt,
           onAgentRunStart: params.notifyAgentRunStart,
+          deferLifecycleStartUntilExecution: turn.followupRun.run.scheduledAutomation
+            ? true
+            : undefined,
           suppressAssistantBridge: turn.followupRun.run.silentExpected,
           onActivity: () => turn.replyOperation?.recordActivity(),
           onErrorBeforeLifecycle:
@@ -363,6 +376,42 @@ export async function runCliFallbackCandidate(
             runtimePolicySessionKey:
               turn.followupRun.run.runtimePolicySessionKey ?? turn.runtimePolicySessionKey,
             agentId: turn.followupRun.run.agentId,
+            jobId: turn.followupRun.run.scheduledAutomation?.job.id,
+            onExecutionStarted: turn.followupRun.run.scheduledAutomation
+              ? async () => {
+                  try {
+                    await turn.followupRun.run.internalEventExecution?.beforeScheduledStart?.(
+                      params.runId,
+                    );
+                    params.runAbortSignal?.throwIfAborted();
+                    turn.followupRun.run.internalEventExecution?.assertCurrent?.();
+                    const automation = turn.followupRun.run.scheduledAutomation;
+                    if (automation && sessionKey) {
+                      automation.onExecutionStarted?.({
+                        runId: params.runId,
+                        sessionId: turn.followupRun.run.sessionId,
+                        sessionKey,
+                        provider: params.provider,
+                        model: params.model,
+                        ...(params.isFallbackRetry ? { isFallback: true } : {}),
+                      });
+                    }
+                  } catch (error) {
+                    if (!params.hasAgentRunStarted()) {
+                      lifecycleBackstop.note({
+                        stream: "lifecycle",
+                        data: {
+                          phase: "finishing",
+                          executionStarted: false,
+                          providerStarted: false,
+                        },
+                      });
+                    }
+                    throw error;
+                  }
+                }
+              : undefined,
+            scheduledToolPolicy: resolveReplyScheduledToolPolicy(turn.followupRun.run),
             config: params.runtimeConfig,
             persistAssistantTranscript:
               turn.followupRun.currentInboundEventKind !== "room_event" &&
@@ -402,6 +451,7 @@ export async function runCliFallbackCandidate(
             forkCliSessionOnResume,
             ...forkRunParams,
             authProfileId,
+            nativeAuthOnly: turn.followupRun.run.scheduledAutomation ? true : undefined,
             mediaImageLayout: params.currentTurnImages.mediaImageLayout,
             messageChannel: turn.followupRun.originatingChannel,
             messageProvider: hookMessageProvider,

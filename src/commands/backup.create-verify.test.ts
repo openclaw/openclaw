@@ -1,9 +1,16 @@
 // Backup create/verify tests cover archive creation, runtime output, and verification failure handling.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fsSync, { existsSync } from "node:fs";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { makeBackupResult } from "../infra/backup-create.test-support.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { backupCreateCommand } from "./backup.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
+
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, existsSync: vi.fn(actual.existsSync) };
+});
 
 const createBackupArchiveMock = vi.hoisted(() => vi.fn());
 const verifyBackupArchiveMock = vi.hoisted(() => vi.fn());
@@ -27,8 +34,9 @@ vi.mock("../runtime.js", async () => {
 });
 
 // mock-isolation: Archive settlement uses a controlled outcome; routing has real-ledger coverage.
-vi.mock("./backup-outcome.js", () => ({
-  recordBackupRunOutcomeWithOwner: recordBackupRunOutcomeMock,
+vi.mock("../cli/local-state-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../cli/local-state-owner.js")>()),
+  runWithLocalStateOwner: recordBackupRunOutcomeMock,
 }));
 
 describe("backupCreateCommand verification", () => {
@@ -37,7 +45,13 @@ describe("backupCreateCommand verification", () => {
     verifyBackupArchiveMock.mockReset();
     writeRuntimeJsonMock.mockReset();
     recordBackupRunOutcomeMock.mockReset();
+    const databasePath = resolveOpenClawStateSqlitePath();
+    vi.mocked(existsSync)
+      .mockReset()
+      .mockImplementation((value) => value === databasePath || fsSync.existsSync(value));
   });
+
+  afterEach(() => vi.restoreAllMocks());
 
   it("formats created archives with included and skipped paths", async () => {
     createBackupArchiveMock.mockResolvedValue(
@@ -80,21 +94,7 @@ describe("backupCreateCommand verification", () => {
   });
 
   it("verifies the archive and settles outcome recording before reporting completion", async () => {
-    createBackupArchiveMock.mockResolvedValue({
-      archivePath: "/tmp/openclaw-backup.tar.gz",
-      archiveRoot: "openclaw-backup",
-      createdAt: "2026-04-07T00:00:00.000Z",
-      runtimeVersion: "test",
-      assetCount: 1,
-      entryCount: 2,
-      assets: [],
-      skipped: [],
-      skippedVolatileCount: 0,
-      verified: false,
-      dryRun: false,
-      includeWorkspace: false,
-      onlyConfig: false,
-    });
+    createBackupArchiveMock.mockResolvedValue(makeBackupResult({ verified: false }));
     verifyBackupArchiveMock.mockResolvedValue({
       ok: true,
       archivePath: "/tmp/openclaw-backup.tar.gz",

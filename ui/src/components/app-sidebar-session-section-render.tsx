@@ -1,4 +1,4 @@
-import { createMemo, For, onCleanup, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import { presenceActivityLabel, presenceViewerLabel } from "../lib/presence-users.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -8,7 +8,10 @@ import type {
   SidebarSessionListHost,
   PersonHeaders,
 } from "./app-sidebar-session-render-types.ts";
-import { renderSessionTree as SessionTree } from "./app-sidebar-session-row-render.tsx";
+import {
+  renderPendingSessionCreateRow,
+  renderSessionTree as SessionTree,
+} from "./app-sidebar-session-row-render.tsx";
 import { renderSidebarSessionSectionHeader as SessionSectionHeader } from "./app-sidebar-session-section-header.tsx";
 import {
   rowDemandsVisibility,
@@ -28,6 +31,11 @@ export function renderSessionSection(params: {
     personHeaders = createMemo(() => params.personHeaders);
   const totalRowCount = createMemo(() => section().totalRowCount);
   const group = createMemo(() => section().category);
+  // Created rows lead their section, so a create for this group takes that slot now.
+  const pendingCreate = createMemo(() => {
+    const pending = host().pendingSessionCreate();
+    return pending?.category && pending.category === group() ? pending : undefined;
+  });
   const personOwner = createMemo(() => section().personOwner);
   const personIdentity = createMemo(() => personOwner()?.identity);
   const presence = createMemo(() => {
@@ -196,7 +204,7 @@ export function renderSessionSection(params: {
     ) : undefined,
   );
   let personHeader: HTMLElement | undefined;
-  onCleanup(() => {
+  onSettled(() => () => {
     if (host().presencePeople?.get(section().id) === personHeader) {
       host().presencePeople?.delete(section().id);
     }
@@ -210,6 +218,9 @@ export function renderSessionSection(params: {
           `sidebar-recent-sessions__group--section-drop-${host().sessionOrganizer.sidebarSectionDropTarget?.position}`,
         {
           "sidebar-recent-sessions__group--headless": !section().renderHeader,
+          // Only a single selected owner's Person section renders without a header.
+          "sidebar-recent-sessions__group--inline-owner":
+            !section().renderHeader && section().id.startsWith("person:"),
           "sidebar-recent-sessions__group--collapsed": collapsed(),
           "sidebar-recent-sessions__group--dragging":
             host().sessionOrganizer.draggingSidebarSection === section().id,
@@ -256,11 +267,6 @@ export function renderSessionSection(params: {
           })()}
           onStartDrag={(sectionId) => host().sessionOrganizer.startSidebarSectionDrag(sectionId)}
           onFinishDrag={() => host().sessionOrganizer.finishSidebarSectionDrag()}
-          reorder={{
-            label: label(),
-            onMove: (target: string, position: "before" | "after") =>
-              host().sessionOrganizer.reorderSidebarSection(section().id, target, position),
-          }}
           onContextMenu={(() => {
             const currentGroup = group();
             return currentGroup
@@ -341,9 +347,7 @@ export function renderSessionSection(params: {
                   <button
                     type="button"
                     class="sidebar-session-group-actions"
-                    title={t("sessionsView.groupMenu", {
-                      group: currentGroup(),
-                    })}
+                    title={t("sessionsView.groupOptions")}
                     aria-label={t("sessionsView.groupMenu", {
                       group: currentGroup(),
                     })}
@@ -375,8 +379,9 @@ export function renderSessionSection(params: {
       ) : undefined}
       {collapsed() ? undefined : (
         <>
-          {section().rows.length > 0 ? (
+          {section().rows.length > 0 || pendingCreate() ? (
             <div class="sidebar-recent-sessions__list" role="list" aria-label={label()}>
+              {renderPendingSessionCreateRow(pendingCreate, true)}
               <For each={section().rows} keyed={(session) => session.key}>
                 {(session) => <SessionTree host={host()} session={session()} />}
               </For>

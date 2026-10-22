@@ -1,4 +1,4 @@
-import { createMemo, createSignal, createUniqueId, onSettled } from "solid-js";
+import { createMemo, createStore, createUniqueId, onSettled } from "solid-js";
 import type { ControlUiLinkPreview } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthToken } from "../../../app/control-ui-auth.ts";
@@ -76,16 +76,14 @@ export function BrowserTabCardHost(props: BrowserTabCardProps) {
       )
     );
   });
-  // Screenshot refreshes keep image failures latched; a new page target may retry them.
-  const [failedImages, setFailedImages] = createSignal<{
-    target: ReturnType<typeof pageTarget>;
-    urls: ReadonlySet<string>;
-  }>((previous) => {
-    const target = pageTarget();
-    return target && target !== previous?.target
-      ? { target, urls: new Set<string>() }
-      : (previous ?? { target, urls: new Set<string>() });
-  });
+  // Screenshot refreshes and unavailable targets retain failures; a new target retries them.
+  const [failedImages, setFailedImages] = createStore<Record<string, boolean>>((draft) => {
+    if (pageTarget()) {
+      for (const url of Object.keys(draft)) {
+        delete draft[url];
+      }
+    }
+  }, {});
   const thumbnailTarget = createMemo(
     () => {
       const current = context();
@@ -203,8 +201,7 @@ export function BrowserTabCardHost(props: BrowserTabCardProps) {
     }
     const currentImage = thumbnail()?.();
     const page = pagePreview()?.();
-    const image =
-      currentImage && !failedImages().urls.has(currentImage) ? currentImage : page?.imageDataUrl;
+    const image = currentImage && !failedImages[currentImage] ? currentImage : page?.imageDataUrl;
     const pageHost = URL.parse(preview.url)?.host || preview.url;
     const title = preview.title?.trim() || page?.title || pageHost || t("browser.title");
     return {
@@ -223,10 +220,9 @@ export function BrowserTabCardHost(props: BrowserTabCardProps) {
       src={src}
       alt=""
       onError={() =>
-        setFailedImages((images) => ({
-          ...images,
-          urls: new Set([...images.urls, src]),
-        }))
+        setFailedImages((images) => {
+          images[src] = true;
+        })
       }
     />
   );
@@ -258,7 +254,7 @@ export function BrowserTabCardHost(props: BrowserTabCardProps) {
               )}
             </>
           )}
-          {data()!.image && !failedImages().urls.has(data()!.image!) && (
+          {data()!.image && !failedImages[data()!.image!] && (
             <button
               type="button"
               class={["shot", { social: data()!.image !== data()!.currentImage }]}
@@ -276,8 +272,7 @@ export function BrowserTabCardHost(props: BrowserTabCardProps) {
             ) : (
               <>
                 <span class="icon" aria-hidden="true">
-                  {data()!.page?.faviconDataUrl &&
-                  !failedImages().urls.has(data()!.page!.faviconDataUrl!) ? (
+                  {data()!.page?.faviconDataUrl && !failedImages[data()!.page!.faviconDataUrl!] ? (
                     renderImage(data()!.page!.faviconDataUrl!)
                   ) : (
                     <Icon name="globe" />

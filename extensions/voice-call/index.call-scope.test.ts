@@ -163,15 +163,18 @@ it("rejects hang-up before admission when the consult is cancelled or the call h
   expect(carrier.endCall).not.toHaveBeenCalled();
 });
 
-it.each(["retired", "replaced"])(
+it.each(["retired", "replaced", "restarted"])(
   "rejects a bound hang-up when its service is %s during lookup",
   async (change) => {
     const carrier = await makeManagerRuntime();
     const lookup = holdCallLookup(carrier);
     const pending = carrier.tool.execute(change, { action: "end_call" });
     await lookup.started;
-    if (change === "retired") {
+    if (change === "retired" || change === "restarted") {
       await carrier.service.stop?.({} as never);
+      if (change === "restarted") {
+        await carrier.service.start(createVoiceCallServiceContext({ logger: noopLogger }));
+      }
     } else {
       registerBoundTool(carrier.call.callId);
     }

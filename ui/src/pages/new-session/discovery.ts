@@ -19,7 +19,8 @@ export type DraftRepositoryState =
   | { kind: "checking"; repoRoot: string }
   | ({ kind: "git" } & DraftBranches)
   | { kind: "direct"; repoRoot: string }
-  | { kind: "unavailable"; repoRoot: string };
+  | { kind: "unavailable"; repoRoot: string }
+  | { kind: "forbidden"; repoRoot: string; missingScope?: string };
 
 export type DraftCloudProfile = Omit<WorkerEnvironmentProfileSummary, "executionModes"> & {
   executionModes?: readonly WorkerExecutionMode[];

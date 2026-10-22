@@ -6,6 +6,8 @@ import {
 } from "openclaw/plugin-sdk/allow-from";
 import type { StableChannelIngressIdentityParams } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import {
+  buildMentionRegexes,
+  normalizeMentionText,
   resolveBotThreadMentionPolicy,
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
@@ -20,12 +22,12 @@ import { isClickClackAccountCurrent, resolveClickClackAccountConfig } from "./ac
 import { resolveClickClackDiscussionRoute } from "./discussions/routing.js";
 import { resolveClickClackGroupPolicy } from "./group-policy.js";
 import { createClickClackClient } from "./http-client.js";
-import { resolveClickClackMentionFacts } from "./mention-facts.js";
 import { getClickClackRuntime } from "./runtime.js";
 import { buildClickClackTarget } from "./target.js";
 import type { ClickClackMessage, CoreConfig, ResolvedClickClackAccount } from "./types.js";
 
 const CHANNEL_ID = "clickclack" as const;
+const CLICKCLACK_MENTION_PATTERN = /(?:^|[^a-z0-9_@-])@([a-z0-9][a-z0-9_-]{1,31})(?![a-z0-9_-])/giu;
 
 function normalizeClickClackUserId(value: string): string | null {
   const trimmed = value.trim();
@@ -118,12 +120,11 @@ export async function resolveClickClackInboundAccess(params: {
       : { chatType: "group", kind: "channel", id: routingMessage.channel_id ?? "" },
   );
   const routingConfig = routeConfig as OpenClawConfig;
-  const accountRuntime = getClickClackRuntime();
   const peer: RoutePeer = {
     kind: isDirect ? "direct" : "channel",
     id: target,
   };
-  let accountRoute: ResolvedAgentRoute = accountRuntime.channel.routing.resolveAgentRoute({
+  let accountRoute: ResolvedAgentRoute = routeRuntime.channel.routing.resolveAgentRoute({
     cfg: routingConfig,
     channel: CHANNEL_ID,
     accountId: routingAccount.accountId,
@@ -134,7 +135,7 @@ export async function resolveClickClackInboundAccess(params: {
     const dmScope = routingConfig.session?.dmScope ?? "main";
     // Account-level agent ownership changes only the agent prefix. Preserve the
     // resolved session policy so outbound recipient routing reaches this key.
-    const sessionKey = accountRuntime.channel.routing.buildAgentSessionKey({
+    const sessionKey = routeRuntime.channel.routing.buildAgentSessionKey({
       agentId,
       mainKey: routingConfig.session?.mainKey,
       channel: CHANNEL_ID,
@@ -143,7 +144,7 @@ export async function resolveClickClackInboundAccess(params: {
       dmScope,
       identityLinks: routingConfig.session?.identityLinks,
     });
-    const mainSessionKey = accountRuntime.channel.routing.buildAgentSessionKey({
+    const mainSessionKey = routeRuntime.channel.routing.buildAgentSessionKey({
       agentId,
       mainKey: routingConfig.session?.mainKey,
       channel: CHANNEL_ID,
@@ -184,6 +185,46 @@ export async function resolveClickClackInboundAccess(params: {
     discussionRoute,
     revoked: discussionResolution.state === "revoked",
   };
+  const resolveMentionFacts = (mentionConfig: OpenClawConfig, mentionPatterns: string[]) => {
+    if (preparedRoute.isDirect) {
+      return { canDetectMention: false, wasMentioned: false };
+    }
+    const body = params.message.body;
+    if (!body) {
+      return { canDetectMention: true, wasMentioned: false, hasAnyMention: false };
+    }
+    const sharedMentionRegexes = buildMentionRegexes(mentionConfig, preparedRoute.route.agentId, {
+      provider: CHANNEL_ID,
+      conversationId: params.message.channel_id,
+    });
+    const localMentionRegexes = mentionPatterns.length
+      ? buildMentionRegexes(
+          {
+            ...mentionConfig,
+            messages: {
+              ...mentionConfig.messages,
+              groupChat: { ...mentionConfig.messages?.groupChat, mentionPatterns },
+            },
+          },
+          undefined,
+          { provider: CHANNEL_ID, conversationId: params.message.channel_id },
+        )
+      : [];
+    const bodyForRegex = normalizeMentionText(body);
+    const hasConfiguredMention = [...sharedMentionRegexes, ...localMentionRegexes].some((regex) =>
+      regex.test(bodyForRegex),
+    );
+    const mentionHandles = [...body.matchAll(CLICKCLACK_MENTION_PATTERN)]
+      .map((match) => match[1]?.toLowerCase())
+      .filter((handle): handle is string => Boolean(handle));
+    const botHandle = params.account.botHandle?.replace(/^@/u, "").trim().toLowerCase();
+    const hasHandleMention = botHandle ? mentionHandles.includes(botHandle) : false;
+    return {
+      canDetectMention: true,
+      wasMentioned: hasHandleMention || hasConfiguredMention,
+      hasAnyMention: mentionHandles.length > 0 || hasConfiguredMention,
+    };
+  };
   // Root lookup can outlive policy changes. Refresh through the config owner without
   // replacing the running transport's identity or rereading its credentials.
   // SAFETY: The host validates ClickClack settings; the downstream readers remain read-only.
@@ -205,15 +246,7 @@ export async function resolveClickClackInboundAccess(params: {
     cfg,
   );
 
-  const mentionFacts = resolveClickClackMentionFacts({
-    isDirect: preparedRoute.isDirect,
-    body: params.message.body,
-    mentionPatterns: effectiveGroupPolicy.mentionPatterns,
-    botHandle: params.account.botHandle,
-    cfg,
-    agentId: preparedRoute.route.agentId,
-    channelId: params.message.channel_id,
-  });
+  const mentionFacts = resolveMentionFacts(cfg, effectiveGroupPolicy.mentionPatterns);
   if (!isCurrent() || (params.message.kind !== undefined && params.message.kind !== "message")) {
     return {
       shouldDispatch: false,
@@ -316,6 +349,7 @@ export async function resolveClickClackInboundAccess(params: {
       ? {
           cfg,
           modeWhenAccessGroupsOff: "configured",
+          hasControlCommand: runtime.channel.text.hasControlCommand(params.message.body, cfg),
         }
       : false,
   });
@@ -370,15 +404,7 @@ export async function resolveClickClackInboundAccess(params: {
     if (!directSenderAllowed && !staticGroupAllowed) {
       return false;
     }
-    const currentMentionFacts = resolveClickClackMentionFacts({
-      isDirect: preparedRoute.isDirect,
-      body: params.message.body,
-      mentionPatterns: currentGroupPolicy.mentionPatterns,
-      botHandle: params.account.botHandle,
-      cfg: currentCfg,
-      agentId: preparedRoute.route.agentId,
-      channelId: params.message.channel_id,
-    });
+    const currentMentionFacts = resolveMentionFacts(currentCfg, currentGroupPolicy.mentionPatterns);
     if (
       isBotAuthor &&
       currentGroupPolicy.allowBots !== true &&
@@ -409,7 +435,7 @@ export async function resolveClickClackInboundAccess(params: {
           }),
         hasControlCommand:
           shouldCheckCommand &&
-          runtime.channel.commands.shouldComputeCommandAuthorized(params.message.body, currentCfg),
+          runtime.channel.text.hasControlCommand(params.message.body, currentCfg),
         commandAuthorized: resolved.commandAccess.authorized,
       },
     }).shouldSkip;

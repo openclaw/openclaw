@@ -13,7 +13,11 @@ import type {
   OpenClawPluginService,
   OpenClawPluginToolContext,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { getPluginRuntimeGatewayRequestScope } from "openclaw/plugin-sdk/plugin-runtime";
+import {
+  getPluginRuntimeGatewayRequestScope,
+  startLazyPluginServiceModule,
+  type LazyPluginServiceHandle,
+} from "openclaw/plugin-sdk/plugin-runtime";
 import { normalizeAgentId, parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { createSubsystemLogger, isTruthyEnvValue } from "openclaw/plugin-sdk/runtime-env";
 import { registerBrowserCliMetadata } from "./cli-metadata.js";
@@ -43,6 +47,7 @@ import {
 } from "./src/browser/system-profile-import-state.js";
 
 const EAGER_BROWSER_CONTROL_SERVICE_ENV = "OPENCLAW_EAGER_BROWSER_CONTROL_SERVER";
+const UNSAFE_BROWSER_CONTROL_OVERRIDE_SPECIFIER = /^(?:data|http|https|node):/i;
 const logger = createSubsystemLogger("browser");
 let hasBrowserNodeHostWork: (() => boolean) | undefined;
 let hasBrowserProxyUploadWork: (() => boolean) | undefined;
@@ -294,7 +299,7 @@ function bindBrowserDashboardEvents(
 function createLazyBrowserPluginService(
   runtime: ReturnType<typeof initializeBrowserSessionTabStore>,
 ): OpenClawPluginService {
-  let service: OpenClawPluginService | null = null;
+  let handle: LazyPluginServiceHandle | null = null;
   let stopDashboardEvents: (() => Promise<void>) | undefined;
   let stopTabCleanup: (() => Promise<void>) | undefined;
   let accepting = false;
@@ -315,11 +320,26 @@ function createLazyBrowserPluginService(
       stopDashboardEvents = ctx.gatewayEvents
         ? bindBrowserDashboardEvents(ctx.gatewayEvents, (message) => logger.warn(message))
         : undefined;
-      if (isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV])) {
-        const { createBrowserPluginService, stopBrowserControlService } =
-          await loadBrowserRegistrationRuntimeModule();
-        service ??= createBrowserPluginService({ stopOnDemand: stopBrowserControlService });
-        await service.start(ctx);
+      if (isTruthyEnvValue(process.env[EAGER_BROWSER_CONTROL_SERVICE_ENV]) && !handle) {
+        await loadBrowserRegistrationRuntimeModule();
+        handle = await startLazyPluginServiceModule({
+          skipEnvVar: "OPENCLAW_SKIP_BROWSER_CONTROL_SERVER",
+          overrideEnvVar: "OPENCLAW_BROWSER_CONTROL_MODULE",
+          validateOverrideSpecifier: (specifier) => {
+            const trimmed = specifier.trim();
+            if (UNSAFE_BROWSER_CONTROL_OVERRIDE_SPECIFIER.test(trimmed)) {
+              throw new Error(`Refusing unsafe browser control override specifier: ${trimmed}`);
+            }
+            return trimmed;
+          },
+          // Keep the default module import static so compiled builds still bundle it.
+          loadDefaultModule: async () => await import("./src/server.js"),
+          startExportNames: [
+            "startBrowserControlServiceFromConfig",
+            "startBrowserControlServerFromConfig",
+          ],
+          stopExportNames: ["stopBrowserControlService", "stopBrowserControlServer"],
+        });
       }
       const { startTrackedBrowserTabCleanupTimer } =
         await import("./src/browser/session-tab-cleanup.js");
@@ -333,13 +353,13 @@ function createLazyBrowserPluginService(
         onWarn: (message) => logger.warn(message),
       });
     },
-    stop: async (ctx) => {
+    stop: async () => {
       accepting = false;
       try {
         await Promise.all([stopTabCleanup?.(), stopDashboardEvents?.()]);
         stopTabCleanup = undefined;
         stopDashboardEvents = undefined;
-        if (!service) {
+        if (!handle) {
           const loadedRuntime = loadBrowserRegistrationRuntimeModule.peek();
           if (!loadedRuntime) {
             return;
@@ -348,7 +368,11 @@ function createLazyBrowserPluginService(
           await stopBrowserControlService();
           return;
         }
-        await service.stop?.(ctx);
+        const current = handle;
+        await current.stop();
+        if (handle === current) {
+          handle = null;
+        }
       } finally {
         await drainBrowserSessionTabStore(runtime);
       }

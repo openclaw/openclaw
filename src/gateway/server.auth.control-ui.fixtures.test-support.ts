@@ -13,10 +13,7 @@ import {
 
 export function expectArrayIncludes(actual: unknown, expectedValues: string[]): void {
   expect(Array.isArray(actual)).toBe(true);
-  const values = actual as unknown[];
-  for (const expected of expectedValues) {
-    expect(values).toContain(expected);
-  }
+  expect(actual).toEqual(expect.arrayContaining(expectedValues));
 }
 
 export const buildSignedDeviceForIdentity = async (params: {
@@ -76,11 +73,10 @@ export const withControlUiGatewayServer = async <T>(
     port: number;
     server: Awaited<ReturnType<typeof startTestGatewayServer>>;
   }) => Promise<T>,
-): Promise<T> => {
-  return await withGatewayServer(fn, {
+): Promise<T> =>
+  withGatewayServer(fn, {
     serverOptions: { controlUiEnabled: true },
   });
-};
 
 export const withControlUiServer = async <T>(
   fn: (ctx: { port: number }) => Promise<T>,
@@ -102,22 +98,20 @@ export const withControlUiServer = async <T>(
 export const startControlUiServerWithClient = async (
   token?: string,
   opts?: Parameters<typeof startServerWithClient>[1],
-) => {
-  return await startServerWithClient(token, {
+) =>
+  startServerWithClient(token, {
     ...opts,
     controlUiEnabled: true,
   });
-};
 
 export const startControlUiServer = async (
   token?: string,
   opts?: Parameters<typeof startServer>[1],
-) => {
-  return await startServer(token, {
+) =>
+  startServer(token, {
     ...opts,
     controlUiEnabled: true,
   });
-};
 
 export const startProxiedControlUiServer = async (token?: string) => {
   const { mutateConfigFile } = await import("../config/config.js");
@@ -146,10 +140,9 @@ export const seedApprovedOperatorReadPairing = async (params: {
   const { requestDevicePairing } = await import("../infra/device-pairing.js");
   const { identityPath, identity } = await createOperatorIdentityFixture(params.identityPrefix);
   const scopes = params.scopes ?? ["operator.read"];
-  const devicePublicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
   const seeded = await requestDevicePairing({
     deviceId: identity.deviceId,
-    publicKey: devicePublicKey,
+    publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
     role: "operator",
     scopes,
     clientId: params.clientId,

@@ -11,7 +11,10 @@ import {
   STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS,
   STARTUP_MIGRATION_LEASE_TTL_MS,
 } from "../../infra/startup-migration-checkpoint.js";
-import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import {
+  hasCommandProcessCleanupError,
+  ignoreNonCleanupCommandError,
+} from "../../process/exec-result.js";
 import { isPidAlive } from "../../shared/pid-alive.js";
 import { sleep } from "../../utils.js";
 import {
@@ -233,12 +236,7 @@ export async function waitForGatewayHealthyRestart(
       params.probeHosts ??
       (await read("probe-hosts", async () => {
         const command = await read("service-command", () =>
-          service.readCommand(params.env ?? process.env).catch((error: unknown) => {
-            if (hasCommandProcessCleanupError(error)) {
-              throw error;
-            }
-            return null;
-          }),
+          service.readCommand(params.env ?? process.env).catch(ignoreNonCleanupCommandError),
         );
         return resolveGatewayServiceProbeHosts({ env: params.env, command });
       }));

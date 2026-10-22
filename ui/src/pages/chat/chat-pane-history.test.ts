@@ -30,6 +30,7 @@ import {
 import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ChatComposer, resetChatComposerState } from "./components/chat-composer.tsx";
 import { ChatHistoryBoundary } from "./components/chat-history-boundary.tsx";
 import { reduceChatSessionProjection } from "./history-merge.ts";
@@ -192,7 +193,8 @@ it.each(["pending", "resolved"] as const)(
             pane.render();
             return pane.chatProps!;
           });
-          return createComponent(ChatComposer, merge(current));
+          const questions = createComposerQuestions(pane.presentationId, current);
+          return createComponent(ChatComposer, merge(current, { questions }));
         },
         { container, wrapper: createSolidApplicationContextProvider(context).wrapper },
       );

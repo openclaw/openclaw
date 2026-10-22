@@ -83,6 +83,7 @@ export function createPluginsPage(options: {
   const help = createPluginHelp(context);
   let pluginConfigEditPending = false;
   let routeDataConsumed = false;
+  const [catalog, setCatalog] = createSignal<Promise<void> | null>(null, { ownedWrite: true });
   let pluginGeneration: number | undefined;
   let adminAccess: boolean | undefined;
   let readAccess: boolean | undefined;
@@ -173,7 +174,6 @@ export function createPluginsPage(options: {
       },
     };
   };
-  const settings = { patch, resolveCredential };
 
   const consent = createPluginsConsent({
     gateway,
@@ -184,9 +184,7 @@ export function createPluginsPage(options: {
     setBusy,
     setMessage,
     getMessages: () => state.messages,
-    clearPageNotice: () => {
-      setState({ pageNotice: null });
-    },
+    clearPageNotice: () => setState({ pageNotice: null }),
     closeDetails: skillPreview.close,
     applyMutationResult,
     refreshCatalogAfterMutation: refreshCatalog,
@@ -422,6 +420,7 @@ export function createPluginsPage(options: {
   function invalidateRequests(invalidateCatalog: boolean, retirePresentation = true) {
     mcpLogin.reset();
     if (invalidateCatalog) {
+      void setCatalog(null);
       catalogTask.reset();
       discovery.invalidate();
     }
@@ -517,7 +516,9 @@ export function createPluginsPage(options: {
       return;
     }
     setState({ error: null });
-    await catalogTask.run([client]);
+    const promise = catalogTask.run([client]);
+    void setCatalog(promise);
+    await promise;
   }
 
   async function refreshDiscovery(): Promise<void> {
@@ -718,7 +719,7 @@ export function createPluginsPage(options: {
     skillPreview,
     mcpLogin,
     discovery,
-    settings,
+    settings: { patch, resolveCredential },
     consent,
     ...targets,
     settingsTab,
@@ -735,6 +736,8 @@ export function createPluginsPage(options: {
       revision();
       return loading();
     },
+    routeLoading: () => gateway.connected && !routeDataConsumed,
+    catalogRead: catalog,
     setState,
     refreshCatalog,
     selectHubTab,

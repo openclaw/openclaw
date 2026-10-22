@@ -66,7 +66,3 @@ export function resolveStableCliSkillAuthoring(
     },
   };
 }
-
-export function resetStableCliSkillAuthoringForTest(): void {
-  shapes.clear();
-}

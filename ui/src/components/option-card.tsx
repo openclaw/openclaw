@@ -19,6 +19,13 @@ type OptionCardProps = {
   onSkip?: () => void;
 };
 
+const ARROW_STEPS: Partial<Record<string, number>> = {
+  ArrowDown: 1,
+  ArrowRight: 1,
+  ArrowUp: -1,
+  ArrowLeft: -1,
+};
+
 export function OptionCard(input: { props: OptionCardProps }) {
   let host!: HTMLElement;
   const options = createMemo(() => input.props.options.slice(0, 4));
@@ -40,6 +47,13 @@ export function OptionCard(input: { props: OptionCardProps }) {
   );
   // A new request resets the local selection; display-only option refreshes preserve it.
   const [selected, setSelected] = createSignal(() => request().recommended);
+  // Roving tabindex: the checked choice, else the first, is the group's only Tab stop.
+  const tabbableIndex = createMemo(() =>
+    Math.max(
+      0,
+      options().findIndex((option) => option.value === selected()),
+    ),
+  );
   const choices = new Set<HTMLButtonElement>();
   createPendingFocus(
     () => ({ request: request(), disabled: input.props.disabled, selected: selected() }),
@@ -67,6 +81,27 @@ export function OptionCard(input: { props: OptionCardProps }) {
     setSelected(value);
     input.props.onSelect?.(value);
   };
+  // Arrow keys move the checked choice without answering; Space and Enter still answer.
+  const onChoicesKeyDown = (event: KeyboardEvent) => {
+    const values = options().map((option) => option.value);
+    const target = [...choices].find((button) => button === event.target);
+    const current = target ? values.indexOf(target.dataset.optionValue ?? "") : -1;
+    const step = ARROW_STEPS[event.key];
+    const next =
+      event.key === "Home"
+        ? 0
+        : event.key === "End"
+          ? values.length - 1
+          : step === undefined
+            ? -1
+            : (current + step + values.length) % values.length;
+    if (input.props.disabled || current < 0 || next < 0) {
+      return;
+    }
+    event.preventDefault();
+    setSelected(values[next]!);
+    [...choices].find((button) => button.dataset.optionValue === values[next])?.focus();
+  };
   return (
     <openclaw-option-card ref={(element) => (host = element)}>
       <section class="option-card" role="group" aria-label={input.props.question}>
@@ -74,7 +109,7 @@ export function OptionCard(input: { props: OptionCardProps }) {
           <div class="option-card__chip">{input.props.header}</div>
         </Show>
         <div class="option-card__question">{input.props.question}</div>
-        <div class="option-card__choices" role="radiogroup">
+        <div class="option-card__choices" role="radiogroup" onKeyDown={onChoicesKeyDown}>
           <For each={options()} keyed={(option) => option.value}>
             {(option, index) => {
               let button: HTMLButtonElement;
@@ -92,6 +127,7 @@ export function OptionCard(input: { props: OptionCardProps }) {
                   type="button"
                   role="radio"
                   aria-checked={option().value === selected() ? "true" : "false"}
+                  tabindex={index() === tabbableIndex() ? 0 : -1}
                   data-option-value={option().value}
                   disabled={input.props.disabled}
                   onClick={() => select(option().value)}

@@ -145,13 +145,22 @@ export async function assertExistingSessionPostInteractionNavigationAllowed(
   throw new Error("Unable to verify stable post-interaction navigation");
 }
 
-function buildExistingSessionWaitPredicate(params: {
-  text?: string;
-  textGone?: string;
-  selector?: string;
-  loadState?: "load" | "domcontentloaded" | "networkidle";
-  fn?: string;
-}): string | null {
+export async function waitForExistingSessionCondition(
+  params: ChromeMcpTargetOperation & {
+    timeMs?: number;
+    text?: string;
+    textGone?: string;
+    selector?: string;
+    url?: string;
+    loadState?: "load" | "domcontentloaded" | "networkidle";
+    fn?: string;
+    ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
+    browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
+  },
+): Promise<void> {
+  if (params.timeMs && params.timeMs > 0) {
+    await sleep(params.timeMs, undefined, { signal: params.signal });
+  }
   const checks = [
     params.text && `Boolean(document.body?.innerText?.includes(${JSON.stringify(params.text)}))`,
     params.textGone && `!document.body?.innerText?.includes(${JSON.stringify(params.textGone)})`,
@@ -179,31 +188,11 @@ function buildExistingSessionWaitPredicate(params: {
     // Preserve its async semantics; document binding guards scheduler rebinding.
     params.fn && `Boolean(await (${normalizeBrowserEvaluateFunctionSource(params.fn)})())`,
   ];
-  return (
+  const predicate =
     checks
       .filter(Boolean)
       .map((check) => `(${check})`)
-      .join(" && ") || null
-  );
-}
-
-export async function waitForExistingSessionCondition(
-  params: ChromeMcpTargetOperation & {
-    timeMs?: number;
-    text?: string;
-    textGone?: string;
-    selector?: string;
-    url?: string;
-    loadState?: "load" | "domcontentloaded" | "networkidle";
-    fn?: string;
-    ssrfPolicy?: BrowserNavigationPolicyOptions["ssrfPolicy"];
-    browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
-  },
-): Promise<void> {
-  if (params.timeMs && params.timeMs > 0) {
-    await sleep(params.timeMs, undefined, { signal: params.signal });
-  }
-  const predicate = buildExistingSessionWaitPredicate(params);
+      .join(" && ") || null;
   if (!predicate && !params.url) {
     return;
   }

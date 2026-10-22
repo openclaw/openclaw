@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants, type Stats } from "node:fs";
+import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { readFileWindowFully } from "@openclaw/fs-safe/advanced";
@@ -238,6 +238,7 @@ export async function readActualWorkspaceManifestImpl(params: {
     }
   };
   const filePaths: string[] = [];
+  const hashContext = activeWorkspaceHashContext();
   const runScans = async (
     start: number,
     end: number,
@@ -287,7 +288,11 @@ export async function readActualWorkspaceManifestImpl(params: {
     }
     throw new Error("Gateway workspace manifest exceeds its eligible byte limit");
   };
-  const addLeaf = async (relative: string, absolute: string, stats: Stats): Promise<boolean> => {
+  const addLeaf = async (
+    relative: string,
+    absolute: string,
+    stats: BigIntStats,
+  ): Promise<boolean> => {
     if (stats.isSymbolicLink()) {
       const target = await fs.readlink(absolute);
       if (!isPortableRootContainedSymlink(root, relative, target)) {
@@ -295,7 +300,29 @@ export async function readActualWorkspaceManifestImpl(params: {
       }
       addEntry({ path: relative, type: "symlink", mode: 0o777, target }, Buffer.byteLength(target));
     } else if (stats.isFile()) {
-      filePaths.push(relative);
+      const sha256 = hashContext?.memo.get(workspaceStatIdentity(hashContext.owner, stats));
+      if (sha256) {
+        // Included paths can cross a replaced parent directory even when the
+        // leaf inode still matches a prior content hash.
+        if ((await fs.realpath(absolute)) !== absolute) {
+          throw new Error("Gateway workspace file changed while it was being read");
+        }
+        addEntry(
+          {
+            path: relative,
+            type: "file",
+            mode: gitFileMode(Number(stats.mode & 0o777n)),
+            size: Number(stats.size),
+            sha256,
+          },
+          Number(stats.size),
+        );
+        if (hashContext?.metrics) {
+          hashContext.metrics.memoHitCount += 1;
+        }
+      } else {
+        filePaths.push(relative);
+      }
     } else {
       return false;
     }
@@ -317,7 +344,7 @@ export async function readActualWorkspaceManifestImpl(params: {
     }
     checkTraversal(relative);
     const absolute = localPath(root, relative);
-    const stats = await fs.lstat(absolute).catch((error: unknown) => {
+    const stats = await fs.lstat(absolute, { bigint: true }).catch((error: unknown) => {
       if (hasNodeErrorCode(error, "ENOENT") || hasNodeErrorCode(error, "ENOTDIR")) {
         return undefined;
       }
@@ -381,7 +408,7 @@ export async function readActualWorkspaceManifestImpl(params: {
         continue;
       }
       const absolute = localPath(root, relative);
-      const stats = await fs.lstat(absolute);
+      const stats = await fs.lstat(absolute, { bigint: true });
       if (stats.isDirectory() && !stats.isSymbolicLink()) {
         const child = await walk(relative);
         if (child.included || params.preserveDirectories?.has(relative)) {

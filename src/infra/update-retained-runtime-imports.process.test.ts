@@ -11,40 +11,23 @@ it("keeps late imports on the old generation through replacement and CLI teardow
   const root = path.join(base, "install");
   await fs.mkdir(path.join(root, "dist"), { recursive: true });
   await fs.mkdir(path.join(root, "node_modules", "fixture"), { recursive: true });
-  await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw","type":"module"}');
-  await fs.writeFile(
-    path.join(root, "node_modules/fixture/package.json"),
-    '{"type":"module","exports":"./index.js"}',
-  );
-  await fs.writeFile(
-    path.join(root, "node_modules/fixture/index.js"),
-    'export default "old dependency";',
-  );
-  await fs.writeFile(path.join(root, "dist/shared.mjs"), "export const shared = {};\n");
-  await fs.writeFile(
-    path.join(root, "dist/late-old-hash.mjs"),
-    'import dependency from "fixture"; import { shared } from "./shared.mjs"; export { shared }; export const value = dependency; export const url = import.meta.url;',
-  );
-  await fs.writeFile(
-    path.join(root, "dist/updater.mjs"),
-    'import { fileURLToPath } from "node:url"; export { shared } from "./shared.mjs"; export const late = () => import("./late-old-hash.mjs"); export const absolute = () => import(fileURLToPath(new URL("./absolute-old-hash.mjs", import.meta.url))); export const cleanup = () => import("./cleanup-old-hash.mjs");',
-  );
-  await fs.writeFile(
-    path.join(root, "dist/absolute-old-hash.mjs"),
-    'export const value = "old absolute";',
-  );
-  await fs.writeFile(
-    path.join(root, "dist/cleanup-old-hash.mjs"),
-    'export const value = "cleanup retained";',
-  );
-  await fs.writeFile(
-    path.join(root, "dist/tool-dependency.mjs"),
-    'export const value = "old tooling";',
-  );
-  await fs.writeFile(
-    path.join(root, "tooling.mjs"),
-    'export { value } from "./dist/tool-dependency.mjs";',
-  );
+  const files = {
+    "package.json": '{"name":"openclaw","type":"module"}',
+    "node_modules/fixture/package.json": '{"type":"module","exports":"./index.js"}',
+    "node_modules/fixture/index.js": 'export default "old dependency";',
+    "dist/shared.mjs": "export const shared = {};\n",
+    "dist/late-old-hash.mjs":
+      'import dependency from "fixture"; import { shared } from "./shared.mjs"; export { shared }; export const value = dependency; export const url = import.meta.url;',
+    "dist/updater.mjs":
+      'import { fileURLToPath } from "node:url"; export { shared } from "./shared.mjs"; export const late = () => import("./late-old-hash.mjs"); export const absolute = () => import(fileURLToPath(new URL("./absolute-old-hash.mjs", import.meta.url))); export const cleanup = () => import("./cleanup-old-hash.mjs");',
+    "dist/absolute-old-hash.mjs": 'export const value = "old absolute";',
+    "dist/cleanup-old-hash.mjs": 'export const value = "cleanup retained";',
+    "dist/tool-dependency.mjs": 'export const value = "old tooling";',
+    "tooling.mjs": 'export { value } from "./dist/tool-dependency.mjs";',
+  };
+  for (const [file, content] of Object.entries(files)) {
+    await fs.writeFile(path.join(root, file), content);
+  }
   const result = spawnNodeEvalSync(
     `import assert from "node:assert/strict";
      import fs from "node:fs/promises";
@@ -69,13 +52,9 @@ it("keeps late imports on the old generation through replacement and CLI teardow
        assert.equal(late.url, pathToFileURL(path.join(root, "dist/late-old-hash.mjs")).href);
        assert.equal((await updater.absolute()).value, "old absolute");
        assert.equal((await import(pathToFileURL(path.join(root, "tooling.mjs")).href)).value, "new tooling");
-       console.log("old lazy chunk, dependency, singleton and module identity retained");
      });
      assert.equal((await updater.cleanup()).value, "cleanup retained");
-     console.log("late CLI cleanup import retained after the update returns");
-     const fresh = await import(pathToFileURL(path.join(root, "dist/late-new-hash.mjs")).href);
-     assert.equal(fresh.value, "new build");
-     console.log("new build available after finalization");`,
+     assert.equal((await import(pathToFileURL(path.join(root, "dist/late-new-hash.mjs")).href)).value, "new build");`,
     {
       imports: [import.meta.resolve("tsx")],
       input: "",
@@ -93,9 +72,4 @@ it("keeps late imports on the old generation through replacement and CLI teardow
   );
   expect(result.error, result.stderr).toBeUndefined();
   expect(result.status, result.stderr).toBe(0);
-  expect(result.stdout).toContain(
-    "old lazy chunk, dependency, singleton and module identity retained",
-  );
-  expect(result.stdout).toContain("new build available after finalization");
-  expect(result.stdout).toContain("late CLI cleanup import retained after the update returns");
 });

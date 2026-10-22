@@ -62,8 +62,6 @@ type TrajectoryRuntimeAppendResult = {
   receipt: {
     kind: "trajectory-runtime-append";
     sessionId: string;
-    appendedRange: { firstSeq: number; lastSeq: number } | undefined;
-    removedThroughSeq: number | undefined;
     windowFacts: TrajectoryRuntimeWindowFacts;
   };
 };
@@ -126,8 +124,6 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
       receipt: {
         kind: "trajectory-runtime-append",
         sessionId,
-        appendedRange: { firstSeq: known.nextSeq, lastSeq: known.nextSeq + rows.length - 1 },
-        removedThroughSeq: undefined,
         windowFacts: {
           nextSeq: known.nextSeq + rows.length,
           retainedBytes: known.retainedBytes + retainedBytes,
@@ -188,8 +184,6 @@ export function appendSqliteTrajectoryRuntimeEventsWithWriter(
         receipt: {
           kind: "trajectory-runtime-append" as const,
           sessionId,
-          appendedRange: rows.length ? { firstSeq: window.nextSeq, lastSeq: seq - 1 } : undefined,
-          removedThroughSeq: window.removeThroughSeq,
           windowFacts: {
             nextSeq: window.removeThroughSeq === seq - 1 ? 0 : seq,
             retainedBytes: window.retainedBytes,

@@ -110,7 +110,7 @@ describe("worker placement startup cleanup ownership", () => {
     runtimeFactoryMocks.createDiskSpace.mockReturnValue(createIdleDiskSpace());
   });
 
-  it("pauses both reconciliation schedulers during a reversible suspension", async () => {
+  it("pauses both reconciliation schedulers during a reversible suspension", async ({ signal }) => {
     await seedReadyNodeDesktop("suspended-reconciliation");
     const time = createGatewaySchedulerClock();
     const scheduler = createTestGatewayScheduler(time.clock);
@@ -119,6 +119,7 @@ describe("worker placement startup cleanup ownership", () => {
     const placements = createPlacements();
     const sidecar = await startRuntime(createRuntime({ placements, environments, scheduler }));
     await time.advanceBy(60_000);
+    await environments.reconcileOnce();
     inspect.mockClear();
     const suspended = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspended).not.toBeNull();
@@ -127,7 +128,14 @@ describe("worker placement startup cleanup ownership", () => {
       await environments.reconcileOnce();
       expect(inspect).not.toHaveBeenCalled();
       suspended!.rollback();
+      const resumed = createDeferredCore();
+      inspect.mockImplementationOnce(async () => {
+        resumed.resolve();
+        return { status: "active" };
+      });
       await time.advanceBy(60_000);
+      // Scheduled environment inspection is detached from the scheduler's tick.
+      await withinTest(resumed.promise, signal);
       expect(inspect).toHaveBeenCalled();
     } finally {
       suspended?.rollback();

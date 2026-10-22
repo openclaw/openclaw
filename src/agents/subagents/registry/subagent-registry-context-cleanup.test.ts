@@ -28,7 +28,6 @@ import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
 import { resolveSubagentSessionAttachmentRootDir } from "../subagent-attachment-paths.js";
 import { createSubagentRegistryContextCleanup } from "./subagent-registry-context-cleanup.js";
-import { resetSubagentRegistryRuntimeLoadersForTests } from "./subagent-registry-deps.js";
 import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import * as registryPersistence from "./subagent-registry-persistence.js";
 import {
@@ -82,7 +81,6 @@ describe("subagent registry context cleanup", () => {
     vi.mocked(resolveContextEngine).mockReset();
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
     vi.mocked(loadSubagentSessionEntry).mockReset();
-    resetSubagentRegistryRuntimeLoadersForTests();
   });
 
   it.each(["session tail", "inline collector"] as const)(

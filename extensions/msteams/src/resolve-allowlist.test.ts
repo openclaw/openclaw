@@ -76,6 +76,21 @@ it("uses the selected named account for Graph user lookup credentials", async ()
   expect(resolveGraphToken).toHaveBeenCalledWith(cfg, { accountId: "support" });
 });
 
+it("keeps the first exact identity match when Graph repeats a user ID", async () => {
+  findGraphUsersByExactIdentity.mockResolvedValueOnce(
+    page([
+      { id: "user-1", displayName: "Another user" },
+      { id: " user-1 ", displayName: "Alice" },
+      { id: "user-1", displayName: "ALICE" },
+      { id: " ", displayName: "Alice" },
+    ]),
+  );
+
+  await expect(users(["Alice"])).resolves.toEqual([
+    { input: "Alice", resolved: true, id: " user-1 ", name: "Alice" },
+  ]);
+});
+
 it.each([
   [page([alice, { id: "user-2", mail: "alice" }]), "user identity is ambiguous"],
   [page([alice], true), "user lookup incomplete"],

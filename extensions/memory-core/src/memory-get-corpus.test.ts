@@ -39,6 +39,14 @@ const unavailable = (corpus: string, error = `${corpus} unavailable`) => ({
   outcome: "unavailable",
   error,
 });
+const bothAvailable = {
+  corpora: ["memory", "wiki"].map((corpus) => ({ corpus, outcome: "ok" })),
+};
+const wikiUnavailable = (error: string) => ({
+  corpora: [unavailable("wiki", error)],
+  warning: `Wiki corpus unavailable: ${error}`,
+  error,
+});
 const register = (
   id: string,
   get: NonNullable<Parameters<typeof registerMemoryCorpusSupplement>[1]["get"]>,
@@ -63,26 +71,14 @@ describe("memory_get corpus outcomes", () => {
       "all",
       memoryHit,
       wikiHit,
-      {
-        ...memoryHit,
-        corpora: [
-          { corpus: "memory", outcome: "ok" },
-          { corpus: "wiki", outcome: "ok" },
-        ],
-      },
+      { ...memoryHit, ...bothAvailable },
     ],
     [
       "falls through from a memory miss to wiki content",
       "all",
       memoryMiss,
       wikiHit,
-      {
-        ...wikiPayload,
-        corpora: [
-          { corpus: "memory", outcome: "ok" },
-          { corpus: "wiki", outcome: "ok" },
-        ],
-      },
+      { ...wikiPayload, ...bothAvailable },
     ],
     [
       "memory unavailable, wiki miss",
@@ -119,9 +115,7 @@ describe("memory_get corpus outcomes", () => {
       {
         path: lookup,
         text: "",
-        corpora: [unavailable("wiki")],
-        warning: "Wiki corpus unavailable: wiki unavailable",
-        error: "wiki unavailable",
+        ...wikiUnavailable("wiki unavailable"),
       },
     ],
   ] as const)("%s", async (_name, corpus, memory, wiki, expected) => {
@@ -140,9 +134,7 @@ describe("memory_get corpus outcomes", () => {
 
     expect(result.details).toEqual({
       ...wikiPayload,
-      corpora: [unavailable("wiki", "broken wiki")],
-      warning: "Wiki corpus unavailable: broken wiki",
-      error: "broken wiki",
+      ...wikiUnavailable("broken wiki"),
     });
   });
 

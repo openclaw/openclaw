@@ -80,7 +80,8 @@ it.each([
     await Promise.all(request.mock.results.map((result) => result.value));
     draw();
   };
-  const indicator = () => container.querySelector(".chat-pane__public-share-indicator");
+  const indicator = () =>
+    container.querySelector(".chat-pane__sharing-trigger[data-public='true']");
   const changed = (key: string | null = row.key, agentId = row.agentId) => {
     mounted.emitGatewayEvent("sessions.changed", {
       reason: "sharing",

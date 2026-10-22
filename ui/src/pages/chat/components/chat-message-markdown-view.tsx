@@ -98,8 +98,11 @@ export function resolveMessageActionDetails(
     : undefined;
   const expansion = fullMessage?.state;
   const expandedMarkdown = expansion?.status === "loaded" ? expansion.markdown : previewMarkdown;
+  // Preparation already filtered the preview; loaded full text is a new display input.
   const visibleMarkdown =
-    role === "assistant" ? stripThinkingTags(expandedMarkdown) : expandedMarkdown;
+    role === "assistant" && expansion?.status === "loaded"
+      ? stripThinkingTags(expandedMarkdown)
+      : expandedMarkdown;
   const isConversationMessage = role === "assistant" || role === "user";
   const markdown = isConversationMessage || pendingInput ? visibleMarkdown : undefined;
   const copyMarkdown = resolveMessageReplyText(message, normalizedMessage, visibleMarkdown);

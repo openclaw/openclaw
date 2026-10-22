@@ -1,18 +1,11 @@
-import { receiveMessageOnPort, type MessagePort, type Worker } from "node:worker_threads";
-import type { BridgeReply } from "./protocol.js";
-
-type IdleBridge = {
-  port: MessagePort;
-  control: Int32Array;
-  worker: Worker;
-  requestId: number;
-};
+import { receiveMessageOnPort } from "node:worker_threads";
+import type { BridgeReply, PostgresBridge } from "./protocol.js";
 
 // Each isolate owns its idle transports; taking one removes it before another caller can open.
-const idleBridges = new Map<string, IdleBridge>();
+const idleBridges = new Map<string, PostgresBridge>();
 const maxIdleBridges = 4;
 
-function closeBridge(bridge: IdleBridge): void {
+function closeBridge(bridge: PostgresBridge): void {
   try {
     const id = ++bridge.requestId;
     bridge.port.postMessage({ operation: "close", id }, []);
@@ -53,7 +46,12 @@ function unwatch(): void {
   }
 }
 
-export function takeIdlePostgresBridge(key: string): IdleBridge | undefined {
+export function hasIdlePostgresBridge(key: string): boolean {
+  const bridge = idleBridges.get(key);
+  return bridge !== undefined && !Atomics.load(bridge.control, 1);
+}
+
+export function takeIdlePostgresBridge(key: string): PostgresBridge | undefined {
   const bridge = idleBridges.get(key);
   idleBridges.delete(key);
   unwatch();
@@ -67,7 +65,7 @@ export function takeIdlePostgresBridge(key: string): IdleBridge | undefined {
   return bridge;
 }
 
-export function retainIdlePostgresBridge(key: string, bridge: IdleBridge): void {
+export function retainIdlePostgresBridge(key: string, bridge: PostgresBridge): void {
   const previous = idleBridges.get(key);
   idleBridges.delete(key);
   unwatch();

@@ -17,7 +17,6 @@ function createWhatsAppApprovalScenario(
   run: Omit<WhatsAppQaApprovalScenarioRun, "kind" | "token">,
 ): WhatsAppQaScenarioImplementation {
   return {
-    posture: "native-approval",
     configOverrides: {
       approvals: { exec: true, ...(run.approvalKind === "plugin" ? { plugin: true } : {}) },
     },
@@ -32,7 +31,6 @@ function createWhatsAppApprovalScenario(
 
 export const whatsappDeliveryScenarios = {
   whatsappQaReplyDeliveryShapeScenario: createWhatsAppMessageScenario({
-    posture: "direct-gateway",
     marker: "WHATSAPP_QA_REPLY_SHAPE",
     buildRun: (token) => ({
       afterReply: async (_reply, context) => {
@@ -64,7 +62,6 @@ export const whatsappDeliveryScenarios = {
   }),
 
   whatsappQaStreamFinalMessageAccountingScenario: {
-    posture: "user-path",
     buildRun: () => ({
       configMode: "allowlist",
       expectReply: true,
@@ -83,7 +80,6 @@ export const whatsappDeliveryScenarios = {
   }),
 
   whatsappQaStatusReactionsScenario: createWhatsAppMessageScenario({
-    posture: "user-path",
     configOverrides: {
       statusReactions: true,
     },
@@ -101,7 +97,6 @@ export const whatsappDeliveryScenarios = {
   }),
 
   whatsappQaStatusReactionLifecycleScenario: createWhatsAppMessageScenario({
-    posture: "user-path",
     configOverrides: {
       statusReactions: true,
     },
@@ -122,7 +117,6 @@ export const whatsappDeliveryScenarios = {
   }),
 
   whatsappQaGroupAllowlistBlockScenario: {
-    posture: "user-path",
     configOverrides: {
       blockGroupSender: true,
       groupPolicy: "allowlist",

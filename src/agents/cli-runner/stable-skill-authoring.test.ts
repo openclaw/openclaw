@@ -1,9 +1,7 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SkillLibraryAuthoringCapability } from "../../skills/library/authoring.js";
-import {
-  resetStableCliSkillAuthoringForTest,
-  resolveStableCliSkillAuthoring,
-} from "./stable-skill-authoring.js";
+
+let resolveStableCliSkillAuthoring: typeof import("./stable-skill-authoring.js").resolveStableCliSkillAuthoring;
 
 const human = (
   defaultTarget: "workspace" | "personal",
@@ -18,7 +16,10 @@ const human = (
   },
 });
 
-afterEach(() => resetStableCliSkillAuthoringForTest());
+beforeEach(async () => {
+  vi.resetModules();
+  ({ resolveStableCliSkillAuthoring } = await import("./stable-skill-authoring.js"));
+});
 
 describe("resolveStableCliSkillAuthoring", () => {
   it("passes through sessions that never had a human authoring grant", () => {

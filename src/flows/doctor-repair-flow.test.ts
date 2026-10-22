@@ -28,7 +28,7 @@ function warningFinding(checkId: string): HealthFinding {
 }
 
 function successfullyRepairedCheck(): DoctorHealthCheck {
-  return normalizeHealthCheck({
+  return {
     id: "test/repaired-first",
     kind: "core",
     description: "repairs before the unresolved check",
@@ -40,13 +40,37 @@ function successfullyRepairedCheck(): DoctorHealthCheck {
     async repair(checkContext) {
       return {
         config: { ...checkContext.cfg, gateway: { ...checkContext.cfg.gateway, mode: "local" } },
-        changes: ["Set gateway.mode to local."],
+        changes: [`Set gateway.mode to local for ${this.id}.`],
       };
     },
-  });
+  };
 }
 
 describe("runDoctorHealthRepairs", () => {
+  it("preserves the check receiver while running repair through progress", async () => {
+    const check: DoctorHealthCheck = {
+      id: "test/receiver",
+      kind: "core",
+      description: "repair uses check metadata",
+      async detect({ cfg }) {
+        return cfg.gateway?.mode === "local" ? [] : [warningFinding(this.id)];
+      },
+      async repair({ cfg }) {
+        return {
+          config: { ...cfg, gateway: { ...cfg.gateway, mode: "local" } },
+          changes: [`Repaired ${this.id}.`],
+        };
+      },
+    };
+
+    const result = await runDoctorHealthRepairs(ctx({}), { checks: [check] });
+
+    expect(result.config.gateway?.mode).toBe("local");
+    expect(result.changes).toEqual(["Repaired test/receiver."]);
+    expect(result.remainingFindings).toEqual([]);
+    expect(result.warnings).toEqual([]);
+  });
+
   it("reports repair validation findings that remain after repair", async () => {
     const checks: DoctorHealthCheck[] = [
       normalizeHealthCheck({
@@ -83,7 +107,7 @@ describe("runDoctorHealthRepairs", () => {
   });
 
   it.each(["skipped", "throws", "unavailable", "validation-failed"] as const)(
-    "preserves unresolved split findings after a successful sibling repair (%s)",
+    "preserves unresolved split findings after a receiver-bound sibling repair (%s)",
     async (outcome) => {
       const unresolvedId = `test/split-${outcome}`;
       const unresolvedCheck = normalizeHealthCheck({
@@ -116,6 +140,7 @@ describe("runDoctorHealthRepairs", () => {
       });
 
       expect(result.config.gateway?.mode).toBe("local");
+      expect(result.changes).toContain("Set gateway.mode to local for test/repaired-first.");
       expect(result.findings.map((finding) => finding.checkId)).toEqual([
         "test/repaired-first",
         unresolvedId,

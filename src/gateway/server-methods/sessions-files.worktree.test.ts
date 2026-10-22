@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
@@ -8,6 +9,7 @@ import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite
 import { retainSessionActorEntryFacts } from "../../config/sessions/session-actor-replica.js";
 import { readRetainedSessionEntryFacts } from "../../config/sessions/session-entry-read-facts.js";
 import { readSessionEntriesFromStoreInWorker } from "../../config/sessions/session-entry-read-runtime.js";
+import * as fsSafe from "../../infra/fs-safe.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -16,7 +18,10 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { sessionsFilesHandlers } from "./sessions-files.js";
-import { createSessionFileDownloadClient } from "./sessions-files.test-support.js";
+import {
+  createSessionFileDownloadClient,
+  createSessionFilesHandlerInvoker,
+} from "./sessions-files.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 const hooks = vi.hoisted(() => ({
@@ -133,6 +138,114 @@ function seedReplicaPressure(env: NodeJS.ProcessEnv) {
 }
 
 describe("sessions.files for managed-worktree sessions", () => {
+  it("refuses a changed file lookup root inside the same managed workspace", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const entry = await seedWorktreeSession(state.workspaceDir);
+      const original = { ...entry, spawnedWorkspaceDir: state.workspaceDir };
+      await sessions.upsertSessionEntryCore({ agentId: "main", sessionKey: key }, original);
+      const source = {
+        workspaceId: entry.worktree.id,
+        root: state.workspaceDir,
+        fileRoot: entry.spawnedCwd,
+      };
+      const opened = await dispatch("sessions.files.get", "preview.html");
+      expect(opened.mock.calls[0]?.[1]).toMatchObject({
+        source,
+        file: { content: "<h1>boo</h1>\n" },
+      });
+      const replacement = path.join(state.workspaceDir, "replacement");
+      fs.mkdirSync(replacement);
+      fs.writeFileSync(path.join(replacement, "preview.html"), "<h1>boo</h1>\n");
+      await sessions.upsertSessionEntryCore(
+        { agentId: "main", sessionKey: key },
+        { ...original, spawnedCwd: replacement },
+      );
+      const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
+      const save = {
+        sessionKey: key,
+        path: "preview.html",
+        content: "new draft",
+        expectedHash: createHash("sha256").update("<h1>boo</h1>\n").digest("hex"),
+        expectedSource: source,
+      };
+      await expect(invoke("sessions.files.set", save)).rejects.toMatchObject({
+        error: { details: { type: "session_file_source_changed" } },
+      });
+      expect(fs.readFileSync(path.join(replacement, "preview.html"), "utf8")).toBe(
+        "<h1>boo</h1>\n",
+      );
+      const freshSource = { ...source, fileRoot: replacement };
+      const fresh = await dispatch("sessions.files.get", "preview.html");
+      expect(fresh.mock.calls[0]?.[1]).toMatchObject({ source: freshSource });
+      expect(
+        await invoke("sessions.files.set", { ...save, expectedSource: freshSource }),
+      ).toMatchObject([{ ok: true }]);
+      expect(fs.readFileSync(path.join(replacement, "preview.html"), "utf8")).toBe("new draft");
+    });
+  });
+
+  it.each(["workspace", "authorization"] as const)(
+    "preserves the file when %s changes during a source-aware save",
+    async (change) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+        const entry = await seedWorktreeSession(state.workspaceDir);
+        let authorized = true;
+        const revoked = new Error("editor authorization revoked");
+        const assertCurrent = () => {
+          if (!authorized) {
+            throw revoked;
+          }
+        };
+        const createRoot = fsSafe.root;
+        using rootSpy = vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+          const root = await createRoot(...args);
+          const write = root.write.bind(root);
+          root.write = async (...writeArgs) => {
+            if (change === "workspace") {
+              await sessions.upsertSessionEntryCore(
+                { agentId: "main", sessionKey: key },
+                { ...entry, worktree: { ...entry.worktree, id: "wt-2" } },
+              );
+            } else {
+              authorized = false;
+            }
+            return write(...writeArgs);
+          };
+          return root;
+        });
+        const invoke = createSessionFilesHandlerInvoker(sessionsFilesHandlers);
+        const saving = invoke(
+          "sessions.files.set",
+          {
+            sessionKey: key,
+            path: "preview.html",
+            content: "unapproved replacement",
+            expectedHash: createHash("sha256").update("<h1>boo</h1>\n").digest("hex"),
+            expectedSource: {
+              workspaceId: entry.worktree.id,
+              root: entry.spawnedCwd,
+              fileRoot: entry.spawnedCwd,
+            },
+          },
+          {},
+          {
+            sessionMutationAuthorization: {
+              assertCurrent,
+              assertTargetCurrent: assertCurrent,
+            },
+          },
+        );
+        await expect(saving).rejects.toThrow(
+          change === "workspace" ? "Session workspace changed during file access" : revoked,
+        );
+        expect(rootSpy).toHaveBeenCalled();
+        expect(fs.readFileSync(path.join(entry.spawnedCwd, "preview.html"), "utf8")).toBe(
+          "<h1>boo</h1>\n",
+        );
+      });
+    },
+  );
+
   it("reads files from a durable session's worktree", async () => {
     hooks.duringSettlement = undefined;
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

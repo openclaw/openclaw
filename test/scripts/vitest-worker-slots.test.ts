@@ -1,39 +1,25 @@
 import fs from "node:fs";
 import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { pathToFileURL } from "node:url";
 import { afterEach, expect, it } from "vitest";
-import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../vitest/vitest.timeouts.js";
+import { copyWorkerRunFixture, writeFixture } from "./vitest-worker-artifacts.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
-const ownerPath = "scripts/lib/vitest-worker-run.mts";
-let ownerInputs: string[] | undefined;
 
-function fixture(lateMetadata = false) {
+function fixture(lateMetadata: boolean, reusesReleasedSlot: boolean) {
   const root = tempDirs.make("vitest-worker-slots-");
-  ownerInputs ??= collectRuntimeImportClosure(repoRoot, [ownerPath], {
-    includeDynamicImports: true,
-  });
-  for (const input of new Set([...ownerInputs, "package.json", "tsconfig.json"])) {
-    const destination = path.join(root, input);
-    fs.mkdirSync(path.dirname(destination), { recursive: true });
-    fs.copyFileSync(path.join(repoRoot, input), destination);
-  }
-  fs.symlinkSync(
-    fs.realpathSync(path.join(repoRoot, "node_modules")),
-    path.join(root, "node_modules"),
-    process.platform === "win32" ? "junction" : "dir",
-  );
+  const ownerUrl = copyWorkerRunFixture(root);
   const occupied = path.join(root, ".artifacts/vitest-workers/run-cache-0");
   fs.mkdirSync(occupied, { recursive: true });
-  fs.writeFileSync(path.join(occupied, "retained"), "uncertain borrower still owns this directory");
-  const probe = path.join(root, "slot-probe.mjs");
-  fs.writeFileSync(
-    probe,
-    `import fs from 'node:fs';
+  fs.writeFileSync(path.join(occupied, "retained"), "owned");
+  const probe = writeFixture(
+    root,
+    "slot-probe.mjs",
+    `import assert from 'node:assert/strict';
+import fs from 'node:fs';
 import path from 'node:path';
 const originalRmdir = fs.rmdir;
 let metadataTarget;
@@ -47,41 +33,38 @@ if (${JSON.stringify(lateMetadata)}) {
     return originalRmdir(target, ...args);
   };
 }
-const { createVitestWorkerRun } = await import(${JSON.stringify(pathToFileURL(path.join(root, ownerPath)).href)});
+const { createVitestWorkerRun } = await import(${JSON.stringify(ownerUrl)});
 const owners = [];
-let observed;
+const reserve = () => {
+  const owner = createVitestWorkerRun();
+  owners.push(owner);
+  return owner;
+};
+let directories;
 try {
-  const first = createVitestWorkerRun();
+  const first = reserve();
   metadataTarget = first.descriptor.directory;
-  owners.push(first);
-  const firstMode = fs.statSync(first.descriptor.directory).mode & 0o777;
-  const second = createVitestWorkerRun();
-  owners.push(second);
+  if (process.platform !== 'win32') assert.equal(fs.statSync(metadataTarget).mode & 0o777, ${0o700 & ~process.umask()});
+  const second = reserve();
   await first.dispose();
-  const firstReleased = !fs.existsSync(first.descriptor.directory);
-  const secondAlive = fs.existsSync(second.descriptor.directory);
-  const third = createVitestWorkerRun();
-  owners.push(third);
-  observed = {
-    first: first.descriptor.directory,
-    firstMode,
-    second: second.descriptor.directory,
-    third: third.descriptor.directory,
-    firstReleased,
-    secondAlive,
-    metadataInjected,
-  };
+  assert.equal(fs.existsSync(first.descriptor.directory), false);
+  assert.equal(fs.existsSync(second.descriptor.directory), true);
+  const third = reserve();
+  directories = [first, second, third].map(owner => owner.descriptor.directory);
+  assert.notEqual(directories[0], directories[1]);
+  assert.notEqual(directories[2], directories[1]);
+  assert.equal(directories[2] === directories[0], ${reusesReleasedSlot});
 } finally {
   fs.rmdir = originalRmdir;
   const completions = await Promise.allSettled(owners.map(owner => owner.dispose()));
   const failures = completions.filter(result => result.status === 'rejected');
   if (failures.length) throw new AggregateError(failures.map(result => result.reason), 'Worker owners did not dispose');
 }
-console.log(JSON.stringify(observed));
+assert.equal(metadataInjected, ${lateMetadata});
+console.log(JSON.stringify(directories));
 `,
   );
-  const preload = path.join(root, "preload.mjs");
-  fs.writeFileSync(preload, "export {};\n");
+  const preload = writeFixture(root, "preload.mjs", "export {};\n");
   return { root, occupied, probe, preload };
 }
 
@@ -93,7 +76,7 @@ it.each([
 ])(
   "preserves occupied generations and applies $label reservation lifetime",
   async ({ label, ci, cache, preload, reusesReleasedSlot }) => {
-    const f = fixture(label === "late metadata");
+    const f = fixture(label === "late metadata", reusesReleasedSlot);
     const result = await runNodeScript(
       f.probe,
       {
@@ -109,35 +92,12 @@ it.each([
     );
     expect(result.error).toBeUndefined();
     expect(result.status, result.stderr + result.stdout).toBe(0);
-    const observed = JSON.parse(result.stdout) as {
-      first: string;
-      firstMode: number;
-      second: string;
-      third: string;
-      firstReleased: boolean;
-      secondAlive: boolean;
-      metadataInjected: boolean;
-    };
-    expect(observed.firstReleased).toBe(true);
-    expect(observed.metadataInjected).toBe(label === "late metadata");
-    if (process.platform !== "win32") {
-      expect(observed.firstMode).toBe(0o700 & ~process.umask());
-    }
-    expect(observed.secondAlive).toBe(true);
-    expect(observed.first).not.toBe(observed.second);
-    expect(observed.third).not.toBe(observed.second);
-    if (reusesReleasedSlot) {
-      expect(observed.third).toBe(observed.first);
-    } else {
-      expect(observed.third).not.toBe(observed.first);
-    }
-    for (const directory of new Set([observed.first, observed.second, observed.third])) {
+    const directories = JSON.parse(result.stdout) as [string, string, string];
+    for (const directory of new Set(directories)) {
       expect(directory).not.toBe(f.occupied);
       expect(fs.existsSync(directory)).toBe(false);
     }
-    expect(fs.readFileSync(path.join(f.occupied, "retained"), "utf8")).toBe(
-      "uncertain borrower still owns this directory",
-    );
+    expect(fs.readFileSync(path.join(f.occupied, "retained"), "utf8")).toBe("owned");
     expect(fs.readdirSync(path.dirname(f.occupied))).toEqual([path.basename(f.occupied)]);
   },
 );

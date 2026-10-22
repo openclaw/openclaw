@@ -126,11 +126,12 @@ suite.define(() => {
 
     await page.reload();
     await expect.poll(() => selectedModel(picker)).toBe("openai/gpt-5.6-terra");
+    await page.setViewportSize({ height: 900, width: 400 });
+    await page.locator(".agent-chat__composer-combobox textarea").tap();
     await attr(picker, "model-select").tap();
     await attr(picker, "model-default").waitFor();
     await expect.poll(() => picker.locator("[data-chat-model-selection-target]").count()).toBe(0);
 
-    await page.setViewportSize({ height: 900, width: 400 });
     const defaultRow = attr(picker, "model-default");
     await expect
       .poll(async () => {

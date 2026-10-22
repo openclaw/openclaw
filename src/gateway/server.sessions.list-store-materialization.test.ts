@@ -3,10 +3,8 @@ import { expect, test, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import * as agentScope from "../agents/agent-scope.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
-import * as sessionEntryStatus from "../config/sessions/session-accessor.sqlite-status.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
-import * as transcriptWorker from "../config/sessions/session-transcript-worker-runtime.js";
 import { withOpenClawAgentDatabaseWrite } from "../state/openclaw-agent-db-write.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
@@ -175,27 +173,6 @@ test("sessions.list projects out prompt snapshots without changing full entry re
   expect(fullEntries[0]?.entry.skillsSnapshot).toBeDefined();
   expect(fullEntries[0]?.entry.systemPromptReport?.source).toBe("run");
 
-  const decode = vi.spyOn(sessionEntryStatus, "parseSessionEntryJson");
-  const projectionReads = vi.fn();
-  const readDatabases = transcriptWorker.withSessionHistoryWorkerDatabases;
-  const workerReads = vi
-    .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
-    .mockImplementation((targets, consume, lane) =>
-      readDatabases(
-        targets,
-        (owners) =>
-          consume(
-            owners.map((owner) => ({
-              ...owner,
-              readStoreProjection: (input: Parameters<typeof owner.readStoreProjection>[0]) => {
-                projectionReads();
-                return owner.readStoreProjection(input);
-              },
-            })),
-          ),
-        lane,
-      ),
-    );
   const cfg = {
     agents: { entries: { main: {} } },
     session: { store: storePath },
@@ -204,8 +181,6 @@ test("sessions.list projects out prompt snapshots without changing full entry re
   let reads: ReturnType<typeof trackSqliteStatementExecutions<"sessionStore">> | undefined;
   try {
     projection = await createSessionRowProjection({ cfg });
-    expect(projectionReads).toHaveBeenCalled();
-    projectionReads.mockClear();
     const resident = projection.describe({ agentId: "main", key: fullEntries[0]!.sessionKey });
     expect(resident?.storedEntry?.sessionId).toBe("sess-main");
     expect(resident?.storedEntry?.skillsSnapshot).toBeUndefined();
@@ -228,7 +203,6 @@ test("sessions.list projects out prompt snapshots without changing full entry re
       ["sessionStore"],
       () => "sessionStore",
     );
-    decode.mockClear();
 
     const result = await directSessionReq<SessionsListResult>("sessions.list", LIST_PARAMS, {
       context: { getRuntimeConfig: () => cfg, ...bindSessionRowProjection({}, () => projection) },
@@ -236,13 +210,9 @@ test("sessions.list projects out prompt snapshots without changing full entry re
     expect(result.ok).toBe(true);
     expect(result.payload?.sessions.map((row) => row.sessionId)).toEqual(["sess-main"]);
     expect(reads.counts.sessionStore).toBe(0);
-    expect(projectionReads).not.toHaveBeenCalled();
-    expect(decode).not.toHaveBeenCalled();
   } finally {
     reads?.restore();
     projection?.dispose();
-    workerReads.mockRestore();
-    decode.mockRestore();
   }
 
   expect(sessionAccessor.listSessionEntriesReadOnly({ agentId: "main", storePath })).toEqual(

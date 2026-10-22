@@ -3,6 +3,21 @@ import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js"
 import { seconds } from "./prometheus-format.js";
 import type { PrometheusMetricStore } from "./prometheus-metric-store.js";
 
+const GC_DURATION_NAME = "openclaw_gc_duration_seconds";
+const GC_DURATION_HELP =
+  "Elapsed garbage collection duration in seconds by collection kind, callback flags, and isolate role.";
+
+export function reserveMainGcHistograms(store: PrometheusMetricStore): void {
+  // The first native batch can arrive after startup traffic fills the shared series cap.
+  for (const kind of ["scavenge", "mark_sweep_compact", "incremental", "weak_processing"]) {
+    store.reserveHistogram(GC_DURATION_NAME, GC_DURATION_HELP, {
+      kind,
+      reason: "other",
+      thread: "main",
+    });
+  }
+}
+
 // Preserve existing le series while narrowing RPC quantile interpolation through 30 seconds.
 const RPC_DURATION_BUCKETS_SECONDS = [
   0.005, 0.01, 0.0125, 0.015, 0.02, 0.025, 0.03, 0.04, 0.05, 0.06, 0.08, 0.1, 0.125, 0.15, 0.2,
@@ -57,6 +72,8 @@ const DIFF_CACHE_MISS_REASONS = new Set([
 ]);
 const CHAT_SEND_PHASE =
   /^chat\.send\.(authority|admission|preparation|attachments|replyContext|authoring|persist|runAdmission|replyInitialization|snapshot|worktree|effects|response|dispatch)$/;
+const CONTROL_UI_DOCUMENT_STAGE =
+  /^control-ui\.document\.(auth_grants|identity_avatar|plugin_catalog|git_branch|preferences|render|total)$/;
 
 export function recordOperationTimingEvent(
   store: PrometheusMetricStore,
@@ -114,8 +131,8 @@ export function recordOperationTimingEvent(
       return;
     case "diagnostic.gc":
       store.histogram(
-        "openclaw_gc_duration_seconds",
-        "Elapsed garbage collection duration in seconds by collection kind, callback flags, and isolate role.",
+        GC_DURATION_NAME,
+        GC_DURATION_HELP,
         {
           kind: evt.kind ?? "unknown",
           reason: evt.reason ?? "other",
@@ -158,6 +175,16 @@ export function recordOperationTimingEvent(
       return;
     case "diagnostic.phase.completed": {
       if (!metadata.trusted) {
+        return;
+      }
+      const documentStage = CONTROL_UI_DOCUMENT_STAGE.exec(evt.name)?.[1];
+      if (documentStage) {
+        store.histogram(
+          "openclaw_control_ui_document_duration_seconds",
+          "Elapsed Control UI HTML document handler stages in seconds; stages can overlap.",
+          { stage: documentStage },
+          seconds(evt.durationMs),
+        );
         return;
       }
       if (evt.name === "sessions.diff" || evt.name === "checkout.diff") {

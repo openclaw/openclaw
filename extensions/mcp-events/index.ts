@@ -166,9 +166,7 @@ export default definePluginEntry({
         try {
           await active.start();
         } catch (error) {
-          if (service === active) {
-            service = undefined;
-          }
+          service = undefined;
           await active.stop();
           throw error;
         }

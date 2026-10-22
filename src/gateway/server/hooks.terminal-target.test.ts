@@ -1,16 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { DeferredHookWake } from "../../cron/service/wake.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import type { HookAgentDispatchPayload as HookPayload } from "../hooks.js";
 
 let terminalObserved = createDeferred();
 let warningObserved = createDeferred();
-const enqueueSystemEventMock = vi.fn((..._args: unknown[]) => {
-  terminalObserved.resolve();
-  return true;
-});
+const deferHookWakeMock = vi.fn<DeferredHookWake>();
 const captureSessionEventTargetMock = vi.fn(async (agentId: string, sessionKey: string) => ({
   agentId,
   sessionKey,
@@ -35,10 +33,6 @@ const logHooksWarnMock = vi.fn((message: string) => {
   }
 });
 
-vi.mock("../../infra/system-events.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../infra/system-events.js")>()),
-  enqueueSystemEvent: enqueueSystemEventMock,
-}));
 // mock-isolation: Observe the terminal destination without admitting an ordinary reply turn.
 vi.mock("../../auto-reply/reply/session-event-handoff.js", () => ({
   captureSessionEventTargetForHost: captureSessionEventTargetMock,
@@ -100,10 +94,16 @@ describe("global hook terminal target resolution", () => {
     resetGatewayWorkAdmission();
     vi.clearAllMocks();
     terminalObserved = createDeferred();
+    deferHookWakeMock.mockImplementation(async ({ commitGuard }) => {
+      commitGuard();
+      terminalObserved.resolve();
+      return { ok: true, eventOutcome: "queued" };
+    });
     warningObserved = createDeferred();
     loadConfigMock.mockReturnValue(globalConfig("main"));
     ({ dispatchAgentHook: dispatch } = createGatewayHookDispatcher({
       deps: {} as never,
+      deferHookWake: deferHookWakeMock,
       logHooks: {
         ...createSubsystemLogger("hook-terminal-test"),
         warn: logHooksWarnMock,
@@ -135,57 +135,98 @@ describe("global hook terminal target resolution", () => {
           expectedTarget: { agentId: "main", sessionKey: "global", sessionId: "captured-session" },
         });
         expect(captureSessionEventTargetMock).toHaveBeenCalledExactlyOnceWith("main", "global");
-        expect(enqueueSystemEventMock).not.toHaveBeenCalled();
+        expect(deferHookWakeMock).not.toHaveBeenCalled();
       } else {
-        expect(enqueueSystemEventMock).toHaveBeenCalledExactlyOnceWith("Hook Email: done", {
-          sessionKey: "agent:main:global",
+        expect(deferHookWakeMock).toHaveBeenCalledExactlyOnceWith({
+          text: "Hook Email: done",
+          agentId: "main",
+          expectedTarget: {
+            agentId: "main",
+            sessionKey: "global",
+            sessionId: "captured-session",
+            generation: "captured-generation",
+          },
+          createIfMissing: true,
+          commitGuard: expect.any(Function),
         });
-        expect(captureSessionEventTargetMock).not.toHaveBeenCalled();
+        expect(captureSessionEventTargetMock).toHaveBeenCalledExactlyOnceWith("main", "global");
         expect(enqueueSessionEventMock).not.toHaveBeenCalled();
       }
     },
   );
 
-  it("does not recapture a failed immediate terminal target after asynchronous preparation", async () => {
-    captureSessionEventTargetMock.mockRejectedValueOnce(new Error("session target was replaced"));
+  it.each(["now", "next-heartbeat"] as const)(
+    "does not recapture a failed %s terminal target after asynchronous preparation",
+    async (wakeMode) => {
+      captureSessionEventTargetMock.mockRejectedValueOnce(new Error("session target was replaced"));
 
-    await expect(dispatch(payload())).resolves.toMatchObject({ ok: false, statusCode: 502 });
-    await warningObserved.promise;
-    expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
-    expect(captureSessionEventTargetMock).toHaveBeenCalledExactlyOnceWith("main", "global");
-    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
-    expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-    expect(logHooksWarnMock).toHaveBeenCalledWith(
-      "hook terminal event not delivered",
-      expect.objectContaining({
-        error: "Hook terminal target could not be captured before the run",
-      }),
-    );
-  });
-
-  it.each(["success", "failure"] as const)(
-    "suppresses the terminal event when the accepted agent is removed after %s",
-    async (outcome) => {
-      const gate = await startGatedRun(outcome);
-      loadConfigMock.mockReturnValue({
-        ...globalConfig("work", false),
-        hooks: { enabled: true, token: "test-token", allowedAgentIds: ["*"] },
+      await expect(dispatch(payload(wakeMode))).resolves.toMatchObject({
+        ok: false,
+        statusCode: 502,
       });
-      gate.resolve();
-
       await warningObserved.promise;
+      expect(runCronIsolatedAgentTurnMock).not.toHaveBeenCalled();
+      expect(captureSessionEventTargetMock).toHaveBeenCalledExactlyOnceWith("main", "global");
+      expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+      expect(deferHookWakeMock).not.toHaveBeenCalled();
       expect(logHooksWarnMock).toHaveBeenCalledWith(
-        "hook agent terminal event suppressed",
+        "hook terminal event not delivered",
         expect.objectContaining({
-          acceptedAgentId: "main",
-          status: outcome === "success" ? "ok" : "error",
-          reason: "accepted-agent-removed",
-          runId: expect.any(String),
-          jobId: expect.any(String),
+          error: "Hook terminal target could not be captured before the run",
         }),
       );
-      expect(enqueueSystemEventMock).not.toHaveBeenCalled();
-      expect(enqueueSessionEventMock).not.toHaveBeenCalled();
     },
   );
+
+  it.each([
+    {
+      name: "the accepted agent is removed after success",
+      outcome: "success" as const,
+      wakeMode: "now" as const,
+      status: "ok",
+      reason: "accepted-agent-removed",
+    },
+    {
+      name: "the accepted agent is removed after failure",
+      outcome: "failure" as const,
+      wakeMode: "now" as const,
+      status: "error",
+      reason: "accepted-agent-removed",
+    },
+    {
+      name: "the accepted agent is removed before deferred success",
+      outcome: "success" as const,
+      wakeMode: "next-heartbeat" as const,
+      status: "ok",
+      reason: "accepted-agent-removed",
+    },
+    {
+      name: "the accepted agent is removed before deferred failure",
+      outcome: "failure" as const,
+      wakeMode: "next-heartbeat" as const,
+      status: "error",
+      reason: "accepted-agent-removed",
+    },
+  ])("suppresses the terminal event when $name", async (testCase) => {
+    const gate = await startGatedRun(testCase.outcome, testCase.wakeMode);
+    loadConfigMock.mockReturnValue({
+      ...globalConfig("work", false),
+      hooks: { enabled: true, token: "test-token", allowedAgentIds: ["*"] },
+    });
+    gate.resolve();
+
+    await warningObserved.promise;
+    expect(logHooksWarnMock).toHaveBeenCalledWith(
+      "hook agent terminal event suppressed",
+      expect.objectContaining({
+        acceptedAgentId: "main",
+        status: testCase.status,
+        reason: testCase.reason,
+        runId: expect.any(String),
+        jobId: expect.any(String),
+      }),
+    );
+    expect(deferHookWakeMock).not.toHaveBeenCalled();
+    expect(enqueueSessionEventMock).not.toHaveBeenCalled();
+  });
 });

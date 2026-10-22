@@ -6,6 +6,7 @@ import {
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { SessionObserverDigest } from "../../../packages/gateway-protocol/src/schema/sessions.js";
 import { extractAssistantPhaseText } from "../../../src/shared/chat-message-content.js";
+import { createChangeListeners } from "../../../src/shared/listeners.js";
 import type { GatewayEventFrame } from "../api/gateway.ts";
 import { pickFreshestObserverDigest } from "../lib/observer-digest.ts";
 import {
@@ -91,13 +92,9 @@ function eventAgentMatches(targetAgentId: string, payloadAgentId: unknown): bool
 
 /** Owns the bounded session subscriptions and per-row activity throttles. */
 export function createSidebarNarration() {
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
   let stopVisibility: (() => void) | undefined;
-  function notify() {
-    for (const listener of listeners) {
-      listener();
-    }
-  }
+  const notify = listeners.publish;
   let currentSource: NarrationSource | null = null;
   let currentInput: SidebarNarrationSyncInput | null = null;
   let visibilityDocument: Document | null = null;
@@ -658,10 +655,7 @@ export function createSidebarNarration() {
   }
   return {
     read: () => ({ lines, observerDigests, tools, runIds }),
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
+    subscribe: listeners.subscribe,
     sync,
     handleEvent,
     disconnect,

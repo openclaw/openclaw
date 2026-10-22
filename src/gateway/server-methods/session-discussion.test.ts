@@ -9,6 +9,7 @@ import {
   type DiagnosticEventPayload,
 } from "../../infra/diagnostic-events.js";
 import type { SessionDiscussionProvider } from "../../plugins/session-discussion-registry.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { sessionDiscussionHandlers } from "./session-discussion.js";
 
 const mocks = vi.hoisted(() => ({
@@ -78,8 +79,8 @@ const storePath = "/tmp/openclaw/sessions.sqlite";
 type Method = "session.discussion.info" | "session.discussion.open";
 
 async function invoke(
-  method: Method,
-  params: Record<string, unknown>,
+  method: Method = "session.discussion.open",
+  params: Record<string, unknown> = { sessionKey },
   runtimeConfig: OpenClawConfig = cfg,
 ) {
   const calls: Array<{ ok: boolean; payload?: unknown; error?: unknown }> = [];
@@ -110,11 +111,9 @@ function provider() {
     openUrl: "https://chat.example/thread",
   });
   const open = vi.fn<SessionDiscussionProvider["open"]>().mockResolvedValue({ state: "available" });
-  return {
-    value: { id: "test", info, open } satisfies SessionDiscussionProvider,
-    info,
-    open,
-  };
+  const value = { id: "test", info, open } satisfies SessionDiscussionProvider;
+  mocks.getProvider.mockReturnValue(value);
+  return value;
 }
 
 describe("session discussion gateway methods", () => {
@@ -138,20 +137,12 @@ describe("session discussion gateway methods", () => {
 
   afterEach(() => vi.useRealTimers());
 
-  it.each(["session.discussion.open"] as const)(
-    "returns none when %s has no provider",
-    async (method) => {
-      mocks.getProvider.mockReturnValue(undefined);
-      expect(await invoke(method, { sessionKey: "agent:main:thread" })).toMatchObject({
-        ok: true,
-        payload: { state: "none" },
-      });
-    },
-  );
+  it("returns none when open has no provider", async () => {
+    expect(await invoke()).toMatchObject({ ok: true, payload: { state: "none" } });
+  });
 
   it("admits bare fixed-store keys only through their persisted owner", async () => {
     const registered = provider();
-    mocks.getProvider.mockReturnValue(registered.value);
     mockSession({ sessionId: "session-ops-global", updatedAt: 1 });
     const ownedConfig: OpenClawConfig = {
       session: { scope: "global", store: "/tmp/shared-sessions.sqlite" },
@@ -197,14 +188,10 @@ describe("session discussion gateway methods", () => {
       return persistedEntry;
     });
     const registered = provider();
-    mocks.getProvider.mockReturnValue(registered.value);
 
     expect(
       await invoke("session.discussion.open", { sessionKey: "agent:main:thread-alias" }),
-    ).toMatchObject({
-      ok: true,
-      payload: { state: "available" },
-    });
+    ).toMatchObject({ ok: true, payload: { state: "available" } });
     expect(registered.open).toHaveBeenCalledWith({
       sessionKey: "agent:main:thread-alias",
       agentId: "main",
@@ -239,9 +226,7 @@ describe("session discussion gateway methods", () => {
   it("does not generate a title for an explicitly named session", async () => {
     mockSession({ sessionId: "session-1", updatedAt: 1, displayName: "Manual title" });
     const registered = provider();
-    mocks.getProvider.mockReturnValue(registered.value);
-
-    await invoke("session.discussion.open", { sessionKey });
+    await invoke();
 
     expect(mocks.maybeGenerateSessionTitle).not.toHaveBeenCalled();
     expect(mocks.readSessionTitleFields).not.toHaveBeenCalled();
@@ -255,26 +240,18 @@ describe("session discussion gateway methods", () => {
       firstUserMessage: "Plan the release",
       lastMessagePreview: null,
     });
-    // Resolvable deferred: settling it after the assertions evicts the shared
-    // single-flight map entry so module state stays clean across suites.
-    let releaseGeneration!: (value: string | null) => void;
-    let markGenerationStarted!: () => void;
-    const generationStarted = new Promise<void>((resolve) => {
-      markGenerationStarted = resolve;
-    });
+    // Settle after timeout to evict the shared single-flight entry.
+    const generation = createDeferredCore<string | null>();
+    const generationStarted = createDeferredCore();
     mocks.generateConversationLabelWithFallback.mockImplementation(() => {
-      markGenerationStarted();
-      return new Promise<string | null>((resolve) => {
-        releaseGeneration = resolve;
-      });
+      generationStarted.resolve();
+      return generation.promise;
     });
     const registered = provider();
-    mocks.getProvider.mockReturnValue(registered.value);
-
-    const responsePromise = invoke("session.discussion.open", { sessionKey });
+    const responsePromise = invoke();
     // Skill discovery precedes inference and may yield to real filesystem work.
     // Start the fake timeout only after the deferred provider call is active.
-    await generationStarted;
+    await generationStarted.promise;
     await vi.advanceTimersByTimeAsync(10_000);
 
     await expect(responsePromise).resolves.toMatchObject({
@@ -283,7 +260,7 @@ describe("session discussion gateway methods", () => {
     });
     expect(registered.open).toHaveBeenCalledOnce();
     expect(mocks.emitSessionTitleChanged).toHaveBeenCalledOnce();
-    releaseGeneration(null);
+    generation.resolve(null);
     // Bounded flush: eviction settles via microtasks, so advancing 0ms is
     // enough. runAllTimersAsync livelocks (10000-timer abort) when any other
     // suite in a shared shard worker schedules an interval into this fake clock.
@@ -291,61 +268,45 @@ describe("session discussion gateway methods", () => {
     expect(mocks.emitSessionTitleChanged).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["session.discussion.open"] as const)(
-    "returns a retryable error when the provider throws from %s",
-    async (method) => {
-      const registered = provider();
-      registered.open.mockRejectedValueOnce(new Error("provider failed"));
-      mocks.getProvider.mockReturnValue(registered.value);
-      const previousDiagnostics = areDiagnosticsEnabledForProcess();
-      const phases: DiagnosticEventPayload[] = [];
-      const stop = onTrustedInternalDiagnosticEvent((event) => phases.push(event), {
-        include: ["diagnostic.phase.completed"],
-      });
-      setDiagnosticsEnabledForProcess(true);
-      try {
-        expect(await invoke(method, { sessionKey: "agent:main:thread" })).toMatchObject({
-          ok: false,
-          error: { code: "UNAVAILABLE" },
-        });
-        await waitForDiagnosticEventsDrained();
-        expect(phases).toEqual([
-          expect.objectContaining({
-            type: "diagnostic.phase.completed",
-            name: `${method}.provider`,
-            durationMs: expect.any(Number),
-          }),
-        ]);
-        expect(JSON.stringify(phases)).not.toContain(sessionKey);
-        expect(JSON.stringify(phases)).not.toContain("provider failed");
-      } finally {
-        stop();
-        setDiagnosticsEnabledForProcess(previousDiagnostics);
-      }
-    },
-  );
-
-  it.each(["session.discussion.open"] as const)(
-    "rejects a malformed provider result from %s",
-    async (method) => {
-      const registered = provider();
-      registered.open.mockResolvedValueOnce({ state: "invalid" } as never);
-      mocks.getProvider.mockReturnValue(registered.value);
-
-      expect(await invoke(method, { sessionKey: "agent:main:thread" })).toMatchObject({
+  it("returns a retryable error when the provider throws from open", async () => {
+    const registered = provider();
+    registered.open.mockRejectedValueOnce(new Error("provider failed"));
+    const previousDiagnostics = areDiagnosticsEnabledForProcess();
+    const phases: DiagnosticEventPayload[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => phases.push(event), {
+      include: ["diagnostic.phase.completed"],
+    });
+    setDiagnosticsEnabledForProcess(true);
+    try {
+      expect(await invoke()).toMatchObject({
         ok: false,
         error: { code: "UNAVAILABLE" },
       });
-    },
-  );
+      await waitForDiagnosticEventsDrained();
+      expect(phases).toEqual([
+        expect.objectContaining({
+          type: "diagnostic.phase.completed",
+          name: "session.discussion.open.provider",
+          durationMs: expect.any(Number),
+        }),
+      ]);
+      expect(JSON.stringify(phases)).not.toContain(sessionKey);
+      expect(JSON.stringify(phases)).not.toContain("provider failed");
+    } finally {
+      stop();
+      setDiagnosticsEnabledForProcess(previousDiagnostics);
+    }
+  });
 
-  it.each(["session.discussion.open"] as const)(
-    "rejects an empty session key for %s",
-    async (method) => {
-      expect(await invoke(method, { sessionKey: "" })).toMatchObject({
-        ok: false,
-        error: { code: "INVALID_REQUEST" },
-      });
-    },
-  );
+  it("rejects a malformed provider result from open", async () => {
+    provider().open.mockResolvedValueOnce({ state: "invalid" } as never);
+    expect(await invoke()).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
+  });
+
+  it("rejects an empty session key for open", async () => {
+    expect(await invoke("session.discussion.open", { sessionKey: "" })).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST" },
+    });
+  });
 });

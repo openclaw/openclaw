@@ -46,9 +46,13 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function mount(createdSessionKey = "agent:main:dashboard:mentioned") {
+async function mount(
+  createdSessionKey = "agent:main:dashboard:mentioned",
+  scopes = ["operator.read", "operator.write"],
+) {
   const directory = vi.fn(async (): Promise<UsersMentionableResult> => people);
   const fixture = createDraftFixture({
+    scopes,
     request: async (method) => {
       if (method === "users.mentionable") {
         return directory();
@@ -174,8 +178,11 @@ async function mount(createdSessionKey = "agent:main:dashboard:mentioned") {
 }
 
 describe("command palette people mentions", () => {
-  it("selects one, two, and repeated references and carries real first-message metadata", async () => {
-    const f = await mount();
+  it.each([
+    { role: "operator", scopes: ["operator.read", "operator.write"] },
+    { role: "guest", scopes: ["operator.sessions.write"] },
+  ])("carries selected people into the first message for a $role", async ({ scopes }) => {
+    const f = await mount(undefined, scopes);
     await f.search("  🙂 @");
     expect(f.input.getAttribute("aria-controls")).toBe(f.menu()?.id);
     expect(f.input.getAttribute("aria-haspopup")).toBe("listbox");
@@ -427,7 +434,7 @@ describe("command palette people mentions", () => {
     expect(f.palette.isOpen).toBe(false);
   });
 
-  it.each(["anonymous", "read-only", "offline"])(
+  it.each(["anonymous", "read-only", "session-read-only", "offline", "create-unavailable"])(
     "does not query a directory for %s operators",
     async (mode) => {
       const f = await mount();
@@ -435,6 +442,12 @@ describe("command palette people mentions", () => {
         Object.assign(f.context.gateway.snapshot, { selfUser: undefined });
       } else if (mode === "read-only") {
         Object.assign(f.context.gateway.snapshot.hello!.auth!, { scopes: ["operator.read"] });
+      } else if (mode === "session-read-only") {
+        Object.assign(f.context.gateway.snapshot.hello!.auth!, {
+          scopes: ["operator.sessions.read"],
+        });
+      } else if (mode === "create-unavailable") {
+        f.context.gateway.snapshot.hello!.features!.methods = [];
       } else {
         f.context.gateway.snapshot.phase = "reconnecting";
       }
@@ -455,7 +468,10 @@ describe("command palette people mentions", () => {
     "keeps a new visible invocation authoritative after %s",
     async (change) => {
       const destination = change === "destination" ? "reviewer" : "main";
-      const f = await mount(`agent:${destination}:dashboard:mentioned`);
+      const f = await mount(
+        `agent:${destination}:dashboard:mentioned`,
+        change === "destination" ? ["operator.sessions.write"] : undefined,
+      );
       const foreground = "agent:main:dashboard:foreground";
       f.context.gateway.snapshot.sessionKey = foreground;
       if (change === "destination") {

@@ -417,7 +417,6 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                       account,
                       config,
                       channelRuntime,
-                      buildContext: channelRuntime.inbound.buildContext,
                       store,
                       taskId: task.id,
                       contextId: task.contextId,
@@ -428,13 +427,11 @@ export const a2aChannelPlugin: ChannelPlugin<ResolvedA2aChannelAccount> = create
                   }).catch((error: unknown) => store.fail(task.id, error));
                 }
 
-                if (send.data.configuration?.returnImmediately) {
-                  result = { task: store.get(task.id, peerName) ?? task };
-                } else {
+                if (!send.data.configuration?.returnImmediately) {
                   const timeoutMs = a2aConfig.replyTimeoutMs ?? DEFAULT_REPLY_TIMEOUT_MS;
-                  const settled = await store.wait(task.id, timeoutMs);
-                  result = { task: settled ?? store.get(task.id, peerName) ?? task };
+                  await store.wait(task, timeoutMs);
                 }
+                result = { task };
               } else {
                 const taskParams = A2aTaskRequestParamsSchema.safeParse(request.params);
                 if (!taskParams.success) {

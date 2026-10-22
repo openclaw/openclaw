@@ -1,6 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Owns catalog-row menu state, actions, focus anchor, and rendering for AppSidebar.
-import { Show } from "solid-js";
+import { Show, type Component } from "solid-js";
 import { pathForRoute } from "../app-route-paths.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -210,7 +210,7 @@ export function createSidebarCatalogMenu(host: SidebarCatalogMenuHost, beforeOpe
       });
       return {
         isOpenFor: (key: CatalogSessionKey) => matchesMenu(snapshot.read()?.menu, key),
-        render: (CatalogMenu: typeof CatalogSessionMenu) => (
+        render: (CatalogMenu: Component<Parameters<typeof CatalogSessionMenu>[0]>) => (
           <Show when={snapshot.read()?.menu} keyed>
             {(menu) => (
               <CatalogMenu

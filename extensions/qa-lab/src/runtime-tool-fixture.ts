@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { loadTranscriptEvents } from "openclaw/plugin-sdk/session-store-runtime";
 import {
   asBoolean,
   isRecord,
@@ -35,12 +34,14 @@ import {
   runCodexNativeWorkspaceFixture,
 } from "./runtime-tool-native-workspace.js";
 import * as searchEvidence from "./runtime-tool-search-evidence.js";
-import type { runAgentPrompt } from "./suite-runtime-agent-process.js";
+import { ensureImageGenerationConfigured } from "./suite-runtime-agent-media.js";
+import { runAgentPrompt } from "./suite-runtime-agent-process.js";
 import {
-  type createSession,
-  type readEffectiveTools,
-  readRawQaSessionStore,
+  createSession,
+  readEffectiveTools,
+  readQaSessionTranscriptEvents,
 } from "./suite-runtime-agent-session.js";
+import { fetchJson } from "./suite-runtime-gateway.js";
 import type { QaSuiteRuntimeEnv } from "./suite-runtime-types.js";
 
 type QaRuntimeToolFixtureConfig = Record<string, unknown>;
@@ -60,14 +61,6 @@ const RUNTIME_PATCH_HAPPY_FILENAME = "runtime-tool-fixture-patch.txt";
 const RUNTIME_PATCH_HAPPY_CONTENTS = "runtime patch\n";
 const RUNTIME_PATCH_DENIED_FILENAME = "runtime-tool-fixture-denied.txt";
 const RUNTIME_PATCH_DENIED_CONTENTS = "runtime-tool-fixture-denied-original\n";
-
-type QaRuntimeToolFixtureDeps = {
-  createSession: typeof createSession;
-  readEffectiveTools: typeof readEffectiveTools;
-  runAgentPrompt: (...args: Parameters<typeof runAgentPrompt>) => Promise<unknown>;
-  fetchJson: (url: string) => Promise<unknown>;
-  ensureImageGenerationConfigured: (env: QaSuiteRuntimeEnv) => Promise<unknown>;
-};
 
 function readQaRuntimeToolFixtureRequests(raw: unknown): QaRuntimeToolFixtureRequest[] {
   return Array.isArray(raw) ? raw.filter(isRecord) : [];
@@ -254,7 +247,6 @@ function describeRuntimePatchArguments(args: unknown): string {
 
 async function formatRuntimePatchMutationDiagnostics(params: {
   env: QaSuiteRuntimeEnv;
-  deps: QaRuntimeToolFixtureDeps;
   requestCursor: number;
 }) {
   const readDirectoryEntries = (directory: string) =>
@@ -274,8 +266,7 @@ async function formatRuntimePatchMutationDiagnostics(params: {
     .slice(-6)
     .map((line) => redactRuntimePatchDiagnostic(line).slice(0, 200));
   const mockRequests = params.env.mock
-    ? await params.deps
-        .fetchJson(qaMockRequestsAfterUrl(params.env.mock.baseUrl, params.requestCursor))
+    ? await fetchJson(qaMockRequestsAfterUrl(params.env.mock.baseUrl, params.requestCursor))
         .then(readQaRuntimeToolFixtureRequests)
         .then((requests) =>
           requests.slice(-4).map((request) => {
@@ -311,21 +302,7 @@ async function readSessionTranscriptBytes(
   env: Pick<QaSuiteRuntimeEnv, "gateway">,
   sessionKey: string,
 ) {
-  const store = await readRawQaSessionStore(env);
-  const entry = store[sessionKey];
-  const sessionId = normalizeOptionalString(entry?.sessionId);
-  if (!sessionId) {
-    throw new Error(`session transcript entry not found for ${sessionKey}`);
-  }
-  const events = await loadTranscriptEvents({
-    agentId: "qa",
-    env: {
-      ...process.env,
-      OPENCLAW_STATE_DIR: path.join(env.gateway.tempRoot, "state"),
-    },
-    sessionId,
-    sessionKey,
-  });
+  const { events } = await readQaSessionTranscriptEvents(env, sessionKey);
   const transcriptBytes = events.map((event) => JSON.stringify(event)).join("\n");
   if (!transcriptBytes.trim()) {
     throw new Error(`session transcript is empty for ${sessionKey}`);
@@ -484,14 +461,13 @@ function formatKnownHarnessGapDetails(toolName: string, config: QaRuntimeToolFix
 export async function runRuntimeToolFixture(
   env: QaSuiteRuntimeEnv,
   config: QaRuntimeToolFixtureConfig,
-  deps: QaRuntimeToolFixtureDeps,
 ) {
   const toolName = normalizeOptionalString(config.toolName) ?? "";
   if (!toolName) {
     throw new Error("runtime tool fixture missing execution.config.toolName");
   }
   if (config.ensureImageGeneration === true) {
-    await deps.ensureImageGenerationConfigured(env);
+    await ensureImageGenerationConfigured(env);
   }
   const metadata = readRuntimeToolCoverageMetadata({ config });
   const forcedCodexNativeWorkspace =
@@ -510,12 +486,12 @@ export async function runRuntimeToolFixture(
   const stableSessionKeyPrefix = nativeWorkspaceBehaviorId
     ? undefined
     : `agent:qa:runtime-tool:${toolName}`;
-  const happySessionKey = await deps.createSession(
+  const happySessionKey = await createSession(
     env,
     `Runtime tool fixture: ${nativeWorkspaceBehaviorId ?? toolName} happy`,
     stableSessionKeyPrefix ? `${stableSessionKeyPrefix}:happy` : undefined,
   );
-  const failureSessionKey = await deps.createSession(
+  const failureSessionKey = await createSession(
     env,
     `Runtime tool fixture: ${nativeWorkspaceBehaviorId ?? toolName} failure`,
     stableSessionKeyPrefix ? `${stableSessionKeyPrefix}:failure` : undefined,
@@ -556,7 +532,7 @@ export async function runRuntimeToolFixture(
       }
       throw new Error(details);
     };
-    const tools = await deps.readEffectiveTools(env, happySessionKey);
+    const tools = await readEffectiveTools(env, happySessionKey);
     if (forcedCodexNativeWorkspace) {
       const nativeDetails = await runCodexNativeWorkspaceFixture({
         env,
@@ -564,7 +540,6 @@ export async function runRuntimeToolFixture(
         required: metadata.required,
         happySessionKey,
         failureSessionKey,
-        runAgentPrompt: deps.runAgentPrompt,
         readEvidence: (sessionKey, nativeToolName) =>
           readLiveToolEvidence({ env, sessionKey, toolName: nativeToolName }),
         failFixture,
@@ -611,11 +586,11 @@ export async function runRuntimeToolFixture(
       !isRecord(config.knownHarnessGap);
     const mockBaseUrl = env.mock?.baseUrl;
     const requestCursorBefore = mockBaseUrl
-      ? readQaMockRequestCursor(await deps.fetchJson(qaMockRequestCursorUrl(mockBaseUrl)))
+      ? readQaMockRequestCursor(await fetchJson(qaMockRequestCursorUrl(mockBaseUrl)))
       : 0;
 
     const runHappyPrompt = () =>
-      deps.runAgentPrompt(env, {
+      runAgentPrompt(env, {
         sessionKey: happySessionKey,
         message: happyPrompt,
         timeoutMs: liveTurnTimeoutMs(env, 45_000),
@@ -637,7 +612,6 @@ export async function runRuntimeToolFixture(
         if ((await readOptionalUtf8(happyPatchPath)) !== RUNTIME_PATCH_HAPPY_CONTENTS) {
           const diagnostics = await formatRuntimePatchMutationDiagnostics({
             env,
-            deps,
             requestCursor: requestCursorBefore,
           });
           throw new Error(
@@ -649,7 +623,7 @@ export async function runRuntimeToolFixture(
       }
     }
     const runFailurePrompt = () =>
-      deps.runAgentPrompt(env, {
+      runAgentPrompt(env, {
         sessionKey: failureSessionKey,
         message: failurePrompt,
         timeoutMs: liveTurnTimeoutMs(env, 45_000),
@@ -682,7 +656,7 @@ export async function runRuntimeToolFixture(
 
     const requests = env.mock
       ? readQaRuntimeToolFixtureRequests(
-          await deps.fetchJson(qaMockRequestsAfterUrl(env.mock.baseUrl, requestCursorBefore)),
+          await fetchJson(qaMockRequestsAfterUrl(env.mock.baseUrl, requestCursorBefore)),
         )
       : [];
     const mockEvidence = env.mock

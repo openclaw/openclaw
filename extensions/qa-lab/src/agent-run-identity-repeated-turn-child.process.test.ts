@@ -1,7 +1,7 @@
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
+import { DatabaseSync, type SQLInputValue } from "node:sqlite";
 import { zstdDecompressSync } from "node:zlib";
 import { withTimeout } from "@openclaw/fs-safe/advanced";
 import {
@@ -23,6 +23,11 @@ import { startQaMockOpenAiServer } from "./providers/mock-openai/server.js";
 
 const lifetime = createFixtureLifetime();
 const setup = createQaGatewaySetupHarness();
+const turns = ["REPEATED-TURN-ONE", "REPEATED-TURN-TWO"];
+function query(database: string, sql: string, ...params: SQLInputValue[]) {
+  using db = new DatabaseSync(database, { readOnly: true });
+  return db.prepare(sql).all(...params);
+}
 afterEach(async () => {
   await lifetime.cleanup();
   await setup.cleanup();
@@ -68,7 +73,6 @@ it(
       const childUrl = resolveRuntimeWorkerUrl(identityRepeatedTurnEntrypoint);
       // Runtime transpilation must not consume the cold ingress execution deadline.
       expect(childUrl.pathname.endsWith(".js")).toBe(true);
-      // In-process test setup already binds MCP; only the maintained child exposes this omission.
       const { child } = await lifetime.acquire(async () => {
         const processChild = spawn(
           process.execPath,
@@ -84,8 +88,6 @@ it(
       const output = createQaChildOutputTail(128 * 1024);
       child.stdout?.on("data", (chunk) => appendQaChildOutputTail(output, chunk));
       child.stderr?.on("data", (chunk) => appendQaChildOutputTail(output, chunk));
-      // A cold child boots, runs two turns, and closes its databases; loaded CI shards need
-      // close to a minute for that (59s observed), so the bound leaves real headroom.
       const exit = await withTimeout(once(child, "close"), 180_000).catch((error: unknown) => {
         throw new Error(`Repeated ingress child did not close: ${readQaChildOutputTail(output)}`, {
           cause: error,
@@ -94,63 +96,36 @@ it(
       const response = await fetch(`${mock.baseUrl}/debug/requests?after=0`);
       expect(response.ok).toBe(true);
       const requests: MockOpenAiRequestSnapshot[] = await response.json();
-      expect(
-        exit,
-        JSON.stringify({
-          output: readQaChildOutputTail(output),
-          providerRequests: requests.length,
-        }),
-      ).toEqual([0, null]);
-      expect(requests.map((request) => request.outcome)).toEqual(["success", "success"]);
-      expect(requests[0]?.prompt).toContain("REPEATED-TURN-ONE");
-      expect(requests[1]?.prompt).toContain("REPEATED-TURN-TWO");
-
-      const state = new DatabaseSync(path.join(stateDir, "state", "openclaw.sqlite"), {
-        readOnly: true,
-      });
-      try {
-        const contexts = state
-          .prepare("SELECT run_id, execution_id, context_id FROM execution_identity_contexts")
-          .all();
-        expect(contexts.map((row) => row.run_id)).toEqual([sessionId, sessionId]);
-        for (const field of ["execution_id", "context_id"] as const) {
-          expect(contexts.map((row) => row[field])).toEqual([
-            expect.any(String),
-            expect.any(String),
-          ]);
-          expect(new Set(contexts.map((row) => row[field])).size).toBe(2);
-        }
-      } finally {
-        state.close();
-      }
-      const agent = new DatabaseSync(
-        path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite"),
-        { readOnly: true },
+      expect(exit, readQaChildOutputTail(output)).toEqual([0, null]);
+      expect(requests).toMatchObject(
+        turns.map((prompt) => ({
+          outcome: "success",
+          prompt: expect.stringContaining(prompt),
+        })),
       );
-      try {
-        const rows = agent
-          .prepare(
-            "SELECT event_json, event_zstd FROM transcript_events WHERE session_id = ? ORDER BY seq",
-          )
-          .all(sessionId) as Array<{ event_json: string | null; event_zstd: Uint8Array }>;
-        const messages = rows
-          .map((row) =>
-            JSON.parse(row.event_json ?? zstdDecompressSync(row.event_zstd).toString("utf8")),
-          )
-          .filter((event) => event.type === "message" && event.message.role === "assistant")
-          .map((event) => event.message);
-        expect(
-          messages.map((message) => ({
-            stopReason: message.stopReason,
-            content: message.content.map((part: { text?: string }) => part.text),
-          })),
-        ).toEqual([
-          { stopReason: "stop", content: ["REPEATED-TURN-ONE"] },
-          { stopReason: "stop", content: ["REPEATED-TURN-TWO"] },
-        ]);
-      } finally {
-        agent.close();
+      const contexts = query(
+        path.join(stateDir, "state", "openclaw.sqlite"),
+        "SELECT run_id, execution_id, context_id FROM execution_identity_contexts",
+      );
+      expect(contexts.map((row) => row.run_id)).toEqual([sessionId, sessionId]);
+      for (const field of ["execution_id", "context_id"] as const) {
+        expect(contexts.map((row) => row[field])).toEqual([expect.any(String), expect.any(String)]);
+        expect(new Set(contexts.map((row) => row[field])).size).toBe(2);
       }
+      const rows = query(
+        path.join(stateDir, "agents", "qa", "agent", "openclaw-agent.sqlite"),
+        "SELECT event_json, event_zstd FROM transcript_events WHERE session_id = ? ORDER BY seq",
+        sessionId,
+      ) as Array<{ event_json: string | null; event_zstd: Uint8Array }>;
+      const messages = rows
+        .map((row) =>
+          JSON.parse(row.event_json ?? zstdDecompressSync(row.event_zstd).toString("utf8")),
+        )
+        .filter((event) => event.type === "message" && event.message.role === "assistant")
+        .map((event) => event.message);
+      expect(messages).toMatchObject(
+        turns.map((text) => ({ stopReason: "stop", content: [{ text }] })),
+      );
     }),
   240_000,
 );

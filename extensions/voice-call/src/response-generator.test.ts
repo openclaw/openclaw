@@ -380,13 +380,19 @@ describe("generateVoiceResponse", () => {
     expect(result).toEqual({ text: "Accepted retry response.", deliveredEarly: true });
   });
 
-  it("extracts spoken text from fenced JSON", async () => {
-    const { result } = await runGenerateVoiceResponse([
-      { text: '```json\n{"spoken":"Fenced JSON works."}\n```' },
-    ]);
+  it.each([
+    ['```json\n{"spoken":"Fenced JSON works."}\n```', "Fenced JSON works."],
+    ['prefix "spoken": "Hello\\nthere" tail', "Hello there"],
+    ['prefix "spoken": "" tail', null],
+    ['prefix "spoken": "bad\\q" tail', 'prefix "spoken": "bad\\q" tail'],
+  ] as const)(
+    "recovers spoken JSON while preserving plain-text fallback: %j",
+    async (text, expected) => {
+      const { result } = await runGenerateVoiceResponse([{ text }]);
 
-    expect(result.text).toBe("Fenced JSON works.");
-  });
+      expect(result.text).toBe(expected);
+    },
+  );
 
   it("returns silence for an explicit empty spoken contract response", async () => {
     const { result } = await runGenerateVoiceResponse([{ text: '{"spoken":""}' }]);

@@ -27,6 +27,7 @@ import {
   createUpdateDatabaseBackupInProcess,
 } from "./update-database-backup.js";
 import * as databaseGenerations from "./update-physical-database-generations.js";
+import type { UpdateRecoveryBaselineRef } from "./update-recovery-baseline-capture.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -484,6 +485,25 @@ async function originalCaptureFixture(externalAgents = false) {
   };
 }
 
+async function expectOriginalDatabase(ref: UpdateRecoveryBaselineRef, sourcePath: string) {
+  const raw = await fs.readFile(ref.manifestPath, "utf8");
+  expect(createHash("sha256").update(raw).digest("hex")).toBe(ref.manifestSha256);
+  const manifest = parseUpdateRecoveryBackupManifest(raw);
+  const entry = manifest.entries.find((candidate) => candidate.sourcePath === sourcePath);
+  assert(entry?.kind === "file" && entry.sqlite);
+  const payloadPath = path.join(ref.directory, entry.archivePath);
+  const bytes = await fs.readFile(payloadPath);
+  expect(entry).toMatchObject({
+    sha256: createHash("sha256").update(bytes).digest("hex"),
+    size: bytes.length,
+  });
+  using retained = new DatabaseSync(payloadPath, { readOnly: true });
+  expect(retained.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+  expect(retained.prepare("SELECT rowid,value FROM payload ORDER BY rowid").all()).toEqual([
+    { rowid: 42, value: "retained" },
+  ]);
+}
+
 it("refuses an original capture before writing when its payload will not fit", async () => {
   const f = await originalCaptureFixture();
   const payloadBytes = 2 * 1024 * 1024;
@@ -584,7 +604,6 @@ it("seals equivalent original bytes under isolated and maintenance-owned capture
 
   const worker = vi.spyOn(inspection, "runUpdateStateInspectionWorker");
   const parentDiscovery = vi.spyOn(candidateState, "discoverUpdateStateSchemaInspectionInProcess");
-  const isolatedGenerations = vi.spyOn(candidateState, "readUpdateDatabaseGenerationsIsolated");
   const isolatedSizes = vi.spyOn(databaseSizes, "readUpdateStateDatabaseSizes");
   const scope = createOpenClawDatabaseMaintenanceScope({
     schemaMaintenance: true,
@@ -624,7 +643,7 @@ it("seals equivalent original bytes under isolated and maintenance-owned capture
     ] as const) {
       expect(maintainedManifest[field], field).toEqual(manifest[field]);
     }
-    expect(worker).toHaveBeenCalledTimes(2);
+    expect(worker).toHaveBeenCalledOnce();
     expect(parentDiscovery).toHaveBeenCalledOnce();
     expect(parentDiscovery).toHaveBeenCalledWith(
       expect.objectContaining({ preserveSourceArtifacts: true }),
@@ -648,12 +667,6 @@ it("seals equivalent original bytes under isolated and maintenance-owned capture
     expect(maintainedManifest.entries).toContainEqual(
       expect.objectContaining({ sourcePath: f.registryOnly, kind: "file", sqlite: true }),
     );
-    // Only absent databases need metadata checks for retained journals; captured images are not reread.
-    expect(isolatedGenerations).toHaveBeenCalledOnce();
-    const generationPaths = isolatedGenerations.mock.calls[0]![0];
-    expect(generationPaths).toContain(f.missingDatabase);
-    expect(generationPaths).not.toContain(f.shared);
-    expect(generationPaths).not.toContain(f.registryOnly);
     expect(isolatedSizes).not.toHaveBeenCalled();
     expect(await Promise.all(f.familyPaths.map((file) => fs.readFile(file)))).toEqual(f.family);
     expect(await Promise.all(f.external.map((source) => fs.readFile(source)))).toEqual(
@@ -678,7 +691,6 @@ it.each(["large", "live-reads-admitted"] as const)(
       );
     }
     const worker = vi.spyOn(inspection, "runUpdateStateInspectionWorker");
-    const isolatedGenerations = vi.spyOn(candidateState, "readUpdateDatabaseGenerationsIsolated");
     const isolatedSizes = vi.spyOn(databaseSizes, "readUpdateStateDatabaseSizes");
     const scope = createOpenClawDatabaseMaintenanceScope({
       schemaMaintenance: true,
@@ -699,19 +711,15 @@ it.each(["large", "live-reads-admitted"] as const)(
         expect(worker.mock.calls.map(([request]) => request.input.mode)).toEqual([
           "discover",
           "database-backup",
-          "database-generations",
         ]);
-        expect(isolatedGenerations).toHaveBeenCalledOnce();
-        expect(isolatedGenerations.mock.calls[0]![0]).not.toContain(f.shared);
         expect(manifest.entries).toContainEqual(
           expect.objectContaining({ sourcePath: f.shared, kind: "file", sqlite: true }),
         );
       } else {
         assert(originalManifest);
         expect(manifest.entries).toEqual(originalManifest.entries);
-        expect(isolatedGenerations).toHaveBeenCalledOnce();
         expect(isolatedSizes).toHaveBeenCalled();
-        expect(worker).toHaveBeenCalledTimes(3);
+        expect(worker).toHaveBeenCalledTimes(2);
       }
     } finally {
       await scope.close();
@@ -763,16 +771,16 @@ it.each([
       return copy(...args);
     });
   } else {
-    const readGenerations = candidateState.readUpdateDatabaseGenerationsIsolated;
-    vi.spyOn(candidateState, "readUpdateDatabaseGenerationsIsolated").mockImplementationOnce(
-      async (...args) => {
+    const publish = durability.publishFileExclusive;
+    vi.spyOn(durability, "publishFileExclusive").mockImplementation(async (...args) => {
+      if (path.basename(args[0].targetPath) === "manifest.json") {
         await mutate();
-        return readGenerations(...args);
-      },
-    );
+      }
+      return publish(...args);
+    });
   }
   const capture = f.captureOriginal(`${change}-${phase}`);
-  if (change === "content") {
+  if (change === "content" && phase === "during") {
     await expect(capture).rejects.toMatchObject({
       cause: expect.objectContaining({
         message: expect.stringMatching(/Original update (file|resource) changed/),
@@ -833,7 +841,7 @@ it.each(["-wal", "-journal"] as const)(
   },
 );
 
-it("retains an unsealed capture when the database changes after its snapshot", async () => {
+it("seals the chosen manual image without discarding later live writes", async () => {
   const f = await originalCaptureFixture();
   const owner = await import("./update-database-backup.js");
   const capture = owner.createUpdateDatabaseBackup;
@@ -845,16 +853,8 @@ it("retains an unsealed capture when the database changes after its snapshot", a
     }
     return captured;
   });
-  await expect(f.captureOriginal("changed")).rejects.toMatchObject({
-    cause: expect.objectContaining({
-      message: `Original database generation changed or could not be verified; capture is unsealed.\n${f.shared}: generation changed after its snapshot.`,
-    }),
-  });
-  const directory = path.join(`${f.stateDir}.update-captures`, "changed");
-  await expect(fs.lstat(path.join(directory, "manifest.json"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-  expect((await fs.readdir(path.join(directory, "payload"))).length).toBeGreaterThan(0);
+  const captured = await f.captureOriginal("changed");
+  await expectOriginalDatabase(captured.ref, f.shared);
   using source = new DatabaseSync(f.shared, { readOnly: true });
   expect(source.prepare("SELECT value FROM payload ORDER BY rowid").all()).toEqual([
     { value: "retained" },
@@ -862,7 +862,7 @@ it("retains an unsealed capture when the database changes after its snapshot", a
   ]);
 });
 
-it("names the database and its backup warning when no stable generation was recorded", async () => {
+it("seals a verified manual image with its unavailable-generation warnings", async () => {
   const f = await originalCaptureFixture();
   const owner = await import("./update-database-backup.js");
   const capture = owner.createUpdateDatabaseBackup;
@@ -883,20 +883,10 @@ it("names the database and its backup warning when no stable generation was reco
       ],
     };
   });
-  await expect(f.captureOriginal("unverified")).rejects.toMatchObject({
-    cause: expect.objectContaining({
-      message: [
-        "Original database generation changed or could not be verified; capture is unsealed.",
-        `${f.shared}: no stable generation was recorded during its snapshot.`,
-        ...producerWarnings,
-      ].join("\n"),
-    }),
-  });
-  const directory = path.join(`${f.stateDir}.update-captures`, "unverified");
-  await expect(fs.lstat(path.join(directory, "manifest.json"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-  expect((await fs.readdir(path.join(directory, "payload"))).length).toBeGreaterThan(0);
+  const captured = await f.captureOriginal("unverified");
+  await expectOriginalDatabase(captured.ref, f.shared);
+  expect(captured.diagnostics.databaseWarnings).toEqual(expect.arrayContaining(producerWarnings));
+  expect(await Promise.all(f.familyPaths.map((file) => fs.readFile(file)))).toEqual(f.family);
 });
 
 it.each(["insufficient", "unknown"] as const)(

@@ -6,7 +6,7 @@ import { setToastInNavDrawer } from "../app/navigation-surface.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { showToast } from "./toast.ts";
-import "./toast-host.ts";
+import "./toast-host.tsx";
 
 async function settleHost(host: HTMLElementTagNameMap["openclaw-toast-host"]) {
   await host.updateComplete;

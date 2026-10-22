@@ -93,8 +93,9 @@ it(
   "settles recovered provisioning and restart-aborted nested/subagent lifecycle turns with a Git child",
   { timeout: 180_000 },
   async ({ signal }) => {
+    const plainTurns = ["plain-1", "plain-2", "plain-3", "plain-4", "plain-5", "plain-6"];
     const ready = new Map(
-      ["spawn", "child", "send", "nested", "exec", "plain", "provision"].map((name) => [
+      ["spawn", "child", "send", "nested", "exec", ...plainTurns, "provision"].map((name) => [
         name,
         createDeferred(),
       ]),
@@ -174,7 +175,7 @@ it(
               ? input.includes(marker("wake-child"))
                 ? "wake-child"
                 : "child"
-              : ["spawn", "send", "nested", "exec", "plain", "wake"].find((candidate) =>
+              : ["spawn", "send", "nested", "exec", ...plainTurns, "wake"].find((candidate) =>
                   input.includes(marker(candidate)),
                 );
             if (!name) {
@@ -345,8 +346,7 @@ it(
                     params: { transport: "sse", openaiWsWarmup: false },
                   },
                 },
-                heartbeat: { every: "0m" },
-                maxConcurrent: 8,
+                maxConcurrent: 16,
                 timeoutSeconds: 120,
                 skipBootstrap: true,
                 skills: [],
@@ -406,7 +406,7 @@ it(
               closeMessage: "restart settlement client closed",
             },
           );
-          for (const name of ["nested", "spawn", "send", "exec", "plain", "wake"]) {
+          for (const name of ["nested", "spawn", "send", "exec", ...plainTurns, "wake"]) {
             await client.request("sessions.create", {
               key: key(name),
               agentId: "main",
@@ -415,7 +415,7 @@ it(
             });
           }
           phase = "admit";
-          for (const name of ["spawn", "send", "exec", "plain", "wake"]) {
+          for (const name of ["spawn", "send", "exec", ...plainTurns, "wake"]) {
             await client.request(
               "agent",
               {
@@ -477,7 +477,7 @@ it(
           const shutdownStartedAt = Date.now();
           expect(child.kill("SIGTERM")).toBe(true);
           expect(await gate(closed), instance.logs()).toEqual([0, null]);
-          expect(Date.now() - shutdownStartedAt, instance.logs()).toBeLessThan(10_000);
+          expect(Date.now() - shutdownStartedAt, instance.logs()).toBeLessThan(5_000);
           expect(instance.logs()).toMatch(
             /completed in \d+ms with warnings: restart-reply-drain\b/u,
           );

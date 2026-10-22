@@ -16,6 +16,8 @@ const CRON_FLAT_PAYLOAD_KEYS = [
   "timeoutSeconds",
   "toolBudget",
   "lightContext",
+  "includeReasoning",
+  "skipIfScratchEmpty",
   "allowUnsafeExternalContent",
 ] as const;
 const CRON_FLAT_SCHEDULE_KEYS = [
@@ -47,6 +49,8 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
   "owner",
   "schedule",
   "pacing",
+  "activeHours",
+  "idleOnly",
   "trigger",
   "sessionTarget",
   "wakeMode",
@@ -68,10 +72,13 @@ const CRON_RECOVERABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
 // Only object-valued CronJobSchema fields accept dotted paths; scalar names
 // such as "nightly.report" must not become nested objects.
 const CRON_NESTABLE_OBJECT_KEYS: ReadonlySet<string> = new Set([
+  "activeHours",
   "delivery",
   "failureAlert",
   "owner",
   "pacing",
+  "activeHours",
+  "idleOnly",
   "payload",
   "schedule",
   "trigger",
@@ -265,6 +272,8 @@ function canonicalizeCronToolPayload(value: Record<string, unknown>): void {
         isNonEmptyString(payload.thinking) ||
         (typeof payload.timeoutSeconds === "number" && isNonEmptyString(payload.text)) ||
         typeof payload.lightContext === "boolean" ||
+        typeof payload.includeReasoning === "boolean" ||
+        typeof payload.skipIfScratchEmpty === "boolean" ||
         typeof payload.allowUnsafeExternalContent === "boolean" ||
         (payload.fallbacks !== undefined && isStringArrayOrNull(payload.fallbacks));
       if (hasAgentTurnSignal) {

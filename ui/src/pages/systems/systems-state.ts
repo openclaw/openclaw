@@ -1,6 +1,6 @@
 import type { BackupStatusResult, StorageLocationsProbeResult } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { registerListener } from "../../../../src/shared/listeners.js";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { NodeListNode } from "../../../../src/shared/node-list-types.js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
@@ -68,7 +68,7 @@ export function createSystems(context: ApplicationContext) {
   const lifecycle = createGatewayConnectionLifecycle(context.gateway.snapshot);
   const storageProbeRequests = new Map<string, AbortController>();
   const telemetry = new Map<string, readonly SystemsTelemetrySample[]>();
-  const listeners = new Set<() => void>();
+  const listeners = createChangeListeners();
   let backupsRequest: AbortController | undefined;
   let desktopSetupRequest: symbol | undefined;
   let subscriptions: Array<() => void> = [];
@@ -247,9 +247,7 @@ export function createSystems(context: ApplicationContext) {
 
   const telemetryHistory = (id: string) => (current() ? (telemetry.get(id) ?? []) : []);
 
-  function notify(): void {
-    listeners.forEach((listener) => listener());
-  }
+  const notify = listeners.publish;
 
   function projectRows(): void {
     state.rows =
@@ -564,7 +562,7 @@ export function createSystems(context: ApplicationContext) {
     enableHostDesktop,
     refreshBackups: () => readBackupState(),
     probeStorage: (name: string) => readBackupState(name),
-    subscribe: (listener: () => void) => registerListener(listeners, listener),
+    subscribe: listeners.subscribe,
   };
 }
 

@@ -10,7 +10,7 @@ import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { ChatImageLightbox } from "../chat/components/chat-image-lightbox-view.tsx";
-import { MessageImages } from "../chat/components/chat-message-images-solid.tsx";
+import { MessageImages } from "../chat/components/chat-message-deferred.tsx";
 import {
   assistantMediaPolicyKey,
   releaseChatMediaResourceOwner,

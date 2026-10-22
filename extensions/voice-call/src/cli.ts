@@ -15,7 +15,6 @@ import { parseCliInteger, writeCliJson, writeCliLine } from "./cli-command-io.js
 import {
   callVoiceCallGateway,
   initiateVoiceCall,
-  isUnknownMethod,
   pollContinueGateway,
   resolveContinueTimeout,
   resolveOperationTimeout,
@@ -347,20 +346,10 @@ export function registerVoiceCallCli(params: {
       const gatewayParams = { callId: options.callId, message: options.message };
       const continueTimeoutMs = resolveContinueTimeout(config);
       return managerAction({
-        gatewayCall: async () => {
-          try {
-            return await callVoiceCallGateway("voicecall.continue.start", gatewayParams, {
-              timeoutMs: resolveOperationTimeout(config),
-            });
-          } catch (err) {
-            if (!isUnknownMethod(err, "voicecall.continue.start")) {
-              throw err;
-            }
-            return callVoiceCallGateway("voicecall.continue", gatewayParams, {
-              timeoutMs: continueTimeoutMs,
-            });
-          }
-        },
+        gatewayCall: () =>
+          callVoiceCallGateway("voicecall.continue.start", gatewayParams, {
+            timeoutMs: resolveOperationTimeout(config),
+          }),
         resolveGatewayPayload: (payload) => pollContinueGateway(payload, continueTimeoutMs),
         managerFallback: (manager) => manager.continueCall(options.callId, options.message),
         failureLabel: "continue",

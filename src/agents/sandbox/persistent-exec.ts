@@ -155,11 +155,13 @@ export async function recoverSandboxPersistentExecOrphans(
   options: { env?: NodeJS.ProcessEnv } = {},
 ) {
   const store = createSandboxPersistentExecStore(options);
-  await recoverOrphanContainers(store);
+  await recoverOrphanContainers(store, await store.list());
 }
 
-async function recoverOrphanContainers(store: Store): Promise<void> {
-  const records = await store.list();
+async function recoverOrphanContainers(
+  store: Store,
+  records: SandboxPersistentExecRecord[],
+): Promise<void> {
   const registry = await readRegistry({ path: store.databasePath, env: store.environment });
   const targets = new Map<string, DockerPersistentExecTarget>();
   for (const record of records) {
@@ -237,13 +239,14 @@ export function createSandboxPersistentExecOwner(params: {
   return {
     async recover(this: void) {
       const store = storeForOwner();
+      const records = await store.list();
       const failures: unknown[] = [];
       try {
-        await recoverOrphanContainers(store);
+        await recoverOrphanContainers(store, records);
       } catch (error) {
         failures.push(error);
       }
-      for (const record of await store.list()) {
+      for (const record of records) {
         try {
           const owner = active.get(`${store.databasePath}\0${record.ownerKey}`);
           if (owner?.attemptId === record.attemptId) {

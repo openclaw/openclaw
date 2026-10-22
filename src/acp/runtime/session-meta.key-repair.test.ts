@@ -37,7 +37,7 @@ const entry = {
   updatedAt: 100,
 };
 const meta = createAcpMeta({ agent: "harness" });
-const noRepairs = { found: 0, repaired: 0, scannedRows: 1, warnings: [] };
+const noRepairs = { found: 0, repaired: 0, warnings: [] };
 const repaired = { found: 1, repaired: 1, warnings: [], backups: [expect.any(String)] };
 const withState = (run: (state: OpenClawTestState) => Promise<void>) =>
   withOpenClawTestState({ scenario: "empty" }, run);
@@ -109,10 +109,7 @@ it.each([
   "repairs $source (binding=$binding, conflicting=$conflicting)",
   ({ source, binding, conflicting }) =>
     withState(async ({ env, stateDir }) => {
-      expect(await repair(env, { apply: false, authority: undefined })).toEqual({
-        ...noRepairs,
-        scannedRows: 0,
-      });
+      expect(await repair(env, { apply: false, authority: undefined })).toEqual(noRepairs);
       expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
       bind(env);
       seed(env, source, { lifecycleRevision: binding });
@@ -127,7 +124,6 @@ it.each([
       const report = {
         ...noRepairs,
         found: 1,
-        scannedRows: conflicting ? 2 : 1,
         warnings: conflicting ? [expect.stringContaining("conflicting payloads retained")] : [],
       };
       expect(await repair(env, { apply: false, authority: undefined })).toEqual(report);

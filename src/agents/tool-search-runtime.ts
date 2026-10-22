@@ -34,6 +34,7 @@ import {
 import { runWithToolResultDelivery } from "./tool-result-limits.js";
 import {
   compactToolSearchCatalogEntry,
+  describeToolSearchCatalogEntry,
   prepareToolSearchCatalogExecutionTool,
   readToolSearchCatalogTelemetry,
   resolveCatalog,
@@ -71,14 +72,6 @@ type ToolSearchExactCallOptions = Pick<
   ToolSearchCallOptions,
   "parentToolCallId" | "signal" | "onUpdate" | "recoverySurface" | "mcpNamespaceGuest"
 >;
-
-function describeEntry(entry: ToolSearchCatalogEntry) {
-  return {
-    ...compactToolSearchCatalogEntry(entry),
-    parameters: entry.parameters ?? {},
-    ...(entry.outputSchema ? { outputSchema: entry.outputSchema } : {}),
-  };
-}
 
 function findEntry(
   catalog: ToolSearchCatalogSession,
@@ -189,6 +182,10 @@ async function assertCatalogOutputMatchesSchema(
         : "Tool call blocked by policy";
     throw new Error(`Tool "${entry.id}" was blocked before execution: ${reason}`);
   }
+  // Failed operations carry an error result, not the tool's successful output.
+  if ("isError" in result && result.isError === true) {
+    return;
+  }
   const validation = await validateCatalogSchemaValue(
     entry,
     "outputSchema",
@@ -283,7 +280,9 @@ export class ToolSearchRuntime {
   };
 
   all = (options?: CatalogVisibilityOptions) =>
-    visibleCatalogEntries(resolveCatalog(this.ctx), options).map(compactToolSearchCatalogEntry);
+    visibleCatalogEntries(resolveCatalog(this.ctx), options).map((entry) =>
+      compactToolSearchCatalogEntry(entry),
+    );
 
   namespaceEntries = () =>
     // Snapshot host metadata without rendering hints or retaining the executable tool.
@@ -304,7 +303,7 @@ export class ToolSearchRuntime {
     if (entry.source !== "openclaw" && options?.parentToolCallId) {
       this.observeNetworkContent(options.parentToolCallId);
     }
-    return describeEntry(entry);
+    return describeToolSearchCatalogEntry(entry);
   };
 
   call = async (id: string, input?: unknown, options?: ToolSearchCallOptions) =>

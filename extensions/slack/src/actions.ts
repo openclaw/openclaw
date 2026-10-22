@@ -389,7 +389,7 @@ export async function editSlackRenderedMessage(
     }
     logVerbose("slack edit: native data block rejected, retrying with text fallback");
     const survivorBlocks = stripSlackNativeDataBlocks(blocks);
-    const survivorText = buildSlackBlocksFallbackText(survivorBlocks) ?? "";
+    const survivorText = buildSlackBlocksFallbackText(survivorBlocks);
     const authoredEditText = content.trim();
     const baseText =
       authoredEditText && !survivorText.includes(authoredEditText) ? authoredEditText : "";
