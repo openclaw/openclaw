@@ -64,6 +64,7 @@ function captureLifecycle(runId: string) {
   return {
     events,
     record,
+    types: () => events.map(({ event }) => event.type),
     eventOf: <T extends DiagnosticEventPayload["type"]>(type: T) =>
       expectDefined(record(type), type).event,
     async run(
@@ -88,17 +89,11 @@ function captureLifecycle(runId: string) {
   };
 }
 
-function emitModelCall(
-  runId: string,
-  sessionId: string,
-  callId: string,
-  durationMs: number,
-  agentId?: string,
-) {
+function emitModelCall(runId: string, sessionId: string, agentId?: string) {
   const base = {
     runId,
     sessionId,
-    callId,
+    callId: `${runId}-call`,
     ...(agentId ? { agentId } : {}),
     provider: "anthropic",
     model: "claude-opus-4-7",
@@ -109,7 +104,7 @@ function emitModelCall(
   };
   emitTrustedDiagnosticEventWithPrivateData({ type: "model.call.started", ...base }, undefined);
   emitTrustedDiagnosticEventWithPrivateData(
-    { type: "model.call.completed", ...base, durationMs },
+    { type: "model.call.completed", ...base, durationMs: 5 },
     undefined,
   );
 }
@@ -129,7 +124,7 @@ describe("Claude CLI run diagnostics", () => {
       modelProvider: undefined,
       model: undefined,
     });
-    expect(diagnostics.events.map(({ event }) => event.type)).toEqual([
+    expect(diagnostics.types()).toEqual([
       "harness.run.started",
       "run.started",
       "run.completed",
@@ -148,7 +143,7 @@ describe("Claude CLI run diagnostics", () => {
       diagnostics.run(
         async () => {
           callbackTrace = getActiveDiagnosticTraceContext();
-          emitModelCall(runId, "session-1", "call-1", 5);
+          emitModelCall(runId, "session-1");
           return success("ok", 5);
         },
         {
@@ -161,10 +156,7 @@ describe("Claude CLI run diagnostics", () => {
       ),
     );
 
-    expect(diagnostics.events).toHaveLength(6);
-    expect(diagnostics.events.map(({ event }) => event.type)).toEqual(
-      expect.arrayContaining(modelEventTypes),
-    );
+    expect(diagnostics.types().toSorted()).toEqual(modelEventTypes.toSorted());
     const harnessStarted = diagnostics.eventOf("harness.run.started");
     const runStarted = diagnostics.eventOf("run.started");
     expect(harnessStarted).toMatchObject({
@@ -208,7 +200,7 @@ describe("Claude CLI run diagnostics", () => {
             },
           }),
         );
-        emitModelCall(runId, "session-owner", "call-owner-1", 4, "main");
+        emitModelCall(runId, "session-owner", "main");
         return success("ok", 5);
       },
       {
@@ -219,17 +211,16 @@ describe("Claude CLI run diagnostics", () => {
         messageChannel: "webchat",
       },
     );
-    expect(diagnostics.events.map(({ event }) => event.type)).toEqual(
-      expect.arrayContaining(modelEventTypes),
-    );
+    expect(diagnostics.types()).toEqual(expect.arrayContaining(modelEventTypes));
     const { eventOf } = diagnostics;
     // Start events retain the requester; preparation owns subsequent attribution.
-    expect(eventOf("harness.run.started").agentId).toBe("worker");
-    expect(eventOf("run.started").agentId).toBe("worker");
-    expect(eventOf("run.completed").agentId).toBe("main");
-    expect(eventOf("harness.run.completed").agentId).toBe("main");
-    expect(eventOf("model.call.started").agentId).toBe("main");
-    expect(eventOf("run.completed").agentId).toBe(eventOf("model.call.started").agentId);
+    expect([
+      eventOf("harness.run.started").agentId,
+      eventOf("run.started").agentId,
+      eventOf("run.completed").agentId,
+      eventOf("harness.run.completed").agentId,
+      eventOf("model.call.started").agentId,
+    ]).toEqual(["worker", "worker", "main", "main", "main"]);
     const commentary = diagnostics.record("agent.commentary");
     expect(commentary?.event).toMatchObject({
       agentId: "main",
@@ -243,6 +234,7 @@ describe("Claude CLI run diagnostics", () => {
   });
 
   it("emits one terminal run and harness event when the Claude turn fails", async () => {
+    captureContent();
     const runId = "run-claude-hierarchy-error";
     const diagnostics = captureLifecycle(runId);
     const commentary = (progressText: string) =>
@@ -255,6 +247,7 @@ describe("Claude CLI run diagnostics", () => {
       diagnostics.run(
         async (lifecycle) => {
           lifecycle.setExecutionContext({ agentId: "main", config: {} });
+          lifecycle.publishCapturedContent({ userPrompt: "prepare the release" });
           commentary("Before error.");
           lifecycle.setPhase("cleanup");
           throw new Error("managed session cleanup failed");
@@ -264,18 +257,13 @@ describe("Claude CLI run diagnostics", () => {
     ).rejects.toThrow("managed session cleanup failed");
     commentary("After error.");
     await flushDiagnosticEvents();
-    expect(diagnostics.events).toHaveLength(5);
-    expect(
-      diagnostics.events.filter(({ event }) => event.type === "agent.commentary"),
-    ).toHaveLength(1);
-    expect(diagnostics.events.map(({ event }) => event.type)).toEqual(
-      expect.arrayContaining([
-        "harness.run.started",
-        "run.started",
-        "run.completed",
-        "harness.run.error",
-      ]),
-    );
+    expect(diagnostics.types().toSorted()).toEqual([
+      "agent.commentary",
+      "harness.run.error",
+      "harness.run.started",
+      "run.completed",
+      "run.started",
+    ]);
     expect(diagnostics.eventOf("run.completed").outcome).toBe("error");
     expect(diagnostics.eventOf("harness.run.error").phase).toBe("cleanup");
     expect(
@@ -283,6 +271,12 @@ describe("Claude CLI run diagnostics", () => {
         .filter(({ event }) => event.type === "run.completed" || event.type === "harness.run.error")
         .every(({ privateData }) => privateData.errorMessage === "managed session cleanup failed"),
     ).toBe(true);
+    expect(diagnostics.record("run.completed")?.privateData.messageContent).toMatchObject({
+      userPrompt: "prepare the release",
+    });
+    expect(diagnostics.record("harness.run.error")?.privateData.harnessContent).toMatchObject({
+      userPrompt: "prepare the release",
+    });
   });
 
   it.each([
@@ -307,70 +301,44 @@ describe("Claude CLI run diagnostics", () => {
         { sessionId: "session-termination" },
       ),
     ).rejects.toThrow(error.message);
-    expect(diagnostics.events).toHaveLength(4);
+    expect(diagnostics.types().toSorted()).toEqual([
+      "harness.run.completed",
+      "harness.run.started",
+      "run.completed",
+      "run.started",
+    ]);
     expect(diagnostics.eventOf("run.completed").outcome).toBe("aborted");
-    expect(
-      diagnostics.events.filter(
-        ({ event }) => event.type === "harness.run.completed" || event.type === "harness.run.error",
-      ),
-    ).toHaveLength(1);
     expect(diagnostics.eventOf("harness.run.completed").outcome).toBe(harnessOutcome);
-    expect(diagnostics.events.some(({ event }) => event.type === "harness.run.error")).toBe(false);
   });
 
-  it("keeps the captured prompt on terminal events when the turn fails", async () => {
-    captureContent();
-    const diagnostics = captureLifecycle("run-claude-failure-content");
-    await expect(
-      diagnostics.run(
-        async (lifecycle) => {
-          lifecycle.publishCapturedContent({ userPrompt: "prepare the release" });
-          lifecycle.setPhase("send");
-          throw new Error("CLI crashed mid-turn");
+  it.each([
+    {
+      label: "raw output before transformed payload text",
+      result: {
+        payloads: [{ text: "goodbye from cli" }],
+        meta: { durationMs: 0, finalAssistantRawText: "hello from cli" },
+      },
+      expected: { finalResponse: "hello from cli" },
+    },
+    {
+      label: "no CLI error payloads",
+      result: {
+        payloads: [{ text: "host failure", isError: true }],
+        meta: {
+          durationMs: 0,
+          error: { kind: "incomplete_turn" as const, message: "host failure" },
         },
-        { sessionId: "session-failure-content" },
-      ),
-    ).rejects.toThrow("CLI crashed mid-turn");
-    expect(diagnostics.record("run.completed")?.privateData.messageContent).toMatchObject({
-      userPrompt: "prepare the release",
-    });
-    expect(diagnostics.record("harness.run.error")?.privateData.harnessContent).toMatchObject({
-      userPrompt: "prepare the release",
-    });
-  });
-
-  it("captures raw CLI output before transformed payload text", async () => {
-    captureContent();
-    const diagnostics = captureLifecycle("run-claude-raw-content");
-    await diagnostics.run(
-      async (lifecycle) => {
-        lifecycle.publishResultContent({
-          payloads: [{ text: "goodbye from cli" }],
-          meta: { durationMs: 0, finalAssistantRawText: "hello from cli" },
-        });
-        return { payloads: [], meta: { durationMs: 0 } };
       },
-      { sessionId: "session-raw-content", model: "claude" },
-    );
-    expect(diagnostics.record("run.completed")?.privateData.messageContent).toMatchObject({
-      finalResponse: "hello from cli",
-    });
-  });
-
-  it("does not capture CLI error payloads", async () => {
+      expected: undefined,
+    },
+  ])("captures $label", async ({ result, expected }) => {
     captureContent();
-    const diagnostics = captureLifecycle("run-claude-error-payload");
-    await diagnostics.run(
-      async (lifecycle) => {
-        lifecycle.publishResultContent({
-          payloads: [{ text: "host failure", isError: true }],
-          meta: { durationMs: 0, error: { kind: "incomplete_turn", message: "host failure" } },
-        });
-        return { payloads: [], meta: { durationMs: 0 } };
-      },
-      { sessionId: "session-error-payload", model: "claude" },
-    );
-    expect(diagnostics.record("run.completed")?.privateData.messageContent).toBeUndefined();
+    const diagnostics = captureLifecycle("run-claude-result-content");
+    await diagnostics.run(async (lifecycle) => {
+      lifecycle.publishResultContent(result);
+      return { payloads: [], meta: { durationMs: 0 } };
+    });
+    expect(diagnostics.record("run.completed")?.privateData.messageContent).toEqual(expected);
   });
 
   it.each([true, false])("merges turn content only with captureContent=%s", async (enabled) => {

@@ -1,5 +1,11 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
+  MAX_PROMETHEUS_FAMILY_SERIES,
+  PROMETHEUS_FAMILY_RESERVES,
+  SHARED_PROMETHEUS_SERIES,
+  type PrometheusMetricName,
+} from "./prometheus-family-budget.js";
+import {
   escapeHelp,
   formatLabels,
   formatPrometheusNumber,
@@ -47,18 +53,26 @@ const DURATION_BUCKETS_SECONDS = [
 ];
 // Match diagnostics-otel's one-hour agent range without removing existing le series.
 export const AGENT_DURATION_BUCKETS_SECONDS = [...DURATION_BUCKETS_SECONDS, 900, 1800, 3600];
-const MAX_PROMETHEUS_SERIES = 2048;
 const DROPPED_SERIES_COUNTER_NAME = "openclaw_prometheus_series_dropped_total";
 
-export function createPrometheusMetricStore() {
+const DROPPED_FAMILY_COUNTER_NAME = "openclaw_prometheus_family_series_dropped_total";
+// Exporter stop/start resets counters, but warnings are once per family per process.
+const warnedFamilies = new Set<PrometheusMetricName>();
+
+export function createPrometheusMetricStore(
+  onSeriesDropped?: (name: PrometheusMetricName) => void,
+) {
   const counters = createSeries<ScalarSample>();
   const gauges = createSeries<ScalarSample>();
   const histograms = createSeries<HistogramSample>();
   let droppedSeries = 0;
+  let sharedSeries = 0;
+  const familyCounts = new Map<PrometheusMetricName, number>();
+  const familyDrops = new Map<PrometheusMetricName, number>();
   // Reuse the scrape workspace; render overwrites it, and reset releases it.
   const parts: string[] = [];
 
-  const series = <T>(map: MetricSeries<T>, name: string, labels: LabelSet) => {
+  const series = <T>(map: MetricSeries<T>, name: PrometheusMetricName, labels: LabelSet) => {
     let labelCount = 0;
     for (const key in labels) {
       if (Object.hasOwn(labels, key)) {
@@ -84,12 +98,23 @@ export function createPrometheusMetricStore() {
       }
       break;
     }
+    const count = familyCounts.get(name) ?? 0;
+    const reserve = PROMETHEUS_FAMILY_RESERVES[name];
     if (
-      counters.samples.length + gauges.samples.length + histograms.samples.length >=
-      MAX_PROMETHEUS_SERIES
+      count >= Math.max(MAX_PROMETHEUS_FAMILY_SERIES, reserve) ||
+      (count >= reserve && sharedSeries >= SHARED_PROMETHEUS_SERIES)
     ) {
       droppedSeries++;
+      familyDrops.set(name, (familyDrops.get(name) ?? 0) + 1);
+      if (onSeriesDropped && !warnedFamilies.has(name)) {
+        warnedFamilies.add(name);
+        onSeriesDropped(name);
+      }
       return undefined;
+    }
+    familyCounts.set(name, count + 1);
+    if (count >= reserve) {
+      sharedSeries++;
     }
     if (!shape) {
       // Each metric can have multiple label shapes (for example GC's optional worker slot).
@@ -120,7 +145,7 @@ export function createPrometheusMetricStore() {
 
   const scalar = (
     map: typeof counters,
-    name: string,
+    name: PrometheusMetricName,
     help: string,
     labels: LabelSet,
     value: number | undefined,
@@ -157,20 +182,34 @@ export function createPrometheusMetricStore() {
     }
   };
 
-  const counter = (name: string, help: string, labels: LabelSet, amount = 1) =>
+  const counter = (name: PrometheusMetricName, help: string, labels: LabelSet, amount = 1) =>
     scalar(counters, name, help, labels, amount, "add");
-  const counterValue = (name: string, help: string, labels: LabelSet, value: number) =>
-    scalar(counters, name, help, labels, value, "max");
-  const gauge = (name: string, help: string, labels: LabelSet, value: number | undefined) =>
-    scalar(gauges, name, help, labels, value, "set");
+  const counterValue = (
+    name: PrometheusMetricName,
+    help: string,
+    labels: LabelSet,
+    value: number,
+  ) => scalar(counters, name, help, labels, value, "max");
+  const gauge = (
+    name: PrometheusMetricName,
+    help: string,
+    labels: LabelSet,
+    value: number | undefined,
+  ) => scalar(gauges, name, help, labels, value, "set");
 
-  const clearGauges = (name: string) => {
+  const clearGauges = (name: PrometheusMetricName) => {
+    const previousLength = gauges.samples.length;
     gauges.shapes.delete(name);
     gauges.samples = gauges.samples.filter((sample) => sample.name !== name);
+    const count = familyCounts.get(name) ?? 0;
+    const remaining = count - (previousLength - gauges.samples.length);
+    const reserve = PROMETHEUS_FAMILY_RESERVES[name];
+    sharedSeries -= Math.max(0, count - reserve) - Math.max(0, remaining - reserve);
+    familyCounts.set(name, remaining);
   };
 
   const getHistogram = (
-    name: string,
+    name: PrometheusMetricName,
     help: string,
     labels: LabelSet,
     buckets = DURATION_BUCKETS_SECONDS,
@@ -202,12 +241,12 @@ export function createPrometheusMetricStore() {
     return sample;
   };
 
-  const reserveHistogram = (name: string, help: string, labels: LabelSet) => {
+  const reserveHistogram = (name: PrometheusMetricName, help: string, labels: LabelSet) => {
     getHistogram(name, help, labels);
   };
 
   const histogram = (
-    name: string,
+    name: PrometheusMetricName,
     help: string,
     labels: LabelSet,
     value: number | undefined,
@@ -256,9 +295,17 @@ export function createPrometheusMetricStore() {
         header(
           DROPPED_SERIES_COUNTER_NAME,
           type,
-          "Prometheus metric series dropped because the exporter series cap was reached.",
+          "New-series observations dropped because an exporter series budget was reached.",
         );
         write(`${DROPPED_SERIES_COUNTER_NAME} `, droppedSeries);
+        header(
+          DROPPED_FAMILY_COUNTER_NAME,
+          type,
+          "New-series observations dropped by bounded metric family.",
+        );
+        for (const [family, count] of familyDrops) {
+          write(`${DROPPED_FAMILY_COUNTER_NAME}${formatLabels({ family })} `, count);
+        }
       }
     }
     for (const sample of histograms.samples.toSorted((left, right) =>
@@ -284,6 +331,9 @@ export function createPrometheusMetricStore() {
       map.shapes.clear();
     }
     droppedSeries = 0;
+    sharedSeries = 0;
+    familyCounts.clear();
+    familyDrops.clear();
     parts.length = 0;
   };
 

@@ -133,10 +133,10 @@ function controlProjectionClock(afterRow?: () => void) {
       const recipient = prepare(...args);
       return (...viewer) => {
         const prepared = recipient(...viewer);
-        const { presentation } = prepared;
+        const presentation = prepared.getPresentation();
         return {
           ...prepared,
-          presentation: {
+          getPresentation: () => ({
             ...presentation,
             snapshot(...rowArgs: Parameters<typeof presentation.snapshot>) {
               try {
@@ -149,7 +149,7 @@ function controlProjectionClock(afterRow?: () => void) {
                 afterRow?.();
               }
             },
-          },
+          }),
         };
       };
     } finally {

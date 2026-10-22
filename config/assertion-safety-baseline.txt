@@ -907,7 +907,7 @@ extensions/zalouser/src/tool.ts	1
 extensions/zalouser/src/zalo-js.ts	7
 extensions/zalouser/src/zca-client.ts	1
 packages/acp-core/src/runtime/errors.ts	6
-packages/agent-core/src/agent-loop.ts	2
+packages/agent-core/src/agent-loop.ts	1
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	1
 packages/agent-core/src/harness/session/tool-result-pairing.ts	3
@@ -2047,7 +2047,6 @@ src/logging/parse-log-line.ts	1
 src/logging/redact.ts	2
 src/logging/secret-redaction-registry.ts	1
 src/logging/state.ts	6
-src/logging/subsystem.ts	1
 src/mcp/channel-bridge.ts	4
 src/mcp/channel-shared.ts	2
 src/mcp/codex-supervision-tools-serve.ts	1

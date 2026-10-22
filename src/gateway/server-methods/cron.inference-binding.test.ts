@@ -110,7 +110,6 @@ async function createFixture(stateDir: string, agentDir: string) {
       defaultAgentId: "main",
       log: createNoopLogger(),
       enqueueSystemEvent: () => {},
-      requestHeartbeat: () => {},
       runIsolatedAgentJob: async () => {
         throw new Error("Persistence proof must not execute an inference request");
       },

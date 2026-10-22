@@ -37,8 +37,7 @@ const hookRun = {
 describe("CodexAppServerEventProjector verbose output and hook projection", () => {
   async function verboseProjector(verboseLevel: "on" | "full", raw = false) {
     const onToolResult = vi.fn();
-    const projector = await createProjector({
-      ...(await createParams()),
+    const { projector } = await fixture.observe({
       verboseLevel,
       ...(raw ? { toolProgressDetail: "raw" as const } : {}),
       onToolResult,
@@ -96,7 +95,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
     const onAgentEvent = vi.fn(() => {
       throw new Error("consumer failed");
     });
-    const projector = await createProjector({ ...(await createParams()), onAgentEvent });
+    const { projector } = await fixture.observe({ onAgentEvent });
     await expect(
       fixture.finish(projector, [
         { type: "plan", id: "plan-1", text: "step one\nstep two" },

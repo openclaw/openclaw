@@ -323,7 +323,7 @@ it("steers configured, session and explicit inputs through current authority int
       const refusal = await refused.outcome;
       expect(revoked, JSON.stringify(refusal)).toBe(true);
       // Changed execution policy leaves unconsumed input eligible for a fresh followup.
-      expect(refusal).toMatchObject({ status: "rejected", reason: "runtime_rejected" });
+      expect(refusal).toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
       expect(await readInputs()).toEqual(["initial", ...routeInputs]);
       vi.restoreAllMocks();
       rejectSourceCleanup = true;

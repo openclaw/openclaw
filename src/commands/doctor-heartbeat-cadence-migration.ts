@@ -8,7 +8,6 @@ import {
   DEFAULT_PROACTIVE_PROMPT,
   resolveDefaultProactiveCadenceMs,
 } from "../cron/default-proactive-job.js";
-import { isHeartbeatTaskCronJob } from "../cron/heartbeat-task.js";
 import {
   readDefaultProactiveJobReceiptInDatabase,
   recordDefaultProactiveJobInDatabase,
@@ -27,10 +26,6 @@ import {
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import type { HealthFinding } from "../flows/health-checks.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import {
-  resolveHeartbeatPhaseMs,
-  resolveHeartbeatSchedulerSeed,
-} from "../infra/heartbeat-schedule.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import {
@@ -53,7 +48,12 @@ import {
   resolveDoctorHeartbeatReceiptJob,
   selectDoctorHeartbeatMonitor,
 } from "./doctor-heartbeat-monitors.js";
+import {
+  resolveHeartbeatPhaseMs,
+  resolveHeartbeatSchedulerSeed,
+} from "./doctor-heartbeat-schedule.js";
 import { resolveLegacyHeartbeatSessionKey } from "./doctor-heartbeat-session.js";
+import { isHeartbeatTaskCronJob } from "./doctor-heartbeat-task-identity.js";
 
 const CHECK_ID = "core/doctor/heartbeat-cadence-migration";
 

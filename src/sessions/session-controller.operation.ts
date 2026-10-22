@@ -577,18 +577,24 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       }
     },
     detachBackend(handle) {
-      if (owner.active === operation && owner.attachment?.backend?.handle === handle) {
-        owner.attachment.backend = undefined;
-        if (
-          !("handle" in owner.attachment) &&
-          owner.attachment.projectSessionActive === undefined
-        ) {
+      const attachment = owner.attachment;
+      if (owner.active === operation && attachment?.backend?.handle === handle) {
+        // Recovery keeps this logical owner but replaces its attempt. New input
+        // must wait for that owner's next backend, not reuse the old readiness.
+        backendReady.resolve();
+        if (!ended() && !state.abortFrozen && !state.cleared) {
+          backendReady = createDeferredCore();
+          backendReadyByOperation.set(operation, backendReady.promise);
+        }
+        attachment.backend = undefined;
+        if (!("handle" in attachment) && attachment.projectSessionActive === undefined) {
           owner.attachment = undefined;
         }
       }
     },
     freezeAbort() {
       apply({ type: "freeze" });
+      backendReady.resolve();
       detachUpstreamAbort();
       watchdog.beginFinalization();
     },
@@ -601,6 +607,7 @@ export function createReplyOperation(params: CreateReplyOperationParams): ReplyO
       if (state === before) {
         return false;
       }
+      backendReady.resolve();
       toolAuthority.close();
       phaseWait?.close();
       watchdog.beginTerminal();

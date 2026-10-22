@@ -270,10 +270,16 @@ export async function prepareAgentRequestPreflight(params: {
       "internal execution identity recovery fields are reserved for main-session restart recovery.",
     );
   }
-  if (request.forceCodeModeTools === true && !isRestartRecoveryResumeRun) {
-    return rejectInvalidRequest(
-      "forceCodeModeTools is reserved for main-session restart recovery.",
-    );
+  // Child recovery shares the restricted tool policy, but not main-session cycle ownership.
+  const canUseRestartRecoveryToolPolicy =
+    isRestartRecoveryResumeRun ||
+    (canUseInternalRuntimeHandoff &&
+      inputProvenance?.kind === "internal_system" &&
+      inputProvenance.sourceTool === "subagent_restart_recovery" &&
+      requestSessionKey !== undefined &&
+      inputProvenance.sourceSessionKey === requestSessionKey);
+  if (request.forceCodeModeTools === true && !canUseRestartRecoveryToolPolicy) {
+    return rejectInvalidRequest("forceCodeModeTools is reserved for native restart recovery.");
   }
   const sessionEffects =
     isOneShotModelRun || requestedInternalSessionEffects ? "internal" : request.sessionEffects;
