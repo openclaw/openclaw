@@ -57,7 +57,7 @@ describe("worktree run lease", () => {
 
   beforeEach(async () => {
     root = caseTempDirs.make("openclaw-run-lease-");
-    const repo = await initializeRepository(root);
+    await initializeRepository(root);
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
     setRuntimeConfigSnapshot({}, {});
     service = new ManagedWorktreeService({ env });
