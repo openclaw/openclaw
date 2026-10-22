@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   ErrorCodes,
@@ -10,6 +9,7 @@ import {
   validateConfigSchemaParams,
   validateConfigSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import type { ConfigPatchParams } from "../../../packages/gateway-protocol/src/schema/config.js";
 import { readAgentRosterProperty } from "../../agents/agent-scope-config.js";
 import {
   createConfigIO,
@@ -21,12 +21,7 @@ import { applyMergePatch, createMergePatch } from "../../config/merge-patch.js";
 import { normalizeSubmittedConfigModelRefs } from "../../config/model-input-normalization.js";
 import { isBuiltInModelProviderOverlayId } from "../../config/model-provider-overlay-ids.js";
 import { ConfigMutationConflictError } from "../../config/mutation-conflict.js";
-import {
-  collectBaseArrayPaths,
-  formatConfigPatchPath,
-  isMergePatchObjectKeyAllowed,
-  normalizeConfigPatchReplacePaths,
-} from "../../config/patch-replace-paths.js";
+import { normalizeConfigPatchReplacePaths } from "../../config/patch-replace-paths.js";
 import { redactConfigObject, restoreRedactedValues } from "../../config/redact-snapshot.js";
 import {
   invalidateGatewayRuntimeConfigSchema,
@@ -37,7 +32,6 @@ import { lookupConfigSchema } from "../../config/schema.js";
 import { projectRuntimeChangesOntoSource } from "../../config/source-value-projection.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isPlainObject } from "../../infra/plain-object.js";
 import { redactToolDetail } from "../../logging/redact.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import {
@@ -64,7 +58,14 @@ import {
 } from "../control-plane-audit.js";
 import { resolveBaseHashParam } from "./base-hash.js";
 import {
+  prepareCustomEndpointPatch,
+  createCustomEndpointHandler,
+  type CustomEndpointParams,
+} from "./config-custom-endpoint.js";
+import {
   diffConfigLeafPaths,
+  assertNoDuplicateConfigPatchIds,
+  rejectDestructiveArrayPatchWithoutIntent,
   hasHashlessPatchLwwStructure,
   isHashlessPatchLwwPath,
 } from "./config-patch-intent.js";
@@ -89,7 +90,12 @@ import {
   sanitizePathForLog,
 } from "./open-path.js";
 import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
-import type { GatewayRequestContext, GatewayRequestHandlers, RespondFn } from "./types.js";
+import type {
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+  GatewayRequestHandlerOptions,
+  RespondFn,
+} from "./types.js";
 import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 const configWriteRecovery = new WeakMap<
@@ -99,231 +105,6 @@ const configWriteRecovery = new WeakMap<
 
 type ConfigRedactionHints = Parameters<typeof redactConfigObject>[1];
 type ConfigRestartWriteMode = Parameters<typeof resolveGatewayConfigRestartWriteResult>[0]["mode"];
-
-function collectDestructiveArrayPatchPaths(params: {
-  base: unknown;
-  patch: unknown;
-  merged: unknown;
-  path?: string;
-}): string[] {
-  if (!isPlainObject(params.patch) || !isPlainObject(params.base)) {
-    return [];
-  }
-
-  const merged = isPlainObject(params.merged) ? params.merged : {};
-  const paths: string[] = [];
-  for (const [key, patchValue] of Object.entries(params.patch)) {
-    const path = formatConfigPatchPath(params.path ?? "", key);
-    if (!isMergePatchObjectKeyAllowed(key, params.path)) {
-      continue;
-    }
-    const baseValue = params.base[key];
-    const mergedValue = merged[key];
-
-    if (Array.isArray(baseValue)) {
-      if (patchValue === null || !Array.isArray(patchValue)) {
-        paths.push(path);
-        continue;
-      }
-      if (Array.isArray(mergedValue)) {
-        if (isConfigPatchIdKeyedArray(baseValue)) {
-          if (!idKeyedArrayPreservesBaseIds(baseValue, mergedValue)) {
-            paths.push(path);
-            continue;
-          }
-          paths.push(
-            ...collectDestructiveIdKeyedArrayEntryPatchPaths({
-              base: baseValue,
-              patch: patchValue,
-              merged: mergedValue,
-              path,
-            }),
-          );
-        } else if (!arrayPreservesBaseEntries(baseValue, mergedValue)) {
-          paths.push(path);
-          continue;
-        }
-      }
-    } else if (isPlainObject(baseValue) && !isPlainObject(patchValue)) {
-      paths.push(...collectBaseArrayPaths(baseValue, path));
-      continue;
-    }
-
-    if (isPlainObject(patchValue)) {
-      paths.push(
-        ...collectDestructiveArrayPatchPaths({
-          base: baseValue,
-          patch: patchValue,
-          merged: mergedValue,
-          path,
-        }),
-      );
-    }
-  }
-  return paths;
-}
-
-function isConfigPatchObjectWithStringId(
-  value: unknown,
-): value is Record<string, unknown> & { id: string } {
-  return isPlainObject(value) && typeof value.id === "string" && value.id.length > 0;
-}
-
-function assertNoDuplicateConfigPatchIds(params: {
-  patch: unknown;
-  current: unknown;
-  replacePaths: ReadonlySet<string>;
-  path?: string;
-}): void {
-  const path = params.path ?? "";
-  if (Array.isArray(params.patch)) {
-    if (
-      !Array.isArray(params.current) ||
-      params.replacePaths.has(path) ||
-      !isConfigPatchIdKeyedArray(params.current)
-    ) {
-      return;
-    }
-    // ID-keyed merge is sequential and would silently let the last duplicate win.
-    // Reject only arrays using that merge contract; explicit replacements may contain duplicates.
-    const currentIds = new Set<string>();
-    for (const entry of params.current) {
-      if (currentIds.has(entry.id)) {
-        throw new Error(
-          `Cannot ID-merge array at ${path || "<root>"}: current config contains duplicate ID ${entry.id}; use replacePaths for an explicit replacement.`,
-        );
-      }
-      currentIds.add(entry.id);
-    }
-    const ids = new Set<string>();
-    for (const entry of params.patch) {
-      if (!isConfigPatchObjectWithStringId(entry)) {
-        continue;
-      }
-      if (ids.has(entry.id)) {
-        throw new Error(`Ambiguous duplicate ID ${entry.id} in array at ${path || "<root>"}.`);
-      }
-      ids.add(entry.id);
-    }
-    const currentById = new Map(params.current.map((entry) => [entry.id, entry] as const));
-    for (const entry of params.patch) {
-      if (!isConfigPatchObjectWithStringId(entry)) {
-        continue;
-      }
-      const currentEntry = currentById.get(entry.id);
-      if (currentEntry) {
-        assertNoDuplicateConfigPatchIds({
-          patch: entry,
-          current: currentEntry,
-          replacePaths: params.replacePaths,
-          path: `${path}[]`,
-        });
-      }
-    }
-    return;
-  }
-  if (!isRecord(params.patch) || !isRecord(params.current)) {
-    return;
-  }
-  for (const [key, child] of Object.entries(params.patch)) {
-    assertNoDuplicateConfigPatchIds({
-      patch: child,
-      current: params.current[key],
-      replacePaths: params.replacePaths,
-      path: formatConfigPatchPath(path, key),
-    });
-  }
-}
-
-function isConfigPatchIdKeyedArray(
-  value: unknown[],
-): value is Array<Record<string, unknown> & { id: string }> {
-  return value.every(isConfigPatchObjectWithStringId);
-}
-
-function idKeyedArrayPreservesBaseIds(
-  base: Array<Record<string, unknown> & { id: string }>,
-  merged: unknown[],
-): boolean {
-  const mergedIds = new Set(
-    merged.filter(isConfigPatchObjectWithStringId).map((entry) => entry.id),
-  );
-  return base.every((entry) => mergedIds.has(entry.id));
-}
-
-function arrayPreservesBaseEntries(base: unknown[], merged: unknown[]): boolean {
-  const unmatchedMerged = [...merged];
-  for (const baseEntry of base) {
-    const matchIndex = unmatchedMerged.findIndex((mergedEntry) =>
-      isDeepStrictEqual(mergedEntry, baseEntry),
-    );
-    if (matchIndex === -1) {
-      return false;
-    }
-    unmatchedMerged.splice(matchIndex, 1);
-  }
-  return true;
-}
-
-function collectDestructiveIdKeyedArrayEntryPatchPaths(params: {
-  base: Array<Record<string, unknown> & { id: string }>;
-  patch: unknown[];
-  merged: unknown[];
-  path: string;
-}): string[] {
-  const baseById = new Map(params.base.map((entry) => [entry.id, entry]));
-  const mergedById = new Map(
-    params.merged.filter(isConfigPatchObjectWithStringId).map((entry) => [entry.id, entry]),
-  );
-  const paths: string[] = [];
-  for (const patchEntry of params.patch) {
-    if (!isConfigPatchObjectWithStringId(patchEntry)) {
-      continue;
-    }
-    const baseEntry = baseById.get(patchEntry.id);
-    const mergedEntry = mergedById.get(patchEntry.id);
-    if (!baseEntry || !mergedEntry) {
-      continue;
-    }
-    paths.push(
-      ...collectDestructiveArrayPatchPaths({
-        base: baseEntry,
-        patch: patchEntry,
-        merged: mergedEntry,
-        path: `${params.path}[]`,
-      }),
-    );
-  }
-  return paths;
-}
-
-function rejectDestructiveArrayPatchWithoutIntent(params: {
-  currentConfig: OpenClawConfig;
-  mergedConfig: unknown;
-  patch: unknown;
-  replacePaths: Set<string>;
-  respond: RespondFn;
-}): boolean {
-  const destructivePaths = collectDestructiveArrayPatchPaths({
-    base: params.currentConfig,
-    patch: params.patch,
-    merged: params.mergedConfig,
-  });
-  const unconfirmedPaths = destructivePaths.filter((path) => !params.replacePaths.has(path));
-  if (unconfirmedPaths.length === 0) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `config.patch would remove entries from array path(s): ${unconfirmedPaths.join(", ")}. ` +
-        `Pass replacePaths with the exact path(s) when this is intentional, or use config.apply for full-config replacement.`,
-    ),
-  );
-  return true;
-}
 
 function hasOwnRecordValue(value: unknown, key: string): boolean {
   return isRecord(value) && Object.hasOwn(value, key);
@@ -685,6 +466,212 @@ async function commitGatewayConfigWriteOrRespond(
   }
 }
 
+async function patchConfig(
+  options: GatewayRequestHandlerOptions,
+  custom?: Exclude<CustomEndpointParams, { action: "discover" }>,
+) {
+  const { respond, client, context } = options;
+  const authority = readGatewayRequestMutationAuthority(options);
+  let params: ConfigPatchParams;
+  if (custom) {
+    params = { raw: "{}", baseHash: custom.baseHash };
+  } else {
+    if (!assertValidParams(options.params, validateConfigPatchParams, "config.patch", respond)) {
+      return;
+    }
+    params = options.params;
+  }
+  const hashlessPatch = resolveBaseHashParam(params) === null;
+  // Hash-free writes do not retry: only the client can replay fresh intent after a lost race;
+  // server re-merge would replay frozen stale intent over the winner. A paused handler can still
+  // commit stale state, an accepted residual instead of adding connection-liveness plumbing.
+  const writeSnapshot = hashlessPatch
+    ? await readConfigFileSnapshotForWrite()
+    : await readConfigWriteSnapshotOrRespond(params, respond, context.configRevisionProjector);
+  if (!writeSnapshot) {
+    return;
+  }
+  const { snapshot, writeOptions } = writeSnapshot;
+  const modelIdNormalizationPolicies =
+    writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies;
+  if (!snapshot.valid) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `${summarizeConfigValidationIssues(snapshot.issues)}; fix (openclaw doctor) before patching`,
+        { details: { issues: snapshot.issues } },
+      ),
+    );
+    return;
+  }
+  if (custom) {
+    try {
+      params = prepareCustomEndpointPatch(
+        custom,
+        snapshot.sourceConfig,
+        writeOptions.basePluginMetadataSnapshot,
+      );
+    } catch (error) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
+      return;
+    }
+  }
+  const parsedRes = parseConfigJson5(params.raw);
+  if (!parsedRes.ok) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
+    return;
+  }
+  if (!isRecord(parsedRes.parsed)) {
+    respond(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "config.patch raw must be an object"),
+    );
+    return;
+  }
+  const normalizedPatch = normalizeSubmittedConfigModelRefs(
+    parsedRes.parsed as OpenClawConfig,
+    modelIdNormalizationPolicies,
+  );
+  if (hashlessPatch && !hasHashlessPatchLwwStructure(normalizedPatch)) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        "config base hash required; re-run config.get and retry",
+      ),
+    );
+    return;
+  }
+  const replacePaths = normalizeConfigPatchReplacePaths(params.replacePaths);
+  try {
+    assertNoDuplicateConfigPatchIds({
+      patch: normalizedPatch,
+      current: snapshot.config,
+      replacePaths,
+    });
+  } catch (error) {
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
+    return;
+  }
+  // Merge authored rows first; merging runtime rows would persist catalog defaults
+  // from untouched siblings whenever an ID-keyed array changes.
+  const sourceConfig = normalizeSubmittedConfigModelRefs(
+    snapshot.sourceConfig,
+    modelIdNormalizationPolicies,
+  );
+  const mergedSource = applyMergePatch(sourceConfig, normalizedPatch, {
+    // Arrays with stable ids behave like maps for partial control-plane edits.
+    mergeObjectArraysById: true,
+    replaceArrayPaths: replacePaths,
+  });
+  const uiHints = loadGatewayConfigRedactionHints();
+  const restoredMerge = restoreRedactedValues(mergedSource, snapshot.config, uiHints);
+  if (!restoredMerge.ok) {
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        restoredMerge.humanReadableMessage ?? "invalid config",
+      ),
+    );
+    return;
+  }
+  if (
+    rejectDestructiveArrayPatchWithoutIntent({
+      currentConfig: snapshot.config,
+      mergedConfig: applyMergePatch(
+        snapshot.config,
+        createMergePatch(sourceConfig, restoredMerge.result),
+      ),
+      patch: normalizedPatch,
+      replacePaths,
+      respond,
+    })
+  ) {
+    return;
+  }
+  // Patch presence is authored intent even when its value equals a runtime default.
+  const restoredChangedPaths = diffConfigLeafPaths(sourceConfig, restoredMerge.result);
+  if (hashlessPatch && !restoredChangedPaths.every(isHashlessPatchLwwPath)) {
+    const guardedPaths = restoredChangedPaths.filter((path) => !isHashlessPatchLwwPath(path));
+    respond(
+      false,
+      undefined,
+      errorShape(
+        ErrorCodes.INVALID_REQUEST,
+        `config base hash required for ${guardedPaths.join(", ")}; re-run config.get and retry with baseHash`,
+      ),
+    );
+    return;
+  }
+  const actor = resolveControlPlaneActor(client);
+  if (restoredChangedPaths.length === 0) {
+    context?.logGateway?.info(
+      `config.patch noop ${formatControlPlaneActor(actor)} (no changed paths)`,
+    );
+    respond(
+      true,
+      {
+        ok: true,
+        noop: true,
+        changedPaths: [],
+        path: resolveGatewayConfigPath(snapshot),
+        ...(params.response !== "summary"
+          ? { config: redactConfigObject(snapshot.config, uiHints) }
+          : {}),
+      },
+      undefined,
+    );
+    return;
+  }
+  const validatedSubmission = validateSubmittedConfigOrRespond({
+    candidate: restoredMerge.result,
+    pluginMetadataSnapshot: writeOptions.basePluginMetadataSnapshot,
+    respond,
+  });
+  if (!validatedSubmission) {
+    return;
+  }
+  const writeConfig = validatedSubmission.validationCandidate;
+  const validatedConfig = validatedSubmission.config;
+  const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
+    config: validatedConfig,
+    respond,
+  });
+  if (!preparedSecretsSnapshot) {
+    return;
+  }
+  await commitConfigRestartWrite({
+    requestParams: params,
+    mode: "config.patch",
+    writeSnapshot: {
+      ...writeSnapshot,
+      writeOptions: {
+        ...writeOptions,
+        // The committed policy may revoke this requester before canonical reread.
+        // Admit publication synchronously; retain the writer's own guards through completion.
+        assertBeforePublish: () => {
+          writeOptions.assertBeforePublish?.();
+          authority.assertCurrent();
+        },
+      },
+    },
+    writeConfig,
+    nextConfig: validatedConfig,
+    actor,
+    context,
+    respond,
+    uiHints,
+    preparedSecretsSnapshot,
+    summary: params.response === "summary",
+  });
+}
+
 export const configHandlers: GatewayRequestHandlers = {
   "config.get": async ({ params, respond, context }) => {
     if (!assertValidParams(params, validateConfigGetParams, "config.get", respond)) {
@@ -788,190 +775,8 @@ export const configHandlers: GatewayRequestHandlers = {
     );
     writeResult.queueFollowUp();
   },
-  "config.patch": async (options) => {
-    const { params, respond, client, context } = options;
-    const authority = readGatewayRequestMutationAuthority(options);
-    if (!assertValidParams(params, validateConfigPatchParams, "config.patch", respond)) {
-      return;
-    }
-    const hashlessPatch = resolveBaseHashParam(params) === null;
-    // Hash-free writes do not retry: only the client can replay fresh intent after a lost race;
-    // server re-merge would replay frozen stale intent over the winner. A paused handler can still
-    // commit stale state, an accepted residual instead of adding connection-liveness plumbing.
-    const writeSnapshot = hashlessPatch
-      ? await readConfigFileSnapshotForWrite()
-      : await readConfigWriteSnapshotOrRespond(params, respond, context.configRevisionProjector);
-    if (!writeSnapshot) {
-      return;
-    }
-    const { snapshot, writeOptions } = writeSnapshot;
-    const modelIdNormalizationPolicies =
-      writeOptions.basePluginMetadataSnapshot?.owners.modelIdNormalizationPolicies;
-    if (!snapshot.valid) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `${summarizeConfigValidationIssues(snapshot.issues)}; fix (openclaw doctor) before patching`,
-          { details: { issues: snapshot.issues } },
-        ),
-      );
-      return;
-    }
-    const parsedRes = parseConfigJson5(params.raw);
-    if (!parsedRes.ok) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, parsedRes.error));
-      return;
-    }
-    if (!isRecord(parsedRes.parsed)) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, "config.patch raw must be an object"),
-      );
-      return;
-    }
-    const normalizedPatch = normalizeSubmittedConfigModelRefs(
-      parsedRes.parsed as OpenClawConfig,
-      modelIdNormalizationPolicies,
-    );
-    if (hashlessPatch && !hasHashlessPatchLwwStructure(normalizedPatch)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "config base hash required; re-run config.get and retry",
-        ),
-      );
-      return;
-    }
-    const replacePaths = normalizeConfigPatchReplacePaths(params.replacePaths);
-    try {
-      assertNoDuplicateConfigPatchIds({
-        patch: normalizedPatch,
-        current: snapshot.config,
-        replacePaths,
-      });
-    } catch (error) {
-      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, formatErrorMessage(error)));
-      return;
-    }
-    // Merge authored rows first; merging runtime rows would persist catalog defaults
-    // from untouched siblings whenever an ID-keyed array changes.
-    const sourceConfig = normalizeSubmittedConfigModelRefs(
-      snapshot.sourceConfig,
-      modelIdNormalizationPolicies,
-    );
-    const mergedSource = applyMergePatch(sourceConfig, normalizedPatch, {
-      // Arrays with stable ids behave like maps for partial control-plane edits.
-      mergeObjectArraysById: true,
-      replaceArrayPaths: replacePaths,
-    });
-    const uiHints = loadGatewayConfigRedactionHints();
-    const restoredMerge = restoreRedactedValues(mergedSource, snapshot.config, uiHints);
-    if (!restoredMerge.ok) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          restoredMerge.humanReadableMessage ?? "invalid config",
-        ),
-      );
-      return;
-    }
-    if (
-      rejectDestructiveArrayPatchWithoutIntent({
-        currentConfig: snapshot.config,
-        mergedConfig: applyMergePatch(
-          snapshot.config,
-          createMergePatch(sourceConfig, restoredMerge.result),
-        ),
-        patch: normalizedPatch,
-        replacePaths,
-        respond,
-      })
-    ) {
-      return;
-    }
-    // Patch presence is authored intent even when its value equals a runtime default.
-    const restoredChangedPaths = diffConfigLeafPaths(sourceConfig, restoredMerge.result);
-    if (hashlessPatch && !restoredChangedPaths.every(isHashlessPatchLwwPath)) {
-      const guardedPaths = restoredChangedPaths.filter((path) => !isHashlessPatchLwwPath(path));
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `config base hash required for ${guardedPaths.join(", ")}; re-run config.get and retry with baseHash`,
-        ),
-      );
-      return;
-    }
-    const actor = resolveControlPlaneActor(client);
-    if (restoredChangedPaths.length === 0) {
-      context?.logGateway?.info(
-        `config.patch noop ${formatControlPlaneActor(actor)} (no changed paths)`,
-      );
-      respond(
-        true,
-        {
-          ok: true,
-          noop: true,
-          changedPaths: [],
-          path: resolveGatewayConfigPath(snapshot),
-          ...(params.response !== "summary"
-            ? { config: redactConfigObject(snapshot.config, uiHints) }
-            : {}),
-        },
-        undefined,
-      );
-      return;
-    }
-    const validatedSubmission = validateSubmittedConfigOrRespond({
-      candidate: restoredMerge.result,
-      pluginMetadataSnapshot: writeOptions.basePluginMetadataSnapshot,
-      respond,
-    });
-    if (!validatedSubmission) {
-      return;
-    }
-    const writeConfig = validatedSubmission.validationCandidate;
-    const validatedConfig = validatedSubmission.config;
-    const preparedSecretsSnapshot = await ensureResolvableSecretRefsOrRespond({
-      config: validatedConfig,
-      respond,
-    });
-    if (!preparedSecretsSnapshot) {
-      return;
-    }
-    await commitConfigRestartWrite({
-      requestParams: params,
-      mode: "config.patch",
-      writeSnapshot: {
-        ...writeSnapshot,
-        writeOptions: {
-          ...writeOptions,
-          // The committed policy may revoke this requester before canonical reread.
-          // Admit publication synchronously; retain the writer's own guards through completion.
-          assertBeforePublish: () => {
-            writeOptions.assertBeforePublish?.();
-            authority.assertCurrent();
-          },
-        },
-      },
-      writeConfig,
-      nextConfig: validatedConfig,
-      actor,
-      context,
-      respond,
-      uiHints,
-      preparedSecretsSnapshot,
-      summary: params.response === "summary",
-    });
-  },
+  "config.patch": (options) => patchConfig(options),
+  "config.customEndpoint": createCustomEndpointHandler(patchConfig),
   "config.apply": async ({ params, respond, client, context }) => {
     if (!assertValidParams(params, validateConfigApplyParams, "config.apply", respond)) {
       return;

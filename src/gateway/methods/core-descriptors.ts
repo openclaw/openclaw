@@ -1,18 +1,16 @@
+import { CORE_GATEWAY_METHOD_ADDITIONS } from "./core-descriptor-additions.js";
+import {
+  CONTROL_PLANE_WRITE,
+  SIDECAR_CONTROL_PLANE_WRITE,
+  UNADVERTISED,
+  PROFILE_DEPENDENT,
+  PROFILE_STARTUP,
+  OBSERVATION,
+  SESSION_WRITE,
+  PORTAL_SESSION_WRITE,
+} from "./core-descriptor-policies.js";
 import type { CoreGatewayMethodSpecRow } from "./core-descriptor-types.js";
 import { cronListShareKey, modelsListShareKey, operatorReadShareKey } from "./read-share-keys.js";
-
-// Canonical append-only method table; derived lookup and dispatch policy lives in core-method-policy.ts.
-const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
-const SIDECAR_CONTROL_PLANE_WRITE = { startup: true, controlPlaneWrite: true } as const;
-const UNADVERTISED = { advertise: false } as const;
-const PROFILE_DEPENDENT = { profileAccess: "required" } as const;
-const PROFILE_STARTUP = { startup: true, ...PROFILE_DEPENDENT } as const;
-const OBSERVATION = { lifetime: "observation" } as const;
-const SESSION_WRITE = { sessionAccess: { mode: "write" } } as const;
-const OWN_SESSION_WRITE = { sessionAccess: { mode: "write", allowOwnSessionScope: true } } as const;
-const PORTAL_SESSION_WRITE = {
-  sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" },
-} as const;
 
 // This is the canonical core method policy table: every core handler must appear here so
 // listing, authorization, startup availability, and write throttling stay in sync.
@@ -705,57 +703,5 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["mcp.app.subscribeResource", "mcp-app", "operator.read", "2026.9"],
   ["mcp.app.unsubscribeResource", "mcp-app", "operator.read", "2026.9"],
   ["mcp.app.openFile", "mcp-app", "operator.read", "2026.9"],
-  // Provider-neutral reads append without changing legacy method indices or payloads.
-  ["memory.get", "memory-search", "operator.read", "2026.9"],
-  ["memory.status", "memory-search", "operator.read", "2026.9"],
-  ["sessions.files.assets", "sessions-files", "operator.read", "2026.9"],
-  ["claws.catalog.search", "claws", "operator.read", "2026.10"],
-  ["claws.catalog.detail", "claws", "operator.read", "2026.10"],
-  ["claws.catalog.preview", "claws", "operator.read", "2026.10"],
-  ["claws.drafts.create", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
-  ["claws.drafts.read", "claws-drafts", "operator.admin", "2026.10"],
-  ["claws.drafts.save", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
-  ["claws.drafts.review", "claws-drafts", "operator.admin", "2026.10"],
-  ["claws.drafts.publish", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
-  ["claws.add.plan", "claws-add", "operator.read", "2026.10"],
-  ["claws.add.apply", "claws-add", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
-  ["worktrees.recoverRemoval", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
-  ["worktrees.retireSnapshot", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
-  ["sessions.processes.list", "session-processes", "operator.read", "2026.9", OBSERVATION],
-  ["sessions.processes.stop", "session-processes", "operator.write", "2026.9"],
-  ["catalog.browse", "plugins", "operator.read", "2026.9"],
-  ["catalog.searchKeywords", "plugins", "operator.read", "2026.9"],
-  ["skills.workshop.list", "skills", "operator.read", "2026.9"],
-  ["skills.workshop.changes", "skills", "operator.read", "2026.9"],
-  ["skills.workshop.archive", "skills", "operator.admin", "2026.9"],
-  ["skills.workshop.restore", "skills", "operator.admin", "2026.9"],
-  ["skills.workshop.undo", "skills", "operator.admin", "2026.9"],
-  ["memory.search.owner", "memory-search", "operator.admin", "2026.9"],
-  ["secrets.store.import", null, "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
-  ["secrets.store.allowedHosts", null, "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
-  ["users.background.get", "users", "operator.read", "2026.9"],
-  ["users.background.upload", "users", "operator.write", "2026.9"],
-  ["users.background.remove", "users", "operator.write", "2026.9"],
-  ["debugProxy.capture", "debug-proxy", "operator.admin", "2026.9"],
-  ["openclaw.setup.auto", "system-agent", "operator.admin", "2026.10"],
-  [
-    "environments.adoptSuggestedProfile",
-    "environments",
-    "operator.admin",
-    "2026.10",
-    CONTROL_PLANE_WRITE,
-  ],
-  ["ui.command.result", "ui-command", "operator.read", "2026.10", PROFILE_DEPENDENT],
-  ["mcp.events.list", "mcp-events", "operator.read", "2026.10", PROFILE_DEPENDENT],
-  ["projects.checkoutOptions", "projects", "operator.read", "2026.10"],
-  // Inference spends tokens, even though its result never changes the conversation.
-  ["chat.predict", "chat", "operator.write", "2026.10", OWN_SESSION_WRITE],
-  ["tools.github.read", "tools-github", "operator.sessions.read", "2026.10", UNADVERTISED],
-  ["tools.github.search", "tools-github", "operator.sessions.read", "2026.10", UNADVERTISED],
-  ["openclaw.setup.runtime.start", "system-agent", "operator.admin", "2026.10"],
-  ["sessions.github.action", "sessions-github", "dynamic", "2026.10", CONTROL_PLANE_WRITE],
-  ["update.handoffSentinel", "update-handoff-sentinel", "operator.admin", "2026.10", UNADVERTISED],
-  ["skills.files.get", "skills", "operator.read", "2026.10"],
-  ["agents.avatar.generate", "agents", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
-  ["exec.approvals.native.commit", "exec-approvals", "operator.admin", "2026.10"],
+  ...CORE_GATEWAY_METHOD_ADDITIONS,
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

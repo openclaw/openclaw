@@ -11,8 +11,12 @@ import { getPropertyNameText } from "./lib/ts-guard-utils.mts";
 
 const repoRoot = resolveRepoRoot(import.meta.url);
 const descriptorPath = "src/gateway/methods/core-descriptors.ts";
+const suffixPath = "src/gateway/methods/core-descriptor-additions.ts";
+const suffixExport = "CORE_GATEWAY_METHOD_ADDITIONS";
+const suffixImport = "./core-descriptor-additions.js";
 
 type MethodSpec = {
+  fileName: string;
   line: number;
   name: string;
   since: string | undefined;
@@ -114,12 +118,14 @@ function collectMethodSpec(
       since: stringProperty(element, "since"),
       compatibilityRestored: trueProperty(element, "compatibilityRestored"),
       line,
+      fileName,
     };
   }
   if (ts.isArrayLiteralExpression(element)) {
     const name = element.elements[0];
     const since = element.elements[3];
     if (
+      element.elements.some(ts.isSpreadElement) ||
       !name ||
       !since ||
       !ts.isStringLiteralLikeNode(name) ||
@@ -134,38 +140,154 @@ function collectMethodSpec(
       policy !== undefined && ts.isObjectLiteralExpression(policy)
         ? trueProperty(policy, "compatibilityRestored")
         : false;
-    return { name: name.text, since: since.text, compatibilityRestored, line };
+    return { name: name.text, since: since.text, compatibilityRestored, line, fileName };
   }
   throw new Error(
     `${fileName}:${line} core method specs must be inline object literals or labeled rows so vintage metadata can be enforced.`,
   );
 }
 
-function collectMethodSpecs(sourceFile: ts.SourceFile, fileName: string): MethodSpec[] {
-  let specs: MethodSpec[] | undefined;
-
-  function visit(node: ts.Node): void {
-    if (
-      ts.isVariableDeclaration(node) &&
-      ts.isIdentifier(node.name) &&
-      node.name.text === "CORE_GATEWAY_METHOD_SPECS" &&
-      node.initializer
-    ) {
-      const initializer = unwrapExpression(node.initializer);
-      if (ts.isArrayLiteralExpression(initializer)) {
-        specs = initializer.elements.map((element) =>
-          collectMethodSpec(element, sourceFile, fileName),
-        );
-      }
-    }
-    node.forEachChild(visit);
+function methodArray(
+  sourceFile: ts.SourceFile,
+  name: string,
+  fileName: string,
+): ts.ArrayLiteralExpression {
+  const declarations = sourceFile.statements.flatMap((statement) =>
+    ts.isVariableStatement(statement) &&
+    statement.modifiers?.some((modifier) => modifier.kind === ts.SyntaxKind.ExportKeyword) &&
+    (statement.declarationList.flags & ts.NodeFlags.Const) !== 0
+      ? [...statement.declarationList.declarations].filter(
+          (declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === name,
+        )
+      : [],
+  );
+  const declaration = declarations[0];
+  const initializer = declaration?.initializer && unwrapExpression(declaration.initializer);
+  if (declarations.length !== 1 || !initializer || !ts.isArrayLiteralExpression(initializer)) {
+    throw new Error(
+      "Could not find one exported const literal array " + name + " in " + fileName + ".",
+    );
   }
+  return initializer;
+}
 
-  visit(sourceFile);
-  if (!specs) {
-    throw new Error(`Could not find CORE_GATEWAY_METHOD_SPECS in ${fileName}.`);
+function isSupportedSuffixImport(sourceFile: ts.SourceFile, localName: string): boolean {
+  const imports = sourceFile.statements.flatMap((statement) => {
+    if (!ts.isImportDeclaration(statement)) {
+      return [];
+    }
+    const bindings = statement.importClause?.namedBindings;
+    if (!bindings || !ts.isNamedImports(bindings)) {
+      return [];
+    }
+    return bindings.elements
+      .filter((binding) => binding.name.text === localName)
+      .map((binding) => ({ statement, binding }));
+  });
+  const entry = imports[0];
+  const shadowed = sourceFile.statements.some(
+    (statement) =>
+      ts.isVariableStatement(statement) &&
+      statement.declarationList.declarations.some(
+        (declaration) => ts.isIdentifier(declaration.name) && declaration.name.text === localName,
+      ),
+  );
+  if (imports.length !== 1 || !entry || shadowed) {
+    return false;
+  }
+  return (
+    entry.statement.importClause?.phaseModifier === undefined &&
+    !entry.binding.isTypeOnly &&
+    ts.isStringLiteralLikeNode(entry.statement.moduleSpecifier) &&
+    entry.statement.moduleSpecifier.text === suffixImport &&
+    (entry.binding.propertyName?.text ?? entry.binding.name.text) === suffixExport
+  );
+}
+
+function collectMethodSpecs(
+  sourceFile: ts.SourceFile,
+  fileName: string,
+  readSuffix: () => { sourceFile: ts.SourceFile; fileName: string },
+): MethodSpec[] {
+  const array = methodArray(sourceFile, "CORE_GATEWAY_METHOD_SPECS", fileName);
+  const specs: MethodSpec[] = [];
+  for (const [index, element] of array.elements.entries()) {
+    if (!ts.isSpreadElement(element)) {
+      specs.push(collectMethodSpec(element, sourceFile, fileName));
+      continue;
+    }
+    const line = sourceFile.getLineAndCharacterOfPosition(element.getStart(sourceFile)).line + 1;
+    if (
+      index !== array.elements.length - 1 ||
+      !ts.isIdentifier(element.expression) ||
+      !isSupportedSuffixImport(sourceFile, element.expression.text)
+    ) {
+      throw new Error(
+        fileName +
+          ":" +
+          line +
+          " method suffix must be the final spread of a named static import of " +
+          suffixExport +
+          " from " +
+          suffixImport +
+          ".",
+      );
+    }
+    // Follow this one canonical source owner, never arbitrary imports or evaluated expressions.
+    const suffix = readSuffix();
+    specs.push(
+      ...methodArray(suffix.sourceFile, suffixExport, suffix.fileName).elements.map((row) =>
+        collectMethodSpec(row, suffix.sourceFile, suffix.fileName),
+      ),
+    );
+  }
+  const names = new Set<string>();
+  for (const spec of specs) {
+    if (names.has(spec.name)) {
+      throw new Error(
+        spec.fileName + ":" + spec.line + " duplicate core method identity " + spec.name + ".",
+      );
+    }
+    names.add(spec.name);
   }
   return specs;
+}
+
+function validVintage(value: string): boolean {
+  return /^(?:<=)?[0-9]{4}[.](?:[1-9]|1[0-2])$/u.test(value);
+}
+
+function validateCurrentSpecs(current: MethodSpec[], base: MethodSpec[]): void {
+  for (const spec of current) {
+    if (!spec.since) {
+      throw new Error(
+        spec.fileName + ":" + spec.line + " " + spec.name + " is missing since metadata.",
+      );
+    }
+    if (!validVintage(spec.since)) {
+      throw new Error(
+        spec.fileName +
+          ":" +
+          spec.line +
+          " " +
+          spec.name +
+          " has invalid vintage " +
+          JSON.stringify(spec.since) +
+          ".",
+      );
+    }
+  }
+  for (const [index, previous] of base.entries()) {
+    if (current[index]?.name !== previous.name) {
+      throw new Error(
+        "Core method table is append-only; preserve existing method order at index " +
+          index +
+          " (" +
+          previous.name +
+          ").",
+      );
+    }
+  }
 }
 
 function currentTrain(): string {
@@ -180,7 +302,11 @@ function currentTrain(): string {
   if (!match) {
     throw new Error(`Root package version ${JSON.stringify(packageJson.version)} is not calver.`);
   }
-  return `${match[1]!}.${match[2]!}`;
+  const train = match[1]! + "." + match[2]!;
+  if (!validVintage(train)) {
+    throw new Error("Root package version is not valid calver: " + version);
+  }
+  return train;
 }
 
 try {
@@ -191,14 +317,28 @@ try {
   const currentSpecs = collectMethodSpecs(
     parser.parseSourceFile(descriptorPath, currentSource),
     descriptorPath,
+    () => ({
+      sourceFile: parser.parseSourceFile(
+        suffixPath,
+        fs.readFileSync(path.join(repoRoot, suffixPath), "utf8"),
+      ),
+      fileName: suffixPath,
+    }),
   );
-  const baseSource = runGit(["show", `${mergeBase}:${descriptorPath}`]);
-  const baseNames = new Set(
-    collectMethodSpecs(
-      parser.parseSourceFile(descriptorPath, baseSource),
-      `${descriptorPath}@${mergeBase}`,
-    ).map((s) => s.name),
+  const baseSource = runGit(["show", mergeBase + ":" + descriptorPath]);
+  const baseSpecs = collectMethodSpecs(
+    parser.parseSourceFile(descriptorPath, baseSource),
+    descriptorPath + "@" + mergeBase,
+    () => ({
+      sourceFile: parser.parseSourceFile(
+        suffixPath,
+        runGit(["show", mergeBase + ":" + suffixPath]),
+      ),
+      fileName: suffixPath + "@" + mergeBase,
+    }),
   );
+  validateCurrentSpecs(currentSpecs, baseSpecs);
+  const baseNames = new Set(baseSpecs.map((spec) => spec.name));
   const added = currentSpecs.filter((spec) => !baseNames.has(spec.name));
   const restored = added.filter((spec) => spec.compatibilityRestored);
   const newMethods = added.filter((spec) => !spec.compatibilityRestored);
@@ -218,8 +358,8 @@ try {
           : "is missing since metadata";
       console.error(
         spec.compatibilityRestored
-          ? `- ${descriptorPath}:${spec.line} ${spec.name} ${problem}; restored compatibility methods must retain <= vintage metadata.`
-          : `- ${descriptorPath}:${spec.line} ${spec.name} ${problem}; add since: ${JSON.stringify(train)}.`,
+          ? `- ${spec.fileName}:${spec.line} ${spec.name} ${problem}; restored compatibility methods must retain <= vintage metadata.`
+          : `- ${spec.fileName}:${spec.line} ${spec.name} ${problem}; add since: ${JSON.stringify(train)}.`,
       );
     }
     process.exitCode = 1;

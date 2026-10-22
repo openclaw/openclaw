@@ -941,6 +941,63 @@ const enSettings = {
     },
   },
   modelProviders: {
+    endpoints: {
+      text: "Text input",
+      unspecified: "Not specified",
+      editConnection: "Edit endpoint",
+      removeKey: "Remove stored key",
+      removeKeyConfirm:
+        "Remove stored API keys for {provider}? The endpoint and models remain. External secret references are retained.",
+      keyRemoved:
+        "Stored API key removal completed. Endpoint retained; external secret references were not deleted.",
+      route: "Effective route: {api} · {url}",
+      title: "Custom endpoints",
+      description:
+        "Independent API endpoints. Official provider sign-in and OAuth remain under Provider access.",
+      add: "Add custom endpoint",
+      edit: "Edit custom endpoint",
+      localOnly: "Endpoint changes require an administrator connected locally on the Gateway host.",
+      gatewayConnects:
+        "The Gateway\u2014not your browser\u2014connects to this address, including LAN and tailnet addresses.",
+      providerId: "Provider ID (immutable after creation)",
+      baseUrl: "API base URL",
+      adapter: "API adapter",
+      key: "Optional API key",
+      keyHint:
+        "Stored using the existing credential writer for agent {agent}. Leave blank to retain existing credentials or SecretRefs. Existing secrets are never shown.",
+      noAuth: "No authentication (Chat Completions only)",
+      preserve:
+        "Only model fields you change are saved; displayed values may include runtime defaults. Unknown metadata stays unspecified. Advanced settings and model-level API/base URL overrides are preserved. Manage stored credentials separately under Provider access.",
+      models: "Models",
+      modelRow: "Model {number}",
+      modelId: "Model ID",
+      modelName: "Display name",
+      context: "Context window",
+      output: "Output token limit",
+      image: "Image input",
+      reasoning: "Reasoning",
+      addModel: "Add model",
+      removeModel: "Remove model",
+      discover: "Discover models",
+      discovered: "Discovered model IDs",
+      addSelected: "Add selected models",
+      discoveryResult:
+        "Model list loaded. Select models to add. This does not test inference or capabilities.",
+      discoveryEmpty:
+        "No model IDs returned. Check the URL and key, or enter models manually. Existing stored credentials are not used for this draft discovery.",
+      defaultUnchanged: "Your default model will not change. Save and test are separate actions.",
+      saved:
+        "Endpoint configuration saved. Check Provider access for credential and catalog status.",
+      deleted: "Endpoint deleted. Stored credentials were not removed.",
+      keyFailed:
+        "Endpoint saved, but the API key was not saved. Retry the key under Provider access.",
+      test: "Test saved connection",
+      testResult:
+        "Saved endpoint inference probe: {status}. This does not verify every model or advertised capability.",
+      delete: "Delete endpoint",
+      deleteConfirm:
+        "Delete {provider}? Configured model references must be resolved first. Stored credentials are retained; remove them separately under Provider access.",
+    },
     title: "Configured providers",
     configureModels: "Model setup",
     login: {

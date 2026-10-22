@@ -1,6 +1,8 @@
 import { createMemo } from "solid-js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
+import type { JSX } from "../../types/solid-elements.js";
+import { CustomEndpoints } from "./custom-endpoints.tsx";
 import { ModelProviderAccountRecovery, ModelProviderLoginView } from "./login-view.tsx";
 import { createModelProviders, type ModelProvidersOwner } from "./model-providers-controller.ts";
 import type { ModelProvidersRouteData } from "./route.ts";
@@ -10,7 +12,10 @@ import {
   renderModelProvidersPageShell as ModelProvidersPageShell,
 } from "./view.tsx";
 
-export function ModelProvidersContent(props: { controller: ModelProvidersOwner }) {
+export function ModelProvidersContent(props: {
+  controller: ModelProvidersOwner;
+  customEndpoints?: JSX.Element;
+}) {
   const current = createMemo(() => props.controller.viewProps());
   let initialLoadComplete = false;
   const showProviderDetails = createMemo(() => {
@@ -37,6 +42,7 @@ export function ModelProvidersContent(props: { controller: ModelProvidersOwner }
       body={
         <ModelProviders
           {...current().props}
+          customEndpoints={props.customEndpoints}
           apiKeySaving={props.controller.mutations.apiKeySaving()}
           defaultsSaving={props.controller.mutations.defaultsSaving()}
           logoutSaving={props.controller.logoutSaving()}
@@ -65,7 +71,14 @@ export type ModelProvidersPageProps = {
 export function ModelProvidersPageBody(props: ModelProvidersPageProps) {
   const context: ApplicationContext = useApplication();
   const controller = createModelProviders(context, props);
-  return <ModelProvidersContent controller={controller} />;
+  return (
+    <ModelProvidersContent
+      controller={controller}
+      customEndpoints={
+        <CustomEndpoints onRefresh={controller.refresh} onInvalidate={controller.clearProbe} />
+      }
+    />
+  );
 }
 
 export function ModelProvidersPage(props: ModelProvidersPageProps) {

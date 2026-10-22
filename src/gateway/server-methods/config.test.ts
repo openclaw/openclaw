@@ -16,6 +16,7 @@ import {
 } from "./config-invocations.test-support.js";
 import { configHandlers } from "./config.js";
 import { createConfigHandlerHarness, createConfigWriteSnapshot } from "./config.test-helpers.js";
+import { createMemoryOperatorClient } from "./memory-provider.test-support.js";
 
 const configWriteMocks = vi.hoisted(() => ({
   commitGatewayConfigWrite: vi.fn(),
@@ -507,5 +508,278 @@ it("uses write-snapshot policies before merging manifest-backed model IDs", asyn
       id: "vendor/modern-model",
       name: "After",
     },
+  ]);
+});
+
+describe("local custom endpoint config workflow", () => {
+  const endpoint = {
+    action: "create",
+    provider: "lab-test",
+    baseHash: "base-hash",
+    baseUrl: "http://lab.lan/v1",
+    api: "openai-completions",
+    noAuth: true,
+    models: [
+      {
+        id: "chat",
+        edits: {
+          name: "Lab chat",
+          reasoning: false,
+          textInput: true,
+          contextWindow: 32000,
+          maxTokens: 2048,
+        },
+      },
+    ],
+  };
+  it("refuses remote and unattested callers before reading or writing configuration", async () => {
+    for (const client of [null, createMemoryOperatorClient(["operator.admin"])]) {
+      const harness = createConfigHandlerHarness({
+        method: "config.customEndpoint",
+        params: endpoint,
+        overrides: { client },
+      });
+      await expectDefined(
+        configHandlers["config.customEndpoint"],
+        "endpoint handler",
+      )(harness.options);
+      expect(harness.respond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({
+          message: expect.stringContaining("Remote custom setup is not supported"),
+        }),
+      );
+    }
+    expect(configWriteMocks.readConfigFileSnapshotForWrite).not.toHaveBeenCalled();
+    expect(configWriteMocks.commitGatewayConfigWrite).not.toHaveBeenCalled();
+  });
+  it("uses the authored config writer and CAS for local creation, editing and reference-aware deletion", async () => {
+    storedConfig = { agents: { defaults: { model: "openai/official" } } };
+    const client = createMemoryOperatorClient(["operator.admin"]);
+    client.internal = { isLocalClient: true };
+    const call = async (params: Record<string, unknown>) => {
+      const harness = createConfigHandlerHarness({
+        method: "config.customEndpoint",
+        params,
+        overrides: { client },
+      });
+      await expectDefined(
+        configHandlers["config.customEndpoint"],
+        "endpoint handler",
+      )(harness.options);
+      return harness.respond;
+    };
+    const created = await call(endpoint);
+    expect(created).toHaveBeenCalledWith(true, expect.objectContaining({ ok: true }), undefined);
+    expect(storedConfig.agents?.defaults?.model).toBe("openai/official");
+    expect(storedConfig.models?.providers?.["lab-test"]?.models).toHaveLength(1);
+    const writes = configWriteMocks.commitGatewayConfigWrite.mock.calls.length;
+    const stale = await call({ ...endpoint, action: "edit", baseUrl: "http://other.lan/v1" });
+    expect(stale).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({ message: expect.stringContaining("changed") }),
+    );
+    expect(configWriteMocks.commitGatewayConfigWrite).toHaveBeenCalledTimes(writes);
+    await call({
+      ...endpoint,
+      action: "edit",
+      baseHash: storedHash,
+      baseUrl: "http://other.lan/v1",
+      models: endpoint.models.map((row) => ({ id: row.id, existingId: row.id, edits: row.edits })),
+    });
+    expect(storedConfig.models?.providers?.["lab-test"]?.baseUrl).toBe("http://other.lan/v1");
+    await call({ action: "delete", provider: "lab-test", baseHash: storedHash });
+    expect(storedConfig.models?.providers?.["lab-test"]).toBeUndefined();
+    expect(storedConfig.agents?.defaults?.model).toBe("openai/official");
+  });
+});
+
+it("custom endpoint URL edits preserve minimal authored rows behind normalized config snapshots", async () => {
+  const authored = {
+    models: {
+      providers: {
+        "lab-minimal": {
+          baseUrl: "https://before.example/v1",
+          api: "openai-completions",
+          models: [
+            { id: "minimal", name: "Minimal" },
+            {
+              id: "audio",
+              name: "Audio",
+              input: ["audio"],
+              maxTokens: 4096,
+              params: { keep: true },
+            },
+            { id: "video", name: "Video", input: ["video"], cost: { input: 2 } },
+          ],
+        },
+      },
+    },
+  };
+  storedConfig = {
+    models: {
+      providers: {
+        "lab-minimal": {
+          baseUrl: "https://before.example/v1",
+          api: "openai-completions",
+          models: authored.models.providers["lab-minimal"].models.map((row) =>
+            modelDefinition(row.id, { name: row.name }),
+          ),
+        },
+      },
+    },
+  };
+  configWriteMocks.readConfigFileSnapshotForWrite.mockImplementation(async () => {
+    const result = currentWriteSnapshot();
+    // Decode authored disk JSON at the I/O boundary, independently of the normalized runtime.
+    result.snapshot.raw = JSON.stringify(authored);
+    result.snapshot.sourceConfig = JSON.parse(result.snapshot.raw);
+    result.snapshot.parsed = result.snapshot.sourceConfig;
+    return result;
+  });
+  const client = createMemoryOperatorClient(["operator.admin"]);
+  client.internal = { isLocalClient: true };
+  const harness = createConfigHandlerHarness({
+    method: "config.customEndpoint",
+    params: {
+      action: "edit",
+      provider: "lab-minimal",
+      baseHash: storedHash,
+      baseUrl: "https://after.example/v1",
+      api: "openai-completions",
+      noAuth: false,
+      models: authored.models.providers["lab-minimal"].models.map((row) => ({
+        id: row.id,
+        existingId: row.id,
+        edits: {},
+      })),
+    },
+    overrides: { client },
+  });
+  await expectDefined(configHandlers["config.customEndpoint"], "endpoint handler")(harness.options);
+  expectSuccess(harness.respond);
+  expect(storedConfig.models?.providers?.["lab-minimal"]).toEqual({
+    ...authored.models.providers["lab-minimal"],
+    baseUrl: "https://after.example/v1",
+  });
+  harness.options.params = {
+    action: "edit",
+    provider: "lab-minimal",
+    baseHash: storedHash,
+    baseUrl: "https://after.example/v1",
+    api: "openai-completions",
+    noAuth: false,
+    models: [
+      { id: "renamed", existingId: "minimal", edits: { name: "Renamed", contextWindow: 42000 } },
+      { id: "audio", existingId: "audio", edits: { imageInput: true, maxTokens: null } },
+      { id: "video", existingId: "video", edits: {} },
+    ],
+  };
+  await expectDefined(configHandlers["config.customEndpoint"], "endpoint handler")(harness.options);
+  expectSuccess(harness.respond);
+  expect(storedConfig.models?.providers?.["lab-minimal"]?.models).toEqual([
+    { id: "renamed", name: "Renamed", contextWindow: 42000 },
+    { id: "audio", name: "Audio", input: ["audio", "image"], params: { keep: true } },
+    authored.models.providers["lab-minimal"].models[2],
+  ]);
+});
+
+it("custom endpoint image edits retain the untouched effective text default", async () => {
+  const authored = {
+    models: {
+      providers: {
+        "lab-input": {
+          baseUrl: "https://lab.example/v1",
+          api: "openai-completions",
+          models: [
+            { id: "default", name: "Default" },
+            { id: "empty", name: "Empty", input: [] },
+            { id: "audio", name: "Audio", input: ["audio"] },
+            { id: "video", name: "Video", input: ["video"] },
+          ],
+        },
+      },
+    },
+  };
+  let raw = JSON.stringify(authored);
+  storedConfig = {
+    models: {
+      providers: {
+        "lab-input": {
+          baseUrl: "https://lab.example/v1",
+          api: "openai-completions",
+          models: [
+            modelDefinition("default", { name: "Default" }),
+            modelDefinition("empty", { name: "Empty", input: [] }),
+            modelDefinition("audio", { name: "Audio", input: ["audio"] }),
+            modelDefinition("video", { name: "Video", input: ["video"] }),
+          ],
+        },
+      },
+    },
+  };
+  configWriteMocks.readConfigFileSnapshotForWrite.mockImplementation(async () => {
+    const result = currentWriteSnapshot();
+    result.snapshot.raw = raw;
+    result.snapshot.sourceConfig = JSON.parse(raw);
+    result.snapshot.parsed = result.snapshot.sourceConfig;
+    return result;
+  });
+  const client = createMemoryOperatorClient(["operator.admin"]);
+  client.internal = { isLocalClient: true };
+  const call = async (
+    models: Array<{
+      id: string;
+      existingId: string;
+      edits: { imageInput?: boolean; textInput?: boolean };
+    }>,
+  ) => {
+    const harness = createConfigHandlerHarness({
+      method: "config.customEndpoint",
+      overrides: { client },
+      params: {
+        action: "edit",
+        provider: "lab-input",
+        baseHash: storedHash,
+        baseUrl: "https://lab.example/v1",
+        api: "openai-completions",
+        noAuth: false,
+        models,
+      },
+    });
+    await expectDefined(
+      configHandlers["config.customEndpoint"],
+      "endpoint handler",
+    )(harness.options);
+    expectSuccess(harness.respond);
+  };
+  await call(
+    authored.models.providers["lab-input"].models.map((row) => ({
+      id: row.id,
+      existingId: row.id,
+      edits: { imageInput: true },
+    })),
+  );
+  expect(storedConfig.models?.providers?.["lab-input"]?.models).toEqual([
+    { id: "default", name: "Default", input: ["text", "image"] },
+    { id: "empty", name: "Empty", input: ["image"] },
+    { id: "audio", name: "Audio", input: ["audio", "image"] },
+    { id: "video", name: "Video", input: ["video", "image"] },
+  ]);
+  raw = JSON.stringify(storedConfig);
+  await call(
+    authored.models.providers["lab-input"].models.map((row) => ({
+      id: row.id,
+      existingId: row.id,
+      edits: row.id === "default" ? { textInput: false } : {},
+    })),
+  );
+  expect(storedConfig.models?.providers?.["lab-input"]?.models).toEqual([
+    { id: "default", name: "Default", input: ["image"] },
+    { id: "empty", name: "Empty", input: ["image"] },
+    { id: "audio", name: "Audio", input: ["audio", "image"] },
+    { id: "video", name: "Video", input: ["video", "image"] },
   ]);
 });
