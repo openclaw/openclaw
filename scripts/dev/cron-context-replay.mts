@@ -199,24 +199,24 @@ function anonymizePayload(payload: CronStoredJob["payload"]): CronStoredJob["pay
       ? { toolsAllowIsDefault: payload.toolsAllowIsDefault }
       : {}),
   };
-  switch (payload.kind) {
-    case "agentTurn":
-      return {
-        kind: "agentTurn",
-        message: "fixture",
-        ...tools,
-        ...(tools.toolsAllow ? { toolsAllow: anonymizeAgentToolsAllow(tools.toolsAllow) } : {}),
-        ...(payload.externalContentSource
-          ? { externalContentSource: payload.externalContentSource }
-          : {}),
-      };
-    case "script":
-      return { kind: "script", script: "return null", ...tools };
-    case "systemEvent":
-      return { kind: "systemEvent", text: "fixture", ...tools };
-    case "command":
-      return { kind: "command", argv: ["true"] };
+  if (payload.kind === "agentTurn") {
+    return {
+      kind: "agentTurn",
+      message: "fixture",
+      ...tools,
+      ...(tools.toolsAllow ? { toolsAllow: anonymizeAgentToolsAllow(tools.toolsAllow) } : {}),
+      ...(payload.externalContentSource
+        ? { externalContentSource: payload.externalContentSource }
+        : {}),
+    };
   }
+  if (payload.kind === "script") {
+    return { kind: "script", script: "return null", ...tools };
+  }
+  if (payload.kind === "systemEvent") {
+    return { kind: "systemEvent", text: "fixture", ...tools };
+  }
+  return { kind: "command", argv: ["true"] };
 }
 
 /**

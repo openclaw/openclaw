@@ -115,6 +115,29 @@ describe("mintCronPromptExecutionContext", () => {
     expect(generationRelease).toHaveBeenCalledOnce();
   });
 
+  it("holds the observed generation for a revisionless parent link", async () => {
+    readSessionEntryInWorker.mockResolvedValue({
+      sessionId: "parent-session",
+      lifecycleRevision: "rev-1",
+    });
+    const minted = await mint(
+      job({
+        owner: { agentId: "main", sessionKey: PARENT_KEY, accountId: "default" },
+        scheduledToolPolicy: {
+          version: 1,
+          mode: "account",
+          ownerSessionKey: PARENT_KEY,
+          ownerAccountId: "default",
+        },
+        sourceConversation: { sessionKey: PARENT_KEY, sessionId: "parent-session" },
+      }),
+    );
+    expect(minted.result.status).toBe("ready");
+    expect(prepareSessionGenerationFacts).toHaveBeenCalledWith(
+      expect.objectContaining({ sessionId: "parent-session", lifecycleRevision: "rev-1" }),
+    );
+  });
+
   it("reports a removed parent as a pause without throwing", async () => {
     readSessionEntryInWorker.mockResolvedValue(undefined);
     const minted = await mint(

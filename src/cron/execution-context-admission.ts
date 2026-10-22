@@ -198,12 +198,15 @@ async function mintScheduledExecutionContext(
     result = buildScheduledExecutionContext(params.job, facts);
     if (result.status === "ready" && result.facts.principal.kind === "parent") {
       const { parent } = result.facts.principal;
+      // A revisionless link holds the generation the builder just validated.
+      const observedRevision =
+        parentRow && !parentRow.missing ? parentRow.lifecycleRevision : undefined;
       const generation = await prepareSessionGenerationFacts({
         agentId: params.agentId,
         storePath: params.storePath,
         sessionKey: parent.sessionKey,
         sessionId: parent.sessionId,
-        lifecycleRevision: parent.lifecycleRevision ?? null,
+        lifecycleRevision: parent.lifecycleRevision ?? observedRevision ?? null,
       });
       releaseLease = generation.release;
       assertParentCurrent = () => generation.assertCurrent();
