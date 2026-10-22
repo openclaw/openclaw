@@ -5,6 +5,7 @@ import { prepareWorktreeRunEndClose } from "../agents/worktrees/run-end-lifecycl
 import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
 import { listLoadedChannelPluginsForRegistry } from "../channels/plugins/registry-loaded.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { isTruthyEnvValue } from "../infra/env.js";
 import { markGatewaySuspendExiting } from "../infra/gateway-suspend-coordinator.js";
 import { commitPresence, upsertPresence } from "../infra/system-presence.js";
 import { stopGatewayDiagnosticHeartbeat } from "../logging/diagnostic.js";
@@ -210,6 +211,9 @@ export async function prepareGatewayLifecycle(params: {
     await import("./terminal/session-manager.js");
   const { TERMINAL_EVENT_DATA } = await import("./terminal/session-types.js");
   const terminalSessions = new TerminalSessionManager({
+    disableGatewayLocalTerminals: isTruthyEnvValue(
+      process.env.OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS,
+    ),
     withOpenAdmission: withAgentTerminalOpenAdmission,
     emit: (connId: string, event: string, payload: unknown) =>
       broadcastToConnIds(event, payload, new Set([connId]), {

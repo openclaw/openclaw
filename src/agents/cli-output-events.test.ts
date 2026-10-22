@@ -15,11 +15,11 @@ import {
   claudeStreamEvent,
   claudeTextDelta,
   joinJsonlFrames,
+  finishCliFrames,
+  localCliBackend as localBackend,
+  createPluginParser,
+  claudeMessageStop,
 } from "./cli-output.test-helpers.js";
-
-function claudeMessageStop() {
-  return claudeStreamEvent({ type: "message_stop" });
-}
 
 function assistantTool(id: string, name: string, input: Record<string, unknown>) {
   return { type: "assistant", message: { content: [{ type: "tool_use", id, name, input }] } };
@@ -37,24 +37,6 @@ const assistantDelta = (text: string, delta: string, sessionId: string) => ({
   sessionId,
   usage: undefined,
 });
-const localBackend: Parameters<typeof createCliJsonlStreamingParser>[0]["backend"] = {
-  command: "local-cli",
-  output: "jsonl",
-  jsonlDialect: "claude-stream-json",
-  sessionIdFields: ["session_id"],
-};
-
-function createPluginParser(
-  overrides: Partial<Parameters<typeof createCliJsonlStreamingParser>[0]>,
-) {
-  return createCliJsonlStreamingParser({
-    backend: { command: "acme", output: "jsonl" },
-    providerId: "acme-cli",
-    onAssistantDelta: () => {},
-    ...overrides,
-  });
-}
-
 function toolProgressHarness() {
   const progress: CliToolInputDelta[] = [];
   const starts: CliToolUseStartDelta[] = [];
@@ -75,21 +57,19 @@ describe("createCliJsonlStreamingParser events", () => {
       onAssistantDelta: () => {},
       onToolUseStart: (delta) => starts.push(delta),
     });
-    parser.push(
-      joinJsonlFrames(
-        claudeStreamEvent({ type: "message_start", message: { id: "interrupted" } }),
-        claudeBlockStart({ type: "tool_use", id: "abandoned", name: "Write", input: {} }, 0),
-        claudeInputJsonDelta('{"content":"unfinished\\n', 0),
-        claudeStreamEvent({ type: "message_start", message: { id: "recovered" } }),
-        claudeBlockStart({ type: "text", text: "" }, 0),
-        claudeTextDelta("Recovered.", 0),
-        claudeBlockStop(0),
-        claudeMessageStop(),
-        { type: "result", subtype: "success", result: "Recovered." },
-        "",
-      ),
+    finishCliFrames(
+      parser,
+      claudeStreamEvent({ type: "message_start", message: { id: "interrupted" } }),
+      claudeBlockStart({ type: "tool_use", id: "abandoned", name: "Write", input: {} }, 0),
+      claudeInputJsonDelta('{"content":"unfinished\\n', 0),
+      claudeStreamEvent({ type: "message_start", message: { id: "recovered" } }),
+      claudeBlockStart({ type: "text", text: "" }, 0),
+      claudeTextDelta("Recovered.", 0),
+      claudeBlockStop(0),
+      claudeMessageStop(),
+      { type: "result", subtype: "success", result: "Recovered." },
+      "",
     );
-    parser.finish();
     expect(starts).toEqual([]);
     expect(parser.getOutput()?.text).toBe("Recovered.");
   });
@@ -138,8 +118,7 @@ describe("createCliJsonlStreamingParser events", () => {
           ),
         ).toBe(true);
         push({ type: "content_block_stop", index: 0 });
-        parser.push(joinJsonlFrames(assistantTool("call-1", name, args), ""));
-        parser.finish();
+        finishCliFrames(parser, assistantTool("call-1", name, args), "");
         expect(starts).toEqual([toolStart("call-1", name, args)]);
       } finally {
         vi.useRealTimers();
@@ -248,32 +227,30 @@ describe("createCliJsonlStreamingParser events", () => {
       onToolResult: (delta) => results.push(delta),
     });
 
-    parser.push(
-      joinJsonlFrames(
-        { type: "init", session_id: "gemini-session-stream" },
-        { type: "message", role: "assistant", content: "Checking tools. ", delta: true },
-        {
-          type: "tool_use",
-          tool_name: name,
-          tool_id: "tool-1",
-          parameters: { objective: "Update files" },
-        },
-        {
-          type: "tool_result",
-          tool_id: "tool-1",
-          status: "success",
-          output: "created",
-        },
-        { type: "message", role: "assistant", content: "Done.", delta: true },
-        {
-          type: "result",
-          status: "success",
-          stats: { total_tokens: 9, input_tokens: 4, output_tokens: 5 },
-        },
-        "",
-      ),
+    finishCliFrames(
+      parser,
+      { type: "init", session_id: "gemini-session-stream" },
+      { type: "message", role: "assistant", content: "Checking tools. ", delta: true },
+      {
+        type: "tool_use",
+        tool_name: name,
+        tool_id: "tool-1",
+        parameters: { objective: "Update files" },
+      },
+      {
+        type: "tool_result",
+        tool_id: "tool-1",
+        status: "success",
+        output: "created",
+      },
+      { type: "message", role: "assistant", content: "Done.", delta: true },
+      {
+        type: "result",
+        status: "success",
+        stats: { total_tokens: 9, input_tokens: 4, output_tokens: 5 },
+      },
+      "",
     );
-    parser.finish();
 
     expect(deltas).toEqual([
       assistantDelta("Checking tools. ", "Checking tools. ", "gemini-session-stream"),
@@ -330,8 +307,7 @@ describe("createCliJsonlStreamingParser events", () => {
       onUsage: (usage, isTerminal) => usageEvents.push({ usage, isTerminal }),
     });
 
-    parser.push(joinJsonlFrames(...frames, ""));
-    parser.finish();
+    finishCliFrames(parser, ...frames, "");
 
     expect(assistantDeltas).toEqual([
       assistantDelta("Hello ", "Hello ", "custom-session"),
@@ -443,15 +419,13 @@ describe("createCliJsonlStreamingParser events", () => {
       onSessionId: (sessionId) => sessionIds.push(sessionId),
     });
 
-    parser.push(
-      joinJsonlFrames(
-        { type: "compaction", session_id: "fork-successor" },
-        { type: "compaction", completed: true },
-        { type: "result" },
-        "",
-      ),
+    finishCliFrames(
+      parser,
+      { type: "compaction", session_id: "fork-successor" },
+      { type: "compaction", completed: true },
+      { type: "result" },
+      "",
     );
-    parser.finish();
 
     expect(compactionEvents).toEqual([{ phase: "start" }, { phase: "end", completed: true }]);
     expect(sessionIds).toEqual(["fork-successor"]);
@@ -683,22 +657,20 @@ describe("createCliJsonlStreamingParser events", () => {
       onToolResult: (delta) => results.push(delta),
     });
 
-    parser.push(
-      joinJsonlFrames(
-        claudeBlockStart({ type: "server_tool_use", id: "srvtoolu_stream", name: "web_search" }, 0),
-        claudeBlockStop(0),
-        claudeBlockStart(
-          {
-            type: "web_search_tool_result",
-            tool_use_id: "srvtoolu_stream",
-            content: { type: "web_search_tool_result_error", error_code: "unavailable" },
-          },
-          1,
-        ),
-        "",
+    finishCliFrames(
+      parser,
+      claudeBlockStart({ type: "server_tool_use", id: "srvtoolu_stream", name: "web_search" }, 0),
+      claudeBlockStop(0),
+      claudeBlockStart(
+        {
+          type: "web_search_tool_result",
+          tool_use_id: "srvtoolu_stream",
+          content: { type: "web_search_tool_result_error", error_code: "unavailable" },
+        },
+        1,
       ),
+      "",
     );
-    parser.finish();
 
     expect(results).toEqual([
       {
@@ -742,8 +714,7 @@ describe("createCliJsonlStreamingParser events", () => {
       onCommentaryText: (text) => commentaryTexts.push(text),
     });
 
-    parser.push(joinJsonlFrames(...frames, ""));
-    parser.finish();
+    finishCliFrames(parser, ...frames, "");
 
     expect(commentaryTexts).toEqual(expectedCommentary);
     expect(deltas).toEqual(expectedDeltas);

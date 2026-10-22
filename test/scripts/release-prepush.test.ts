@@ -116,6 +116,10 @@ describe("release:prepush", () => {
       ["pnpm", ["deadcode:knip"]],
       ["node", ["scripts/test-projects.mts", "--changed", MERGE_BASE_SHA]],
     ]);
+    expect(runCommand.mock.calls[1]?.[0].env).toMatchObject({
+      CHECKOUT_BASE_SHA: MERGE_BASE_SHA,
+      OPENCLAW_OXLINT_TRUSTED_POLICY_REF: BASE_SHA,
+    });
   });
 
   it("pins changed static/type checks, dead-code analysis, and changed tests", () => {
@@ -127,7 +131,12 @@ describe("release:prepush", () => {
       ["node", "scripts/test-projects.mts", "--changed", BASE_SHA],
     ]);
     expect(plan.every((command) => command.cwd === "/snapshot")).toBe(true);
-    expect(plan[1]?.env).toMatchObject({ CI: "1", OPENCLAW_LOCAL_CHECK: "0" });
+    expect(plan[1]?.env).toMatchObject({
+      CHECKOUT_BASE_SHA: BASE_SHA,
+      CI: "1",
+      OPENCLAW_LOCAL_CHECK: "0",
+      OPENCLAW_OXLINT_TRUSTED_POLICY_REF: BASE_SHA,
+    });
   });
 
   it("stops at the first failed integrated gate", async () => {

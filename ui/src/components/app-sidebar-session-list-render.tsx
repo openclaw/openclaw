@@ -154,10 +154,18 @@ export function renderSessionList(params: {
   catalogRenderer: SessionCatalogGroupsRenderer;
 }) {
   const host = createMemo(() => params.host);
+  // A create for a rendered custom group is placed by that section instead.
+  const unplacedCreate = createMemo(() => {
+    const pending = host().pendingSessionCreate();
+    const category = pending?.category;
+    return category && params.sections.some((section) => section.category === category)
+      ? undefined
+      : pending;
+  });
   return renderSessionListFrame(
     host,
     <div class="sidebar-recent-sessions">
-      {renderPendingSessionCreateRow(host)}
+      {renderPendingSessionCreateRow(unplacedCreate)}
       {renderSessionListBody(params)}
       {renderRosterLoadMore(
         host(),

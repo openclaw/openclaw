@@ -507,8 +507,6 @@ const enChatSession = {
       askImageQuestion: "What does this image show?",
       selectionTooLong:
         "These comments are too long for Side chat. Use a shorter selection or comment.",
-      selectionQuoteOnly:
-        "The selection is too long to attach. A short quote is ready in Side chat.",
       askSubmit: "Ask",
       askBusy: "Side chat is already answering a question.",
       askHistoryUnavailable: "Couldn't load this session's history.",

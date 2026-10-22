@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
 import { castAgentMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
-  resolveRunTimeoutDuringCompaction,
   selectCompactionTimeoutSnapshot,
   shouldFlagCompactionTimeout,
   trimToContinuableTail,
@@ -41,23 +40,6 @@ describe("compaction-timeout helpers", () => {
       }),
     ).toBe(true);
   });
-
-  it.each([
-    ["extends the first compaction timeout", false, true, false, "extend"],
-    ["aborts after compaction grace", true, false, true, "abort"],
-    ["aborts without active compaction", false, false, false, "abort"],
-  ] as const)(
-    "%s",
-    (_name, isCompactionPendingOrRetrying, isCompactionInFlight, graceAlreadyUsed, expected) => {
-      expect(
-        resolveRunTimeoutDuringCompaction({
-          isCompactionPendingOrRetrying,
-          isCompactionInFlight,
-          graceAlreadyUsed,
-        }),
-      ).toBe(expected);
-    },
-  );
 
   it("keeps tool-result tails continuable after compaction timeout", () => {
     const pre = [

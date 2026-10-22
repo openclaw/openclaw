@@ -80,6 +80,14 @@ type WebPushResults = Awaited<ReturnType<typeof broadcastWebPush>>;
 type RespondCall = [boolean, unknown?, { code: string; message: string; details?: unknown }?];
 const endpoint = "https://push.example.test/subscription";
 const keys = { p256dh: "p256dh", auth: "auth" };
+const directRegistration = {
+  nodeId: "ios-node-1",
+  transport: "direct",
+  token: "abcd",
+  topic: "ai.openclaw.ios",
+  environment: "sandbox",
+  updatedAtMs: 1,
+} as const;
 
 const relayRegistration = {
   nodeId: "ios-node-1",
@@ -126,14 +134,10 @@ async function request(
   return respond;
 }
 
-function apnsRequest(params: Record<string, unknown>) {
+function apnsRequest(params: Record<string, unknown> = { nodeId: "ios-node-1" }) {
   return request("push.test", params, {
     getRuntimeConfig: () => mocks.getRuntimeConfig(),
   } as never);
-}
-
-function deliveryRequest() {
-  return request("push.web.test", {}, {} as never);
 }
 
 function webClient(options: { deviceId?: string; userProfileId?: string }) {
@@ -166,12 +170,12 @@ function subscribe(
 
 function boundRequest(
   method: "push.web.preferences.get" | "push.web.preferences.set" | "push.web.unsubscribe",
-  params: Record<string, unknown>,
+  params: Record<string, unknown> = {},
   options: { deviceId?: string; userProfileId?: string } = {},
 ) {
   return request(
     method,
-    params,
+    { endpoint, ...params },
     { broadcastToConnIds: vi.fn() } as never,
     webClient({ ...options, deviceId: options.deviceId ?? "browser-device" }),
   );
@@ -207,13 +211,23 @@ function boundSubscription(userProfileId: string | null = null): BoundWebPushSub
 describe("push.test handler", () => {
   beforeEach(() => {
     mocks.getRuntimeConfig.mockClear();
-    mocks.getRuntimeConfig.mockReturnValue({});
     vi.mocked(loadApnsRegistration).mockClear();
     vi.mocked(normalizeApnsEnvironment).mockClear();
     vi.mocked(resolveApnsAuthConfigFromEnv).mockClear();
     vi.mocked(resolveApnsRelayConfigFromEnv).mockClear();
     vi.mocked(sendApnsAlert).mockClear();
     vi.mocked(clearApnsRegistrationIfCurrent).mockClear();
+    mocks.getRuntimeConfig.mockReturnValue({});
+    vi.mocked(loadApnsRegistration).mockResolvedValue(directRegistration);
+    vi.mocked(resolveApnsAuthConfigFromEnv).mockResolvedValue({
+      ok: true,
+      value: {
+        teamId: "TEAM123",
+        keyId: "KEY123",
+        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
+      },
+    });
+    vi.mocked(normalizeApnsEnvironment).mockReturnValue(null);
     vi.mocked(shouldClearStoredApnsRegistration).mockReturnValue(false);
   });
 
@@ -224,7 +238,7 @@ describe("push.test handler", () => {
 
   it("returns invalid request when node has no APNs registration", async () => {
     vi.mocked(loadApnsRegistration).mockResolvedValue(null);
-    const respond = await apnsRequest({ nodeId: "ios-node-1" });
+    const respond = await apnsRequest();
     expectErrorResponse(respond, "has no APNs registration");
   });
 
@@ -237,7 +251,6 @@ describe("push.test handler", () => {
       ok: true,
       value: relay(),
     });
-    vi.mocked(normalizeApnsEnvironment).mockReturnValue(null);
     vi.mocked(sendApnsAlert).mockResolvedValue(
       apnsResult({
         tokenSuffix: "abcd1234",
@@ -246,11 +259,7 @@ describe("push.test handler", () => {
       }),
     );
 
-    const respond = await apnsRequest({
-      nodeId: "ios-node-1",
-      title: "Wake",
-      body: "Ping",
-    });
+    const respond = await apnsRequest({ nodeId: "ios-node-1", title: "Wake", body: "Ping" });
 
     expect(resolveApnsAuthConfigFromEnv).not.toHaveBeenCalled();
     expect(resolveApnsRelayConfigFromEnv).toHaveBeenCalledTimes(1);
@@ -267,88 +276,34 @@ describe("push.test handler", () => {
     ]);
   });
 
-  it("clears stale registrations after invalid token push-test failures", async () => {
-    const registration = {
-      nodeId: "ios-node-1",
-      transport: "direct",
-      token: "abcd",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      updatedAtMs: 1,
-    } as const;
-    vi.mocked(loadApnsRegistration).mockResolvedValue(registration);
-    vi.mocked(resolveApnsAuthConfigFromEnv).mockResolvedValue({
-      ok: true,
-      value: {
-        teamId: "TEAM123",
-        keyId: "KEY123",
-        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
-      },
-    });
-    vi.mocked(normalizeApnsEnvironment).mockReturnValue(null);
-    vi.mocked(sendApnsAlert).mockResolvedValue(
-      apnsResult({
+  it.each([null, "production"] as const)(
+    "clears invalid tokens only without override %s",
+    async (environment) => {
+      vi.mocked(normalizeApnsEnvironment).mockReturnValue(environment);
+      const result = apnsResult({
         ok: false,
         status: 400,
         reason: "BadDeviceToken",
-      }),
-    );
-    vi.mocked(shouldClearStoredApnsRegistration).mockReturnValue(true);
-
-    await apnsRequest({
-      nodeId: "ios-node-1",
-      title: "Wake",
-      body: "Ping",
-    });
-
-    expect(clearApnsRegistrationIfCurrent).toHaveBeenCalledWith({
-      nodeId: "ios-node-1",
-      registration,
-    });
-  });
-
-  it("does not clear direct registrations when push.test overrides the environment", async () => {
-    const registration = {
-      nodeId: "ios-node-1",
-      transport: "direct",
-      token: "abcd",
-      topic: "ai.openclaw.ios",
-      environment: "sandbox",
-      updatedAtMs: 1,
-    } as const;
-    vi.mocked(loadApnsRegistration).mockResolvedValue(registration);
-    vi.mocked(resolveApnsAuthConfigFromEnv).mockResolvedValue({
-      ok: true,
-      value: {
-        teamId: "TEAM123",
-        keyId: "KEY123",
-        privateKey: "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----", // pragma: allowlist secret
-      },
-    });
-    vi.mocked(normalizeApnsEnvironment).mockReturnValue("production");
-    const result = apnsResult({
-      ok: false,
-      status: 400,
-      reason: "BadDeviceToken",
-      environment: "production",
-    });
-    vi.mocked(sendApnsAlert).mockResolvedValue(result);
-    vi.mocked(shouldClearStoredApnsRegistration).mockReturnValue(false);
-
-    await apnsRequest({
-      nodeId: "ios-node-1",
-      title: "Wake",
-      body: "Ping",
-      environment: "production",
-    });
-
-    expect(shouldClearStoredApnsRegistration).toHaveBeenCalledWith({
-      registration,
-      result,
-      overrideEnvironment: "production",
-    });
-    expect(clearApnsRegistrationIfCurrent).not.toHaveBeenCalled();
-  });
+        environment: environment ?? "sandbox",
+      });
+      vi.mocked(sendApnsAlert).mockResolvedValue(result);
+      vi.mocked(shouldClearStoredApnsRegistration).mockReturnValue(environment === null);
+      await apnsRequest({ nodeId: "ios-node-1", ...(environment ? { environment } : {}) });
+      if (environment) {
+        expect(shouldClearStoredApnsRegistration).toHaveBeenCalledWith({
+          registration: directRegistration,
+          result,
+          overrideEnvironment: environment,
+        });
+        expect(clearApnsRegistrationIfCurrent).not.toHaveBeenCalled();
+      } else {
+        expect(clearApnsRegistrationIfCurrent).toHaveBeenCalledWith({
+          nodeId: "ios-node-1",
+          registration: directRegistration,
+        });
+      }
+    },
+  );
 });
 
 describe("push.web.test handler", () => {
@@ -369,7 +324,7 @@ describe("push.web.test handler", () => {
       { ok: false, subscriptionId: "expired-subscription", statusCode: 410, error: "Gone" },
     ];
     vi.mocked(broadcastWebPush).mockResolvedValue(results);
-    const respond = await deliveryRequest();
+    const respond = await request("push.web.test", {}, {} as never);
     expect(respond).toHaveBeenCalledTimes(1);
     expect(firstRespondCall(respond)).toEqual(
       success
@@ -385,7 +340,7 @@ describe("push.web.test handler", () => {
   it("returns invalid request when no subscriptions are registered", async () => {
     vi.mocked(broadcastWebPush).mockResolvedValue([]);
 
-    const respond = await deliveryRequest();
+    const respond = await request("push.web.test", {}, {} as never);
     expectErrorResponse(respond, "no web push subscriptions registered");
   });
 });
@@ -447,12 +402,12 @@ describe("bound Web Push handlers", () => {
         boundSubscription("deleted-profile"),
       );
       mocks.resolveProfileId.mockReturnValue(undefined);
-      const respond = await boundRequest(method, {
-        endpoint,
-        ...(method === "push.web.preferences.set"
+      const respond = await boundRequest(
+        method,
+        method === "push.web.preferences.set"
           ? { scope: "device", preferences: { enabled: true, label: "" } }
-          : {}),
-      });
+          : {},
+      );
       expectErrorResponse(respond);
     },
   );
@@ -460,7 +415,7 @@ describe("bound Web Push handlers", () => {
   it.each([{ deviceId: "other-device" }, { deviceId: "" }, { userProfileId: "other-profile" }])(
     "rejects unsubscribe from a different owner: %j",
     async (options) => {
-      const respond = await boundRequest("push.web.unsubscribe", { endpoint }, options);
+      const respond = await boundRequest("push.web.unsubscribe", {}, options);
 
       expectErrorResponse(respond);
       expect(clearBoundWebPushSubscription).not.toHaveBeenCalled();
@@ -470,7 +425,6 @@ describe("bound Web Push handlers", () => {
   it("updates device preferences only while the subscription binding matches", async () => {
     const preferences = { enabled: false, label: "phone", categories: { humanMentioned: true } };
     const respond = await boundRequest("push.web.preferences.set", {
-      endpoint,
       scope: "device",
       preferences,
     });
@@ -506,7 +460,6 @@ describe("bound Web Push handlers", () => {
       const respond = await boundRequest(
         "push.web.preferences.set",
         {
-          endpoint,
           scope: "user",
           preferences,
         },
@@ -519,9 +472,7 @@ describe("bound Web Push handlers", () => {
       };
       expect(setCanonicalUserPreferences).toHaveBeenCalledWith(
         "profile-owner",
-        {
-          "notifications.web.v1": normalized,
-        },
+        { "notifications.web.v1": normalized },
         { assertCurrent: expect.any(Function) },
       );
       expectSuccess(respond, { scope: "user", preferences: normalized });
@@ -531,7 +482,6 @@ describe("bound Web Push handlers", () => {
   it("fails closed when the subscription binding changes during the update", async () => {
     vi.mocked(setWebPushSubscriptionPreferences).mockResolvedValue(false);
     const respond = await boundRequest("push.web.preferences.set", {
-      endpoint,
       scope: "device",
       preferences: { enabled: true, label: "" },
     });
@@ -541,7 +491,6 @@ describe("bound Web Push handlers", () => {
 
   it("rejects an invalid quiet-hours time zone", async () => {
     const respond = await boundRequest("push.web.preferences.set", {
-      endpoint,
       scope: "device",
       preferences: {
         enabled: true,
@@ -558,10 +507,7 @@ describe("bound Web Push handlers", () => {
     expect(firstRespondCall(respond)).toMatchObject([
       false,
       undefined,
-      {
-        code: ErrorCodes.INVALID_REQUEST,
-        message: "invalid notification quiet-hours time zone",
-      },
+      { code: ErrorCodes.INVALID_REQUEST, message: "invalid notification quiet-hours time zone" },
     ]);
   });
 });
