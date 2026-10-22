@@ -37,6 +37,14 @@ suite.define(() => {
             colorScheme: mode,
           },
           async ({ page }) => {
+            const resize = (height: number) =>
+              page.setViewportSize({ width: mobile ? 390 : 1280, height });
+            const rail = (view: string) =>
+              page.locator(`.sidebar-rail [data-navigation-view="${view}"]`);
+            const expectDismissed = async () => {
+              await rail("sessions").waitFor({ state: "attached" });
+              expect(await card.count()).toBe(0);
+            };
             await seedChatSettings(page, suite.server.baseUrl, {
               themeMode: mode,
               sidebarAgentsMode: "chip",
@@ -118,22 +126,18 @@ suite.define(() => {
                 animations: "disabled",
               });
               const name = `after-${mobile ? "mobile" : "desktop"}-${mode}`;
-              await writeFile(nodePath.join(suite.artifactDir, name + ".png"), frame.png);
-              await writeFile(
-                nodePath.join(suite.artifactDir, name + "-sidebar.png"),
-                frame.elements[0]!.png,
-              );
-              await writeFile(
-                nodePath.join(suite.artifactDir, name + "-card.png"),
-                frame.elements[1]!.png,
-              );
+              for (const [suffix, png] of [
+                ["", frame.png],
+                ["-sidebar", frame.elements[0]!.png],
+                ["-card", frame.elements[1]!.png],
+              ] as const) {
+                await writeFile(nodePath.join(suite.artifactDir, `${name}${suffix}.png`), png);
+              }
             }
             for (let index = 0; index < 3; index += 1) {
               await page.getByRole("button", { name: "Show more", exact: true }).click();
             }
-            await page.setViewportSize(
-              mobile ? { width: 390, height: 568 } : { width: 1280, height: 540 },
-            );
+            await resize(mobile ? 568 : 540);
             await page.locator('[data-session-key="agent:main:task-31"]').scrollIntoViewIfNeeded();
             expect(await list.evaluate((node) => node.scrollHeight > node.clientHeight)).toBe(true);
             const shortListBounds = (await list.boundingBox())!;
@@ -145,15 +149,13 @@ suite.define(() => {
             expect(shortCardBounds.y + shortCardBounds.height).toBeLessThanOrEqual(
               mobile ? 568 : 540,
             );
-            await page.setViewportSize(
-              mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 },
-            );
+            await resize(mobile ? 844 : 900);
             await list.evaluate((node) => {
               node.scrollTop = 0;
             });
-            await page.locator('.sidebar-rail [data-navigation-view="pages"]').click();
+            await rail("pages").click();
             await close.waitFor();
-            await page.locator('.sidebar-rail [data-navigation-view="sessions"]').click();
+            await rail("sessions").click();
             await page.keyboard.press("Tab");
             await close.focus();
             expect(await close.evaluate((node) => node.matches(":focus-visible"))).toBe(true);
@@ -169,21 +171,13 @@ suite.define(() => {
             expect(
               await page.evaluate((key) => localStorage.getItem(key), dismissalKey),
             ).not.toBeNull();
-            expect(
-              await page
-                .locator('.sidebar-rail [data-navigation-view="sessions"]')
-                .evaluate((node) => node === document.activeElement),
-            ).toBe(true);
+            expect(await rail("sessions").evaluate((node) => node === document.activeElement)).toBe(
+              true,
+            );
             await page.goto(`${suite.server.baseUrl}new`);
-            await page
-              .locator('.sidebar-rail [data-navigation-view="sessions"]')
-              .waitFor({ state: "attached" });
-            expect(await card.count()).toBe(0);
+            await expectDismissed();
             await page.goto(url);
-            await page
-              .locator('.sidebar-rail [data-navigation-view="sessions"]')
-              .waitFor({ state: "attached" });
-            expect(await card.count()).toBe(0);
+            await expectDismissed();
             await page.reload();
             if (mobile) {
               await page.getByRole("button", { name: "Expand sidebar", exact: true }).click();
@@ -199,9 +193,7 @@ suite.define(() => {
             await page.locator(".sidebar-shell").waitFor();
             expect(await card.count()).toBe(0);
             if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
-              await page.setViewportSize(
-                mobile ? { width: 390, height: 844 } : { width: 1280, height: 900 },
-              );
+              await resize(mobile ? 844 : 900);
               if (mobile) {
                 const toggle = page.getByRole("button", { name: "Expand sidebar", exact: true });
                 if (await toggle.isVisible()) {

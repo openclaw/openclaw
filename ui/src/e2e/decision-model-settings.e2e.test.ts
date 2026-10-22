@@ -2,6 +2,7 @@ import { expect, it } from "vitest";
 import { applyMergePatch } from "../../../src/config/merge-patch.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { pickerValue, selectPickerValue } from "../test-helpers/select-picker-e2e.ts";
+import { agentRoster } from "./agent-roster.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -40,15 +41,7 @@ suite.define(() =>
         });
         const gateway = await installMockGateway(page, {
           methodResponses: {
-            "agents.list": {
-              agents: [
-                { id: "main", name: "Main" },
-                { id: "scout", name: "Scout" },
-              ],
-              defaultId: "main",
-              mainKey: "main",
-              scope: "per-sender",
-            },
+            "agents.list": agentRoster({ main: "Main", scout: "Scout" }, "main", "per-sender"),
             "models.list": { models: [], decisionModels },
             "config.get": snapshot(),
             "usage.status": { updatedAt: 1, providers: [] },

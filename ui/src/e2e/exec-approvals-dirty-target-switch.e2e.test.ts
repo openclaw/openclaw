@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { configSnapshot } from "./config-composer-fixtures.test-support.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -51,12 +52,8 @@ async function openApprovals(page: Page) {
     ],
     methodResponses: {
       "config.get": {
-        config: operatorConfig,
+        ...configSnapshot(operatorConfig, "config-hash-1"),
         sourceConfig: operatorConfig,
-        hash: "config-hash-1",
-        issues: [],
-        raw: JSON.stringify(operatorConfig),
-        valid: true,
       },
       "device.pair.list": { paired: [], pending: [] },
       "exec.approvals.get": approvals("gateway-hash-1"),

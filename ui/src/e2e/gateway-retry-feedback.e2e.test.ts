@@ -8,7 +8,10 @@ import {
   installMockGateway,
   pauseVirtualClock,
 } from "../test-helpers/control-ui-e2e.ts";
+import { chatMessage } from "./chat-flow.test-support.ts";
+import { computedStyles } from "./config-composer-fixtures.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { expectStyles } from "./style-contract.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Gateway retry feedback" });
 
@@ -29,11 +32,8 @@ suite.define(() => {
         );
         const gateway = await installMockGateway(page, {
           historyMessages: [
-            { role: "user", content: [{ type: "text", text: "Check the deployment checklist." }] },
-            {
-              role: "assistant",
-              content: [{ type: "text", text: "The checklist is ready for review." }],
-            },
+            chatMessage("user", "Check the deployment checklist."),
+            chatMessage("assistant", "The checklist is ready for review."),
           ],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
@@ -45,6 +45,8 @@ suite.define(() => {
         await page.clock.runFor(2_001);
         await gateway.closeLatest(1006, "synthetic failed attempt");
         const status = page.locator(".sidebar-shell__footer .gateway-status");
+        const spinnerLocator = status.locator(".session-run-spinner");
+        const labelLocator = status.locator(".gateway-status__label");
         await status.getByText("Reconnecting…", { exact: true }).waitFor();
         const capture = async (name: string) => {
           const frame = await takeControlUiScreenshotFrame(page, status, [status], {
@@ -58,19 +60,13 @@ suite.define(() => {
           );
         };
         expect(await status.getByRole("button").count()).toBe(0);
-        expect(await status.locator(".session-run-spinner").count()).toBe(1);
+        expect(await spinnerLocator.count()).toBe(1);
         const stateBounds = await status.locator(".gateway-status__state").boundingBox();
-        expect(
-          await status
-            .locator(".session-run-spinner")
-            .evaluate((element) => getComputedStyle(element).borderTopColor),
-        ).toBe(
-          await status
-            .locator(".gateway-status__label")
-            .evaluate((element) => getComputedStyle(element).color),
-        );
+        await expectStyles(spinnerLocator, {
+          "border-top-color": (await computedStyles(labelLocator, ["color"])).color,
+        });
         await capture("reconnecting-backoff");
-        const spinner = await status.locator(".session-run-spinner").elementHandle();
+        const spinner = await spinnerLocator.elementHandle();
         expect(await spinner!.evaluate((element) => getComputedStyle(element).animationName)).toBe(
           "btn-spinner-spin",
         );
@@ -89,7 +85,7 @@ suite.define(() => {
         expect(await animation.evaluate((current) => current.currentTime)).toBe(500);
         const aligned = async () => {
           const icon = await status.locator(".gateway-status__icon").boundingBox();
-          const label = await status.locator(".gateway-status__label").boundingBox();
+          const label = await labelLocator.boundingBox();
           expect(Math.abs(icon!.y + icon!.height / 2 - label!.y - label!.height / 2)).toBeLessThan(
             1,
           );
@@ -101,14 +97,14 @@ suite.define(() => {
         await animation.evaluate((current) => current.play());
         await page.clock.resume();
         const moving = async () => {
-          const before = await status.locator(".session-run-spinner").evaluate((element) => ({
+          const before = await spinnerLocator.evaluate((element) => ({
             time: Number(element.getAnimations()[0]!.currentTime),
             transform: getComputedStyle(element).transform,
           }));
           // A full iteration can return to the same rotation; observe a distinct painted phase.
           await expect
             .poll(() =>
-              status.locator(".session-run-spinner").evaluate(async (element, previous) => {
+              spinnerLocator.evaluate(async (element, previous) => {
                 await new Promise<void>((resolve) => {
                   requestAnimationFrame(() => resolve());
                 });
@@ -144,11 +140,7 @@ suite.define(() => {
         await capture("reconnecting-mobile");
         expect(await status.getByRole("button").count()).toBe(0);
         await page.emulateMedia({ reducedMotion: "reduce" });
-        expect(
-          await status
-            .locator(".session-run-spinner")
-            .evaluate((element) => getComputedStyle(element).animationName),
-        ).toBe("none");
+        await expectStyles(spinnerLocator, { "animation-name": "none" });
         await gateway.setOnline(true);
         await page.clock.resume();
         await waitForControlUiGatewayReady(page);
