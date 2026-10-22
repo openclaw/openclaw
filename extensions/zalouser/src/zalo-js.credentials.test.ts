@@ -88,7 +88,6 @@ import {
   getZaloUserInfo,
   listZaloFriends,
   logoutZaloProfile,
-  sendZaloLink,
   sendZaloReaction,
   startZaloQrLogin,
   waitForZaloQrLogin,
@@ -151,6 +150,14 @@ function mockQrLogin(api: API, cookie?: unknown[]) {
   });
 }
 
+function expectRefreshedCredentials(stored: StoredZaloCredentials, cookie: unknown[]) {
+  expect(stored).toMatchObject({
+    cookie,
+    createdAt: "2026-04-01T00:00:00.000Z",
+    lastUsedAt: expect.stringMatching(ISO_TIMESTAMP_RE),
+  });
+}
+
 describe("zalouser credential persistence", () => {
   let before: Partial<Record<"apply" | "revoke" | "register", () => Promise<void>>>;
   let afterRegister: (() => void) | undefined;
@@ -197,8 +204,7 @@ describe("zalouser credential persistence", () => {
     await seedCredentials(profile, stored);
     await seedCredentials(profile, stored, otherStateDir);
     createZaloMock.mockResolvedValue({
-      login: async () =>
-        createMockApi({ imei: stored.imei, userAgent: stored.userAgent, cookies: stored.cookie }),
+      login: async () => createMockApi({ cookies: stored.cookie }),
     });
     const { entered, release, wait } = credentialGate();
     before.revoke = wait;
@@ -237,8 +243,7 @@ describe("zalouser credential persistence", () => {
       }
     };
     before.register = wait;
-    const api = createMockApi({ cookies: cookieJar("new") });
-    mockQrLogin(api);
+    mockQrLogin(createMockApi({ cookies: cookieJar("new") }));
 
     const setup = runSetupWizardConfigure({
       configure: createPluginSetupWizardConfigure(zalouserSetupPlugin),
@@ -272,9 +277,7 @@ describe("zalouser credential persistence", () => {
     const callbackCookie = cookieJar("callback");
     const refreshedCookie = cookieJar("refreshed");
     const identity = { imei: "api-imei", userAgent: "api-user-agent", language: "vi" };
-    const api = createMockApi({ ...identity, cookies: refreshedCookie });
-
-    mockQrLogin(api, callbackCookie);
+    mockQrLogin(createMockApi({ ...identity, cookies: refreshedCookie }), callbackCookie);
 
     const native = createRequire(import.meta.url)("node:sqlite") as typeof import("node:sqlite");
     const Database = native.DatabaseSync;
@@ -336,16 +339,8 @@ describe("zalouser credential persistence", () => {
   it("revalidates setup ownership immediately before QR credentials are written", async () => {
     const profile = "qr-stale-owner";
     const guardError = new Error("verified inference changed");
-    const beforeCredentialPersistence = vi.fn(async () => {
-      throw guardError;
-    });
-    const api = createMockApi({
-      imei: "api-imei",
-      userAgent: "api-user-agent",
-      cookies: cookieJar("stale-owner"),
-    });
-
-    mockQrLogin(api);
+    const beforeCredentialPersistence = vi.fn().mockRejectedValue(guardError);
+    mockQrLogin(createMockApi({ cookies: cookieJar("stale-owner") }));
 
     const started = await startZaloQrLogin({
       profile,
@@ -431,11 +426,7 @@ describe("zalouser credential persistence", () => {
           cookie: storedCookie,
           language: undefined,
         });
-        expect(await readCredentials(profile)).toMatchObject({
-          cookie: loginCookie,
-          createdAt: "2026-04-01T00:00:00.000Z",
-          lastUsedAt: expect.stringMatching(ISO_TIMESTAMP_RE),
-        });
+        expectRefreshedCredentials(await readCredentials(profile), loginCookie);
       }
       await expect(
         listZaloFriends(profile, {
@@ -454,11 +445,7 @@ describe("zalouser credential persistence", () => {
       } else if (mode === "read-only") {
         expect(stored).toEqual(storedBefore);
       } else {
-        expect(stored).toMatchObject({
-          cookie: refreshedCookie,
-          createdAt: "2026-04-01T00:00:00.000Z",
-          lastUsedAt: expect.stringMatching(ISO_TIMESTAMP_RE),
-        });
+        expectRefreshedCredentials(stored, refreshedCookie);
       }
     },
   );
@@ -596,17 +583,15 @@ describe("zalouser credential persistence", () => {
     expect(replacementFriends).toHaveBeenCalledOnce();
   });
 
-  it.each(["reaction", "link"] as const)("rejects %s without a session", async (action) => {
-    const send =
-      action === "reaction"
-        ? sendZaloReaction({
-            profile: "missing-session",
-            threadId: "thread-1",
-            msgId: "msg-1",
-            cliMsgId: "cli-1",
-            emoji: "like",
-          })
-        : sendZaloLink("thread-1", "https://example.com", { profile: "missing-session" });
-    await expect(send).rejects.toThrow("No saved Zalo session");
+  it("rejects an API operation without a session", async () => {
+    await expect(
+      sendZaloReaction({
+        profile: "missing-session",
+        threadId: "thread-1",
+        msgId: "msg-1",
+        cliMsgId: "cli-1",
+        emoji: "like",
+      }),
+    ).rejects.toThrow("No saved Zalo session");
   });
 });

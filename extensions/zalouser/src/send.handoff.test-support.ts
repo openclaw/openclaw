@@ -1,10 +1,7 @@
 import { AsyncResource } from "node:async_hooks";
 import { createCipheriv, createDecipheriv } from "node:crypto";
 import { createRequire } from "node:module";
-import type {
-  ChannelMessageSendTextContext,
-  MessageReceipt,
-} from "openclaw/plugin-sdk/channel-outbound";
+import type { ChannelMessageSendTextContext } from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
@@ -62,18 +59,17 @@ type Gate = {
   release: ReturnType<typeof createDeferred<void>>;
 };
 export type SendRoute = "message.text" | "message.media" | "sendText" | "sendMedia" | "sendPayload";
-type SendInput = Pick<
-  ChannelMessageSendTextContext,
-  "signal" | "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
-> & {
-  text?: string;
-  to?: string;
-  mediaUrl?: string;
-  onDeliveryResult?: (result: {
-    messageId?: string;
-    receipt?: MessageReceipt;
-  }) => Promise<void> | void;
-};
+type SendInput = Partial<
+  Pick<
+    ChannelMessageSendTextContext,
+    | "signal"
+    | "assertDirectAdapterHandoff"
+    | "onPlatformSendDispatch"
+    | "onDeliveryResult"
+    | "text"
+    | "to"
+  >
+> & { mediaUrl?: string };
 export type SentRequest = { method: string; path: string; params: Record<string, unknown> };
 
 function required<T>(value: T | undefined): T {
