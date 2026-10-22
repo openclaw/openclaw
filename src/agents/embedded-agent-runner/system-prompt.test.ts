@@ -1,6 +1,4 @@
 import { Type } from "typebox";
-// Embedded system prompt tests cover prompt assembly for provider guidance,
-// delegation mode, workspace-only safety, memory sections, and active processes.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   clearMemoryPluginState,
@@ -15,55 +13,20 @@ vi.mock("../../tts/tts-settings.js", () => ({
   setTtsMachinePrefsPathResolver: vi.fn(),
 }));
 
-function basicPromptInputs(): Parameters<typeof buildConfiguredAgentSystemPrompt>[0] {
-  return {
+function renderPrompt(
+  overrides: Partial<Parameters<typeof buildConfiguredAgentSystemPrompt>[0]> = {},
+) {
+  return buildConfiguredAgentSystemPrompt({
     workspaceDir: "/tmp/openclaw",
     reasoningTagHint: false,
-    runtimeInfo: {
-      host: "local",
-      os: "darwin",
-      arch: "arm64",
-      node: process.version,
-      model: "gpt-5.4",
-    },
     tools: [],
     modelAliasLines: [],
-  };
-}
-
-function fixedEmbeddedPromptInputs(): Parameters<typeof buildConfiguredAgentSystemPrompt>[0] {
-  return {
-    workspaceDir: "/tmp/openclaw-prompt-agent",
-    runtimeCwd: "/tmp/openclaw-prompt-project",
-    reasoningTagHint: true,
-    runtimeInfo: {
-      host: "fixture-host",
-      os: "linux",
-      arch: "arm64",
-      node: "v24.14.0",
-      model: "fixture-model",
-      channel: "discord",
-      chatType: "direct",
-    },
-    tools: ["read", "exec", "process", "message", "sessions_spawn"].map(createStubTool),
-    capabilityToolNames: ["tool_search", "web_search"],
-    ownerNumbers: ["fixture-owner"],
-    modelAliasLines: ["- direct-alias: fixture/direct"],
-    ttsHint: "Fixture direct TTS hint.",
-    skillsPrompt: "<available_skills>Fixture skill guidance.</available_skills>",
-    contextFiles: [{ path: "AGENTS.md", content: "Fixture project guidance." }],
-    extraSystemPrompt: "Fixture turn context.",
-    promptContribution: {
-      stablePrefix: "Fixture stable provider guidance.",
-      dynamicSuffix: "Fixture dynamic provider guidance.",
-    },
-  };
+    ...overrides,
+  });
 }
 
 describe("buildConfiguredAgentSystemPrompt", () => {
   afterEach(() => {
-    // Memory prompt sections are shared plugin state, so each prompt-rendering
-    // test leaves the global registry clean.
     clearMemoryPluginState();
   });
 
@@ -129,8 +92,7 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     "routes explicit task creation from the native %s tool surface in default suggest mode",
     (surface) => {
       const sessions = createStubTool(surface === "create" ? "sessions_create" : "sessions");
-      const prompt = buildConfiguredAgentSystemPrompt({
-        ...basicPromptInputs(),
+      const prompt = renderPrompt({
         tools: surface === "absent" ? [] : [sessions],
       });
 
@@ -181,10 +143,9 @@ describe("buildConfiguredAgentSystemPrompt", () => {
   });
 
   it("forwards the subagent prompt surface to embedded prompt rendering", () => {
-    const prompt = buildConfiguredAgentSystemPrompt({
-      ...basicPromptInputs(),
+    const prompt = renderPrompt({
       promptSurface: "subagent",
-      tools: [{ name: "sessions_spawn" } as never],
+      tools: [createStubTool("sessions_spawn")],
       nativeCommandGuidanceLines: ["Subagent-only command guidance."],
       promptMode: "minimal",
     });
@@ -212,18 +173,14 @@ describe("buildConfiguredAgentSystemPrompt", () => {
   });
 
   it("includes background process guidance whenever process is callable", () => {
-    const params = {
-      ...basicPromptInputs(),
-      tools: [{ name: "process" } as never],
-    } satisfies Parameters<typeof buildConfiguredAgentSystemPrompt>[0];
-    const prompt = buildConfiguredAgentSystemPrompt(params);
+    const prompt = renderPrompt({ tools: [createStubTool("process")] });
 
     expect(prompt).not.toContain("Active exec sessions");
     expect(prompt).toContain("Before input: process log");
     expect(prompt).toContain("waitingForInput/stdinWritable");
     expect(prompt).toContain("process list");
 
-    const restrictedPrompt = buildConfiguredAgentSystemPrompt({ ...params, tools: [] });
+    const restrictedPrompt = renderPrompt();
     expect(restrictedPrompt).not.toContain("Active exec sessions");
     expect(restrictedPrompt).not.toContain("process log");
     expect(restrictedPrompt).not.toContain("process list");
@@ -236,11 +193,14 @@ describe("buildConfiguredAgentSystemPrompt", () => {
     ["loose runtime agent", {}, { agentId: "loose" }, false],
     ["no agent identity", {}, {}, false],
   ])("resolves embedded prompt policy for %s", (name, selector, runtime, restricted) => {
-    const inputs = fixedEmbeddedPromptInputs();
-    const prompt = buildConfiguredAgentSystemPrompt({
-      ...inputs,
+    const prompt = renderPrompt({
+      tools: [createStubTool("read")],
+      promptContribution: {
+        stablePrefix: "Fixture stable provider guidance.",
+        dynamicSuffix: "Fixture dynamic provider guidance.",
+      },
       ...selector,
-      runtimeInfo: { ...inputs.runtimeInfo, ...runtime },
+      runtimeInfo: runtime,
       config: {
         tools: { fs: { workspaceOnly: false } },
         agents: {

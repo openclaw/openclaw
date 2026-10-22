@@ -20,16 +20,13 @@ type Compaction = NonNullable<
   NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>["compaction"]
 >;
 
-function buildSafeguardFactories(
-  qualityGuard?: Compaction["qualityGuard"],
-  workspaceDir = "/workspace",
-) {
+function buildSafeguardFactories(qualityGuard?: Compaction["qualityGuard"]) {
   // Runtime inspection must use the manager that owns the factories.
   const sessionManager = {} as SessionManager;
   const factories = buildEmbeddedExtensionFactories({
     cfg: { agents: { defaults: { compaction: { mode: "safeguard", qualityGuard } } } },
     sessionManager,
-    workspaceDir,
+    workspaceDir: "/tmp/openclaw-workspace",
     model: { id: "claude-sonnet-4-20250514", contextWindow: 200_000 } as Model,
   });
   return { factories, sessionManager };
@@ -46,14 +43,7 @@ describe("buildEmbeddedExtensionFactories", () => {
     expect(getCompactionSafeguardRuntime(sessionManager)).toMatchObject({
       qualityGuardEnabled: enabled,
       qualityGuardMaxRetries: maxRetries,
+      workspaceDir: "/tmp/openclaw-workspace",
     });
-  });
-
-  it("wires the run workspace into safeguard runtime", () => {
-    const { sessionManager } = buildSafeguardFactories(undefined, "/tmp/openclaw-workspace");
-
-    expect(getCompactionSafeguardRuntime(sessionManager)?.workspaceDir).toBe(
-      "/tmp/openclaw-workspace",
-    );
   });
 });

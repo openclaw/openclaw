@@ -1,4 +1,3 @@
-// Coverage for detecting repeated tool loops immediately after compaction.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const logInfo = vi.hoisted(() => vi.fn());
@@ -15,17 +14,16 @@ vi.mock("../../logging/subsystem.js", () => ({
 
 import { createPostCompactionLoopGuard } from "./post-compaction-loop-guard.js";
 
-function callOutcome(toolName: string, args: unknown, result: string) {
-  // The guard compares stable hashes instead of full payloads to keep runtime
-  // state bounded.
-  return { toolName, argsHash: JSON.stringify(args), resultHash: result };
-}
+const read = (path = "/x", resultHash = "r1") => ({
+  toolName: "read",
+  argsHash: JSON.stringify({ path }),
+  resultHash,
+});
 
 describe("createPostCompactionLoopGuard", () => {
   it("is dormant when never armed", () => {
     const guard = createPostCompactionLoopGuard();
-    const verdict = guard.observe(callOutcome("read", { path: "/x" }, "r1"));
-    expect(verdict.shouldAbort).toBe(false);
+    expect(guard.observe(read()).shouldAbort).toBe(false);
   });
 
   it("aborts on the third identical (tool,args,result) call within the window", () => {
@@ -69,33 +67,22 @@ describe("createPostCompactionLoopGuard", () => {
   it("does NOT abort outside the window", () => {
     const guard = createPostCompactionLoopGuard();
     guard.armPostCompaction();
-    expect(guard.observe(callOutcome("read", { path: "/x" }, "r1"))).toEqual({
-      shouldAbort: false,
-    });
-    expect(guard.observe(callOutcome("read", { path: "/x" }, "r1"))).toEqual({
-      shouldAbort: false,
-    });
-    expect(guard.observe(callOutcome("read", { path: "/y" }, "r2"))).toEqual({
-      shouldAbort: false,
-    });
-    const after = guard.observe(callOutcome("read", { path: "/x" }, "r1"));
-    expect(after.shouldAbort).toBe(false);
+    expect(guard.observe(read())).toEqual({ shouldAbort: false });
+    expect(guard.observe(read())).toEqual({ shouldAbort: false });
+    expect(guard.observe(read("/y", "r2"))).toEqual({ shouldAbort: false });
+    expect(guard.observe(read()).shouldAbort).toBe(false);
   });
 
   it("re-arms when armPostCompaction is called again (multiple compactions per run)", () => {
     const guard = createPostCompactionLoopGuard();
     guard.armPostCompaction();
-    guard.observe(callOutcome("read", { path: "/x" }, "r1"));
-    guard.observe(callOutcome("read", { path: "/y" }, "r2"));
-    expect(guard.observe(callOutcome("read", { path: "/x" }, "r1")).shouldAbort).toBe(false);
+    guard.observe(read());
+    guard.observe(read("/y", "r2"));
+    expect(guard.observe(read()).shouldAbort).toBe(false);
     guard.armPostCompaction();
-    expect(guard.observe(callOutcome("read", { path: "/x" }, "r1"))).toEqual({
-      shouldAbort: false,
-    });
-    expect(guard.observe(callOutcome("read", { path: "/x" }, "r1"))).toEqual({
-      shouldAbort: false,
-    });
-    expect(guard.observe(callOutcome("read", { path: "/x" }, "r1"))).toMatchObject({
+    expect(guard.observe(read())).toEqual({ shouldAbort: false });
+    expect(guard.observe(read())).toEqual({ shouldAbort: false });
+    expect(guard.observe(read())).toMatchObject({
       shouldAbort: true,
       count: 3,
     });
@@ -104,10 +91,9 @@ describe("createPostCompactionLoopGuard", () => {
   it("respects the parent loop detection disabled state", () => {
     const guard = createPostCompactionLoopGuard({ enabled: false });
     guard.armPostCompaction();
-    guard.observe(callOutcome("gateway", { x: 1 }, "r1"));
-    guard.observe(callOutcome("gateway", { x: 1 }, "r1"));
-    const third = guard.observe(callOutcome("gateway", { x: 1 }, "r1"));
-    expect(third.shouldAbort).toBe(false);
+    guard.observe(read());
+    guard.observe(read());
+    expect(guard.observe(read()).shouldAbort).toBe(false);
   });
 });
 
@@ -153,14 +139,14 @@ describe("post-compaction re-read instrumentation", () => {
   it("does not count signatures evicted from the bounded baseline", () => {
     const guard = createPostCompactionLoopGuard();
     for (let i = 0; i < 20; i += 1) {
-      guard.observe(callOutcome("read", { path: `/old-${i}.md` }, "v1"));
+      guard.observe(read(`/old-${i}.md`, "v1"));
     }
     guard.armPostCompaction();
     // Signature from before the baseline window: no longer comparable.
-    guard.observe(callOutcome("read", { path: "/old-0.md" }, "v2"));
+    guard.observe(read("/old-0.md", "v2"));
     // Signature still inside the baseline window tail.
-    guard.observe(callOutcome("read", { path: "/old-19.md" }, "v2"));
-    guard.observe(callOutcome("gateway", { action: "probe" }, "r1"));
+    guard.observe(read("/old-19.md", "v2"));
+    guard.observe({ toolName: "gateway", argsHash: '{"action":"probe"}', resultHash: "r1" });
     const summary = logInfo.mock.calls
       .map((call) => call[0] as string)
       .find((message) => message.includes("post-compaction window closed"));

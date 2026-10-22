@@ -7,8 +7,6 @@ import {
 } from "@openclaw/ai/internal/runtime";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "@openclaw/ai/internal/shared";
 import * as providerTransportStream from "@openclaw/ai/transports";
-// Stream resolution tests cover how embedded runs choose provider, boundary,
-// native Codex, or custom stream functions and pass auth/cache/signal options.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk/plugin-entry";
@@ -44,11 +42,7 @@ vi.mock("../../llm/stream.js", async (importOriginal) => {
   return { ...actual, streamSimple: streamMocks.streamSimple };
 });
 
-// Wrap createBoundaryAwareStreamFnForModel with a spy that delegates to the
-// real implementation by default so existing routing tests still observe a
-// real transport stream; per-test overrideBoundaryAwareStreamFnOnce() injects
-// a probe stream when a regression test needs to inspect the wrapped
-// transport's options.
+// Keep real transport routing unless a test needs to inspect forwarded options.
 vi.mock("@openclaw/ai/transports", async (importOriginal) => {
   const actual = await importOriginal<typeof providerTransportStream>();
   return {
@@ -63,16 +57,24 @@ const llmRuntime = {
 } as LlmRuntime;
 
 function resolveEmbeddedAgentStream(
-  params: Omit<Parameters<typeof resolveEmbeddedAgentStreamImpl>[0], "llmRuntime"> & {
+  params: Omit<
+    Parameters<typeof resolveEmbeddedAgentStreamImpl>[0],
+    "llmRuntime" | "sessionId" | "currentStreamFn"
+  > & {
     llmRuntime?: LlmRuntime;
+    sessionId?: string;
+    currentStreamFn?: StreamFn;
   },
 ) {
-  return resolveEmbeddedAgentStreamImpl({ llmRuntime, ...params });
+  return resolveEmbeddedAgentStreamImpl({
+    llmRuntime,
+    sessionId: "session-1",
+    currentStreamFn: undefined,
+    ...params,
+  });
 }
 
 const overrideBoundaryAwareStreamFnOnce = (streamFn: StreamFn): void => {
-  // Boundary wrapping remains real by default; individual cases replace only
-  // the inner stream when they need to inspect forwarded options.
   vi.mocked(providerTransportStream.createBoundaryAwareStreamFnForModel).mockReturnValueOnce(
     streamFn,
   );
@@ -84,6 +86,7 @@ function useNativeStreamFn(streamFn: StreamFn): StreamFn {
 }
 
 const requireRecord = createRequireRecord("record", "expected-label-object");
+const mockStream = () => vi.fn<StreamFn>(() => createAssistantMessageEventStream());
 
 afterEach(() => {
   vi.useRealTimers();
@@ -97,13 +100,12 @@ afterEach(() => {
 describe("resolveEmbeddedAgentStream", () => {
   it("records the selected transport for proxied Anthropic", async () => {
     const currentStreamFn = vi.fn<StreamFn>();
-    const boundaryStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    const boundaryStreamFn = mockStream();
     overrideBoundaryAwareStreamFnOnce(boundaryStreamFn);
     const boundaryFactory = vi.mocked(providerTransportStream.createBoundaryAwareStreamFnForModel);
     const initialCalls = boundaryFactory.mock.calls.length;
     const params = {
       currentStreamFn,
-      sessionId: "session-1",
       model: {
         api: "anthropic-messages",
         provider: "cloudflare-ai-gateway",
@@ -156,7 +158,6 @@ describe("resolveEmbeddedAgentStream", () => {
       const { streamFn } = resolveEmbeddedAgentStream({
         model,
         providerStreamFn,
-        currentStreamFn: undefined,
         sessionId: "registered-cache-test",
       });
       let payload: unknown;
@@ -192,7 +193,7 @@ describe("resolveEmbeddedAgentStream", () => {
   it("preserves sentinels for registered provider streams", async () => {
     const secret = "plugin-stream-secret";
     const sentinel = mintSecretSentinel(secret, { label: "model-auth:plugin" });
-    const providerStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    const providerStreamFn = mockStream();
     const model = {
       api: "plugin-api",
       provider: "plugin",
@@ -200,9 +201,7 @@ describe("resolveEmbeddedAgentStream", () => {
       headers: { Authorization: `Bearer ${sentinel}` },
     } as never;
     const { streamFn } = resolveEmbeddedAgentStream({
-      currentStreamFn: undefined,
       providerStreamFn,
-      sessionId: "session-1",
       model,
       resolvedApiKey: sentinel,
     });
@@ -317,7 +316,6 @@ describe("resolveEmbeddedAgentStream", () => {
         effectiveContextTokenBudget: 128_000,
         recordEvent,
       });
-      expect(boundaryStreamFactory.mock.calls.slice(initialBoundaryCalls)).toEqual([]);
       const stream = await observedEmbeddedStreamFn(
         model,
         {
@@ -366,8 +364,10 @@ describe("resolveEmbeddedAgentStream", () => {
       );
       const rejectedResult = await rejectedStream.result();
 
-      expect(rejectedResult.stopReason).toBe("error");
-      expect(rejectedResult.errorMessage).toContain("session websocket connection rejected");
+      expect(rejectedResult).toMatchObject({
+        stopReason: "error",
+        errorMessage: expect.stringContaining("session websocket connection rejected"),
+      });
       expect(resolveSessionAuth).toHaveBeenCalledTimes(2);
       expect(fetchSpy).not.toHaveBeenCalled();
       expect(boundaryStreamFactory.mock.calls.slice(initialBoundaryCalls)).toEqual([]);
@@ -388,17 +388,17 @@ describe("resolveEmbeddedAgentStream", () => {
       .fn<(provider: string) => Promise<string | undefined>>()
       .mockResolvedValueOnce(firstSentinel)
       .mockResolvedValueOnce(secondSentinel);
-    const currentStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
-    const innerStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    const currentStreamFn = mockStream();
+    const innerStreamFn = mockStream();
     overrideBoundaryAwareStreamFnOnce(innerStreamFn);
+    const model = {
+      api: "openai-responses",
+      provider: "github-copilot",
+      id: "gpt-5.6-sol",
+    } as never;
     const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn,
-      sessionId: "session-1",
-      model: {
-        api: "openai-responses",
-        provider: "github-copilot",
-        id: "gpt-5.6-sol",
-      } as never,
+      model,
       transportAuthAvailable: true,
       authStorage: { getApiKey },
     });
@@ -414,16 +414,13 @@ describe("resolveEmbeddedAgentStream", () => {
   });
 
   it("propagates prompt cache identity into custom session streams", async () => {
-    const currentStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    const currentStreamFn = mockStream();
+    const model = { api: "custom-api", provider: "custom-provider", id: "custom-model" } as never;
     const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn,
       sessionId: "run-session",
       promptCacheKey: "cron-cache-key",
-      model: {
-        api: "custom-api",
-        provider: "custom-provider",
-        id: "custom-model",
-      } as never,
+      model,
     });
 
     expect(streamFn).not.toBe(currentStreamFn);
@@ -437,11 +434,10 @@ describe("resolveEmbeddedAgentStream", () => {
   });
 
   it("preserves anthropic-vertex stream identity without cache or run cancellation", () => {
-    const currentStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    const currentStreamFn = mockStream();
     streamMocks.anthropicVertex.mockReturnValueOnce(currentStreamFn);
     const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn,
-      sessionId: "session-1",
       model: {
         api: "anthropic-messages",
         provider: "anthropic-vertex",
@@ -455,7 +451,7 @@ describe("resolveEmbeddedAgentStream", () => {
     { api: "anthropic-messages", provider: "anthropic-vertex", id: "custom-model" },
     { api: "openai-chatgpt-responses", provider: "openai", id: "gpt-5.5" },
   ])("cancels $provider streams when the run owner aborts", async (model) => {
-    const inner = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    const inner = mockStream();
     const vertex = model.provider === "anthropic-vertex";
     if (vertex) {
       streamMocks.anthropicVertex.mockReturnValueOnce(inner);
@@ -466,7 +462,6 @@ describe("resolveEmbeddedAgentStream", () => {
     const callerController = new AbortController();
     const { streamFn } = resolveEmbeddedAgentStream({
       currentStreamFn: vertex ? inner : undefined,
-      sessionId: "session-1",
       signal: runController.signal,
       model: model as never,
       ...(!vertex && { resolvedApiKey: "oauth-bearer-token" }),
@@ -489,11 +484,7 @@ describe("resolveEmbeddedAgentStream", () => {
 });
 
 describe("embedded provider stream activity", () => {
-  const model = {
-    api: "openai-completions",
-    provider: "openai",
-    id: "gpt-5.4",
-  } as never;
+  const model = { api: "openai-completions", provider: "openai", id: "gpt-5.4" } as never;
 
   function resolveProviderStream(
     providerStreamFn: Parameters<typeof resolveEmbeddedAgentStreamImpl>[0]["providerStreamFn"],
@@ -501,9 +492,7 @@ describe("embedded provider stream activity", () => {
   ) {
     return resolveEmbeddedAgentStream({
       llmRuntime: defaultLlmRuntime,
-      currentStreamFn: undefined,
       providerStreamFn,
-      sessionId: "session-1",
       signal: runSignal,
       model,
     }).streamFn;
@@ -512,12 +501,10 @@ describe("embedded provider stream activity", () => {
   it("revalidates run authority after deferred credential resolution", async () => {
     const credentials = createDeferredCore<string>();
     let current = true;
-    const providerStreamFn = vi.fn<StreamFn>(() => createAssistantMessageEventStream());
+    const providerStreamFn = mockStream();
     const streamFn = resolveEmbeddedAgentStream({
       llmRuntime: defaultLlmRuntime,
-      currentStreamFn: undefined,
       providerStreamFn,
-      sessionId: "session-1",
       model,
       authStorage: { getApiKey: vi.fn(() => credentials.promise) },
       assertCurrent: () => {
@@ -547,18 +534,6 @@ describe("embedded provider stream activity", () => {
         stream.end(
           makeAgentAssistantMessage({
             content: [{ type: "text", text: "done" }],
-            api: "openai-completions",
-            provider: "openai",
-            model: "gpt-5.4",
-            usage: {
-              input: 1,
-              output: 1,
-              cacheRead: 0,
-              cacheWrite: 0,
-              totalTokens: 2,
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
-            },
-            timestamp: 1,
           }),
         );
         return stream;
