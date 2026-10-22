@@ -472,9 +472,7 @@ export function createPositionRail(props: PositionRailParams) {
     if (scrollElement) {
       reader.followActive = true;
       observationPending = true;
-      resizeObserver = new ResizeObserver(() => {
-        observeLayout();
-      });
+      resizeObserver = new ResizeObserver(observeLayout);
       resizeObserver.observe(scrollElement);
       scheduleLayout();
     }
@@ -560,12 +558,12 @@ export function createPositionRail(props: PositionRailParams) {
       if (currentActiveId && !markerIndexes.has(currentActiveId)) {
         currentActiveId = undefined;
       }
-      markersChanged = true;
-    }
-    for (const field of ["focusedId", "hoveredId"] as const) {
-      if (!markerIndexes.has(interaction[field] ?? "")) {
-        interaction[field] = null;
+      for (const field of ["focusedId", "hoveredId"] as const) {
+        if (!markerIndexes.has(interaction[field] ?? "")) {
+          interaction[field] = null;
+        }
       }
+      markersChanged = true;
     }
     // Text-only previews retain the rail geometry. Native resize/scroll and
     // transcript observations already request measurements when it changes.

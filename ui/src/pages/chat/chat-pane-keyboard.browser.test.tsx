@@ -30,7 +30,7 @@ it("publishes keyboard transitions to the mobile composer without transcript geo
   connectPaneTestView(pane);
   document.body.append(pane.element);
   await pane.updateComplete;
-  await vi.dynamicImportSettled();
+  await expect.poll(() => pane.querySelector("textarea")).not.toBeNull();
   const textarea = expectDefined(pane.querySelector("textarea"), "mobile composer input");
   const shell = expectDefined(
     pane.querySelector<HTMLElement>(".agent-chat__composer-shell"),
