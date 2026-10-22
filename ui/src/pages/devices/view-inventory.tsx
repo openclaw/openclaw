@@ -109,6 +109,11 @@ export function DeviceInventoryContent(props: DevicesProps & { pending: boolean 
   // Pending requests and unpaired presence render in their own sections, so
   // this section's empty state depends only on its own rows.
   const empty = () => groups().length === 0 && !gatewayPresence();
+  const groupedRows = (
+    <For each={groups()} keyed={(group) => group.key}>
+      {(group) => <InventoryGroup group={group()} devices={props} />}
+    </For>
+  );
   const deviceRows = (
     <>
       <Show when={gatewayPresence()}>
@@ -121,9 +126,7 @@ export function DeviceInventoryContent(props: DevicesProps & { pending: boolean 
       ) : empty() && (props.connected || props.devicesList) ? (
         <SettingsEmpty message={t("devices.inventory.empty")} />
       ) : (
-        <For each={groups()} keyed={(group) => group.key}>
-          {(group) => <InventoryGroup group={group()} devices={props} />}
-        </For>
+        groupedRows
       )}
     </>
   );

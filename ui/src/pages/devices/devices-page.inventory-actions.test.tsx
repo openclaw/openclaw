@@ -25,7 +25,7 @@ describe("Devices inventory actions", () => {
     async (outcome) => {
       const approved = createDeferred<unknown>();
       const inventory = {
-        paired: [],
+        paired: [{ deviceId: "paired-1", displayName: "Paired browser", roles: ["operator"] }],
         pending: [{ requestId: "request-1", deviceId: "device-1", displayName: "Browser" }],
       };
       const request = vi.fn(async (method: string) => {
@@ -45,9 +45,20 @@ describe("Devices inventory actions", () => {
       });
       const approve = () => button(page.container, t("devices.inventory.approve"));
       await waitForSolid(() => expect(approve().disabled).toBe(false));
+      const details = Array.from(
+        page.container.querySelectorAll<HTMLDetailsElement>(".device-entry__details"),
+      ).find((element) =>
+        element.closest(".device-entry")?.textContent?.includes("Paired browser"),
+      );
+      if (!details) {
+        throw new Error("Expected the paired browser details");
+      }
+      details.open = true;
       approve().click();
       try {
         await waitForSolid(() => expect(approve().disabled).toBe(true));
+        expect(details.isConnected).toBe(true);
+        expect(details.open).toBe(true);
         expect(
           request.mock.calls.filter(([method]) => method === "device.pair.approve"),
         ).toHaveLength(1);
@@ -66,6 +77,10 @@ describe("Devices inventory actions", () => {
         } else {
           approved.resolve({});
           await waitForSolid(() => expect(approve().disabled).toBe(false));
+        }
+        if (outcome !== "reconnect") {
+          expect(details.isConnected).toBe(true);
+          expect(details.open).toBe(true);
         }
       } finally {
         approved.resolve({});
