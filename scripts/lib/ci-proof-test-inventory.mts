@@ -608,6 +608,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/matrix/src/matrix/send.authority.integration.test.ts",
   "extensions/matrix/src/matrix/send.test.ts",
   "extensions/mattermost/src/channel-actions-setup-status.contract.test.ts",
+  "extensions/mattermost/src/delivery-trace.test.ts",
   "extensions/mattermost/src/mattermost/monitor-auth.test.ts",
   "extensions/mattermost/src/mattermost/monitor-posts.thread-history.test.ts",
   "extensions/mattermost/src/mattermost/monitor-resources.test.ts",
