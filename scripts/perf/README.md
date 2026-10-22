@@ -259,6 +259,25 @@ inventory that is not 44 plugins including every requested bundled ID. Use the
 bundled IDs from the target deployment's startup log and build their artifacts
 before measuring. Omit the flag to retain the all-synthetic fixture.
 
+To reproduce startup waiting for pending GitHub publication recovery, add
+`--publication-git-delay-ms 10000` to both the seed and run commands. This keeps
+the same plugin and session inventory and binds one existing session to a tiny
+local managed worktree with a retained publication request. Its historical
+requester authority is absent, so recovery must inspect the local workspace and
+then refuse publication without credentials or network access. A fixture-only
+`git` executable delays one exact read-only config command in that worktree,
+then delegates to the real Git executable. Other Git commands run normally.
+
+The sample's `publicationRecovery` records the delay and start/release epoch
+timestamps. Missing or incomplete boundary markers fail the measurement. The
+controller waits for that read to finish before teardown, even if readiness and
+the first RPC already succeeded; `completionMs` therefore includes this recovery
+work while `readyz.ms` and `firstSessionRpc.ms` measure availability independently.
+Use a newly seeded root for each sample: completed requests and boundary markers
+make these publication fixtures intentionally single-use. Delays are bounded to
+30 seconds and must match the seed. This tests subprocess waiting at the real
+publication owner; it does not simulate GitHub response semantics.
+
 Startup results include spawn-to-`/readyz` and spawn-to-first-successful
 `sessions.list` timings. The `teamBoot` protocol handshake uses the isolated
 Gateway's synthetic shared token so access-policy plugins receive a real owner
