@@ -63,7 +63,7 @@ function exportPaths() {
   };
 }
 
-function readJson<T = Record<string, unknown>>(outputDir: string, file: string): T {
+function readJson(outputDir: string, file: string): Record<string, unknown> {
   return JSON.parse(readText(outputDir, file));
 }
 
@@ -1116,7 +1116,7 @@ describe("exportTrajectoryBundle", () => {
     expect(JSON.stringify(exportedEvents)).toContain("$WORKSPACE_DIR/inside.txt");
     expect(JSON.stringify(exportedEvents)).not.toContain("$WORKSPACE_DIR2");
 
-    const manifest = readJson<TrajectoryBundleManifest>(outputDir, "manifest.json");
+    const manifest: TrajectoryBundleManifest = JSON.parse(readText(outputDir, "manifest.json"));
     expect([
       manifest.workspaceDir,
       manifest.sourceFiles.session,

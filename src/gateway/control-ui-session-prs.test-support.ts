@@ -122,6 +122,8 @@ export function mockPrCheckout(options: {
                   }
                 : null,
             };
+      default:
+        break;
     }
     throw new Error("Unexpected local Git operation");
   });

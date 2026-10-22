@@ -19,13 +19,15 @@ import {
 const scope = "acct:imessage:+1555";
 const media = { contentType: "image/png", kind: "image" } as const;
 
+function timedCache() {
+  vi.useFakeTimers();
+  vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
+  return createSentMessageCache();
+}
+
 describe("iMessage sent-message echo cache", () => {
-  let cache: ReturnType<typeof createSentMessageCache>;
   beforeEach(() => {
     installIMessageStateRuntimeForTest();
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-02-25T00:00:00Z"));
-    cache = createSentMessageCache();
   });
 
   afterEach(() => {
@@ -33,6 +35,8 @@ describe("iMessage sent-message echo cache", () => {
   });
 
   it("matches recent text within the same scope", async () => {
+    const cache = timedCache();
+
     cache.remember(scope, { text: "  Reasoning:\r\n_step_  " });
 
     expect(await cache.has(scope, { text: "Reasoning:\n_step_" })).toBe(true);
@@ -42,6 +46,7 @@ describe("iMessage sent-message echo cache", () => {
   it.each(["\uFFFD\uFFFE\uFFFF\uFEFF", "\u0000\u0000"])(
     "matches delayed reflected echoes with leading corruption %j",
     async (markers) => {
+      const cache = timedCache();
       cache.remember(scope, { text: "Delayed echo reply" });
       expect(await cache.has(scope, { text: markers + "Delayed echo reply" })).toBe(true);
     },
@@ -51,6 +56,7 @@ describe("iMessage sent-message echo cache", () => {
     ["attributedBody", ["Delayed \uFFFD echo reply", "Delayed\techo reply", "Delayed\necho reply"]],
     ["NUL", ["Delayed\u0000echo reply"]],
   ] as const)("keeps %s corruption cleanup leading-only", async (_name, variants) => {
+    const cache = timedCache();
     cache.remember(scope, { text: "Delayed echo reply" });
     for (const text of variants) {
       expect(await cache.has(scope, { text })).toBe(false);
@@ -72,6 +78,8 @@ describe("iMessage sent-message echo cache", () => {
   });
 
   it("matches by outbound message id and ignores placeholder ids", async () => {
+    const cache = timedCache();
+
     cache.remember(scope, { messageId: "abc-123" });
     cache.remember(scope, { messageId: "ok" });
 
@@ -80,6 +88,8 @@ describe("iMessage sent-message echo cache", () => {
   });
 
   it("keeps message-id lookups longer than text fallback", async () => {
+    const cache = timedCache();
+
     cache.remember(scope, { text: "hello", messageId: "m-1" });
     vi.advanceTimersByTime(6_000);
 
@@ -89,7 +99,7 @@ describe("iMessage sent-message echo cache", () => {
 
   it("matches persisted echoes written before the monitor cache is created", async () => {
     await rememberEcho({ scope, text: "OpenClaw imsg live test", messageId: "guid-1" });
-    cache = createSentMessageCache();
+    const cache = createSentMessageCache();
 
     expect(await cache.has(scope, { text: "OpenClaw imsg live test" })).toBe(true);
     expect(await cache.has("acct:imessage:+1666", { text: "OpenClaw imsg live test" })).toBe(false);
@@ -100,29 +110,34 @@ describe("iMessage sent-message echo cache", () => {
     await rememberEcho({ scope, text: "text-only" });
     await rememberEcho({ scope, messageId: "id-only" });
 
-    cache = createSentMessageCache();
+    const cache = createSentMessageCache();
 
     expect(await cache.has(scope, { text: "text-only" })).toBe(true);
     expect(await cache.has(scope, { messageId: "id-only" })).toBe(true);
   });
 
-  it.each([
-    { entry: { text: "ok" }, fallback: { text: "ok" } },
-    {
-      entry: { media },
-      fallback: { media: { contentType: "image/jpeg", kind: "image" as const } },
-    },
-  ])(
-    "rejects conflicting persisted IDs but allows content fallback: $entry",
-    async ({ entry, fallback }) => {
-      await rememberEcho({ scope, ...entry, messageId: "guid-agent" });
-      expect(await hasEcho({ scope, ...entry, messageId: "guid-user" })).toBe(false);
-      expect(await hasEcho({ scope, ...entry, messageId: "guid-agent" })).toBe(true);
-      expect(await hasEcho({ scope, ...fallback })).toBe(true);
-    },
-  );
+  it("does not match persisted media when both message ids differ", async () => {
+    await rememberEcho({ scope, media, messageId: "guid-agent-image" });
+
+    expect(await hasEcho({ scope, media, messageId: "guid-user-image" })).toBe(false);
+    expect(
+      await hasEcho({
+        scope,
+        media: { contentType: "image/jpeg", kind: "image" },
+      }),
+    ).toBe(true);
+  });
+
+  it("does not match persisted text when both message ids differ", async () => {
+    await rememberEcho({ scope, text: "ok", messageId: "guid-agent-text" });
+
+    expect(await hasEcho({ scope, text: "ok", messageId: "guid-user-text" })).toBe(false);
+    expect(await hasEcho({ scope, text: "ok", messageId: "guid-agent-text" })).toBe(true);
+    expect(await hasEcho({ scope, text: "ok" })).toBe(true);
+  });
 
   it("matches persisted self-chat text after the in-memory cache expires", async () => {
+    const cache = timedCache();
     const text = "Delayed self-chat echo";
     const outboundGuid = "p:0/guid-agent-text";
 
@@ -139,11 +154,13 @@ describe("iMessage sent-message echo cache", () => {
   it("matches persisted media through the primary sent-message cache", async () => {
     await rememberEcho({ scope, media, pending: true });
 
+    const cache = createSentMessageCache();
     expect(await cache.has(scope, { media })).toBe(false);
     expect(await cache.has(scope, { media }, { includePendingText: true })).toBe(true);
   });
 
   it("does not use id-backed in-memory media after a different message id", async () => {
+    const cache = timedCache();
     cache.remember(scope, { media, messageId: "guid-agent-image" });
 
     expect(
@@ -157,6 +174,8 @@ describe("iMessage sent-message echo cache", () => {
   });
 
   it("keeps short-lived pending persisted echoes out of generic text matching", async () => {
+    timedCache();
+
     await rememberEcho({ scope, text: "pending-send", ttlMs: 1_000, pending: true });
     expect(await hasEcho({ scope, text: "pending-send" })).toBe(false);
     expect(await hasEcho({ scope, text: "pending-send", includePendingText: true })).toBe(true);
@@ -166,6 +185,7 @@ describe("iMessage sent-message echo cache", () => {
   });
 
   it("refreshes persisted echoes written after an earlier empty lookup", async () => {
+    const cache = createSentMessageCache();
     expect(await cache.has(scope, { messageId: "guid-late" })).toBe(false);
 
     const entry = { scope, messageId: "guid-late", timestamp: Date.now() };
@@ -180,6 +200,8 @@ describe("iMessage sent-message echo cache", () => {
   });
 
   it("does not match stale echoes after persisted read failure", async () => {
+    timedCache();
+
     await rememberEcho({ scope, text: "stale echo" });
     expect(await hasEcho({ scope, text: "stale echo" })).toBe(true);
 
@@ -190,6 +212,7 @@ describe("iMessage sent-message echo cache", () => {
   });
 
   it("retains entries written hours earlier so a reconnect re-emit still sees own outbound rows", async () => {
+    vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-08T12:00:00Z"));
     await rememberEcho({
       scope,
@@ -198,7 +221,7 @@ describe("iMessage sent-message echo cache", () => {
     });
 
     vi.setSystemTime(new Date("2026-05-08T15:00:00Z"));
-    cache = createSentMessageCache();
+    const cache = createSentMessageCache();
     expect(await cache.has(scope, { text: "agent reply from before the gap" })).toBe(true);
     expect(await cache.has(scope, { messageId: "guid-pre-gap" })).toBe(true);
   });
