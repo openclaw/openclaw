@@ -5,6 +5,7 @@ import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 const PERSONAL_AUTH_PROFILE_STORE_FAILURE_CODE = "personal_auth_profile_store";
 
 function isStorageFailureNode(error: Error): boolean {
+  // SAFETY: Native errors may expose diagnostic code fields as runtime extensions.
   const record = error as Error & Record<string, unknown>;
   return (
     classifyGatewayStorageFailure({
