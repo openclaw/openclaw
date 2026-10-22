@@ -524,6 +524,12 @@ cannot resume reconciliation or hold the shutdown guard. Interrupted maintenance
 retains the lease and provisioning identity for a later sweep; it does not request
 worker destruction. Provider mutations already in progress still settle before
 their owners close.
+Read-only allocation lookups made by reconciliation also release their wait on shutdown, without
+publishing a late lookup result or changing the saved cleanup intent. Reconciliation
+waiting for an environment lock releases its observer on cancellation; any admitted
+mutation keeps its settlement owner. Placement sweeps stop waiting for optional
+environment observations as soon as service shutdown begins, allowing transport
+cleanup to proceed while the environment service drains accepted work.
 Optional session-evidence reads and disk probes are canceled. Node retention stops
 new preparation and cancels supported requests; an in-progress shared bundle
 build remains joined. An accepted retirement, workspace recovery, reclaim, or
@@ -541,6 +547,10 @@ does not wait for the process shutdown deadline. Admitted recovery effects still
 settle before their owners close. After cancellation, reconciliation skips fresh
 placement scans and retention writes; the next boot resumes from durable state.
 Pending diagnostics distinguish attachment reconciliation, environment reconciliation,
+environment-lock and inventory waits, installation and credential preparation, and
+provider calls (including inspection, allocation lookup, provisioning, teardown, and
+SSH identity resolution). Environment and provider identifiers accompany these waits.
+They also distinguish
 retention writes, candidate reads, and session recovery. For an attached worker, shutdown stops the exact
 remote environment before draining its workspace queue: a foreground command
 can hold that queue until the stop cancels it. Remote stop, drain, and active-turn

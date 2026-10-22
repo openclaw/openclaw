@@ -225,11 +225,8 @@ describe("diagnostic session activity aliases", () => {
 
   it("keeps embedded diagnostic work active until every owner ends", () => {
     markDiagnosticEmbeddedRunStarted({ sessionId: "s1" });
-    markDiagnosticEmbeddedRunStarted({
-      sessionId: "s1",
-      sessionKey: "main",
-      workKey: "reply:main",
-    });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s1", sessionKey: "main" });
+    markDiagnosticEmbeddedRunStarted({ sessionId: "s2", sessionKey: "main" });
 
     expect(getDiagnosticSessionActivitySnapshot({ sessionKey: "main" }).activeWorkKind).toBe(
       "embedded_run",
@@ -238,11 +235,7 @@ describe("diagnostic session activity aliases", () => {
       "embedded_run",
     );
 
-    markDiagnosticEmbeddedRunEnded({
-      sessionId: "s1",
-      sessionKey: "main",
-      workKey: "reply:main",
-    });
+    markDiagnosticEmbeddedRunEnded({ sessionId: "s2", sessionKey: "main" });
 
     expect(getDiagnosticSessionActivitySnapshot({ sessionId: "s1", sessionKey: "main" })).toEqual(
       expect.objectContaining({ activeWorkKind: "embedded_run" }),

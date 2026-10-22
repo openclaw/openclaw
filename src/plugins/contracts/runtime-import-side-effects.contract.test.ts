@@ -25,7 +25,7 @@ const HOT_RUNTIME_IMPORT_CASES = [
     "src/plugin-sdk/approval-reference-runtime.ts",
     () => import("../../plugin-sdk/approval-reference-runtime.js"),
   ],
-  ["src/plugins/runtime/runtime-system.ts", () => import("../runtime/runtime-system.js")],
+  ["src/plugins/runtime/runtime-base.ts", () => import("../runtime/runtime-base.js")],
   ["src/web-search/runtime.ts", () => import("../../web-search/runtime.js")],
   ["src/web-fetch/runtime.ts", () => import("../../web-fetch/runtime.js")],
 ] as const;

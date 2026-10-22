@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 315715,
+  "startupJsGzipBytes": 315696,
   "reason": "Keep shared session status copy separate from the New Session form catalog",
   "updatedAt": "2026-10-22"
 }

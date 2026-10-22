@@ -166,6 +166,7 @@ suite.define(() => {
                 .locator(".usage-presets")
                 .getByRole("button", { name: label, exact: true })
                 .click();
+              await page.clock.fastForward(400);
               const request = await gateway.waitForRequest("sessions.usage", {
                 after: requestsBefore,
               });
