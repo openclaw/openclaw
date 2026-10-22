@@ -1,49 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { Logbook } from "./logbook-view.tsx";
+import { logbookClient, logbookStatus, logbookTimeline } from "./logbook.test-support.ts";
 const neverRetired = new Promise<void>(() => {});
 
 describe("Logbook view", () => {
   it("renders timeline clocks in the capture host timezone and preserves detail text", async () => {
     const day = "2026-01-01";
-    const status = {
-      captureEnabled: true,
-      capturePaused: false,
-      captureIntervalSeconds: 30,
-      analysisIntervalMinutes: 15,
-      retentionDays: 30,
-      pendingFrames: 0,
-      analysisRunning: false,
-      visionModelSource: "missing",
-      today: "2026-01-01",
-      todayCards: 1,
-      timeZone: "America/Los_Angeles",
-    };
-    const timeline = {
-      day,
-      cards: [
-        {
-          id: 1,
-          day,
-          startMs: Date.UTC(2026, 0, 2, 0, 30),
-          endMs: Date.UTC(2026, 0, 2, 1, 30),
-          title: "Work",
-          summary: "Summary",
-          detail: "  API_TOKEN = computeToken()  ",
-          category: "Coding",
-          distractions: [],
-        },
-      ],
-      stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
-    };
+    const status = logbookStatus(day, { timeZone: "America/Los_Angeles" });
+    const timeline = logbookTimeline(day, [
+      {
+        startMs: Date.UTC(2026, 0, 2, 0, 30),
+        endMs: Date.UTC(2026, 0, 2, 1, 30),
+        detail: "  API_TOKEN = computeToken()  ",
+      },
+    ]);
     const request = vi.fn(async (method: string) =>
       structuredClone(method === "logbook.status" ? status : timeline),
     );
-    // SAFETY: This view fixture only invokes request on the browser client.
-    const client = { request } as unknown as GatewayBrowserClient;
+    const client = logbookClient(request);
 
     const container = document.createElement("div");
     const view = mountSolid(
@@ -90,24 +67,8 @@ describe("Logbook view", () => {
   it("keeps action focus and capture toggle state current across refreshes", async () => {
     vi.useFakeTimers();
     const day = "2026-01-01";
-    let serverStatus = {
-      captureEnabled: false,
-      capturePaused: false,
-      captureIntervalSeconds: 30,
-      analysisIntervalMinutes: 15,
-      retentionDays: 30,
-      pendingFrames: 0,
-      analysisRunning: false,
-      visionModelSource: "missing" as const,
-      today: day,
-      todayCards: 0,
-      timeZone: "UTC",
-    };
-    const timeline = {
-      day,
-      cards: [],
-      stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
-    };
+    let serverStatus = logbookStatus(day, { captureEnabled: false, todayCards: 0 });
+    const timeline = logbookTimeline(day);
     const request = vi.fn(async (method: string, params: unknown) => {
       if (method === "logbook.capture.set") {
         serverStatus = { ...serverStatus, capturePaused: (params as { paused: boolean }).paused };
@@ -121,10 +82,8 @@ describe("Logbook view", () => {
       }
       throw new Error(`Unexpected Logbook request: ${method}`);
     });
-    const client = { request } as unknown as GatewayBrowserClient;
-    const view = mountSolid(() => (
-      <Logbook initialClient={client} getRetired={() => neverRetired} />
-    ));
+    const client = logbookClient(request);
+    const view = mountSolid(() => <Logbook initialClient={client} getRetired={() => neverRetired} />);
     try {
       await waitForSolid(() =>
         expect(view.queryByRole("button", { name: "Pause" })).not.toBeNull(),
