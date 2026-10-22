@@ -1,10 +1,12 @@
+// Tests compile-cache child-process spawning and environment propagation.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import { constants } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { Mock, MockInstance } from "vitest";
 import { CLI_PARENT_BOUND_PRELOAD } from "../cli-parent-lifetime.mjs";
 import { awaitGateBeforeSettlement } from "../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../test/helpers/temp-dir.js";
@@ -12,7 +14,6 @@ import {
   WINDOWS_TASK_SUPERVISOR_CHILD_FLAG,
   WINDOWS_TASK_SUPERVISOR_FLAG,
 } from "./daemon/windows-task-supervisor-contract.js";
-import { buildCliRespawnPlan, runCliRespawnPlan } from "./entry.respawn.js";
 import { createDeferredCore } from "./shared/deferred.js";
 import { withMockedPlatform } from "./test-utils/vitest-spies.js";
 
@@ -55,36 +56,17 @@ import {
 } from "./entry.compile-cache.js";
 import { resolveNodeCompileCacheEnv } from "./infra/node-compile-cache-env.js";
 
-let child: ChildProcess;
-let spawned: ReturnType<typeof createDeferredCore<void>>;
-let previousExitCode: typeof process.exitCode;
-let detach: ReturnType<typeof vi.fn>;
-const pending: Promise<unknown>[] = [];
-beforeEach(() => {
-  previousExitCode = process.exitCode;
-  child = new EventEmitter() as ChildProcess;
-  spawned = createDeferredCore();
-  detach = vi.fn();
-  attachChildProcessBridge.mockReset().mockReturnValue({ detach });
-  spawn.mockReset().mockImplementation(() => {
-    spawned.resolve();
-    return child;
-  });
-});
-afterEach(async () => {
-  child.emit("close", 0, null);
-  await Promise.allSettled(pending.splice(0));
-  process.exitCode = previousExitCode;
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-  vi.unstubAllEnvs();
-});
-
 describe("entry compile cache", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let root: string;
   let entryFile: string;
   let argv: string[];
+  let child: ChildProcess;
+  let kill: Mock<ChildProcess["kill"]>;
+  let processKill: MockInstance<typeof process.kill>;
+  let originalExitCode: typeof process.exitCode;
+  let spawned: ReturnType<typeof createDeferredCore<void>>;
+  const pending: Array<Promise<boolean>> = [];
   let writeStderr: MockInstance<typeof process.stderr.write>;
   beforeEach(() => {
     root = tempDirs.make("openclaw-compile-cache-");
@@ -98,11 +80,32 @@ describe("entry compile cache", () => {
       directory: path.join(root, ".node-cache"),
     });
     getCompileCacheDir.mockReset();
+    attachChildProcessBridge.mockReset().mockReturnValue({ detach: vi.fn() });
+    child = new EventEmitter() as ChildProcess;
+    kill = vi.fn(() => true);
+    child.kill = kill;
+    spawned = createDeferredCore();
+    spawn.mockReset().mockImplementation(() => {
+      spawned.resolve();
+      return child;
+    });
     vi.spyOn(process, "argv", "get").mockImplementation(() => argv);
     vi.spyOn(process, "execArgv", "get").mockReturnValue(["--no-warnings"]);
+    processKill = vi.spyOn(process, "kill").mockReturnValue(true);
+    originalExitCode = process.exitCode;
     // A nondefault status proves settlement has not published either success or failure.
     process.exitCode = 17;
     writeStderr = vi.spyOn(process.stderr, "write").mockReturnValue(true);
+  });
+
+  afterEach(async () => {
+    vi.useRealTimers();
+    child.emit("close", 0, null);
+    await Promise.allSettled(pending.splice(0));
+    process.exitCode = originalExitCode;
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    vi.unstubAllEnvs();
   });
 
   function respawn(options: Omit<Parameters<typeof respawnCompileCache>[0], "currentFile"> = {}) {
@@ -195,6 +198,7 @@ describe("entry compile cache", () => {
   it.each([
     { mode: "inherited", cli: ["status", "--json"] },
     { mode: "active", cli: ["status", "--json"] },
+    { mode: "standalone", cli: ["status", "--json"] },
     { mode: "interactive", cli: [] },
     { mode: "interactive", cli: ["tui"] },
   ])("respawns $mode without caching: $cli", async ({ mode, cli }) => {
@@ -204,24 +208,31 @@ describe("entry compile cache", () => {
       vi.stubEnv("NODE_COMPILE_CACHE", undefined);
       getCompileCacheDir.mockReturnValue(path.join(root, ".active-cache"));
     }
+    const standalone = mode === "standalone";
+    if (standalone) {
+      vi.stubGlobal("__openclawStandaloneRootUrl", new URL(`file://${root}/`).href);
+    }
     const { completion } = await startRespawn();
-    const options = expectDefined(spawn.mock.calls[0], "respawn call")[2];
-    expect(spawn).toHaveBeenCalledExactlyOnceWith(
-      process.execPath,
-      ["--import", CLI_PARENT_BOUND_PRELOAD, "--no-warnings", entryFile, ...cli],
-      expect.objectContaining({
-        env: expect.objectContaining({
-          NODE_DISABLE_COMPILE_CACHE: "1",
-          OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: "1",
-        }),
+    expect(spawn).toHaveBeenCalledOnce();
+    const [command, args, options] = expectDefined(spawn.mock.calls[0], "respawn call");
+    expect({ command, args, options }).toMatchObject({
+      command: process.execPath,
+      args: standalone
+        ? cli
+        : ["--import", CLI_PARENT_BOUND_PRELOAD, "--no-warnings", entryFile, ...cli],
+      options: {
+        env: { NODE_DISABLE_COMPILE_CACHE: "1", OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: "1" },
         stdio: ["inherit", "inherit", "inherit", "ipc"],
         detached:
           mode !== "interactive" &&
           process.platform !== "win32" &&
           !(process.stdin.isTTY || process.stdout.isTTY),
-      }),
-    );
+      },
+    });
     expect(options?.env?.NODE_COMPILE_CACHE).toBeUndefined();
+    if (standalone) {
+      expect(options?.env?.OPENCLAW_CLI_RESPAWN_PARENT).toBe(String(process.pid));
+    }
     expect(attachChildProcessBridge).toHaveBeenCalledWith(child, expect.any(Function));
     child.emit("exit", 0, null);
     expect(process.exitCode).toBe(17);
@@ -267,6 +278,38 @@ describe("entry compile cache", () => {
     },
   );
 
+  it.each(["linux", "win32"] as const)(
+    "waits for a signaled compile-cache respawn child after force-killing it on %s",
+    async (platform) => {
+      useSourceEntry();
+      argv = [process.execPath, entryFile, "tui"];
+      vi.useFakeTimers();
+      await withMockedPlatform(platform, async () => {
+        const { completion } = await startRespawn();
+        const [, onSignal] = expectDefined(attachChildProcessBridge.mock.calls[0], "bridge call");
+        expectDefined(onSignal, "signal handler")("SIGTERM");
+        vi.advanceTimersByTime(1_000);
+        expect(kill).toHaveBeenCalledWith("SIGTERM");
+        expect(process.exitCode).toBe(17);
+        vi.advanceTimersByTime(1_000);
+        expect(kill).toHaveBeenCalledWith(platform === "win32" ? "SIGTERM" : "SIGKILL");
+        expect(process.exitCode).toBe(17);
+        expect(processKill).not.toHaveBeenCalled();
+        child.emit("exit", null, "SIGKILL");
+        expect(process.exitCode).toBe(17);
+        expect(processKill).not.toHaveBeenCalled();
+        child.emit("close", null, "SIGKILL");
+        await expect(completion).resolves.toBe(true);
+        expect(process.exitCode).toBe(platform === "win32" ? 1 : 137);
+        if (platform === "win32") {
+          expect(processKill).not.toHaveBeenCalled();
+        } else {
+          expect(processKill).toHaveBeenCalledExactlyOnceWith(process.pid, "SIGKILL");
+        }
+      });
+    },
+  );
+
   it("awaits diagnostic setup while preserving the child environment snapshot", async () => {
     useSourceEntry();
     vi.stubEnv("OPENCLAW_PROFILE", "before-diagnostics");
@@ -294,184 +337,5 @@ describe("entry compile cache", () => {
     child.emit("close", -2, null);
     await expect(diagnosticCompletion).resolves.toBe(true);
     expect(process.exitCode).toBe(1);
-  });
-});
-
-describe("entry respawn", () => {
-  const warningFlag = "--disable-warning=ExperimentalWarning";
-  const caReady = "OPENCLAW_NODE_EXTRA_CA_CERTS_READY";
-  const optionsReady = "OPENCLAW_NODE_OPTIONS_READY";
-
-  type PlanOptions = NonNullable<Parameters<typeof buildCliRespawnPlan>[0]> & { args?: string[] };
-  function buildPlan({ args = ["status"], ...params }: PlanOptions) {
-    return buildCliRespawnPlan({
-      argv: ["node", "openclaw", ...args],
-      env: {},
-      execArgv: [],
-      platform: "linux",
-      ...params,
-    });
-  }
-
-  function requirePlan(params: Parameters<typeof buildPlan>[0]) {
-    return expectDefined(buildPlan(params), "Expected CLI respawn plan");
-  }
-
-  const warningPrefix = ["--import", CLI_PARENT_BOUND_PRELOAD, warningFlag];
-  const systemCa = "/etc/ssl/certs/ca-certificates.crt";
-  const voltaShim = "/home/alice/.volta/bin/volta-shim";
-  const systemTrust = { NODE_USE_SYSTEM_CA: "1" };
-  const guarded = { [caReady]: "1", [optionsReady]: "1" };
-  const macCron = ["cron", "list", "--json"];
-
-  it.each([undefined, "--max-old-space-size=4096"])(
-    "suppresses standalone warnings through NODE_OPTIONS while preserving %s",
-    (nodeOptions) => {
-      vi.stubGlobal("__openclawStandaloneRootUrl", "file:///app/runtime/");
-      const args = ["--profile", "work", "config", "get", "gateway.mode"];
-      const argv = ["bun", "/app/runtime/openclaw.mjs", ...args];
-      const params = { argv, env: { NODE_OPTIONS: nodeOptions }, platform: "darwin" as const };
-      const respawnPlan = requirePlan(params);
-
-      expect(respawnPlan).toMatchObject({
-        argv: args,
-        env: {
-          NODE_OPTIONS: nodeOptions ? `${nodeOptions} ${warningFlag}` : warningFlag,
-          [optionsReady]: "1",
-          OPENCLAW_CLI_RESPAWN_PARENT: String(process.pid),
-        },
-      });
-      expect(buildPlan({ ...params, env: respawnPlan.env })).toBeNull();
-    },
-  );
-
-  it.each(["linux", "win32"] as const)(
-    "leaves foreground Gmail shutdown with its lifecycle owner on %s",
-    (platform) => {
-      for (const args of [
-        ["webhooks", "gmail", "run", "--account", "fixture@example.com"],
-        ["--profile", "fixture", "webhooks", "gmail", "run"],
-      ]) {
-        expect(buildPlan({ args, platform, autoNodeExtraCaCerts: systemCa })).toBeNull();
-      }
-      expect(buildPlan({ args: ["webhooks", "gmail", "setup"], platform })).not.toBeNull();
-    },
-  );
-
-  it.each([
-    [
-      "bare root stays attached",
-      { args: [], autoNodeExtraCaCerts: systemCa },
-      { argv: [...warningPrefix, "openclaw"], detachForProcessTree: false },
-    ],
-    [
-      "preserves macOS system trust",
-      { args: macCron, env: systemTrust, platform: "darwin" },
-      {
-        argv: [...warningPrefix, "openclaw", ...macCron],
-        env: { NODE_USE_SYSTEM_CA: "1" },
-      },
-    ],
-    [
-      "preserves an explicit CA",
-      { env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" }, autoNodeExtraCaCerts: systemCa },
-      { env: { NODE_EXTRA_CA_CERTS: "/custom/ca.pem" } },
-    ],
-    [
-      "uses node for Volta shims",
-      {
-        argv: [voltaShim, "/usr/local/bin/openclaw", "status"],
-        env: { PATH: "/home/alice/.volta/bin:/usr/bin:/bin" },
-        execPath: voltaShim,
-      },
-      {
-        command: "node",
-        argv: [...warningPrefix, "/usr/local/bin/openclaw", "status"],
-        detachForProcessTree: true,
-      },
-    ],
-    [
-      "retains interactive system trust",
-      { args: ["tui"], env: systemTrust, platform: "darwin" },
-      null,
-    ],
-    [
-      "honors respawn guards",
-      {
-        env: guarded,
-        execArgv: [warningFlag],
-        autoNodeExtraCaCerts: systemCa,
-      },
-      null,
-    ],
-    [
-      "accepts underscore stack_size",
-      {
-        args: ["dashboard"],
-        execArgv: ["--stack_size=16384"],
-        autoNodeExtraCaCerts: systemCa,
-        platform: "win32",
-      },
-      null,
-    ],
-  ] satisfies [string, PlanOptions, object | null][])("%s", (_name, params, expected) => {
-    const plan = buildPlan(params);
-    if (expected === null) {
-      expect(plan).toBeNull();
-    } else {
-      expect(plan).toMatchObject(expected);
-    }
-  });
-
-  it.each([
-    ["injects a discovered CA for whitespace", "linux", " ", "/etc/ca.pem", "/etc/ca.pem", "1"],
-    ["drops whitespace without discovery", "linux", " ", undefined, undefined, undefined],
-    ["drops whitespace on Windows", "win32", " ", undefined, undefined, undefined],
-  ] as const)("%s", (_label, platform, inherited, discovered, expected, expectedReady) => {
-    const env = { NODE_EXTRA_CA_CERTS: inherited };
-    const respawnPlan = requirePlan({ env, autoNodeExtraCaCerts: discovered, platform });
-    if (platform === "win32") {
-      expect(respawnPlan.argv).toEqual([
-        "--import",
-        CLI_PARENT_BOUND_PRELOAD,
-        "--stack-size=8192",
-        "openclaw",
-        "status",
-      ]);
-    }
-
-    expect([respawnPlan.env.NODE_EXTRA_CA_CERTS, respawnPlan.env[caReady]]).toEqual([
-      expected,
-      expectedReady,
-    ]);
-  });
-  it("records status after the respawn child closes", async () => {
-    process.exitCode = undefined;
-    const writeError = vi.fn();
-
-    const plan = {
-      command: "/usr/bin/node",
-      argv: ["--import", CLI_PARENT_BOUND_PRELOAD, "/repo/openclaw/dist/entry.js", "status"],
-      env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
-      detachForProcessTree: true,
-    };
-    const completion = runCliRespawnPlan(plan, writeError);
-    pending.push(completion);
-
-    expect(spawn).toHaveBeenCalledExactlyOnceWith(plan.command, plan.argv, {
-      stdio: ["inherit", "inherit", "inherit", "ipc"],
-      env: plan.env,
-      detached: process.platform !== "win32" && !(process.stdin.isTTY || process.stdout.isTTY),
-      windowsHide: !(process.stdin.isTTY || process.stdout.isTTY),
-    });
-    expect(attachChildProcessBridge.mock.calls[0]).toEqual([child, expect.any(Function)]);
-
-    child.emit("exit", 7, null);
-    expect(process.exitCode).toBeUndefined();
-    child.emit("close", 7, null);
-    await completion;
-    expect(process.exitCode).toBe(7);
-    expect(detach).toHaveBeenCalledOnce();
-    expect(writeError).not.toHaveBeenCalled();
   });
 });

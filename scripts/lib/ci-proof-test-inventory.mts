@@ -908,6 +908,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/zoom-meetings/src/runtime.test.ts",
   "packages/agent-core/src/agent-loop.retention.test.ts",
   "packages/agent-core/src/agent-loop.test.ts",
+  "packages/agent-core/src/harness/compaction/compaction-provenance.test.ts",
   "packages/agent-core/src/harness/compaction/utils.test.ts",
   "packages/ai/src/anthropic-cache-carrier-parity.test.ts",
   "packages/ai/src/internal/anthropic-inline-images.test.ts",

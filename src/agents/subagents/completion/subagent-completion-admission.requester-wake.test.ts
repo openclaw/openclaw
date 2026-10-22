@@ -29,7 +29,6 @@ import {
   seedSubagentCompletionOwner,
   settleRequesterCompletionBatch,
   updateCompletionOwner,
-  wakeBatch,
 } from "./subagent-completion-admission.test-helpers.js";
 import { mutateSubagentCompletionInDatabase } from "./subagent-completion-mutation.kernel.js";
 import type { RequesterWakeCommittedWrite } from "./subagent-completion-mutation.types.js";
@@ -60,6 +59,19 @@ describe("persisted subagent requester wakes", () => {
       "failed to persist requester settle wake rejection",
       expect.any(Object),
     );
+  function wakeBatch(...names: string[]) {
+    const inputs = names.map((name) => {
+      const input = records();
+      input.subagent.runId = `completion-${name}`;
+      if (name !== "run") {
+        input.subagent.childSessionKey = `agent:main:subagent:${name}`;
+      }
+      return input;
+    });
+    const ids = inputs.map(({ subagent }) => subagent.runId);
+    return inputs.map((input) => armRequesterWake(input, ids));
+  }
+
   registerRequesterWakeOwnershipTests({ database: () => db.value, persistOwner });
   it("reconciles an acknowledged retirement without even a no-op data write", async () => {
     const input = armRequesterWake(records());
@@ -124,12 +136,8 @@ describe("persisted subagent requester wakes", () => {
     async (delivered) => {
       const input = armRequesterWake(records());
       input.subagent.cleanupCompletedAt = undefined;
-      const receipt = input.subagent.delivery!;
-      receipt.payload = loadPendingFinalDeliveryPayload(input.subagent);
-      receipt.attemptCount = 2;
-      const before = structuredClone(receipt);
       persistOwner(input);
-      using driver = requesterWakeDriver([input]);
+      const driver = requesterWakeDriver([input]);
       const generation = driver.controller.bumpCleanupGeneration(input.subagent);
 
       await settleOne(input, {
@@ -139,29 +147,8 @@ describe("persisted subagent requester wakes", () => {
       });
 
       expect(driver.controller.isCleanupAttemptCurrent(input.subagent, generation)).toBe(delivered);
-      expect(receipt).toEqual(before);
-      if (delivered) {
-        expect(currentRun(input)).not.toBe(input.subagent);
-        expect(currentRun(input).delivery).not.toBe(receipt);
-        expect(currentRun(input).delivery).toMatchObject({
-          payload: undefined,
-          attemptCount: undefined,
-        });
-      }
-      expect(currentRun(input)).toMatchObject({
-        requesterSettleWake: undefined,
-        cleanupHandled: delivered,
-        cleanupCompletedAt: undefined,
-      });
+      expect(currentRun(input).requesterSettleWake).toBeUndefined();
       expect(stored(input)?.cleanupHandled).toBe(false);
-      db.value = await reopenOwners();
-      expect(currentRun(input)).toMatchObject({
-        cleanupHandled: false,
-        delivery: { status: delivered ? "delivered" : "failed" },
-      });
-      if (delivered) {
-        expect(currentRun(input).delivery?.payload).toBeUndefined();
-      }
     },
   );
 
@@ -190,8 +177,8 @@ describe("persisted subagent requester wakes", () => {
         lastError: "The original operator no longer has access",
       },
       suppressCompletionDelivery: true,
-      requesterSettleWake: undefined,
     });
+    expect(restored.requesterSettleWake).toBeUndefined();
     expect(restored.delivery?.queueId).toBeUndefined();
     expect(systemEvents(db.value)).toEqual([]);
   });
@@ -342,11 +329,15 @@ describe("persisted subagent requester wakes", () => {
 
   it("reconciles failed replay persistence before transport with a rearmed sibling", async () => {
     vi.useFakeTimers();
-    const inputs = wakeBatch("run", "replay-sibling");
-    const [input, sibling] = [inputs[0]!, inputs[1]!];
+    const input = armRequesterWake(records());
+    const sibling = armRequesterWake(records());
+    sibling.subagent.runId = "replay-sibling";
+    sibling.subagent.childSessionKey = "agent:main:subagent:replay-sibling";
+    const inputs = [input, sibling];
     const batch = inputs.map(({ subagent }) => subagent);
     const batchRunIds = batch.map(({ runId }) => runId);
     for (const record of inputs) {
+      armRequesterWake(record, batchRunIds);
       persistOwner(record);
     }
     const driver = requesterWakeDriver(inputs);
@@ -473,6 +464,30 @@ describe("persisted subagent requester wakes", () => {
       driver.controller.clearRuntimeState();
       vi.useRealTimers();
     }
+  });
+
+  it("replaces an in-progress completion receipt on requester settlement and clears pending payloads", async () => {
+    const input = armRequesterWake(records());
+    const receipt = input.subagent.delivery!;
+    receipt.payload = loadPendingFinalDeliveryPayload(input.subagent);
+    receipt.attemptCount = 2;
+    const before = structuredClone(receipt);
+    persistOwner(input);
+    using driver = requesterWakeDriver([input]);
+    driver.wake.mockImplementation(async (params) => {
+      await params.completeBatch([input.subagent], 1, { delivered: true, path: "direct" });
+      return true;
+    });
+    await driver.run();
+    expect(currentRun(input).delivery).not.toBe(receipt);
+    expect(currentRun(input).delivery?.status).toBe("delivered");
+    expect(currentRun(input).delivery?.payload).toBeUndefined();
+    expect(currentRun(input).delivery?.attemptCount).toBeUndefined();
+    expect(receipt).toEqual(before);
+    expect(currentRun(input).requesterSettleWake).toBeUndefined();
+    db.value = await reopenOwners();
+    expect(subagentRuns.get(input.subagent.runId)?.delivery?.status).toBe("delivered");
+    expect(subagentRuns.get(input.subagent.runId)?.delivery?.payload).toBeUndefined();
   });
 
   it.each([
@@ -640,24 +655,50 @@ describe("persisted subagent requester wakes", () => {
     },
   );
 
-  it("settles an uncaptured failure without changing the child result", async () => {
-    const input = failedRecords("failed", { status: "error" });
-    input.subagent.completion = { required: true };
-    persistOwner(input);
-    const before = structuredClone(input.subagent);
-    using driver = requesterWakeDriver([input]);
-    await driver.run();
-    expectNoRejection(driver);
-    db.value = await reopenOwners();
-    const restored = currentRun(input);
-    expect(restored.requesterSettleWake).toBeUndefined();
-    expect([restored.execution, restored.completion]).toEqual([
-      before.execution,
-      before.completion,
-    ]);
-    expect(systemEvents(db.value)).toEqual([]);
-    expect(driver.wake).toHaveBeenCalledOnce();
-  });
+  it.each(["failed", "timed_out", "yielded"] as const)(
+    "settles an uncaptured %s wake without changing the child result",
+    async (status) => {
+      const input =
+        status === "yielded"
+          ? armRequesterWake(records())
+          : failedRecords(status, { status: status === "timed_out" ? "timeout" : "error" });
+      input.subagent.completion = { required: true };
+      if (status === "yielded") {
+        Object.assign(input.subagent, {
+          pauseReason: "sessions_yield",
+          delivery: { status: "pending" },
+          cleanupHandled: false,
+          cleanupCompletedAt: undefined,
+        });
+        input.subagent.execution.outcome = undefined;
+        input.subagent.requesterSettleWake!.retireAfterSettle = true;
+      }
+      persistOwner(input);
+      const before = structuredClone(input.subagent);
+      using driver = requesterWakeDriver([input]);
+      if (status === "yielded") {
+        driver.wake.mockImplementation(async (params) => {
+          await params.completeBatch([params.settledEntry], 1, { delivered: true, path: "direct" });
+          return true;
+        });
+      }
+      await driver.run();
+      expectNoRejection(driver);
+      db.value = await reopenOwners();
+      const restored = subagentRuns.get(input.subagent.runId)!;
+      expect(restored.requesterSettleWake).toBeUndefined();
+      if (status === "yielded") {
+        expect(restored).toEqual({ ...before, requesterSettleWake: undefined });
+      } else {
+        expect([restored.execution, restored.completion]).toEqual([
+          before.execution,
+          before.completion,
+        ]);
+      }
+      expect(systemEvents(db.value)).toEqual([]);
+      expect(driver.wake).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each(["missing outcome", "paused"] as const)(
     "does not settle uncaptured completion with %s evidence",

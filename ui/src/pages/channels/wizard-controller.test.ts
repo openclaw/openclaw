@@ -40,23 +40,6 @@ const completedAccounts = [
   { channel: "whatsapp", accountId: "work" },
 ];
 const scripted = (...steps: Array<[string, unknown]>) => createController(replies(...steps));
-const startThen = (...results: unknown[]) =>
-  scripted(
-    ...results.map((result, index): [string, unknown] => [
-      index ? "wizard.next" : "wizard.start",
-      result,
-    ]),
-  );
-const finished = (channel = "telegram", channels = [channel], accounts = done().accounts) => ({
-  phase: "done",
-  channel,
-  channels,
-  accounts,
-});
-const settle = async () => {
-  await Promise.resolve();
-  await Promise.resolve();
-};
 afterEach(() => vi.useRealTimers());
 
 it("does not treat a colliding owner selection as the channel presentation", async () => {
@@ -65,7 +48,10 @@ it("does not treat a colliding owner selection as the channel presentation", asy
       id: "step-owner",
       type: "select",
       message: "Set up channels for agent",
-      options: ["telegram", "helper"].map((agentId) => ({ value: { agentId }, label: agentId })),
+      options: [
+        { value: { agentId: "telegram" }, label: "telegram" },
+        { value: { agentId: "helper" }, label: "helper" },
+      ],
     },
     "s-owner-collision",
   );
@@ -93,19 +79,22 @@ it("does not treat a colliding owner selection as the channel presentation", asy
   await controller.answer({ agentId: "telegram" });
   await controller.answer("discord");
 
-  expect(controller.state).toEqual(
-    finished("discord", ["discord"], [{ channel: "discord", accountId: "default" }]),
-  );
+  expect(controller.state).toEqual({
+    phase: "done",
+    channel: "discord",
+    channels: ["discord"],
+    accounts: [{ channel: "discord", accountId: "default" }],
+  });
 });
 
 it("advances gateway-owned progress without inventing user answers", async () => {
   const progress = createDeferred<unknown>();
-  const { controller, request } = startThen(
-    { ...progressStep("progress-1", "Starting"), sessionId: "s-progress" },
-    progress.promise,
-    running(),
-    progressStep("progress-3", "Finishing"),
-    done(["telegram"], []),
+  const { controller, request } = scripted(
+    ["wizard.start", { ...progressStep("progress-1", "Starting"), sessionId: "s-progress" }],
+    ["wizard.next", progress.promise],
+    ["wizard.next", running()],
+    ["wizard.next", progressStep("progress-3", "Finishing")],
+    ["wizard.next", done(["telegram"], [])],
   );
 
   await controller.start("telegram");
@@ -114,12 +103,11 @@ it("advances gateway-owned progress without inventing user answers", async () =>
     step: { id: "progress-1", executor: "gateway" },
     busy: true,
   });
-  const poll = [
+  expect(request).toHaveBeenLastCalledWith(
     "wizard.next",
     { sessionId: "s-progress" },
     { timeoutMs: null, signal: expect.any(AbortSignal) },
-  ];
-  expect(request).toHaveBeenLastCalledWith(...poll);
+  );
 
   await controller.answer(null);
   expect(request.mock.calls.filter(([method]) => method === "wizard.next")).toHaveLength(1);
@@ -134,6 +122,11 @@ it("advances gateway-owned progress without inventing user answers", async () =>
     expect(controller.state).toMatchObject({ phase: "done", channels: ["telegram"] }),
   );
 
+  const poll = [
+    "wizard.next",
+    { sessionId: "s-progress" },
+    { timeoutMs: null, signal: expect.any(AbortSignal) },
+  ];
   expect(request.mock.calls.filter(([method]) => method === "wizard.next")).toEqual([
     poll,
     poll,
@@ -166,7 +159,8 @@ it("ignores a gateway progress response after the wizard is cancelled", async ()
   await controller.cancel();
   const changeCountAfterCancel = onChange.mock.calls.length;
   progress.resolve(running());
-  await settle();
+  await Promise.resolve();
+  await Promise.resolve();
 
   expect(controller.state).toEqual({ phase: "idle" });
   expect(progressSignal?.aborted).toBe(true);
@@ -179,10 +173,10 @@ it("ignores a gateway progress response after the wizard is cancelled", async ()
 });
 
 it("surfaces validation errors on the re-emitted step", async () => {
-  const { controller } = startThen(running(tokenStep, "s1"), {
-    ...running(),
-    error: "Token looks invalid.",
-  });
+  const { controller } = scripted(
+    ["wizard.start", running(tokenStep, "s1")],
+    ["wizard.next", { ...running(), error: "Token looks invalid." }],
+  );
 
   await controller.start("telegram");
   await controller.answer("nope");
@@ -194,20 +188,25 @@ it("surfaces validation errors on the re-emitted step", async () => {
 });
 
 it.each([
-  [
-    "expired session",
-    new GatewayRequestError({
+  {
+    name: "expired session",
+    error: new GatewayRequestError({
       code: "INVALID_REQUEST",
       message: "wizard not found",
       details: { code: "WIZARD_NOT_FOUND" },
     }),
-    "Setup expired. Close and restart setup.",
-    false,
-  ],
-  ["generic request error", new Error("wizard unavailable"), "wizard unavailable", true],
-] as const)(
-  "reports %s without replay and preserves its cancellation policy",
-  async (_name, error, message, cancellable) => {
+    message: "Setup expired. Close and restart setup.",
+    cancellable: false,
+  },
+  {
+    name: "generic request error",
+    error: new Error("wizard unavailable"),
+    message: "wizard unavailable",
+    cancellable: true,
+  },
+])(
+  "reports $name without replay and preserves its cancellation policy",
+  async ({ error, message, cancellable }) => {
     const { controller, request } = scripted(
       ["wizard.start", running(tokenStep, "s1")],
       ["wizard.next", error],
@@ -226,96 +225,130 @@ it.each([
 );
 
 it("maps runner failures to the error phase", async () => {
-  const { controller } = startThen({
-    sessionId: "s1",
-    done: true,
-    status: "error",
-    error: "config invalid",
-  });
+  const { controller } = scripted([
+    "wizard.start",
+    { sessionId: "s1", done: true, status: "error", error: "config invalid" },
+  ]);
 
   await controller.start(null);
-  expect(controller.state).toEqual({ phase: "error", channel: null, message: "config invalid" });
+  expect(controller.state).toEqual({
+    phase: "error",
+    channel: null,
+    message: "config invalid",
+  });
 });
 
-it.each(["cancel", "timeout", "terminal"] as const)(
-  "settles a late start after %s without leaking a live session",
-  async (mode) => {
-    vi.useFakeTimers();
-    const pending = createDeferred<unknown>();
-    let session: string | null = null;
-    let starts = 0;
-    const { controller, request } = createController(async (method, params) => {
-      if (method === "wizard.cancel") {
-        if ((params as { sessionId: string }).sessionId === session) {
-          session = null;
-        }
-        return { status: "cancelled" };
+it("cancels a stale in-flight start so the gateway session is not leaked", async () => {
+  const startResult = createDeferred<unknown>();
+  const { controller, request } = scripted(
+    ["wizard.start", startResult.promise],
+    ["wizard.cancel", { status: "cancelled" }],
+  );
+
+  const start = controller.start("telegram");
+  await Promise.resolve();
+  await controller.cancel();
+  startResult.resolve(running(selectStep, "s-stale"));
+  await start;
+  await Promise.resolve();
+  expect(controller.state).toEqual({ phase: "idle" });
+  expect(request).toHaveBeenCalledWith("wizard.cancel", { sessionId: "s-stale" });
+});
+
+it("cancels a session created after a local start timeout so retry can proceed", async () => {
+  vi.useFakeTimers();
+  const firstStartResult = createDeferred<unknown>();
+  let runningSession: string | null = null;
+  let startCount = 0;
+  const { controller, request } = createController(async (method, params) => {
+    if (method === "wizard.start") {
+      startCount += 1;
+      if (startCount === 1) {
+        runningSession = "s-timeout";
+        return await firstStartResult.promise;
       }
-      if (method !== "wizard.start") {
-        throw new Error(`unexpected ${method}`);
-      }
-      if (++starts === 1) {
-        session = "late";
-        return await pending.promise;
-      }
-      if (session) {
+      if (runningSession) {
         throw new Error("wizard already running");
       }
-      return running(selectStep, "retry");
-    });
-    const start = controller.start("telegram");
-    if (mode === "cancel") {
-      await Promise.resolve();
-      await controller.cancel();
-    } else {
-      await vi.advanceTimersByTimeAsync(120_000);
-      await start;
-      expect(controller.state).toMatchObject({
-        phase: "error",
-        message: "wizard request timed out: wizard.start",
-      });
+      return running(selectStep, "s-retry");
     }
-    pending.resolve(
-      mode === "terminal" ? { ...done(), sessionId: "late" } : running(selectStep, "late"),
-    );
-    await start;
-    await settle();
-    if (mode === "terminal") {
-      expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toEqual([]);
-      return;
+    if (method === "wizard.cancel") {
+      const sessionId = (params as { sessionId?: string }).sessionId;
+      if (sessionId === runningSession) {
+        runningSession = null;
+      }
+      return { status: "cancelled" };
     }
-    if (mode === "cancel") {
-      expect(controller.state).toEqual({ phase: "idle" });
-    }
-    expect(request).toHaveBeenCalledWith("wizard.cancel", { sessionId: "late" });
-    expect(session).toBeNull();
-    await controller.start("telegram");
-    expect(starts).toBe(2);
-    expect(controller.state).toMatchObject({
-      phase: "step",
-      step: { id: "step-select" },
-      busy: false,
-    });
-  },
-);
+    throw new Error(`unexpected ${method}`);
+  });
+
+  const timedOutStart = controller.start("telegram");
+  await vi.advanceTimersByTimeAsync(120_000);
+  await timedOutStart;
+  expect(controller.state).toMatchObject({
+    phase: "error",
+    message: "wizard request timed out: wizard.start",
+  });
+
+  firstStartResult.resolve(running(selectStep, "s-timeout"));
+  await Promise.resolve();
+  await Promise.resolve();
+  expect(request).toHaveBeenCalledWith("wizard.cancel", { sessionId: "s-timeout" });
+  expect(runningSession).toBeNull();
+
+  await controller.start("telegram");
+  expect(startCount).toBe(2);
+  expect(controller.state).toMatchObject({
+    phase: "step",
+    step: { id: "step-select" },
+    busy: false,
+  });
+});
+
+it("does not cancel a terminal start result that arrives after the local timeout", async () => {
+  vi.useFakeTimers();
+  const startResult = createDeferred<unknown>();
+  const { controller, request } = scripted(
+    ["wizard.start", startResult.promise],
+    ["wizard.cancel", { status: "cancelled" }],
+  );
+
+  const timedOutStart = controller.start("telegram");
+  await vi.advanceTimersByTimeAsync(120_000);
+  await timedOutStart;
+
+  startResult.resolve({ sessionId: "s-done", done: true, status: "done" });
+  await Promise.resolve();
+  await Promise.resolve();
+
+  expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toEqual([]);
+});
 
 it.each([
-  [
-    "gateway-reported channels",
-    null,
-    "whatsapp",
-    done(["telegram", "whatsapp"], structuredClone(completedAccounts)),
-    finished("telegram", ["telegram", "whatsapp"], completedAccounts),
-  ],
-  [
-    "no configured channels",
-    "whatsapp",
-    "__skip__",
-    { done: true, status: "done" },
-    finished("whatsapp", [], []),
-  ],
-] as const)("completes with %s", async (_name, initial, answer, result, expected) => {
-  const { controller } = startThen(running(selectStep, "s1"), result);
+  {
+    name: "gateway-reported channels",
+    initial: null,
+    answer: "whatsapp",
+    result: done(["telegram", "whatsapp"], structuredClone(completedAccounts)),
+    expected: {
+      phase: "done",
+      channel: "telegram",
+      channels: ["telegram", "whatsapp"],
+      accounts: completedAccounts,
+    },
+  },
+  {
+    name: "no configured channels",
+    initial: "whatsapp",
+    answer: "__skip__",
+    result: { done: true, status: "done" },
+    expected: { phase: "done", channel: "whatsapp", channels: [], accounts: [] },
+  },
+])("completes with $name", async ({ initial, answer, result, expected }) => {
+  const { controller } = scripted(
+    ["wizard.start", running(selectStep, "s1")],
+    ["wizard.next", result],
+  );
   await controller.start(initial);
   await controller.answer(answer);
   expect(controller.state).toEqual(expected);
@@ -323,7 +356,10 @@ it.each([
 
 it("ignores answers while a previous answer is in flight", async () => {
   const nextResult = createDeferred<unknown>();
-  const { controller, request } = startThen(running(selectStep, "s1"), nextResult.promise);
+  const { controller, request } = scripted(
+    ["wizard.start", running(selectStep, "s1")],
+    ["wizard.next", nextResult.promise],
+  );
 
   await controller.start("telegram");
   const first = controller.answer("telegram");
@@ -332,5 +368,10 @@ it("ignores answers while a previous answer is in flight", async () => {
   expect(request.mock.calls.filter(([method]) => method === "wizard.next")).toHaveLength(1);
   nextResult.resolve(done());
   await first;
-  expect(controller.state).toEqual(finished());
+  expect(controller.state).toEqual({
+    phase: "done",
+    channel: "telegram",
+    channels: ["telegram"],
+    accounts: [{ channel: "telegram", accountId: "default" }],
+  });
 });

@@ -13,7 +13,6 @@ import { bindBrowserHttpFailures } from "../../app/browser-http.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
-import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import {
@@ -22,16 +21,7 @@ import {
 } from "./channel-settings-presentation.tsx";
 import { createChannelsViewProps } from "./view.test-support.ts";
 
-const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => {
-  try {
-    for (const close of cleanups.splice(0)) {
-      await close();
-    }
-  } finally {
-    vi.unstubAllGlobals();
-  }
-});
+afterEach(() => vi.unstubAllGlobals());
 
 async function transportFixture(scopes: string[], firstStatus: number, signal: AbortSignal) {
   const arrivals: Array<{
@@ -101,11 +91,17 @@ async function transportFixture(scopes: string[], firstStatus: number, signal: A
       lastError: null,
       lastErrorCode: null,
     };
-    const { gateway, publish } = createApplicationGateway(snapshot);
-    Object.assign(gateway.connection, { token: "fixture-saved-token", password: "" });
+    const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
     const retained = createDeferred<ControlUiChannelSettingsContext>();
     const application = {
-      gateway,
+      gateway: {
+        snapshot,
+        connection: { token: "fixture-saved-token", password: "" },
+        subscribe(listener: (next: ApplicationGatewaySnapshot) => void) {
+          listeners.add(listener);
+          return () => listeners.delete(listener);
+        },
+      },
       channels: {},
       runtimeConfig: {},
       plugins: {
@@ -141,10 +137,10 @@ async function transportFixture(scopes: string[], firstStatus: number, signal: A
     });
     flush();
     const context = await withinTest(retained.promise, signal);
-    cleanups.push(close);
     return {
       arrivals,
       errors,
+      close,
       request: (accountId = "main/account", path = ["profile"]) =>
         context.request({
           accountId,
@@ -166,7 +162,9 @@ async function transportFixture(scopes: string[], firstStatus: number, signal: A
         } else {
           snapshot.client = createClient();
         }
-        publish(snapshot);
+        for (const notify of listeners) {
+          notify(snapshot);
+        }
       },
     };
   } catch (error) {
@@ -179,57 +177,73 @@ it.for([200, 401])(
   "sends admitted HTTP requests with credential fallback after %s",
   async (status, { signal }) => {
     const f = await transportFixture(["operator.admin"], status, signal);
-    await expect(f.request()).resolves.toMatchObject({
-      ok: true,
-      status: 200,
-      data: { marker: "server-response" },
-    });
-    expect(f.arrivals).toEqual(
-      (status === 401
-        ? ["fixture-device-token", "fixture-saved-token"]
-        : ["fixture-device-token"]
-      ).map((token) => ({
-        method: "PUT",
-        path: "/api/channels/profile-fixture/main%2Faccount/profile",
-        authorization: `Bearer ${token}`,
-        body: JSON.stringify({ name: "Example" }),
-      })),
-    );
-    expect(f.errors).toEqual([]);
+    try {
+      await expect(f.request()).resolves.toMatchObject({
+        ok: true,
+        status: 200,
+        data: { marker: "server-response" },
+      });
+      expect(f.arrivals).toEqual(
+        (status === 401
+          ? ["fixture-device-token", "fixture-saved-token"]
+          : ["fixture-device-token"]
+        ).map((token) => ({
+          method: "PUT",
+          path: "/api/channels/profile-fixture/main%2Faccount/profile",
+          authorization: `Bearer ${token}`,
+          body: JSON.stringify({ name: "Example" }),
+        })),
+      );
+      expect(f.errors).toEqual([]);
+    } finally {
+      await f.close();
+    }
   },
 );
 
 it("encodes opaque account and path segments once in real HTTP requests", async ({ signal }) => {
   const f = await transportFixture(["operator.admin"], 200, signal);
-  await expect(f.request("main/account", ["profile", "a?b#c"])).resolves.toMatchObject({
-    ok: true,
-  });
-  await expect(f.request("%2e%2e", ["%2e%2e"])).resolves.toMatchObject({ ok: true });
-  expect(f.arrivals.map((arrival) => arrival.path)).toEqual([
-    "/api/channels/profile-fixture/main%2Faccount/profile/a%3Fb%23c",
-    "/api/channels/profile-fixture/%252e%252e/%252e%252e",
-  ]);
-  expect(f.errors).toEqual([]);
+  try {
+    await expect(f.request("main/account", ["profile", "a?b#c"])).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(f.request("%2e%2e", ["%2e%2e"])).resolves.toMatchObject({ ok: true });
+    expect(f.arrivals.map((arrival) => arrival.path)).toEqual([
+      "/api/channels/profile-fixture/main%2Faccount/profile/a%3Fb%23c",
+      "/api/channels/profile-fixture/%252e%252e/%252e%252e",
+    ]);
+    expect(f.errors).toEqual([]);
+  } finally {
+    await f.close();
+  }
 });
 
 it("rejects traversal segments and missing operation paths before HTTP dispatch", async ({
   signal,
 }) => {
   const f = await transportFixture(["operator.admin"], 200, signal);
-  for (const segment of [".", "..", ""]) {
-    await expect(f.request(segment, ["profile"])).rejects.toThrow("account-relative");
-    await expect(f.request("default", [segment])).rejects.toThrow("account-relative");
+  try {
+    for (const segment of [".", "..", ""]) {
+      await expect(f.request(segment, ["profile"])).rejects.toThrow("account-relative");
+      await expect(f.request("default", [segment])).rejects.toThrow("account-relative");
+    }
+    await expect(f.request("default", [])).rejects.toThrow("account-relative");
+    expect(f.arrivals).toHaveLength(0);
+    expect(f.errors).toEqual([]);
+  } finally {
+    await f.close();
   }
-  await expect(f.request("default", [])).rejects.toThrow("account-relative");
-  expect(f.arrivals).toHaveLength(0);
-  expect(f.errors).toEqual([]);
 });
 
 it("rejects a read-only plugin capability before real HTTP dispatch", async ({ signal }) => {
   const f = await transportFixture(["operator.read"], 200, signal);
-  await expect(f.request()).rejects.toThrow("connected administrator");
-  expect(f.arrivals).toHaveLength(0);
-  expect(f.errors).toEqual([]);
+  try {
+    await expect(f.request()).rejects.toThrow("connected administrator");
+    expect(f.arrivals).toHaveLength(0);
+    expect(f.errors).toEqual([]);
+  } finally {
+    await f.close();
+  }
 });
 
 it.for(["admin", "client", "presentation"] as const)(
@@ -245,6 +259,7 @@ it.for(["admin", "client", "presentation"] as const)(
       expect(f.errors).toEqual([]);
     } finally {
       stop();
+      await f.close();
     }
   },
 );

@@ -39,7 +39,6 @@ import {
   armRequesterWake,
   settleRequesterCompletionBatch,
   updateCompletionOwner,
-  wakeBatch,
 } from "./subagent-completion-admission.test-helpers.js";
 import {
   admitCorrelatedSubagentSessionDelivery,
@@ -294,7 +293,7 @@ describe("native subagent completion worker admission", () => {
     });
   });
 
-  it.each(["reply lost", "replacement", "metadata successor"] as const)(
+  it.each(["ordinary", "reply lost", "replacement", "metadata successor"] as const)(
     "publishes native completion before its admitted successor without host SQLite or record parsing (%s)",
     async (change) => {
       await withAdmissionState(async ({ input, context, owner, pending, runId }) => {
@@ -399,13 +398,19 @@ describe("native subagent completion worker admission", () => {
 
 it("settles a requester cohort after concurrently admitted children complete", async () => {
   await withSubagentCompletionWorkerState(async (database) => {
-    const inputs = wakeBatch("concurrent-0", "concurrent-1", "concurrent-2", "concurrent-3");
-    for (const input of inputs) {
+    const inputs = Array.from({ length: 4 }, (_, index) => {
+      const input = requesterRecords();
+      input.subagent.runId = `concurrent-child-${index}`;
+      input.subagent.childSessionKey = `agent:main:subagent:concurrent-${index}`;
       input.subagent.execution = { status: "running", startedAt: Date.now() - 1_000 };
       input.subagent.completion = { required: true };
+      return input;
+    });
+    const ids = inputs.map(({ subagent }) => subagent.runId);
+    for (const input of inputs) {
+      armRequesterWake(input, ids);
       seedSubagentCompletionOwner({ subagent: input.subagent, databaseOptions: { database } });
     }
-    const ids = inputs.map(({ subagent }) => subagent.runId);
     const acknowledged = createDeferredCore();
     const release = createDeferredCore();
     let held = false;

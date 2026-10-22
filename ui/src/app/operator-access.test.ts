@@ -3,27 +3,65 @@ import { describe, expect, it } from "vitest";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import type { ApplicationGatewaySnapshot } from "./gateway.ts";
-import { canReactToSession, readGatewayOperatorAccess } from "./operator-access.ts";
-
-const operator = (scopes?: string[], role = "operator") => ({ hello: { auth: { role, scopes } } });
+import {
+  canReactToSession,
+  hasOperatorReadAccess,
+  readGatewayOperatorAccess,
+} from "./operator-access.ts";
 
 describe("readGatewayOperatorAccess", () => {
   it.each([
-    ["an absent snapshot", null, [true, true, false, true, false]],
-    ["an absent hello", { hello: null }, [true, true, false, true, false]],
-    ["legacy operator authentication", operator(), [true, true, true, true, true]],
-    ["explicitly empty scopes", operator([]), [false, false, false, false, false]],
-    ["read-only access", operator(["operator.read"]), [false, false, false, false, false]],
-    ["write access", operator(["operator.write"]), [true, false, false, false, false]],
-    ["approval access", operator(["operator.approvals"]), [false, false, false, true, true]],
-    ["pairing access", operator(["operator.pairing"]), [false, false, true, false, false]],
-    ["administrator access", operator(["operator.admin"]), [true, true, true, true, true]],
-    [
-      "a foreign role",
-      operator(["node.read", "operator.admin"], "node"),
-      [false, false, false, false, false],
-    ],
-  ] as const)("projects %s from the current Gateway snapshot", (_name, snapshot, expected) => {
+    {
+      name: "an absent snapshot",
+      snapshot: null,
+      expected: [true, true, false, true, false],
+    },
+    {
+      name: "an absent hello",
+      snapshot: { hello: null },
+      expected: [true, true, false, true, false],
+    },
+    {
+      name: "legacy operator authentication",
+      snapshot: { hello: { auth: { role: "operator" } } },
+      expected: [true, true, true, true, true],
+    },
+    {
+      name: "explicitly empty scopes",
+      snapshot: { hello: { auth: { role: "operator", scopes: [] } } },
+      expected: [false, false, false, false, false],
+    },
+    {
+      name: "read-only access",
+      snapshot: { hello: { auth: { role: "operator", scopes: ["operator.read"] } } },
+      expected: [false, false, false, false, false],
+    },
+    {
+      name: "write access",
+      snapshot: { hello: { auth: { role: "operator", scopes: ["operator.write"] } } },
+      expected: [true, false, false, false, false],
+    },
+    {
+      name: "approval access",
+      snapshot: { hello: { auth: { role: "operator", scopes: ["operator.approvals"] } } },
+      expected: [false, false, false, true, true],
+    },
+    {
+      name: "pairing access",
+      snapshot: { hello: { auth: { role: "operator", scopes: ["operator.pairing"] } } },
+      expected: [false, false, true, false, false],
+    },
+    {
+      name: "administrator access",
+      snapshot: { hello: { auth: { role: "operator", scopes: ["operator.admin"] } } },
+      expected: [true, true, true, true, true],
+    },
+    {
+      name: "a foreign role with an operator scope",
+      snapshot: { hello: { auth: { role: "node", scopes: ["node.read", "operator.admin"] } } },
+      expected: [false, false, false, false, false],
+    },
+  ])("projects $name from the current Gateway snapshot", ({ snapshot, expected }) => {
     expect(
       readGatewayOperatorAccess(snapshot as Pick<ApplicationGatewaySnapshot, "hello"> | null),
     ).toEqual({
@@ -33,6 +71,17 @@ describe("readGatewayOperatorAccess", () => {
       canReviewApprovals: expected[3],
       canGrantApprovals: expected[4],
     });
+  });
+});
+
+describe("hasOperatorReadAccess", () => {
+  it("accepts read, implied write/admin, and legacy access but rejects unrelated scopes", () => {
+    expect(hasOperatorReadAccess(null)).toBe(true);
+    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.read"] })).toBe(true);
+    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.write"] })).toBe(true);
+    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.admin"] })).toBe(true);
+    expect(hasOperatorReadAccess({ role: "operator" })).toBe(true);
+    expect(hasOperatorReadAccess({ role: "operator", scopes: ["operator.pairing"] })).toBe(false);
   });
 });
 

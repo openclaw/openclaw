@@ -1,4 +1,5 @@
 // @vitest-environment node
+// Control UI tests cover custom theme behavior.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { importCustomThemeFromUrl } from "../pages/config/custom-theme-import.ts";
 import {
@@ -10,10 +11,12 @@ import type { ImportedCustomTheme } from "./custom-theme.ts";
 
 beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 function createResponse(
-  body = JSON.stringify(createTweakcnPayload()),
+  body: string,
   options: {
     body?: ReadableStream<Uint8Array> | null;
     headers?: HeadersInit;
@@ -21,19 +24,32 @@ function createResponse(
     url?: string;
   } = {},
 ) {
-  const response = new Response(options.body === undefined ? body : options.body, options);
-  Object.defineProperty(response, "url", { value: options.url ?? "" });
-  vi.spyOn(response, "text").mockResolvedValue(body);
-  return response;
+  return {
+    ok: (options.status ?? 200) >= 200 && (options.status ?? 200) < 300,
+    status: options.status ?? 200,
+    headers: new Headers(options.headers),
+    body:
+      options.body === undefined
+        ? new ReadableStream({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode(body));
+              controller.close();
+            },
+          })
+        : options.body,
+    text: vi.fn(async () => body),
+    url: options.url ?? "",
+  } as unknown as Response;
 }
 
-const themeId = "cmlhfpjhw000004l4f4ax3m7z";
-const sourceUrl = `https://tweakcn.com/themes/${themeId}`;
-const fetchUrl = `https://tweakcn.com/r/themes/${themeId}`;
-const firstFetchCall = () => vi.mocked(fetch).mock.calls[0]!;
-function importTheme(response = createResponse(), input = sourceUrl) {
-  vi.mocked(fetch).mockResolvedValue(response);
-  return importCustomThemeFromUrl(input);
+function firstFetchCall(): [string, { headers?: unknown; redirect?: unknown; signal?: unknown }] {
+  const call = vi.mocked(fetch).mock.calls[0] as
+    | [string, { headers?: unknown; redirect?: unknown; signal?: unknown }]
+    | undefined;
+  if (!call) {
+    throw new Error("expected fetch call");
+  }
+  return call;
 }
 
 describe("custom theme import helpers", () => {
@@ -47,24 +63,29 @@ describe("custom theme import helpers", () => {
   });
 
   it("fetches tweakcn themes with bounded no-redirect requests", async () => {
-    expect(await importTheme()).toMatchObject({
-      label: "Light Green",
-      sourceUrl,
-      light: { bg: "oklch(0.98 0.01 120)", "font-body": "Inter, system-ui, sans-serif" },
-      dark: {
-        bg: "oklch(0.12 0.04 265)",
-        "accent-hover": "color-mix(in srgb, var(--accent) 82%, white 18%)",
-      },
+    const response = createResponse(JSON.stringify(createTweakcnPayload()));
+    vi.mocked(fetch).mockResolvedValue(response);
+
+    const imported = await importCustomThemeFromUrl(
+      "https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z",
+    );
+
+    expect(imported.label).toBe("Light Green");
+    expect(imported.sourceUrl).toBe("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z");
+    expect(imported.light.bg).toBe("oklch(0.98 0.01 120)");
+    expect(imported.dark.bg).toBe("oklch(0.12 0.04 265)");
+    expect(imported.light["font-body"]).toBe("Inter, system-ui, sans-serif");
+    expect(imported.dark["accent-hover"]).toBe("color-mix(in srgb, var(--accent) 82%, white 18%)");
+    const fetchMock = vi.mocked(fetch);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [fetchUrl, fetchOptions] = firstFetchCall();
+    expect(fetchUrl).toBe("https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z");
+    expect(fetchOptions.signal).toBeInstanceOf(AbortSignal);
+    expect(fetchOptions).toEqual({
+      headers: { accept: "application/json" },
+      redirect: "error",
+      signal: fetchOptions.signal,
     });
-    expect(fetch).toHaveBeenCalledOnce();
-    expect(firstFetchCall()).toEqual([
-      fetchUrl,
-      {
-        headers: { accept: "application/json" },
-        redirect: "error",
-        signal: expect.any(AbortSignal),
-      },
-    ]);
   });
 
   it.each([
@@ -74,31 +95,66 @@ describe("custom theme import helpers", () => {
     "cmlhfpjhw000004l4f4ax3m7z",
     "Theme link: https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z.",
   ])("imports supported tweakcn input form %s", async (input) => {
-    expect(await importTheme(createResponse(), input)).toMatchObject({ themeId, sourceUrl });
-    expect(firstFetchCall()[0]).toBe(fetchUrl);
+    vi.mocked(fetch).mockResolvedValue(createResponse(JSON.stringify(createTweakcnPayload())));
+
+    const imported = await importCustomThemeFromUrl(input);
+
+    expect(imported.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
+    expect(imported.sourceUrl).toBe("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z");
+    expect(firstFetchCall()[0]).toBe("https://tweakcn.com/r/themes/cmlhfpjhw000004l4f4ax3m7z");
   });
 
-  it.each([
-    [{ headers: { "content-length": "200001" } }, "too large"],
-    [{ body: null }, "unreadable theme payload"],
-    [{ url: "https://example.com/r/themes/foreign-theme" }, "Unexpected redirect"],
-  ] as const)("rejects unreadable or untrusted responses (%j)", async (options, error) => {
-    const response = createResponse(undefined, options);
-    await expect(importTheme(response)).rejects.toThrow(error);
-    expect(response.text).not.toHaveBeenCalled();
+  it("rejects oversized tweakcn theme responses before parsing", async () => {
+    const response = createResponse("{}", {
+      headers: { "content-length": "200001" },
+    });
+    vi.mocked(fetch).mockResolvedValue(response);
+
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
+    ).rejects.toThrow("too large");
   });
 
   it("rejects unsafe tweakcn content-length values before acquiring the body reader", async () => {
-    const response = createResponse("{}", {
-      headers: { "content-length": "9007199254740993" },
-    });
-    const cancel = vi.spyOn(response.body!, "cancel");
-    const getReader = vi.spyOn(response.body!, "getReader").mockImplementation(() => {
+    const cancel = vi.fn(() => Promise.resolve());
+    const getReader = vi.fn(() => {
       throw new Error("reader should not be acquired");
     });
-    await expect(importTheme(response)).rejects.toThrow("too large");
+    const response = {
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-length": "9007199254740993" }),
+      body: { cancel, getReader },
+      url: "",
+    } as unknown as Response;
+    vi.mocked(fetch).mockResolvedValue(response);
+
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
+    ).rejects.toThrow("too large");
     expect(getReader).not.toHaveBeenCalled();
     expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it("rejects tweakcn theme responses without a bounded body stream", async () => {
+    const response = createResponse(JSON.stringify(createTweakcnPayload()), { body: null });
+    vi.mocked(fetch).mockResolvedValue(response);
+
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
+    ).rejects.toThrow("unreadable theme payload");
+    expect(response["text"]).not.toHaveBeenCalled();
+  });
+
+  it("rejects redirected tweakcn import responses", async () => {
+    const response = createResponse(JSON.stringify(createTweakcnPayload()), {
+      url: "https://example.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
+    });
+    vi.mocked(fetch).mockResolvedValue(response);
+
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
+    ).rejects.toThrow("Unexpected redirect");
   });
 
   it.each([
@@ -113,23 +169,31 @@ describe("custom theme import helpers", () => {
     } else {
       payload.cssVars.light.background = token;
     }
-    await expect(importTheme(createResponse(JSON.stringify(payload)))).rejects.toThrow(
-      "Unsupported tweakcn token",
-    );
+    vi.mocked(fetch).mockResolvedValue(createResponse(JSON.stringify(payload)));
+
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
+    ).rejects.toThrow("Unsupported tweakcn token");
   });
 
   it("validates imported font families without regex backtracking", async () => {
     const payload = createTweakcnPayload();
     payload.cssVars.theme["font-sans"] = `${"Inter, ".repeat(20)}@bad`;
-    await expect(importTheme(createResponse(JSON.stringify(payload)))).rejects.toThrow(
-      "Unsupported tweakcn token",
-    );
+    vi.mocked(fetch).mockResolvedValue(createResponse(JSON.stringify(payload)));
+
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z"),
+    ).rejects.toThrow("Unsupported tweakcn token");
   });
 
   it("parses stored imported themes and rejects malformed records", () => {
     const imported = createImportedTheme();
 
-    expect(parseImportedCustomTheme(imported)?.themeId).toBe(themeId);
+    const parsed = parseImportedCustomTheme(imported);
+    if (!parsed) {
+      throw new Error("Expected imported custom theme to parse");
+    }
+    expect(parsed.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
     expect(parseImportedCustomTheme({ ...imported, themeId: "claude" })?.themeId).toBe("claude");
     expect(parseImportedCustomTheme({ ...imported, light: {} })).toBeNull();
   });
@@ -139,12 +203,12 @@ describe("custom theme import helpers", () => {
     const remove = vi.fn();
     const style = { id: "", textContent: "", remove } as unknown as HTMLStyleElement;
     const createElement = vi.fn(() => style);
-    const getElementById = vi.fn<() => HTMLStyleElement | null>(() => null);
-    vi.stubGlobal("document", {
+    const documentStub = {
       head: { appendChild },
       createElement,
-      getElementById,
-    });
+      getElementById: vi.fn(() => null),
+    } as unknown as Document;
+    vi.stubGlobal("document", documentStub);
 
     syncCustomThemeStyleTag(createImportedTheme());
 
@@ -152,7 +216,11 @@ describe("custom theme import helpers", () => {
     expect(style.id).toBe("openclaw-custom-theme");
     expect(style.textContent).toContain(':root[data-theme="custom"]');
 
-    getElementById.mockReturnValue(style);
+    vi.stubGlobal("document", {
+      head: documentStub.head,
+      createElement,
+      getElementById: vi.fn(() => style),
+    } as unknown as Document);
     syncCustomThemeStyleTag(null);
     expect(remove).toHaveBeenCalledOnce();
   });

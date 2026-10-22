@@ -5,7 +5,7 @@ import type {
   ControlUiChannelSettingsSnapshot,
 } from "../../../../src/plugin-sdk/control-ui-settings.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ChannelsStatusSnapshot } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createChannelCapability } from "../../lib/channels/index.ts";
@@ -19,7 +19,6 @@ import { updatePickers } from "../../test-helpers/select-picker.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { ChannelsPage } from "./channels-page.tsx";
 import { pairingSnapshot } from "./pairing.test-support.ts";
-import { channelSnapshot as snapshotFor } from "./view.test-support.ts";
 
 const packaged = vi.hoisted(() => [] as ControlUiPluginDistribution[]);
 vi.mock("../../plugins/control-ui-distribution.ts", async (importOriginal) => ({
@@ -30,8 +29,17 @@ vi.mock("../../plugins/control-ui-distribution.ts", async (importOriginal) => ({
 const mountedPages = new Map<HTMLElement, () => void>();
 const sources: Array<Pick<ApplicationContext, "runtimeConfig" | "channels">> = [];
 
-const channelSnapshot = (overrides: Partial<ChannelsStatusSnapshot> = {}) =>
-  snapshotFor({}, { ts: 0, ...overrides });
+const channelSnapshot = (
+  overrides: Partial<ChannelsStatusSnapshot> = {},
+): ChannelsStatusSnapshot => ({
+  ts: 0,
+  channelOrder: [],
+  channelLabels: {},
+  channels: {},
+  channelAccounts: {},
+  channelDefaultAccountId: {},
+  ...overrides,
+});
 
 function channelStatus(id: string, label: string, configured = false, description?: string) {
   return channelSnapshot({
@@ -129,23 +137,39 @@ type TestGateway = ApplicationContext["gateway"] & {
 
 function createGateway(
   scopes?: string[],
-  overrides: Record<string, () => unknown> = {},
+  responses: Record<string, () => unknown> = {},
 ): TestGateway {
-  const responses: Record<string, () => unknown> = {
-    "channels.pairing.list": () =>
-      pairingSnapshot({ accounts: [], requests: [], commandOwnerConfigured: true }),
-    "channels.status": channelSnapshot,
-    "plugins.list": () => ({ plugins: [], diagnostics: [], mutationAllowed: true }),
-    ...overrides,
-  };
-  const fixture = createApplicationGateway();
-  const snapshot = Object.assign(fixture.gateway.snapshot, {
-    client: {
-      request: vi.fn(async (method: string) => (responses[method] ? responses[method]() : {})),
-    } as unknown as GatewayBrowserClient,
-    phase: "connected" as const,
+  const client = {
+    request: vi.fn(async (method: string) => {
+      if (responses[method]) {
+        return responses[method]();
+      }
+      return method === "channels.pairing.list"
+        ? {
+            accounts: [],
+            requests: [],
+            commandOwnerConfigured: true,
+            limits: { pendingPerAccount: 3, ttlMs: 3_600_000 },
+          }
+        : method === "channels.status"
+          ? channelSnapshot()
+          : method === "plugins.list"
+            ? { plugins: [], diagnostics: [], mutationAllowed: true }
+            : {};
+    }),
+  } as unknown as GatewayBrowserClient;
+  const snapshot: ApplicationGatewaySnapshot = {
+    client,
+    phase: "connected",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
+    hello: null,
+    assistantAgentId: null,
     sessionKey: "main",
-  });
+    lastError: null,
+    lastErrorCode: null,
+  };
+  const fixture = createApplicationGateway(snapshot);
   const gateway = Object.assign(fixture.gateway, {
     emit(patch: Partial<ApplicationGatewaySnapshot>) {
       fixture.publish(Object.assign(snapshot, patch));
@@ -208,29 +232,6 @@ async function choosePairingFilter(page: HTMLElement, index: number, value: stri
   await settle();
 }
 
-function mockFetch(...responses: Array<Response | Promise<Response>>) {
-  const fetchMock = vi.fn<typeof fetch>();
-  if (responses.length === 1) {
-    fetchMock.mockImplementation(async () => await responses[0]!);
-  } else {
-    for (const response of responses) {
-      fetchMock.mockImplementationOnce(async () => await response);
-    }
-  }
-  vi.stubGlobal("fetch", fetchMock);
-  return fetchMock;
-}
-
-const httpResponse = (status: number) =>
-  status === 503
-    ? new Response("gateway unavailable", { status })
-    : Response.json(
-        status === 200
-          ? { ok: true, persisted: true }
-          : { error: { message: status === 403 ? "Forbidden" : "Unauthorized" } },
-        { status },
-      );
-
 afterEach(() => {
   packaged.length = 0;
   for (const page of mountedPages.keys()) {
@@ -247,23 +248,6 @@ afterEach(() => {
 });
 
 describe("ChannelsPage lifecycle", () => {
-  it("does not refresh config or channel status after a rejected save", async () => {
-    const source = createContext(createGateway(["operator.admin", "operator.read"]));
-    source.channels.state.channelsSnapshot = channelStatus("whatsapp", "WhatsApp", true);
-    source.runtimeConfig.state.configFormDirty = true;
-    const save = vi.spyOn(source.runtimeConfig, "save").mockResolvedValue(false);
-    const configRefresh = vi.spyOn(source.runtimeConfig, "refresh");
-    const channelRefresh = vi.spyOn(source.channels, "refresh");
-    const page = mountPage(source.context);
-    await settle();
-    page.querySelector<HTMLButtonElement>(".channels-item")!.click();
-    await settle();
-    page.querySelector<HTMLButtonElement>(".channels-detail .btn.primary")!.click();
-    await waitForSolid(() => expect(save).toHaveBeenCalledOnce());
-    expect(configRefresh).not.toHaveBeenCalled();
-    expect(channelRefresh).not.toHaveBeenCalled();
-  });
-
   it("keeps channel details available but waits for reconnect before starting setup", async () => {
     const gateway = createGateway(["operator.admin", "operator.read"], {
       "wizard.start": () => ({
@@ -342,15 +326,16 @@ describe("ChannelsPage lifecycle", () => {
     ];
     if (!late) {
       plugins.unshift(plugin("slack-suite", "Suite", { channelIds: ["slack"] }));
-      plugins.push(
-        plugin("firecrawl", "FireCrawl", {
-          origin: "global",
-          description: "Crawl websites.",
-          installed: false,
-          enabled: false,
-          state: "available",
-        }),
-      );
+      plugins.push({
+        id: "firecrawl",
+        name: "FireCrawl",
+        origin: "global",
+        description: "Crawl websites.",
+        installed: false,
+        enabled: false,
+        state: "available",
+        hasIcon: true,
+      });
     }
     const snapshot = {
       ...channelStatus(
@@ -563,6 +548,90 @@ describe("ChannelsPage lifecycle", () => {
     expect(filters[0]?.textContent).toContain("All channels");
     expect(filters[1]?.textContent).toContain("All accounts");
   });
+
+  it("keeps rejected channel configuration visible in its editor without reloading the draft", async () => {
+    const gateway = createGateway(undefined, {
+      "config.set": () => {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message:
+            "channel rejected: OPENAI_API_KEY=sk-1234567890abcdef <img src=x onerror=alert(1)>",
+        });
+      },
+    });
+    gateway.emit({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.admin", "operator.read"] },
+        features: { methods: ["config.set", "config.schema"] },
+      } as unknown as ApplicationGatewaySnapshot["hello"],
+    });
+    const source = createContext(gateway);
+    const config = { channels: { whatsapp: { enabled: true } } };
+    const channel = {
+      configured: true,
+      linked: true,
+      running: true,
+      connected: true,
+      reconnectAttempts: 0,
+    };
+    source.channels.state.channelsSnapshot = channelSnapshot({
+      channelOrder: ["whatsapp"],
+      channelLabels: { whatsapp: "WhatsApp" },
+      channels: { whatsapp: channel },
+    });
+    source.channels.state.pairingSnapshot = pairingSnapshot({
+      accounts: [],
+      requests: [],
+      commandOwnerConfigured: true,
+    });
+    Object.assign(source.runtimeConfig.state, {
+      configSnapshot: { config, hash: "test", raw: JSON.stringify(config) },
+      configForm: structuredClone(config),
+      configFormOriginal: structuredClone(config),
+      configDraftBaseHash: "test",
+      configSchema: {
+        type: "object",
+        properties: {
+          channels: {
+            type: "object",
+            properties: {
+              whatsapp: {
+                type: "object",
+                properties: { enabled: { type: "boolean", title: "Enabled" } },
+              },
+            },
+          },
+        },
+      },
+      configUiHints: { "channels.whatsapp.enabled": { advanced: false } },
+    });
+    const refreshConfig = vi.spyOn(source.runtimeConfig, "refresh");
+    const refreshChannels = vi.spyOn(source.channels, "refresh");
+    const page = mountPage(source.context);
+    await settle();
+
+    page.querySelector<HTMLButtonElement>(".channels-item")!.click();
+    await settle();
+    source.runtimeConfig.patchForm(["channels", "whatsapp", "enabled"], false);
+    await settle();
+    const save = page.querySelector<HTMLButtonElement>(".channels-detail .btn.primary")!;
+    expect(save.disabled).toBe(false);
+    save.click();
+
+    await waitForSolid(() => {
+      const alert = page.querySelector<HTMLElement>(".channels-detail [role=alert]");
+      expect(alert?.textContent).toContain("channel rejected");
+      expect(alert?.textContent).toContain("OPENAI_API_KEY=sk-123...cdef");
+      expect(alert?.textContent).not.toContain("sk-1234567890abcdef");
+      expect(alert?.querySelector("img")).toBeNull();
+    });
+    expect(source.runtimeConfig.state.configFormDirty).toBe(true);
+    expect(source.runtimeConfig.state.configForm).toEqual({
+      channels: { whatsapp: { enabled: false } },
+    });
+    expect(refreshConfig).not.toHaveBeenCalled();
+    expect(refreshChannels).not.toHaveBeenCalled();
+  });
 });
 
 async function mountPackagedChannel(channelId = "custom-profile", scopes = ["operator.admin"]) {
@@ -665,7 +734,8 @@ function retire(f: PackagedChannel, reason: "disconnect" | "client" | "admin" | 
 
 it("retains a packaged editor and its pending request across detail close, another channel, and reopen", async () => {
   const pending = createDeferred<Response>();
-  mockFetch(pending.promise);
+  const fetchMock = vi.fn<typeof fetch>().mockReturnValue(pending.promise);
+  vi.stubGlobal("fetch", fetchMock);
   const f = await mountPackagedChannel();
   const original = f.mounts[0]!;
   original.input.value = "Retained draft";
@@ -719,7 +789,8 @@ it.each(["disconnect", "client", "admin", "unmount", "caller"] as const)(
   "rejects retained HTTP callbacks and pending responses after %s retirement before another credential dispatch",
   async (retirement) => {
     const pending = createDeferred<Response>();
-    const fetchMock = mockFetch(pending.promise);
+    const fetchMock = vi.fn<typeof fetch>().mockReturnValue(pending.promise);
+    vi.stubGlobal("fetch", fetchMock);
     const f = await mountPackagedChannel();
     const caller = new AbortController();
     const request = f.context.request(profileRequest(caller.signal));
@@ -770,13 +841,29 @@ it("checks operation authority after consuming a successful response body", asyn
 });
 
 it.each([
+  [401, 200],
   [401, 401],
   [403, 200],
   [401, 503],
 ] as const)(
   "keeps captured credential fallback and sanitized HTTP details for %s then %s",
   async (first, second) => {
-    const fetchMock = mockFetch(httpResponse(first), httpResponse(second));
+    const fetchMock = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        Response.json(
+          { error: { message: first === 403 ? "Forbidden" : "Unauthorized" } },
+          { status: first },
+        ),
+      )
+      .mockResolvedValueOnce(
+        second === 200
+          ? Response.json({ ok: true, persisted: true })
+          : second === 503
+            ? new Response("gateway unavailable", { status: second })
+            : Response.json({ error: { message: "Unauthorized" } }, { status: second }),
+      );
+    vi.stubGlobal("fetch", fetchMock);
     const f = await mountPackagedChannel();
     const result = await f.context.request(profileRequest());
     expect(
@@ -786,13 +873,15 @@ it.each([
     );
     expect(fetchMock.mock.calls[0]![0]).toBe("/api/channels/custom-profile/main%2Faccount/profile");
     expect(result.status).toBe(first === 403 ? 403 : second);
-    expect(result.errorMessage).toBe(
-      first === 403
-        ? "HTTP 403: Forbidden"
-        : second === 503
-          ? "HTTP 503"
-          : "HTTP 401: Unauthorized",
-    );
+    if (first === 403 || second !== 200) {
+      expect(result.errorMessage).toBe(
+        first === 403
+          ? "HTTP 403: Forbidden"
+          : second === 503
+            ? "HTTP 503"
+            : "HTTP 401: Unauthorized",
+      );
+    }
   },
 );
 

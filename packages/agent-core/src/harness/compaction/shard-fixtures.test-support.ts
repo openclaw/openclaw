@@ -1,119 +1,9 @@
-import { expect, vi } from "vitest";
+import { vi } from "vitest";
 import { createAssistantMessageEventStream } from "../../llm.js";
 import type { AssistantMessage, Message, Model, StreamFn } from "../../llm.js";
-import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage } from "../../types.js";
-import type { SessionTreeEntry } from "../types.js";
 import { compact, generateSummary } from "./compaction.js";
-import { createMessageEntry, createContextUsage } from "./compaction.test-support.js";
 import type { SummarizationCompletionParams } from "./summarization-completion.js";
-import { createFileOps } from "./utils.js";
-
-export const entries = (...messages: AgentMessage[]) => messages.map(createMessageEntry);
-export function contains(value: string, ...expected: string[]) {
-  for (const part of expected) {
-    expect(value).toContain(part);
-  }
-}
-export function excludes(value: string, ...unexpected: string[]) {
-  for (const part of unexpected) {
-    expect(value).not.toContain(part);
-  }
-}
-export function modelReply(
-  model: Model,
-  content: string | AssistantMessage["content"] = "summary",
-  overrides: Partial<AssistantMessage> = {},
-) {
-  return assistant(content, {
-    api: model.api,
-    provider: model.provider,
-    model: model.id,
-    ...overrides,
-  });
-}
-
-export const userEntry = (content: string, index: number) =>
-  createMessageEntry(user(content, index + 1), index);
-
-export function compactionEntry(
-  index: number,
-  summary: string,
-  firstKeptEntryId: string,
-  overrides: Partial<Extract<SessionTreeEntry, { type: "compaction" }>> = {},
-): SessionTreeEntry {
-  return {
-    type: "compaction",
-    id: `entry-${index}`,
-    parentId: index ? `entry-${index - 1}` : null,
-    timestamp: new Date(index + 1).toISOString(),
-    summary,
-    firstKeptEntryId,
-    tokensBefore: 200_000,
-    ...overrides,
-  };
-}
-
-export function makePreparation(overrides: Partial<Parameters<typeof compact>[0]> = {}) {
-  return {
-    firstKeptEntryId: "kept-entry",
-    messagesToSummarize: [],
-    turnPrefixMessages: [],
-    isSplitTurn: true,
-    tokensBefore: 100,
-    fileOps: createFileOps(),
-    settings: { enabled: true, reserveTokens: 1_000, keepRecentTokens: 100 },
-    ...overrides,
-  };
-}
-
-export function promptText(context: Parameters<StreamFn>[1]) {
-  const message = context.messages[0];
-  if (message?.role !== "user") {
-    throw new Error("expected a user summary prompt");
-  }
-  return typeof message.content === "string"
-    ? message.content
-    : message.content.map((block) => (block.type === "text" ? block.text : "")).join("");
-}
-
-export function captureStream(reply: (model: Model, prompt: string) => AssistantMessage) {
-  const prompts: string[] = [];
-  const outputBudgets: (number | undefined)[] = [];
-  let systemPrompt = "";
-  let maxOutputTokens: number | undefined;
-  const streamFn = vi.fn<StreamFn>((model, context, options) => {
-    const prompt = promptText(context);
-    prompts.push(prompt);
-    systemPrompt = context.systemPrompt ?? "";
-    maxOutputTokens = options?.maxTokens;
-    outputBudgets.push(maxOutputTokens);
-    return responseStream(reply(model, prompt));
-  });
-  return {
-    streamFn,
-    prompts,
-    outputBudgets,
-    readCapture: () => ({ prompt: prompts.at(-1) ?? "", systemPrompt, maxOutputTokens }),
-  };
-}
-
-export function captureCompletion(reply: (prompt: string) => AssistantMessage) {
-  const prompts: string[] = [];
-  let systemPrompt = "";
-  const runtime: AgentCoreCompletionRuntimeDeps = {
-    completeSimple: async (_model, context) => {
-      const content = context.messages[0]?.content;
-      if (!Array.isArray(content) || content.length !== 1 || content[0]?.type !== "text") {
-        throw new Error("expected one text-only summarization input");
-      }
-      prompts.push(content[0].text);
-      systemPrompt = context.systemPrompt ?? "";
-      return reply(content[0].text);
-    },
-  };
-  return { prompts, runtime, systemPrompt: () => systemPrompt };
-}
 
 export const text = (value: string) => ({ type: "text" as const, text: value });
 
@@ -126,8 +16,6 @@ export function custom(content: Custom["content"], overrides: Partial<Custom> = 
   return { role: "custom", customType: "test", content, display: true, timestamp: 1, ...overrides };
 }
 
-const { contextUsage: _contextUsage, ...zeroUsage } = createContextUsage(0);
-
 export function assistant(
   content: string | AssistantMessage["content"],
   overrides: Partial<AssistantMessage> = {},
@@ -138,7 +26,14 @@ export function assistant(
     api: "test-api",
     provider: "test-provider",
     model: "test-model",
-    usage: { ...zeroUsage, cost: { ...zeroUsage.cost } },
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
     stopReason: "stop",
     timestamp: 1,
     ...overrides,
@@ -219,7 +114,7 @@ type SummaryOptions = Partial<
     SummarizationCompletionParams,
     "previousSummary" | "thinkingLevel" | "signal" | "streamFn" | "runtime"
   >
-> & { reserveTokens?: number; summaryPrompt?: Parameters<typeof generateSummary>[11] };
+> & { reserveTokens?: number };
 export function summarize(messages: AgentMessage[], model: Model, options: SummaryOptions = {}) {
   return generateSummary(
     messages,
@@ -233,7 +128,6 @@ export function summarize(messages: AgentMessage[], model: Model, options: Summa
     options.thinkingLevel,
     options.streamFn,
     options.runtime,
-    options.summaryPrompt,
   );
 }
 

@@ -36,7 +36,7 @@ export function replacement<S extends Surface>(
 export function recordReplacement<S extends Surface>(
   surface: S,
   content: string | ((context: ViewContext<S>) => string),
-  updates: boolean | ((context: ViewContext<S>) => void) = false,
+  updates = false,
 ) {
   const contexts: ViewContext<S>[] = [];
   const roots: HTMLElement[] = [];
@@ -46,15 +46,7 @@ export function recordReplacement<S extends Surface>(
     contexts.push(context);
     container.textContent = typeof content === "string" ? content : content(context);
     return updates
-      ? {
-          dispose,
-          update: (next: typeof context) => {
-            contexts.push(next);
-            if (typeof updates === "function") {
-              updates(next);
-            }
-          },
-        }
+      ? { dispose, update: (next: typeof context) => contexts.push(next) }
       : { dispose };
   });
   return { view: replacement(surface, mount), contexts, roots, dispose, mount };

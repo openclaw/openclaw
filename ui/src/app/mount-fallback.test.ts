@@ -1,15 +1,17 @@
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const indexHtmlPath = new URL("../../index.html", import.meta.url);
+const indexHtmlPath = path.resolve(
+  process.cwd(),
+  path.basename(process.cwd()) === "ui" ? "index.html" : "ui/index.html",
+);
 type TestWindow = Window & typeof globalThis;
 const mountTimeoutMs = 12_000;
 
 let html: string;
 beforeEach(async () => {
   html = await readFile(indexHtmlPath, "utf8");
-  // JSDOM's iframe timers use the host timer functions.
-  vi.useFakeTimers();
 });
 
 function createIsolatedWindow(url?: string, fetch?: TestWindow["fetch"]): TestWindow {
@@ -47,8 +49,17 @@ function installShell(window: TestWindow, marker = "openclaw-mount-fallback"): v
   window.eval(script.textContent);
 }
 
-function boot(fetch?: TestWindow["fetch"], url?: string) {
+function fallbackElement(win: TestWindow) {
+  const element = win.document.getElementById("openclaw-mount-fallback");
+  expect(element).toBeInstanceOf(win.HTMLElement);
+  return element!;
+}
+
+function boot(fetch?: TestWindow["fetch"], url?: string, ready?: DocumentReadyState) {
   const win = createIsolatedWindow(url, fetch);
+  if (ready) {
+    vi.spyOn(win.document, "readyState", "get").mockReturnValue(ready);
+  }
   installShell(win);
   return win;
 }
@@ -76,6 +87,15 @@ function pendingProbe(stalled = true) {
   return { win, fetch, signals };
 }
 
+describe("Control UI document shell", () => {
+  it("requests the web app manifest with credentials", async () => {
+    const parsed = new DOMParser().parseFromString(html, "text/html");
+    const manifest = parsed.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+
+    expect(manifest?.getAttribute("crossorigin")).toBe("use-credentials");
+  });
+});
+
 describe("Control UI mount fallback", () => {
   it("removes only the native-auth navigation hint before the app starts", async () => {
     const win = boot(
@@ -89,6 +109,11 @@ describe("Control UI mount fallback", () => {
     });
     rendered(win);
   });
+  beforeEach(() => {
+    // JSDOM's iframe timers use the host timer functions.
+    vi.useFakeTimers();
+  });
+
   afterEach(() => {
     document.body.innerHTML = "";
     vi.useRealTimers();
@@ -109,6 +134,24 @@ describe("Control UI mount fallback", () => {
         (element) => win.getComputedStyle(element).backgroundColor,
       ),
     ).toEqual(["rgb(247, 242, 236)", "rgb(247, 242, 236)"]);
+  });
+
+  it("keeps the fallback visible until the app completes its first render", async () => {
+    const win = boot();
+    if (!win.customElements.get("openclaw-app")) {
+      win.customElements.define("openclaw-app", class extends win.HTMLElement {});
+    }
+    await win.customElements.whenDefined("openclaw-app");
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs);
+
+    const fallback = fallbackElement(win);
+    expect(fallback.hidden).toBe(false);
+    expect([...win.document.body.classList]).toEqual(["openclaw-mount-fallback-active"]);
+
+    rendered(win);
+
+    expect(fallback.hidden).toBe(true);
+    expect([...win.document.body.classList]).toEqual([]);
   });
 
   it("probes a cache-busted current document when the original bundle did not start", async () => {
@@ -142,6 +185,20 @@ describe("Control UI mount fallback", () => {
     expect(fetch).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(fetch).toHaveBeenCalledOnce();
+  });
+
+  it.each([2, 3])("bounds recovery navigations after attempt %s", async (attempt) => {
+    const fetch = vi.fn().mockRejectedValue(new Error("offline"));
+    boot(fetch, `http://localhost:3000/?openclaw_mount_recovery=${attempt}`, "complete");
+    await vi.advanceTimersByTimeAsync(mountTimeoutMs);
+    if (attempt < 3) {
+      expect(fetch).toHaveBeenCalledOnce();
+      expect(new URL(fetch.mock.calls[0]![0]).searchParams.get("openclaw_mount_recovery")).toBe(
+        String(attempt + 1),
+      );
+    } else {
+      expect(fetch).not.toHaveBeenCalled();
+    }
   });
 
   it("does not begin recovery while the unsupported browser screen is loading", async () => {

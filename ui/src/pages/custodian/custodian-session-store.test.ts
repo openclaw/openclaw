@@ -31,6 +31,8 @@ type ChatParams = { sessionId?: string; message?: string };
 type RequestOptions = { signal?: AbortSignal };
 type RequestArgs = [method: string, params: ChatParams, options?: RequestOptions];
 type Context = ReturnType<typeof createContext>["context"];
+const echoReply = (_method: string, params: ChatParams) =>
+  Promise.resolve(chatReply(params.sessionId));
 const configPath = ["plugins", "entries", "example", "config"];
 const settings = {
   Names: [...configPath, "names.with.dots"],
@@ -215,18 +217,64 @@ it.each(["operator", "navigation"] as const)("retires %s plugin context", async 
   expect(store.input).toBe("");
 });
 
-it("remints an invalidated startup session and offers retry", async () => {
+it("shares and persists one session across surfaces and stores", async () => {
+  const request = vi
+    .fn()
+    .mockResolvedValueOnce(chatReply("shared-session"))
+    .mockResolvedValueOnce(chatReply("shared-session", "Still here."))
+    .mockImplementationOnce(echoReply);
+  const { context } = createContext(request);
+  const store = new CustodianSessionStore();
+  const firstSurfaceUpdates = vi.fn();
+  const panelSurfaceUpdates = vi.fn();
+  store.subscribe(firstSurfaceUpdates);
+  store.subscribe(panelSurfaceUpdates);
+  store.connect(context, "caretaker");
+  store.connect(context, "caretaker");
+  await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+  await store.send("Check this system");
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(request.mock.calls[1]?.[1]).toMatchObject({
+    sessionId: "shared-session",
+    message: "Check this system",
+  });
+  expect(text(store)).toEqual(["Ready.", "Check this system", "Still here."]);
+  expect(store.hasRealUserTurn()).toBe(true);
+  expect(firstSurfaceUpdates).toHaveBeenCalled();
+  expect(panelSurfaceUpdates).toHaveBeenCalled();
+  expect(localStorage.getItem("openclaw.custodian.session.v1")).toBe("shared-session");
+  new CustodianSessionStore().connect(context, "caretaker");
+  await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+  expect(request.mock.calls[2]?.[1].sessionId).toBe("shared-session");
+});
+
+it.each([false, true])("remints an invalidated session (live=%s)", async (live) => {
   const error = new GatewayRequestError({
-    code: "INVALID_REQUEST",
-    message: "OpenClaw session belongs to another caller.",
+    code: live ? "UNAVAILABLE" : "INVALID_REQUEST",
+    message: live ? "OpenClaw session expired." : "OpenClaw session belongs to another caller.",
     details: buildSystemAgentSessionInvalidatedErrorDetails(),
   });
-  const request = vi.fn().mockRejectedValue(error);
+  const request = live
+    ? vi
+        .fn()
+        .mockImplementationOnce(echoReply)
+        .mockRejectedValueOnce(error)
+        .mockImplementationOnce(echoReply)
+    : vi.fn().mockRejectedValue(error);
   const { store } = setupStore(request);
   await waitForFast(() => expect(store.sending).toBe(false));
   const staleSessionId = request.mock.calls[0]?.[1].sessionId;
-  expect(localStorage.getItem("openclaw.custodian.session.v1")).not.toBe(staleSessionId);
-  expect(store.canRetry()).toBe(true);
+  if (live) {
+    expect(store.messages.at(-1)?.text).toBe("Ready.");
+    await store.send("Continue");
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+    const replacementSessionId = request.mock.calls[2]?.[1].sessionId;
+    expect(replacementSessionId).not.toBe(staleSessionId);
+    expect(localStorage.getItem("openclaw.custodian.session.v1")).toBe(replacementSessionId);
+  } else {
+    expect(localStorage.getItem("openclaw.custodian.session.v1")).not.toBe(staleSessionId);
+    expect(store.canRetry()).toBe(true);
+  }
 });
 
 it.each(["coalesced", "invalidated"] as const)("settles %s history reads", async (mode) => {

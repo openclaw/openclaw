@@ -1,3 +1,4 @@
+// Tests executable behavior for the legacy package entrypoint.
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -50,17 +51,25 @@ vi.mock("./infra/package-lifecycle.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./infra/package-lifecycle.js")>()),
   completePendingPackageLifecycle: vi.fn(async () => {}),
 }));
-// mock-isolation: Exercise legacy export binding without initializing the library graph.
 vi.mock("./library.js", () => ({
-  ...Object.fromEntries(
-    `applyTemplate createDefaultDeps deriveSessionKey describePortOwner ensureBinary
-     ensurePortAvailable getReplyFromConfig handlePortError loadConfig monitorWebChannel
-     normalizeE164 promptYesNo resolveSessionKey resolveStorePath runCommandWithTimeout
-     runExec waitForever`
-      .split(/\s+/)
-      .map((name) => [name, vi.fn()] as const),
-  ),
+  applyTemplate: vi.fn(),
+  createDefaultDeps: vi.fn(),
+  deriveSessionKey: vi.fn(),
+  describePortOwner: vi.fn(),
+  ensureBinary: vi.fn(),
+  ensurePortAvailable: vi.fn(),
+  getReplyFromConfig: vi.fn(),
+  handlePortError: vi.fn(),
+  loadConfig: vi.fn(),
+  monitorWebChannel: vi.fn(),
+  normalizeE164: vi.fn(),
   PortInUseError: class PortInUseError extends Error {},
+  promptYesNo: vi.fn(),
+  resolveSessionKey: vi.fn(),
+  resolveStorePath: vi.fn(),
+  runCommandWithTimeout: vi.fn(),
+  runExec: vi.fn(),
+  waitForever: vi.fn(),
 }));
 
 const originalArgv = process.argv;
@@ -112,13 +121,6 @@ describe("legacy package executable entrypoint", () => {
     return base;
   }
 
-  const scopedCache = (base: string) =>
-    expect.objectContaining({
-      NODE_COMPILE_CACHE: expect.stringContaining(path.join(base, "openclaw")),
-      OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
-    });
-  const indexArg = () => [...process.execArgv, expect.stringMatching(/[\\/]index\.ts$/)];
-
   function markPendingLifecycle() {
     vi.mocked(existsSync).mockImplementation((value) =>
       String(value).endsWith(".openclaw-lifecycle-pending"),
@@ -128,12 +130,16 @@ describe("legacy package executable entrypoint", () => {
   it.each([
     { mode: "version", args: ["--version"] },
     { mode: "CLI", args: ["status"] },
+    { mode: "disabled cache", args: ["status"] },
     { mode: "Gateway", args: ["gateway", "run"] },
     { mode: "library", args: ["status"] },
   ])("loads only the modules needed for $mode", async ({ mode, args }) => {
     const handled = mode === "version";
     const caches = mode === "Gateway";
     const loadsFailure = !handled && mode !== "library";
+    if (mode === "disabled cache") {
+      vi.stubEnv("NODE_DISABLE_COMPILE_CACHE", "1");
+    }
     vi.mocked(isMainModule).mockReturnValue(mode !== "library");
     vi.mocked(tryHandleRootVersionFastPath).mockReturnValue(handled);
     const entry = await loadEntry(args);
@@ -196,13 +202,24 @@ describe("legacy package executable entrypoint", () => {
   it("scopes an inherited cache before starting the direct CLI", async () => {
     const base = inheritCache();
     await loadEntry();
-    expect(compileCache.respawn).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({
-        command: process.execPath,
-        args: ["--import", CLI_PARENT_BOUND_PRELOAD, ...indexArg(), "status"],
-        env: scopedCache(base),
-      }),
-    );
+    expect(compileCache.respawn.mock.calls).toEqual([
+      [
+        expect.objectContaining({
+          command: process.execPath,
+          args: [
+            "--import",
+            CLI_PARENT_BOUND_PRELOAD,
+            ...process.execArgv,
+            expect.stringMatching(/[\\/]index\.ts$/),
+            "status",
+          ],
+          env: expect.objectContaining({
+            NODE_COMPILE_CACHE: expect.stringContaining(path.join(base, "openclaw")),
+            OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: "1",
+          }),
+        }),
+      ],
+    ]);
     expect(compileCache.enable).not.toHaveBeenCalled();
     expect(runCliWithExitFinalization).not.toHaveBeenCalled();
   });
@@ -212,7 +229,9 @@ describe("legacy package executable entrypoint", () => {
     ["hooks", "relay"],
   ])("keeps foreground %s in-process with an inherited cache", async (...command) => {
     inheritCache();
-    await withMockedPlatform("linux", () => loadEntry(command));
+    await withMockedPlatform("linux", async () => {
+      await loadEntry(command);
+    });
     expect(compileCache.respawn).not.toHaveBeenCalled();
     expect(compileCache.enable).toHaveBeenCalledOnce();
     expect(runCliWithExitFinalization).toHaveBeenCalledOnce();
@@ -227,8 +246,16 @@ describe("legacy package executable entrypoint", () => {
     await expect(loadEntry(["gateway", "run"])).rejects.toBe(replacement);
     expect(execve).toHaveBeenCalledWith(
       process.execPath,
-      [process.execPath, ...indexArg(), "gateway", "run"],
-      scopedCache(base),
+      [
+        process.execPath,
+        ...process.execArgv,
+        expect.stringMatching(/[\\/]index\.ts$/),
+        "gateway",
+        "run",
+      ],
+      expect.objectContaining({
+        NODE_COMPILE_CACHE: expect.stringContaining(path.join(base, "openclaw")),
+      }),
     );
     expect(compileCache.respawn).not.toHaveBeenCalled();
     expect(runCliWithExitFinalization).not.toHaveBeenCalled();
@@ -240,11 +267,17 @@ describe("legacy package executable entrypoint", () => {
     { args: ["update", "status"], fails: false },
     { args: ["status"], fails: true },
   ])("completes the lifecycle before CLI startup: $args, fails=$fails", async ({ args, fails }) => {
+    const calls: string[] = [];
     markPendingLifecycle();
     vi.mocked(completePendingPackageLifecycle).mockImplementation(async () => {
+      calls.push("lifecycle");
       if (fails) {
         throw new Error("postinstall failed");
       }
+    });
+    vi.mocked(tryHandleRootVersionFastPath).mockImplementation(() => {
+      calls.push("version");
+      return false;
     });
     const entry = loadEntry(args);
     if (fails) {
@@ -252,8 +285,7 @@ describe("legacy package executable entrypoint", () => {
       expect(tryHandleRootVersionFastPath).not.toHaveBeenCalled();
     } else {
       await entry;
-      expect(tryHandleRootVersionFastPath).toHaveBeenCalledOnce();
-      expect(completePendingPackageLifecycle).toHaveBeenCalledBefore(tryHandleRootVersionFastPath);
+      expect(calls).toEqual(["lifecycle", "version"]);
     }
     expect(completePendingPackageLifecycle).toHaveBeenCalledOnce();
   });
