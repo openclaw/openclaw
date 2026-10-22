@@ -64,10 +64,6 @@ import {
   buildBootstrapPromptWarningNotice,
   buildBootstrapTruncationReportMeta,
 } from "../bootstrap-budget.js";
-import {
-  makeBootstrapWarn as makeBootstrapWarnImpl,
-  resolveBootstrapContextForRun as resolveBootstrapContextForRunImpl,
-} from "../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import { isPrimaryBootstrapRun, resolveWorkspaceBootstrapRouting } from "../bootstrap-routing.js";
 import {
@@ -115,6 +111,7 @@ import {
   isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
 } from "../workspace.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
+import { resolveCliBootstrapContextForRun } from "./bootstrap-context.js";
 import { canTransportSystemPrompt, resolveCliBootstrapPromptHash } from "./bootstrap-transport.js";
 import {
   applyClaudeManagedMcpTimeout,
@@ -662,10 +659,15 @@ async function prepareCliRunContextWithinReadFence(
     : undefined;
 
   const sessionLabel = params.sessionKey ?? params.sessionId;
+  const canonicalWorkspace = resolveUserPath(
+    resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
+  );
   const { bootstrapFiles, contextFiles: resolvedContextFiles } = skipsTurnPreparation
     ? { bootstrapFiles: [], contextFiles: [] }
-    : await resolveBootstrapContextForRunImpl({
-        workspaceDir: params.bootstrapWorkspaceDir ?? workspaceDir,
+    : await resolveCliBootstrapContextForRun({
+        bootstrapWorkspaceDir: params.bootstrapWorkspaceDir,
+        workspaceDir,
+        sessionLabel,
         config: params.config,
         sessionKey: params.sessionKey,
         sessionId: params.sessionId,
@@ -674,11 +676,7 @@ async function prepareCliRunContextWithinReadFence(
         agentId: sessionAgentId,
         contextMode: params.bootstrapContextMode,
         runKind: params.bootstrapContextRunKind,
-        warn: makeBootstrapWarnImpl({
-          sessionLabel,
-          workspaceDir,
-          warn: (message) => cliBackendLog.warn(message),
-        }),
+        warn: (message) => cliBackendLog.warn(message),
       });
   // Ring-zero OpenClaw runs replace the bundle MCP surface entirely: no
   // loopback server, no plugin/user servers. A selectable backend also removes
@@ -841,9 +839,6 @@ async function prepareCliRunContextWithinReadFence(
   );
   // Mirror the embedded runner's bootstrap routing for backends that transport
   // OpenClaw's system prompt, using the final native or mediated file access.
-  const canonicalWorkspace = resolveUserPath(
-    resolveAgentWorkspaceDir(params.config ?? {}, workspaceResolution.agentId),
-  );
   const selectedNativeToolsProvideFileAccess =
     params.cliToolAvailability === undefined || params.cliToolAvailability.native.length > 0;
   const mediatedBootstrapFileAccess =
