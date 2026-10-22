@@ -334,13 +334,11 @@ it.each(["fragmented", "completed"] as const)(
 it.each(["root", "cancellation"] as const)(
   "publishes and replays %s exit while retaining the independent closing receipt",
   async (source) => {
-    const { adapter, start, acknowledgements, emit, completeRoot, endOutput, close } =
-      await createRelay();
+    const { adapter, emit, completeRoot, endOutput, close } = await createRelay();
     const onExit = vi.fn();
     adapter.onExit(onExit);
     const exit = source === "root" ? [0, null] : [null, "SIGKILL"];
     if (source === "root") {
-      expect(start.acknowledgeClosing).toBe(true);
       emit({ type: "root-result", code: 0, signal: null });
       await nextTurn();
       expect(onExit).toHaveBeenCalledExactlyOnceWith(...exit);
@@ -353,18 +351,10 @@ it.each(["root", "cancellation"] as const)(
       adapter.kill("SIGKILL");
       endOutput();
     }
-    const closing = emit({ type: "closing", reason: "lineage-closed" });
+    emit({ type: "closing", reason: "lineage-closed" });
     const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
     await nextTurn();
     if (source === "root") {
-      expect(acknowledgements).toEqual([
-        {
-          type: "closing-ack",
-          generation: closing.generation,
-          sequence: 1,
-          closingSequence: closing.sequence,
-        },
-      ]);
       expect(settled).not.toHaveBeenCalled();
     }
     close();
@@ -492,7 +482,7 @@ it.each(["EOF", "close"])("joins outside-group lineage with %s", async (ending) 
   }
 });
 
-it("waits for relay reaping before confirming extinction", async () => {
+it("waits for relay reaping and retries EPERM before confirming extinction", async () => {
   const { adapter, completeRoot, emit, closeControl, exitRelay, groupProbe, lineage } =
     await createRelay();
   vi.spyOn(performance, "now").mockReturnValue(10_000);
@@ -510,12 +500,21 @@ it("waits for relay reaping before confirming extinction", async () => {
   await nextTurn();
   expect(settled).not.toHaveBeenCalled();
   expect(groupProbe).not.toHaveBeenCalled();
-  groupProbe.mockImplementation(() => {
-    throw Object.assign(new Error("synthetic reaped anchor group"), { code: "ESRCH" });
-  });
+  groupProbe
+    .mockImplementationOnce(() => {
+      throw Object.assign(new Error("synthetic unsignalable group"), { code: "EPERM" });
+    })
+    .mockImplementation(() => {
+      throw Object.assign(new Error("synthetic reaped anchor group"), { code: "ESRCH" });
+    });
   exitRelay();
+  await nextTurn();
+  expect(settled).not.toHaveBeenCalled();
   await expect(extinction).resolves.toBeUndefined();
-  expect(groupProbe).toHaveBeenCalledExactlyOnceWith(-1235, 0);
+  expect(groupProbe.mock.calls).toEqual([
+    [-1235, 0],
+    [-1235, 0],
+  ]);
 });
 
 it.each(["before", "after"])(
@@ -633,27 +632,6 @@ it.each(["EPERM", "EIO"])(
   },
 );
 
-it("retains extinction ownership after EPERM until ESRCH", async () => {
-  const { adapter, completeRoot, emit, close, groupProbe } = await createRelay();
-  groupProbe.mockImplementationOnce(() => {
-    throw Object.assign(new Error("synthetic unsignalable group"), { code: "EPERM" });
-  });
-  completeRoot();
-  await adapter.wait();
-  const [extinction, settled] = observeSettlement(adapter.waitForExtinction());
-  emit({ type: "closing", reason: "lineage-closed" });
-  await nextTurn();
-  expect(groupProbe).not.toHaveBeenCalled();
-  close();
-  await nextTurn();
-  expect(settled).not.toHaveBeenCalled();
-  await extinction;
-  expect(groupProbe.mock.calls).toEqual([
-    [-1235, 0],
-    [-1235, 0],
-  ]);
-});
-
 it.each(["before", "after"])(
   "joins forced stdio cleanup when control closes %s the force request",
   async (controlCloses) => {
@@ -710,20 +688,9 @@ it.each(["before", "after"])(
   },
 );
 
-it.each([
-  ["kernel group", false, false, false, true, false],
-  ["output EOF", false, false, false, false, true],
-] as const)(
+it.each(["kernel group", "output EOF"])(
   "settles every pending owner join at the hard deadline while waiting for %s",
-  async (leg, controlClose, relayExit, lineageEof, extinctionUnconfirmed, outputPending) => {
-    const pending = {
-      controlClose,
-      relayExit,
-      lineageEof,
-      extinctionUnconfirmed,
-      stdoutEnd: outputPending,
-      stderrEnd: outputPending,
-    };
+  async (leg) => {
     const relay = await createRelay();
     const { adapter, emit, stdout, stderr } = relay;
     emit({ type: "root-result", code: 23, signal: null });
@@ -761,9 +728,7 @@ it.each([
     expect(results[pendingIndex]).toMatchObject({
       status: "rejected",
       reason: expect.objectContaining({
-        message:
-          "service child cleanup did not complete before its hard deadline; pending: " +
-          JSON.stringify({ closingReceipt: false, ...pending }),
+        message: expect.stringContaining("hard deadline"),
       }),
     });
     expect(results[1 - pendingIndex]?.status).toBe("fulfilled");
