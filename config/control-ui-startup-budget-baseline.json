@@ -1,5 +1,5 @@
 {
   "startupJsGzipBytes": 315737,
-  "reason": "Keep New Session metadata imports narrow; refreshed same-machine build after main integration",
+  "reason": "Narrow New Session metadata imports after header deferral; preserve the stricter startup baseline",
   "updatedAt": "2026-10-22"
 }

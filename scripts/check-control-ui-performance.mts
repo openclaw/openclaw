@@ -56,9 +56,9 @@ const controlUiPerformanceBudgets = {
   startupJsRequests: 9,
   chatBootJsRequests: 27,
   newBootJsRequests: 22,
-  // Narrow metadata imports: 1,441,525 B Chat and 962,148 B New Session.
-  // Keep the stricter existing caps after refreshing the main integration.
-  chatBootJsGzipBytes: 1_498_208,
+  // Combined boot imports: 1,421,045 B Chat and 962,347 B New Session.
+  // Preserve relative Chat headroom and the stricter existing New Session cap.
+  chatBootJsGzipBytes: 1_476_953,
   newBootJsGzipBytes: 977_485,
   startupCssRequests: 1,
   // Solid 2 action/optimistic runtime adoption; offset tracked by HF-STARTUP-BUDGET.
