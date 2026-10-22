@@ -1,6 +1,7 @@
 /** Tests inactive channel variants in secrets runtime collection. */
 import { describe, expect, it } from "vitest";
 import "./runtime-channel-inactive-variants.test-support.ts";
+import { getPath } from "./path-utils.js";
 import {
   asConfig,
   loadAuthStoreWithProfiles,
@@ -58,35 +59,31 @@ describe("secrets runtime snapshot channel inactive variants", () => {
   ])(
     "resolves the implicit Slack default's credentials in $mode mode",
     async ({ mode, credentials, resolved }) => {
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          channels: {
-            slack: {
-              mode,
-              ...credentials,
-              accounts: {
-                work: {
-                  mode: "socket",
-                  botToken: "xoxb-work",
-                  appToken: "xapp-work",
-                  userToken: "xoxp-work",
-                  signingSecret: "signing-work",
-                  relay: { authToken: "relay-work" },
-                },
+      const snapshot = await prepare(
+        {
+          slack: {
+            mode,
+            ...credentials,
+            accounts: {
+              work: {
+                mode: "socket",
+                botToken: "xoxb-work",
+                appToken: "xapp-work",
+                userToken: "xoxp-work",
+                signingSecret: "signing-work",
+                relay: { authToken: "relay-work" },
               },
             },
           },
-        }),
-        env: {
+        },
+        {
           SLACK_BOT: "xoxb-default",
           SLACK_APP: "xapp-default",
           SLACK_USER: "xoxp-default",
           SLACK_SIGNING: "signing-default",
           SLACK_RELAY: "relay-default",
         },
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => loadAuthStoreWithProfiles({}),
-      });
+      );
 
       expect(snapshot.config.channels?.slack).toMatchObject(resolved);
       expect(snapshot.warnings).toEqual([]);
@@ -112,20 +109,13 @@ describe("secrets runtime snapshot channel inactive variants", () => {
   ])(
     "keeps unused Slack root refs inactive with $name",
     async ({ enabled, appToken, accountId }) => {
-      const snapshot = await prepareSecretsRuntimeSnapshot({
-        config: asConfig({
-          channels: {
-            slack: {
-              enabled,
-              botToken: envRef("MISSING_SLACK_BOT"),
-              appToken,
-              accounts: { [accountId]: { botToken: "xoxb-work", appToken: "xapp-work" } },
-            },
-          },
-        }),
-        env: {},
-        agentDirs: ["/tmp/openclaw-agent-main"],
-        loadAuthStore: () => loadAuthStoreWithProfiles({}),
+      const snapshot = await prepare({
+        slack: {
+          enabled,
+          botToken: envRef("MISSING_SLACK_BOT"),
+          appToken,
+          accounts: { [accountId]: { botToken: "xoxb-work", appToken: "xapp-work" } },
+        },
       });
 
       expect(snapshot.config.channels?.slack?.botToken).toEqual(envRef("MISSING_SLACK_BOT"));
@@ -138,67 +128,50 @@ describe("secrets runtime snapshot channel inactive variants", () => {
     },
   );
 
-  it("treats IRC account nickserv password refs as inactive when nickserv is disabled", async () => {
-    const password = envRef("MISSING_IRC_WORK_NICKSERV_PASSWORD");
+  it.each(["channel", "account"])("ignores disabled IRC %s nickserv", async (scope) => {
+    const nickserv = {
+      enabled: false,
+      password: envRef(
+        scope === "channel"
+          ? "MISSING_IRC_TOPLEVEL_NICKSERV_PASSWORD"
+          : "MISSING_IRC_WORK_NICKSERV_PASSWORD",
+      ),
+    };
+    const irc =
+      scope === "channel" ? { nickserv } : { accounts: { work: { enabled: true, nickserv } } };
+    const snapshot = await prepare({ irc });
+    const path = `channels.irc.${scope === "account" ? "accounts.work." : ""}nickserv.password`;
+    expect(getPath(snapshot.config, path.split("."))).toEqual(nickserv.password);
+    expect(snapshot.warnings.map((warning) => warning.path)).toContain(path);
+  });
+
+  it.each([
+    ["socket", "signingSecret"],
+    ["http", "appToken"],
+  ])("ignores Slack %s-inactive %s", async (mode, field) => {
+    const ref = envRef(
+      field === "appToken" ? "MISSING_SLACK_APP_TOKEN" : "MISSING_SLACK_SIGNING_SECRET",
+    );
+    const workRef = envRef("MISSING_SLACK_WORK_APP_TOKEN");
     const snapshot = await prepare({
-      irc: {
+      slack: {
+        mode,
+        [field]: ref,
         accounts: {
-          work: {
-            enabled: true,
-            nickserv: { enabled: false, password },
-          },
+          work: { enabled: true, mode, ...(field === "appToken" ? { [field]: workRef } : {}) },
         },
       },
     });
-
-    expect(snapshot.config.channels?.irc?.accounts?.work?.nickserv?.password).toEqual(password);
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "channels.irc.accounts.work.nickserv.password",
-    );
-  });
-
-  it("treats top-level IRC nickserv password refs as inactive when nickserv is disabled", async () => {
-    const password = envRef("MISSING_IRC_TOPLEVEL_NICKSERV_PASSWORD");
-    const snapshot = await prepare({ irc: { nickserv: { enabled: false, password } } });
-
-    expect(snapshot.config.channels?.irc?.nickserv?.password).toEqual(password);
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "channels.irc.nickserv.password",
-    );
-  });
-
-  it("treats Slack signingSecret refs as inactive when mode is socket", async () => {
-    const signingSecret = envRef("MISSING_SLACK_SIGNING_SECRET");
-    const snapshot = await prepare({
-      slack: {
-        mode: "socket",
-        signingSecret,
-        accounts: { work: { enabled: true, mode: "socket" } },
-      },
-    });
-
-    expect(snapshot.config.channels?.slack?.signingSecret).toEqual(signingSecret);
-    expect(snapshot.warnings.map((warning) => warning.path)).toContain(
-      "channels.slack.signingSecret",
-    );
-  });
-
-  it("treats Slack appToken refs as inactive when mode is http", async () => {
-    const appToken = envRef("MISSING_SLACK_APP_TOKEN");
-    const workToken = envRef("MISSING_SLACK_WORK_APP_TOKEN");
-    const snapshot = await prepare({
-      slack: {
-        mode: "http",
-        appToken,
-        accounts: { work: { enabled: true, mode: "http", appToken: workToken } },
-      },
-    });
-
-    expect(snapshot.config.channels?.slack?.appToken).toEqual(appToken);
-    expect(snapshot.config.channels?.slack?.accounts?.work?.appToken).toEqual(workToken);
-    const warningPaths = snapshot.warnings.map((warning) => warning.path);
-    expect(warningPaths).toContain("channels.slack.appToken");
-    expect(warningPaths).toContain("channels.slack.accounts.work.appToken");
+    const paths = [
+      `channels.slack.${field}`,
+      ...(field === "appToken" ? [`channels.slack.accounts.work.${field}`] : []),
+    ];
+    for (const path of paths) {
+      expect(getPath(snapshot.config, path.split("."))).toEqual(
+        path.includes("accounts.work") ? workRef : ref,
+      );
+      expect(snapshot.warnings.map((warning) => warning.path)).toContain(path);
+    }
   });
 
   it("treats top-level Google Chat serviceAccount as inactive when enabled accounts override it", async () => {

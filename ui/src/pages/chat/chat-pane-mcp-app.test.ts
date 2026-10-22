@@ -30,6 +30,10 @@ import {
 } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatPaneMcpApps, type ChatPaneMcpAppOwner } from "./chat-pane-mcp-app.ts";
+import {
+  openSessionWorkspacePreview,
+  selectSessionWorkspacePreview,
+} from "./components/chat-session-workspace-state.ts";
 import { handleAbortChat } from "./run-lifecycle.ts";
 
 const cleanups: Array<() => void> = [];
@@ -55,9 +59,13 @@ function fixture() {
   // These events only read gateway state; new-session delivery is observed at its existing owner.
   const agentSelection = { intentRevision: 0 };
   const context = { gateway: gateway.gateway, agentSelection } as ApplicationContext;
-  const state: ChatPaneMcpAppOwner["state"] = {
+  const state: ChatPaneMcpAppOwner["state"] & { settings: undefined } = {
+    settings: undefined,
     client,
     connected: true,
+    connectionEpoch: 1,
+    sidebarContent: null,
+    sessions: createTestSessionCapability(gateway.gateway),
     sessionKey: "agent:main:one",
     assistantAgentId: "main",
     chatAttachments: [],
@@ -240,6 +248,7 @@ describe("MCP app pane actions", () => {
     const host = Object.assign(makeChatHost({ client: f.client, sessionKey: f.state.sessionKey }), {
       handleSendChat: f.state.handleSendChat,
       handleOpenSidebar: f.state.handleOpenSidebar,
+      sidebarContent: f.state.sidebarContent,
     });
     f.owner.state = host;
     const sent = message(host.sessionKey, "new");
@@ -304,6 +313,7 @@ describe("MCP app pane actions", () => {
     const host = Object.assign(makeChatHost({ client: f.client, sessionKey: f.state.sessionKey }), {
       handleSendChat: f.state.handleSendChat,
       handleOpenSidebar: f.state.handleOpenSidebar,
+      sidebarContent: f.state.sidebarContent,
     });
     f.owner.state = host;
     const sent = message(host.sessionKey, "new");
@@ -336,6 +346,7 @@ describe("MCP app pane actions", () => {
         assistantAgentId: "main",
         handleSendChat: f.state.handleSendChat,
         handleOpenSidebar: f.state.handleOpenSidebar,
+        sidebarContent: f.state.sidebarContent,
       });
       f.owner.state = host;
       const create = vi.fn(async () => null);
@@ -439,4 +450,22 @@ describe("MCP app pane actions", () => {
     expect(next.state.handleSendChat).toHaveBeenCalledExactlyOnceWith("delivered once");
     expect(f.state.handleSendChat).not.toHaveBeenCalled();
   });
+});
+
+it("retires panel actions synchronously when their workspace tab changes", () => {
+  const f = fixture();
+  f.dispatch(MCP_APP_OPEN_EVENT, f.launch);
+  const content = vi.mocked(f.state.handleOpenSidebar).mock.calls.at(-1)?.[0];
+  if (content?.kind !== "mcp-app") {
+    throw new Error("Expected app content");
+  }
+  openSessionWorkspacePreview(f.state, "app", "App", content);
+  const retire = vi.fn();
+  const stop = content.observeRetirement(retire);
+  expect(retire).not.toHaveBeenCalled();
+  selectSessionWorkspacePreview(f.state, null);
+  expect(retire).toHaveBeenCalledOnce();
+  stop();
+  f.cleanup();
+  expect(retire).toHaveBeenCalledOnce();
 });

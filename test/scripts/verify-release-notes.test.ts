@@ -1941,6 +1941,7 @@ Atomics.wait = function (...args) {
 
     expect(result.status).toBe(1);
     expect(result.stdout).toContain("1 errors");
+    expect(result.stdout).toContain("- ### Highlights must contain 5-8 top-level bullets; found 1");
     expect(JSON.parse(readFileSync(manifestPath, "utf8"))).toMatchObject({
       schemaVersion: 3,
       version: "2026.7.1",

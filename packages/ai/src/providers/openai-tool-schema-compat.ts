@@ -5,8 +5,8 @@ import { truncateToolSchemaDepth, wasToolSchemaTruncated } from "./tool-schema-d
 import { normalizeToolSchema } from "./tool-schema-normalization.js";
 
 /** Repairs recoverable OpenAI tool-schema shapes before canonical normalization. */
-export function normalizeOpenAIStrictCompatSchema(schema: unknown): TSchema {
-  return normalizeToolSchema(schema, "compat") as TSchema;
+export function normalizeOpenAIStrictCompatSchema(schema: unknown, toolName?: string): TSchema {
+  return normalizeToolSchema(schema, "compat", toolName) as TSchema;
 }
 
 /**

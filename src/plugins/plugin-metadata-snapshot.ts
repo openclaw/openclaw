@@ -114,36 +114,25 @@ export function isPluginMetadataSnapshotCompatible(params: {
   >;
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  allowScopedSnapshot?: boolean;
-  pluginIds?: readonly string[];
   workspaceDir?: string;
-  index?: InstalledPluginIndex;
 }): boolean {
   const env = params.env ?? process.env;
   if (isCurrentPluginMetadataSnapshotRuntimeGeneration(params.snapshot)) {
     return true;
   }
-  const requestedPluginIds = normalizePluginIdScope(params.pluginIds);
-  const snapshotPluginIds = normalizePluginIdScope(params.snapshot.pluginIds);
-  const scopeMatches =
-    snapshotPluginIds === undefined ||
-    params.allowScopedSnapshot === true ||
-    (requestedPluginIds !== undefined &&
-      serializePluginIdScope(snapshotPluginIds) === serializePluginIdScope(requestedPluginIds));
   return (
-    scopeMatches &&
+    normalizePluginIdScope(params.snapshot.pluginIds) === undefined &&
     params.snapshot.policyHash === resolveInstalledPluginIndexPolicyHash(params.config, env) &&
     (!params.snapshot.configFingerprint ||
       params.snapshot.configFingerprint ===
         resolvePluginControlPlaneFingerprint({
           config: params.config,
           env,
-          index: params.index ?? params.snapshot.index,
+          index: params.snapshot.index,
           policyHash: params.snapshot.policyHash,
           workspaceDir: params.workspaceDir,
         })) &&
-    (params.snapshot.workspaceDir ?? "") === (params.workspaceDir ?? "") &&
-    indexesMatch(params.snapshot.index, params.index)
+    (params.snapshot.workspaceDir ?? "") === (params.workspaceDir ?? "")
   );
 }
 

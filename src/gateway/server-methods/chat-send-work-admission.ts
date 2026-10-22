@@ -29,7 +29,6 @@ import {
 import type { registerChatAbortController } from "../chat-abort.js";
 import { ExpectedProfileMismatchError } from "../expected-profile.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../operator-role-policy.js";
-import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import { captureGatewayClientUploadCommitGuard } from "../upload-policy.js";
@@ -99,7 +98,6 @@ export function consumeChatSendAdmissionRetry(
     const pending = readPreRegisteredRun({
       key: params.session.pendingChatSendKey,
       entry: params.context.dedupe.get(params.session.pendingChatSendKey),
-      keyPrefix: PENDING_CHAT_SEND_DEDUPE_PREFIX,
     });
     if (pending?.payload.goalFingerprint) {
       params.respond(

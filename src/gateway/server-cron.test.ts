@@ -28,6 +28,7 @@ import { CronService } from "../cron/service.js";
 import { waitForCronRunQueue } from "../cron/service/run-queue.js";
 import { onTimer as onCronTimer } from "../cron/service/timer.test-support.js";
 import { resolveSelectedCronJobsStorePath } from "../cron/store/paths.js";
+import { makeCronStreamSandboxTarget } from "../cron/stream-sandbox.test-support.js";
 import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import {
   OutboundDeliveryError,
@@ -243,6 +244,7 @@ function buildGatewayCronService(
     typeof legacyStore === "string"
       ? {
           ...process.env,
+          ...params.env,
           OPENCLAW_SKIP_CRON: "0",
           OPENCLAW_STATE_DIR: path.dirname(legacyStore),
         }
@@ -514,6 +516,98 @@ describe("buildGatewayCronService", () => {
     loadCronService,
     createCronService,
     addCronJob,
+  });
+
+  it("disables Gateway-hosted automation execution while preserving timed agent turns", async () => {
+    const cfg = createCronConfig("server-cron-disabled-host-execution");
+    cfg.agents = { entries: { main: {} } };
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-08-14T12:00:00.000Z"));
+    const clock = createGatewaySchedulerClock(Date.now());
+    const previous = loadCronService({ ...cfg, cron: { ...cfg.cron, enabled: false } });
+    let restricted: CronServiceFixture | undefined;
+    const { spawn } = mockCronSupervisor();
+    const spawnSandbox = vi.fn(async () => ({
+      ...createWatchedRun(),
+      activity: { resultSettled: false, lastOutputAtMs: Date.now() },
+      runId: "sandbox-stream",
+    }));
+    vi.doMock("./cron-stream-sandbox.js", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("./cron-stream-sandbox.js")>()),
+      createCronStreamSandboxExecutor: () => ({ spawn: spawnSandbox, recover: async () => {} }),
+    }));
+    try {
+      const command = await addCommandJob(previous, "persisted command", "process.exit(0)", {
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+      });
+      const processJob = await addSystemEventJob(previous, "persisted process", "done", {
+        schedule: { kind: "on-exit", command: "sleep 60" },
+        sessionTarget: "main",
+      });
+      const streamJob = await addSystemEventJob(previous, "persisted stream", "event", {
+        schedule: { kind: "stream", command: ["source"] },
+        sessionTarget: "main",
+      });
+      await previous.cron.stopAndDrain?.();
+
+      restricted = loadCronService(cfg, {
+        env: { OPENCLAW_DISABLE_CRON_HOST_EXECUTION: "1" },
+        scheduler: createTestGatewayScheduler(clock.clock),
+      });
+      await restricted.cron.start();
+      await restricted.reconcileExitWatchers();
+      await restricted.reconcileStreamWatchers();
+      expect(restricted.cron.getJob(streamJob.id)).toMatchObject({
+        enabled: true,
+        state: {
+          streamStatus: "disabled",
+          streamError: expect.stringContaining("OPENCLAW_DISABLE_CRON_HOST_EXECUTION"),
+        },
+      });
+      await expect(restricted.cron.run(command.id, "force")).rejects.toThrow(
+        "OPENCLAW_DISABLE_CRON_HOST_EXECUTION",
+      );
+      await expect(addCommandJob(restricted, "new command", "process.exit(0)")).rejects.toThrow(
+        "OPENCLAW_DISABLE_CRON_HOST_EXECUTION",
+      );
+      const sandbox = await restricted.cron.add(
+        cronJob(
+          "sandbox stream",
+          { kind: "agentTurn", message: "handle event" },
+          {
+            schedule: { kind: "stream", command: ["source"] },
+          },
+        ),
+        { streamSandbox: makeCronStreamSandboxTarget() },
+      );
+      expect(sandbox.state.streamStatus).toBe("running");
+      expect(spawnSandbox).toHaveBeenCalledOnce();
+      const agent = await addAgentTurnJob(restricted, "scheduled agent", "run on schedule", {
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: Date.now() },
+      });
+      await expect(
+        restricted.cron.update(agent.id, { payload: { kind: "command", argv: ["true"] } }),
+      ).rejects.toThrow("OPENCLAW_DISABLE_CRON_HOST_EXECUTION");
+
+      vi.setSystemTime(Date.now() + 60_000);
+      clock.setTime(Date.now());
+      await onCronTimer(getCronState(restricted));
+      await waitForCronRunQueue(getCronState(restricted));
+      expect(restricted.cron.getJob(command.id)?.state).toMatchObject({ lastStatus: "skipped" });
+      expect(restricted.cron.getJob(agent.id)?.state).toMatchObject({ lastStatus: "ok" });
+      expect(spawn).not.toHaveBeenCalled();
+      await expect(restricted.cron.update(command.id, { enabled: false })).resolves.toMatchObject({
+        enabled: false,
+      });
+      await expect(restricted.cron.remove(processJob.id)).resolves.toMatchObject({
+        ok: true,
+        removed: true,
+      });
+    } finally {
+      vi.doUnmock("./cron-stream-sandbox.js");
+      await (restricted ?? previous).cron.stopAndDrain?.();
+      vi.useRealTimers();
+    }
   });
 
   it("keeps sole-agent ownerless jobs dynamic across a restart and roster rename", async () => {

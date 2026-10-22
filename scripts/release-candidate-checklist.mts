@@ -31,6 +31,7 @@ import {
   stripLeadingPackageManagerSeparator,
 } from "./lib/arg-utils.mts";
 import { readBoundedResponseText } from "./lib/bounded-response.mjs";
+import { resolveNpmJsonEntries } from "./lib/npm-json-output.mts";
 import { parsePluginReleaseSelection } from "./lib/plugin-npm-release.ts";
 import { loadChangelogCollection } from "./lib/release-changelog.mjs";
 import { releaseBranchForTag } from "./lib/release-context.mjs";
@@ -43,7 +44,10 @@ import {
   verifyNpmPreflightProducer,
   validateReleasePreflightTagIdentity,
 } from "./npm-preflight-tooling-identity.mjs";
-import { validateNpmPreflightDistTag } from "./openclaw-npm-extended-stable-release.mjs";
+import {
+  resolveNpmPreflightSdkSelectors,
+  validateNpmPreflightDistTag,
+} from "./openclaw-npm-extended-stable-release.mjs";
 import {
   PluginSdkApiAcknowledgementError,
   validatePluginSdkApiReleaseEvidence,
@@ -190,7 +194,7 @@ Options:
   --npm-dist-tag <beta|latest>  Default: ${DEFAULT_NPM_DIST_TAG}
   --plugin-publish-scope <scope>      selected|all-publishable. Default: ${DEFAULT_PLUGIN_SCOPE}
   --plugins <names>                   Required when plugin scope is selected.
-  --output-dir <dir>                  Evidence output dir. Default: .artifacts/release-candidate/<tag>
+  --output-dir <dir>                  Evidence output dir. Default: .artifacts/release-candidate/<tag>/<target-sha>
 `;
 }
 
@@ -378,6 +382,18 @@ export function parseArgs(argv: string[]) {
   return options;
 }
 
+export function resolveReleaseCandidateOutputDir({
+  outputDir,
+  tag,
+  targetSha,
+}: {
+  outputDir: string;
+  tag: string;
+  targetSha: string;
+}) {
+  return outputDir || join(".artifacts", "release-candidate", tag, targetSha);
+}
+
 export function run(
   command: string,
   args: string[],
@@ -418,6 +434,162 @@ function readJson(path: string, label: string) {
       `${label} is invalid JSON: ${error instanceof Error ? error.message : String(error)}`,
       { cause: error },
     );
+  }
+}
+
+export function resolveEarlyPluginSdkApiBases({
+  distTags,
+  npmDistTag,
+  packageVersion,
+}: {
+  distTags: unknown;
+  npmDistTag: string;
+  packageVersion: string;
+}): Record<string, string> {
+  const entries = resolveNpmJsonEntries(distTags);
+  if (entries.length !== 1 || !isRecord(entries[0])) {
+    throw new Error("Expected one npm dist-tag selector map for the Plugin SDK API review");
+  }
+  const selectorMap = entries[0];
+  const selectors = resolveNpmPreflightSdkSelectors(packageVersion, npmDistTag);
+  return Object.fromEntries(
+    selectors.map((selector) => {
+      const version = selectorMap[selector];
+      if (typeof version !== "string" || !parseReleaseVersion(version)) {
+        throw new Error(`Invalid npm Plugin SDK API predecessor for ${selector}`);
+      }
+      return [selector, `v${version}`];
+    }),
+  );
+}
+
+function formatPluginSdkApiAcknowledgementFailure(
+  error: PluginSdkApiAcknowledgementError,
+  report: string,
+) {
+  const argv = stripLeadingPackageManagerSeparator(process.argv.slice(2));
+  const end = argv.indexOf("--");
+  const flag = "--plugin-sdk-api-acknowledgement";
+  let replaced = false;
+  for (let index = 0; index < (end === -1 ? argv.length : end); index++) {
+    if (argv[index] === flag) {
+      argv[++index] = error.digest;
+      replaced = true;
+    }
+  }
+  if (!replaced) {
+    argv.unshift(flag, error.digest);
+  }
+  return new Error(
+    [
+      error.message,
+      report || "Review the Plugin SDK API diff artifact before rerunning.",
+      ["pnpm", "release:candidate", "--", ...argv].map(shellQuote).join(" "),
+    ].join("\n\n"),
+    { cause: error },
+  );
+}
+
+export function resolveEarlyPluginSdkApiReviewPaths({
+  outputDir,
+  targetRoot,
+}: {
+  outputDir: string;
+  targetRoot: string;
+}) {
+  const reviewDir = resolvePath(targetRoot, outputDir, "plugin-sdk-api-early-review");
+  return {
+    reviewDir,
+    evidencePath: join(reviewDir, "plugin-sdk-api-release-evidence.json"),
+    reportPath: join(reviewDir, "plugin-sdk-api-release-diff.md"),
+    diffPath: join(reviewDir, "plugin-sdk-api-release-diff.json"),
+  };
+}
+
+function runEarlyPluginSdkApiReview({
+  npmDistTag,
+  outputDir,
+  targetRoot,
+  targetSha,
+  toolingSha,
+}: {
+  npmDistTag: string;
+  outputDir: string;
+  targetRoot: string;
+  targetSha: string;
+  toolingSha: string;
+}) {
+  const packageManifest: unknown = JSON.parse(
+    run("git", ["show", `${targetSha}:package.json`], { capture: true, cwd: targetRoot }),
+  );
+  const packageVersion = requireString(
+    isRecord(packageManifest) ? packageManifest.version : undefined,
+    "release package version",
+  );
+  const bases = resolveEarlyPluginSdkApiBases({
+    distTags: JSON.parse(
+      run("npm", ["view", "openclaw", "dist-tags", "--json"], {
+        capture: true,
+        cwd: targetRoot,
+      }),
+    ),
+    npmDistTag,
+    packageVersion,
+  });
+  for (const tag of new Set(Object.values(bases))) {
+    run(
+      "git",
+      [
+        "fetch",
+        "--no-tags",
+        "--filter=blob:none",
+        "--depth=1",
+        "origin",
+        `+refs/tags/${tag}:refs/tags/${tag}`,
+      ],
+      { cwd: TOOLING_ROOT },
+    );
+  }
+  const { reviewDir, evidencePath, reportPath, diffPath } = resolveEarlyPluginSdkApiReviewPaths({
+    outputDir,
+    targetRoot,
+  });
+  mkdirSync(reviewDir, { recursive: true });
+  const args = [
+    "run",
+    "plugin-sdk:api:diff",
+    "--",
+    "--head",
+    targetSha,
+    "--evidence",
+    evidencePath,
+    "--json",
+    diffPath,
+    "--summary",
+    reportPath,
+  ];
+  if (Object.keys(bases).length === 2) {
+    args.push("--bases-json", JSON.stringify(bases));
+  } else {
+    args.push("--base", requireString(Object.values(bases)[0], "Plugin SDK API predecessor"));
+  }
+  console.log("Reviewing the Plugin SDK API while Full Release Validation runs...");
+  run("pnpm", args, { cwd: TOOLING_ROOT });
+  const evidence = readJson(evidencePath, "early Plugin SDK API evidence");
+  const report = readFileSync(reportPath, "utf8").trim();
+  try {
+    return validatePluginSdkApiReleaseEvidence({
+      acknowledgement: "",
+      evidence,
+      expectedHeadSha: targetSha,
+      expectedWorkflowSha: toolingSha,
+      npmDistTag,
+    });
+  } catch (error) {
+    if (error instanceof PluginSdkApiAcknowledgementError) {
+      throw formatPluginSdkApiAcknowledgementFailure(error, report);
+    }
+    throw error;
   }
 }
 
@@ -2090,8 +2262,12 @@ async function main() {
     });
     return;
   }
-  options.outputDir ||= join(".artifacts", "release-candidate", options.tag);
   const targetSha = gitRevParse(options.targetSha || "HEAD", targetRoot);
+  options.outputDir = resolveReleaseCandidateOutputDir({
+    outputDir: options.outputDir,
+    tag: options.tag,
+    targetSha,
+  });
   assertReleaseCandidateTag(options.tag, targetSha, targetRoot);
   const toolingSha = gitRevParse("HEAD", TOOLING_ROOT);
   const latestTrustedToolingSha = fetchTrustedWorkflowSha(options.workflowRef, TOOLING_ROOT);
@@ -2233,6 +2409,19 @@ async function main() {
     fullReleaseRunId: options.fullReleaseRunId,
     npmPreflightRunId: options.npmPreflightRunId,
   });
+
+  // The validation run continues in GitHub while trusted local tooling computes
+  // the review digest. A missing acknowledgement therefore surfaces near
+  // dispatch instead of after every FRV lane has sealed.
+  if (!options.pluginSdkApiAcknowledgement) {
+    runEarlyPluginSdkApiReview({
+      npmDistTag: options.npmDistTag,
+      outputDir: options.outputDir,
+      targetRoot,
+      targetSha,
+      toolingSha,
+    });
+  }
 
   const { run: fullRun } = await waitForSuccessfulRun(options.repo, options.fullReleaseRunId, {
     workflowName: "Full Release Validation",
@@ -2393,27 +2582,7 @@ async function main() {
           });
         }
       }
-      const argv = stripLeadingPackageManagerSeparator(process.argv.slice(2));
-      const end = argv.indexOf("--");
-      const flag = "--plugin-sdk-api-acknowledgement";
-      let replaced = false;
-      for (let index = 0; index < (end === -1 ? argv.length : end); index++) {
-        if (argv[index] === flag) {
-          argv[++index] = error.digest;
-          replaced = true;
-        }
-      }
-      if (!replaced) {
-        argv.unshift(flag, error.digest);
-      }
-      throw new Error(
-        [
-          error.message,
-          report || "Review the Plugin SDK API diff artifact before rerunning.",
-          ["pnpm", "release:candidate", "--", ...argv].map(shellQuote).join(" "),
-        ].join("\n\n"),
-        { cause: error },
-      );
+      throw formatPluginSdkApiAcknowledgementFailure(error, report);
     }
     throw error;
   }

@@ -296,18 +296,17 @@ describe("updateSessionStoreAfterAgentRun", () => {
       })
       .finally(sql.restore);
     expect(sql.queries.filter(isSessionEntryDataSql)).toEqual([]);
-    expect(s.sessionStore[sessionKey]).toMatchObject({
-      chatType: "group",
-      label: "Renamed while running",
-      model: "gpt-5.5",
-      sendPolicy: "deny",
-      contextTokens: 32_000,
-      contextTokensSource: "runtime",
-    });
-    expect(s.sessionStore[sessionKey]?.agentHarnessId).toBeUndefined();
-    expect(s.sessionStore[sessionKey]?.elevatedLevel).toBeUndefined();
-    expect(s.sessionStore[sessionKey]?.inheritedToolAllow).toBeUndefined();
-    expect(s.sessionStore[sessionKey]?.pinnedAt).toBeUndefined();
+    s.check(
+      {
+        chatType: "group",
+        label: "Renamed while running",
+        model: "gpt-5.5",
+        sendPolicy: "deny",
+        contextTokens: 32_000,
+        contextTokensSource: "runtime",
+      },
+      ["agentHarnessId", "elevatedLevel", "inheritedToolAllow", "pinnedAt"],
+    );
     expect(s.read()).toEqual(s.sessionStore[sessionKey]);
   });
 
@@ -321,9 +320,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         compactionCount: 1,
       }),
     });
-    expect(s.sessionStore[sessionKey]?.sessionId).toBe(sessionId);
-    expect(s.read()?.sessionId).toBe(sessionId);
-    expect(s.read()?.compactionCount).toBeUndefined();
+    s.check({ sessionId }, ["compactionCount"]);
   });
 
   it("persists explicit-session runtime models", async ({ s }) => {
@@ -500,9 +497,7 @@ describe("updateSessionStoreAfterAgentRun", () => {
         }),
       }),
     });
-    for (const entry of [s.sessionStore[sessionKey], s.read()]) {
-      expect(entry).toMatchObject(visible);
-    }
+    s.check(visible);
   });
 
   it("preserves current accounting during session touch", async ({ s }) => {

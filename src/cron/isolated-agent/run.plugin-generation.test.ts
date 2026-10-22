@@ -90,6 +90,18 @@ async function setupPublishedGeneration(withAuth = false) {
     release: vi.fn(async () => {}),
   };
 }
+function publishDispatch(fixture: Awaited<ReturnType<typeof setupPublishedGeneration>>) {
+  const release = vi.fn(async () => {});
+  loadPublishedReplyDispatchRuntimeMock.mockImplementation(async ({ onRuntimeLease }) => {
+    onRuntimeLease?.({
+      snapshot: fixture.owner,
+      pluginGeneration: fixture.pluginGeneration,
+      [Symbol.asyncDispose]: release,
+    });
+    return fixture.dispatchRuntime;
+  });
+  return release;
+}
 
 describe("runCronIsolatedAgentTurn plugin generation carry", () => {
   setupRunCronIsolatedAgentTurnSuite();
@@ -207,15 +219,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
 
   it("cancels prepared runtime acquisition and releases its published dispatch lease", async () => {
     const fixture = await setupPublishedGeneration();
-    const releaseDispatch = vi.fn(async () => {});
-    loadPublishedReplyDispatchRuntimeMock.mockImplementation(async ({ onRuntimeLease }) => {
-      onRuntimeLease?.({
-        snapshot: fixture.owner,
-        pluginGeneration: fixture.pluginGeneration,
-        [Symbol.asyncDispose]: releaseDispatch,
-      });
-      return fixture.dispatchRuntime;
-    });
+    const releaseDispatch = publishDispatch(fixture);
     const acquisitionStarted = createDeferred<AbortSignal>();
     const releaseAcquisition = createDeferred();
     acquirePreparedModelRuntimeMock.mockImplementation(
@@ -376,15 +380,7 @@ describe("runCronIsolatedAgentTurn plugin generation carry", () => {
 
   it("releases the prepared lease when continuation initialization fails", async () => {
     const fixture = await setupPublishedGeneration();
-    const releaseDispatch = vi.fn(async () => {});
-    loadPublishedReplyDispatchRuntimeMock.mockImplementation(async ({ onRuntimeLease }) => {
-      onRuntimeLease?.({
-        snapshot: fixture.owner,
-        pluginGeneration: fixture.pluginGeneration,
-        [Symbol.asyncDispose]: releaseDispatch,
-      });
-      return fixture.dispatchRuntime;
-    });
+    const releaseDispatch = publishDispatch(fixture);
     const state = await import("./run-session-state.js");
     const initialize = vi.spyOn(state, "createCronRunContinuationSession").mockReturnValue({
       initialize: async () => {

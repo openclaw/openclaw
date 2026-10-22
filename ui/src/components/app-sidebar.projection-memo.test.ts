@@ -118,9 +118,13 @@ async function mount(rows: GatewaySessionRow[]) {
   };
 }
 
-async function expectRowRefresh(sidebar: Sidebar, change: () => void) {
+async function expectRowRefresh(sidebar: Sidebar, change: (() => void) | Partial<Sidebar>) {
   projectRows.mockClear();
-  change();
+  if (typeof change === "function") {
+    change();
+  } else {
+    Object.assign(sidebar, change);
+  }
   if (vi.isFakeTimers()) {
     vi.advanceTimersToNextFrame();
   }
@@ -496,15 +500,9 @@ describe("sidebar projection memo", () => {
     projectHome.mockClear();
     projectRows.mockClear();
     for (const change of [
-      () => {
-        sidebar.invalidate();
-      },
-      () => {
-        sidebar.devGitBranch = "feature/sidebar";
-      },
-      () => {
-        sidebar.invalidate();
-      },
+      () => sidebar.invalidate(),
+      () => (sidebar.devGitBranch = "feature/sidebar"),
+      () => sidebar.invalidate(),
       () => {
         sidebar.sidebarMenus.closePositionedMenu("sessionSort");
         sidebar.invalidate();
@@ -530,38 +528,23 @@ describe("sidebar projection memo", () => {
     expect(ownerPicker.params).toBe(ownerPickerParams);
     expect(projectHome).toHaveBeenCalled();
     expect(projectHome.mock.results.at(-1)?.value.lastMessagePreview).toBe("Home after");
-    await expectRowRefresh(sidebar, () => {
-      sidebar.activeRouteId = "chat";
-      sidebar.sessionKey = key("first");
-    });
+    await expectRowRefresh(sidebar, { activeRouteId: "chat", sessionKey: key("first") });
     expect(sidebar.findSidebarSessionByKey(key("first"))?.visuallyActive).toBe(true);
-    await expectRowRefresh(sidebar, () => {
-      sidebar.sessionKey = key("second");
-    });
+    await expectRowRefresh(sidebar, { sessionKey: key("second") });
     expect(sidebar.findSidebarSessionByKey(key("first"))?.visuallyActive).toBe(false);
     expect(sidebar.findSidebarSessionByKey(key("second"))?.visuallyActive).toBe(true);
 
-    await expectRowRefresh(sidebar, () => {
-      sidebar.setSessionSortMode("updated");
-    });
+    await expectRowRefresh(sidebar, () => sidebar.setSessionSortMode("updated"));
     expect(sidebar.querySelector("[data-session-key]")?.getAttribute("data-session-key")).toBe(
       key("second"),
     );
-    await expectRowRefresh(sidebar, () => {
-      sidebar.sessionsShowCron = true;
-    });
+    await expectRowRefresh(sidebar, { sessionsShowCron: true });
     expect(row(key("cron:daily"))).not.toBeNull();
-    await expectRowRefresh(sidebar, () => {
-      sidebar.sessionsShowSystem = true;
-    });
+    await expectRowRefresh(sidebar, { sessionsShowSystem: true });
     expect(row(key("explicit:healthcheck"))).not.toBeNull();
-    await expectRowRefresh(sidebar, () => {
-      sidebar.sessionsStatusFilter = "all";
-    });
+    await expectRowRefresh(sidebar, { sessionsStatusFilter: "all" });
     expect(row(key("archived"))).not.toBeNull();
-    await expectRowRefresh(sidebar, () => {
-      sidebar.setSessionOwnerFilter("bob");
-    });
+    await expectRowRefresh(sidebar, () => sidebar.setSessionOwnerFilter("bob"));
     await sidebar.sessionData.refreshSidebarSessions();
     await settleLitElement(sidebar);
     expect(row(key("second"))).not.toBeNull();
@@ -585,9 +568,7 @@ describe("sidebar projection memo", () => {
       result: { ...sessions.sessions.state.result!, sessions: [work], count: 1 },
     });
     await settleLitElement(sidebar);
-    await expectRowRefresh(sidebar, () => {
-      sidebar.sessionDataContext!.agentSelection.set("work");
-    });
+    await expectRowRefresh(sidebar, () => sidebar.sessionDataContext!.agentSelection.set("work"));
     expect(row(work.key)?.textContent).toContain("Work thread");
     expect(row(key("first"))).toBeNull();
   });
@@ -719,9 +700,7 @@ describe("sidebar projection memo", () => {
       "2",
     );
     expect(row(target.key)?.querySelector(".session-row-badge--draft")).not.toBeNull();
-    await expectRowRefresh(sidebar, () => {
-      sidebar.storedOutboxes = undefined;
-    });
+    await expectRowRefresh(sidebar, { storedOutboxes: undefined });
     expect(row(target.key)?.querySelector(".session-row-badge--draft")).toBeNull();
     await expectRowRefresh(sidebar, () =>
       sessions.sessions.setPullRequestSummary(target.key, { numbers: [42], state: "open" }),
@@ -736,9 +715,7 @@ describe("sidebar projection memo", () => {
       cancel = sessions.sessions.beginArchive(target.key, target.sessionId);
     });
     expect(row(target.key)).toBeNull();
-    await expectRowRefresh(sidebar, () => {
-      cancel?.();
-    });
+    await expectRowRefresh(sidebar, () => cancel?.());
     expect(row(target.key)).not.toBeNull();
   });
 
@@ -758,16 +735,20 @@ describe("sidebar projection memo", () => {
       const { sidebar, gateway, row, sessions, publish } = await mount([target, other]);
       const spinner = (sessionKey: string) =>
         row(sessionKey)?.querySelector('[aria-label="Active run"]');
-      expect(spinner(target.key)).not.toBeNull();
-      gateway.publishEvent("agent", {
-        sessionKey: target.key,
-        runId: "answer-run",
-        seq: 1,
-        stream: "assistant",
-        data: { text: "The answer is ready." },
-      });
-      await settleLitElement(sidebar);
-      expect(spinner(target.key)).not.toBeNull();
+      const expectRunning = () => expect(spinner(target.key)).not.toBeNull();
+      const agent = async (seq: number, stream: string, data: unknown) => {
+        gateway.publishEvent("agent", {
+          sessionKey: target.key,
+          runId: "answer-run",
+          seq,
+          stream,
+          data,
+        });
+        await settleLitElement(sidebar);
+        expectRunning();
+      };
+      expectRunning();
+      await agent(1, "assistant", { text: "The answer is ready." });
       expect(spinner(other.key)).not.toBeNull();
       gateway.publishEvent("chat", {
         sessionKey: target.key,
@@ -777,50 +758,18 @@ describe("sidebar projection memo", () => {
         message: { role: "assistant", content: [] },
       });
       await settleLitElement(sidebar);
-      expect(spinner(target.key)).not.toBeNull();
-      gateway.publishEvent("agent", {
-        sessionKey: target.key,
-        runId: "answer-run",
-        seq: 2,
-        stream: "item",
-        data: {
-          kind: "tool",
-          phase: "start",
-          itemId: "inspect",
-          toolCallId: "inspect",
-          name: "read_file",
-          title: "Read file",
-        },
+      expectRunning();
+      await agent(2, "item", {
+        kind: "tool",
+        phase: "start",
+        itemId: "inspect",
+        toolCallId: "inspect",
+        name: "read_file",
+        title: "Read file",
       });
-      await settleLitElement(sidebar);
-      expect(spinner(target.key)).not.toBeNull();
-      gateway.publishEvent("agent", {
-        sessionKey: target.key,
-        runId: "answer-run",
-        seq: 3,
-        stream: "lifecycle",
-        data: { phase: "finishing", error: "retryable" },
-      });
-      await settleLitElement(sidebar);
-      expect(spinner(target.key)).not.toBeNull();
-      gateway.publishEvent("agent", {
-        sessionKey: target.key,
-        runId: "answer-run",
-        seq: 4,
-        stream: "run_status",
-        data: { phase: "retrying", message: "Retrying" },
-      });
-      await settleLitElement(sidebar);
-      expect(spinner(target.key)).not.toBeNull();
-      gateway.publishEvent("agent", {
-        sessionKey: target.key,
-        runId: "answer-run",
-        seq: 3,
-        stream: "lifecycle",
-        data: { phase: "finishing" },
-      });
-      await settleLitElement(sidebar);
-      expect(spinner(target.key)).not.toBeNull();
+      await agent(3, "lifecycle", { phase: "finishing", error: "retryable" });
+      await agent(4, "run_status", { phase: "retrying", message: "Retrying" });
+      await agent(3, "lifecycle", { phase: "finishing" });
       expect(sessions.sessions.state.result?.sessions[0]?.hasActiveRun).toBe(true);
       publish([{ ...target, hasActiveRun: false, activeRunIds: [], status }, other]);
       await settleLitElement(sidebar);

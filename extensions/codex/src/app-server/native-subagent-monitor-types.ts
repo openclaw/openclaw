@@ -287,7 +287,6 @@ export type MonitorOptions = {
     timeoutMs: number,
   ) => Promise<boolean>;
   interruptModelExecution?: (threadId: string, turnId: string) => void;
-  recoveryPollDelaysMs?: readonly number[];
   retainClient?: () => (() => void) | undefined;
   retainParentThread?: (threadId: string) => (() => void) | undefined;
   hasObservationBacking?: (parentThreadId: string, childThreadId: string) => boolean;

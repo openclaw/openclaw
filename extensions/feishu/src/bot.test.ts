@@ -5,10 +5,7 @@ import {
   type BuiltChannelInboundEventContext,
   type ChannelInboundSupplementalResolutionOptions,
 } from "openclaw/plugin-sdk/channel-inbound";
-import {
-  createPluginRuntimeMock,
-  createTestInboundDebounceFlush,
-} from "openclaw/plugin-sdk/channel-test-helpers";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type {
   ensureConfiguredBindingRouteReady,
   getSessionBindingService,
@@ -33,9 +30,7 @@ import {
   sentMessage,
   withFeishuRuntimeDefaults,
 } from "./bot.test-support.js";
-import { resolveFeishuMessageDedupeKey } from "./dedupe-key.js";
 import { parseMergeForwardContent } from "./message-content.js";
-import { createFeishuMessageReceiveHandler } from "./monitor.message-handler.js";
 import { setFeishuRuntime } from "./runtime.js";
 
 const failedFinalReceipt = {
@@ -86,11 +81,11 @@ function senderClient(get = vi.fn().mockResolvedValue({ data: { user: { name: "S
 }
 
 function savedMedia(id: string, contentType: string, size: number, path = `/tmp/${id}`) {
-  return { saved: { id, path, size, contentType } };
+  return { id, path, size, contentType };
 }
 
 function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
-  const runtime = {
+  return createPluginRuntimeMock({
     config: {
       current: vi.fn(() => currentRuntimeConfig),
     },
@@ -111,53 +106,13 @@ function createFeishuBotRuntime(overrides: DeepPartial<PluginRuntime> = {}): Plu
         upsertPairingRequest: vi.fn(),
       },
       inbound: {
-        ingress: createPluginRuntimeMock().channel.inbound.ingress,
         buildContext: buildChannelInboundEventContext,
-        run: vi.fn(async (params) => {
-          const input = await params.adapter.ingest(params.raw);
-          if (!input) {
-            return {
-              admission: { kind: "drop" as const, reason: "ingest-null" },
-              dispatched: false,
-            };
-          }
-          const turn = await params.adapter.resolveTurn(
-            input,
-            {
-              kind: "message",
-              canStartAgentTurn: true,
-            },
-            {},
-          );
-          const { cfg, route, ctxPayload: ctx, record, replyOptions, admission } = turn;
-          await runtime.channel.session.recordInboundSession({
-            storePath: runtime.channel.session.resolveStorePath(cfg.session?.store, {
-              agentId: route.agentId,
-            }),
-            sessionKey: ctx.SessionKey ?? route.sessionKey,
-            ctx,
-            groupResolution: record?.groupResolution,
-            createIfMissing: record?.createIfMissing,
-            updateLastRoute: record?.updateLastRoute,
-            onRecordError: record?.onRecordError ?? (() => undefined),
-          });
-          return {
-            admission: admission ?? { kind: "dispatch" as const },
-            dispatched: true,
-            ctxPayload: ctx,
-            routeSessionKey: route.sessionKey,
-            dispatchResult:
-              admission?.kind === "observeOnly"
-                ? { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } }
-                : await dispatchReply({ ctx, cfg, replyOptions }),
-          };
-        }),
       },
+      reply: { dispatchReplyWithBufferedBlockDispatcher: dispatchReply },
       ...overrides.channel,
     },
-    ...(overrides.system ? { system: overrides.system as PluginRuntime["system"] } : {}),
-  } as unknown as PluginRuntime;
-  return runtime;
+    ...(overrides.system ? { system: overrides.system } : {}),
+  });
 }
 
 type FeishuRoutePeer = { id: string; kind: "direct" | "group" };
@@ -415,6 +370,14 @@ function rejectSenderPermission(msg: string) {
 }
 function historyMessage(senderId: string, content: string, offset = 0, senderType = "user") {
   return { senderId, senderType, content, createTime: 1710000000000 + offset * 1000 };
+}
+
+function fetchedMessage(
+  messageId: string,
+  content: string,
+  fields: Partial<NonNullable<Awaited<ReturnType<typeof getMessage>>>> = {},
+) {
+  return { messageId, chatId: "oc-group", content, contentType: "text", ...fields };
 }
 
 function mergeForwardItem(
@@ -1031,14 +994,12 @@ describe("handleFeishuMessage command authorization", () => {
 
   it("drops quoted group context from senders outside the group sender allowlist in allowlist mode", async () => {
     const parentId = "om_parent_blocked";
-    getMessage.mockResolvedValueOnce({
-      messageId: parentId,
-      chatId: "oc-group",
-      senderId: "ou-blocked",
-      senderType: "user",
-      content: "blocked quoted content",
-      contentType: "text",
-    });
+    getMessage.mockResolvedValueOnce(
+      fetchedMessage(parentId, "blocked quoted content", {
+        senderId: "ou-blocked",
+        senderType: "user",
+      }),
+    );
 
     await receiveGroup(
       {
@@ -1082,8 +1043,7 @@ describe("handleFeishuMessage command authorization", () => {
       saveMessageResource.mockRejectedValueOnce(new Error(`expired ${type} key`));
       await receiveMedia(`msg-${type}-failed`, type, content);
       const context = inboundContext();
-      expect(context.RawBody).toBe(rawBody);
-      expect(context.CommandBody).toBe(rawBody);
+      expect(context).toMatchObject({ RawBody: rawBody, CommandBody: rawBody });
       expect(context.BodyForAgent).toContain(body);
       for (const marker of excluded) {
         expect(context.BodyForAgent).not.toContain(marker);
@@ -1207,8 +1167,10 @@ describe("handleFeishuMessage command authorization", () => {
 
     const context = inboundContext();
     expect(context.BodyForAgent).toContain(caption);
-    expect(context.MediaPaths).toEqual(files.map((fileName) => `/tmp/${fileName}`));
-    expect(context.MediaTypes).toEqual(files.map(() => "text/csv"));
+    expect(context).toMatchObject({
+      MediaPaths: files.map((fileName) => `/tmp/${fileName}`),
+      MediaTypes: files.map(() => "text/csv"),
+    });
   });
 
   it("delivers unique rich-post attachments in their original mixed-media order", async () => {
@@ -1253,13 +1215,10 @@ describe("handleFeishuMessage command authorization", () => {
     ]);
 
     const context = inboundContext();
-    expect(context.MediaPaths).toEqual([
-      "/tmp/first.mov",
-      "/tmp/img_shared.png",
-      "/tmp/last.mov",
-      "/tmp/file_first.png",
-    ]);
-    expect(context.MediaTypes).toEqual(["video/mp4", "image/png", "video/mp4", "image/png"]);
+    expect(context).toMatchObject({
+      MediaPaths: ["/tmp/first.mov", "/tmp/img_shared.png", "/tmp/last.mov", "/tmp/file_first.png"],
+      MediaTypes: ["video/mp4", "image/png", "video/mp4", "image/png"],
+    });
     expect(context.BodyForAgent).toContain("**Urgent***[Docs](https://example.com)* <u>@Bob</u>");
   });
 
@@ -1298,7 +1257,10 @@ describe("handleFeishuMessage command authorization", () => {
       getMessage.mockResolvedValueOnce(
         content === null
           ? null
-          : { messageId, chatId: "oc_group_1", contentType: "merge_forward", content },
+          : fetchedMessage(messageId, content, {
+              chatId: "oc_group_1",
+              contentType: "merge_forward",
+            }),
       );
       await receive({
         messageId,
@@ -1475,14 +1437,9 @@ describe("handleFeishuMessage command authorization", () => {
   ] as const)(
     "hydrates native topic IDs before routing (synthetic=%s)",
     async (synthetic, messageId, senderOpenId, threadId, groupSessionScope) => {
-      getMessage.mockResolvedValueOnce({
-        messageId,
-        chatId: "oc-group",
-        chatType: "topic_group",
-        content: "topic starter",
-        contentType: "text",
-        threadId,
-      });
+      getMessage.mockResolvedValueOnce(
+        fetchedMessage(messageId, "topic starter", { chatType: "topic_group", threadId }),
+      );
       const cfg = groupConfig({ groupSessionScope, replyInThread: "enabled" });
       await receiveConfigured(
         {
@@ -1616,14 +1573,12 @@ describe("handleFeishuMessage command authorization", () => {
       if (mode === "existing") {
         readSessionUpdatedAt.mockReturnValue(1710000000000);
       } else {
-        getMessage.mockResolvedValue({
-          messageId: "om_topic_root",
-          chatId: "oc-group",
-          contentType: "text",
-          threadId: "omt_topic_1",
-          content: allowlist ? "blocked root starter" : "root starter",
-          ...(allowlist ? { senderId: "ou-blocked", senderType: "user" } : {}),
-        });
+        getMessage.mockResolvedValue(
+          fetchedMessage("om_topic_root", allowlist ? "blocked root starter" : "root starter", {
+            threadId: "omt_topic_1",
+            ...(allowlist ? { senderId: "ou-blocked", senderType: "user" } : {}),
+          }),
+        );
         listThreadMessages.mockResolvedValue(
           allowlist
             ? [
@@ -1744,12 +1699,11 @@ describe("handleFeishuMessage command authorization", () => {
     "fetches quoted context only for admitted mention-only replies (mentioned=%s)",
     async (mentioned) => {
       if (mentioned) {
-        getMessage.mockResolvedValueOnce({
-          messageId: "om_group_quoted_001",
-          chatId: "oc-group-90177",
-          content: "parent message with context",
-          contentType: "text",
-        });
+        getMessage.mockResolvedValueOnce(
+          fetchedMessage("om_group_quoted_001", "parent message with context", {
+            chatId: "oc-group-90177",
+          }),
+        );
       }
       const runtime = await receiveGroup(
         {
@@ -1782,107 +1736,5 @@ describe("handleFeishuMessage command authorization", () => {
       }
     },
   );
-});
-
-describe("createFeishuMessageReceiveHandler media dedupe", () => {
-  type ReceiveOptions = Parameters<typeof createFeishuMessageReceiveHandler>[0];
-  function receiver(
-    batchSize: 1 | 2,
-    accountId: string,
-    resolveDebounceText: ReceiveOptions["resolveDebounceText"],
-  ) {
-    const handleMessage = vi
-      .fn<NonNullable<ReceiveOptions["handleMessage"]>>()
-      .mockResolvedValue(undefined);
-    const core = {
-      channel: {
-        debounce: {
-          resolveInboundDebounceMs: vi.fn(() => (batchSize === 2 ? 10 : 0)),
-          createInboundDebouncer: vi.fn(
-            (options: {
-              onFlush: (
-                entries: FeishuMessageEvent[],
-                createFlush: typeof createTestInboundDebounceFlush,
-              ) => { completion: Promise<void> };
-            }) => {
-              const entries: FeishuMessageEvent[] = [];
-              return {
-                enqueue: async (event: FeishuMessageEvent) => {
-                  if (batchSize === 1) {
-                    await options.onFlush([event], createTestInboundDebounceFlush).completion;
-                  } else {
-                    entries.push(event);
-                    if (entries.length === batchSize) {
-                      await options.onFlush(entries, createTestInboundDebounceFlush).completion;
-                    }
-                  }
-                },
-                flushKey: async () => {},
-                cancelKey: () => false,
-                drain: async () => {},
-              };
-            },
-          ),
-        },
-      },
-    } as unknown as PluginRuntime;
-    return {
-      handleMessage,
-      handler: createFeishuMessageReceiveHandler({
-        cfg: createFeishuTestConfig({ dmPolicy: "open" }),
-        channelRuntime: core.channel,
-        accountId,
-        chatHistories: new Map(),
-        handleMessage,
-        resolveDebounceText,
-        hasProcessedMessage: vi.fn(async () => false),
-      }),
-    };
-  }
-
-  it("preserves the original dispatch dedupe key when debounce merges text content", async () => {
-    const { handler, handleMessage } = receiver(
-      2,
-      "receive-text-debounce",
-      ({ event }) => (JSON.parse(event.message.content) as { text: string }).text,
-    );
-    const textEvent = (messageId: string, createTime: string, text: string) =>
-      createFeishuTestEvent({
-        messageId,
-        senderOpenId: "ou-text-debounce",
-        text,
-        message: { create_time: createTime },
-      });
-    const last = textEvent("msg-text-last", "1710000001000", "second");
-    await handler(textEvent("msg-text-first", "1710000000000", "first"));
-    await handler(last);
-    const call = handleMessage.mock.calls[0]![0];
-    expect(call.event.message.content).toBe(last.message.content);
-    expect(call.preparedContent).toBe("first\nsecond");
-    expect(call.messageDedupeKey).toBe(resolveFeishuMessageDedupeKey(last));
-    expect(resolveFeishuMessageDedupeKey(call.event)).toBe(call.messageDedupeKey);
-  });
-
-  it("keeps same-id media variants distinct at receive time", async () => {
-    const { handler, handleMessage } = receiver(1, "receive-media-dedupe", () => "");
-    const audioEvent = (fileKey: string) =>
-      createFeishuTestEvent({
-        messageId: "msg-audio-receive-reused-id",
-        senderOpenId: "ou-audio-receive-dedup",
-        messageType: "audio",
-        content: JSON.stringify({ file_key: fileKey, duration: 1200 }),
-      });
-    const firstEvent = audioEvent("file_audio_receive_first");
-    const secondEvent = audioEvent("file_audio_receive_second");
-    await handler(firstEvent);
-    await handler(secondEvent);
-    await handler(audioEvent("file_audio_receive_first"));
-    expect(handleMessage).toHaveBeenCalledTimes(2);
-    expect(handleMessage.mock.calls.map(([call]) => call.event)).toEqual([firstEvent, secondEvent]);
-    expect(handleMessage.mock.calls.map(([call]) => typeof call.processingClaim?.commit)).toEqual([
-      "function",
-      "function",
-    ]);
-  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

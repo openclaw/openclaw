@@ -217,155 +217,105 @@ describe("LINE webhook spool image sets", () => {
       }
     });
   });
-  it("keeps a later message on the same lane behind an incomplete image set", async () => {
+  it.each([
+    {
+      name: "holds an incomplete set ahead of a later message",
+      events: [
+        { webhookEventId: "incomplete", imageSet: { id: "set-order", index: 1, total: 3 } },
+        { webhookEventId: "after", text: "text" },
+      ],
+      blocked: "image",
+      before: [],
+      after: ["image", "text"],
+      parts: 1,
+      queued: 1,
+      timeout: 20_000,
+      missing: true,
+    },
+    {
+      name: "serializes two messages queued behind an image set",
+      events: [
+        { webhookEventId: "set-queue", imageSet: { id: "set-queue", index: 1, total: 3 } },
+        { webhookEventId: "first", text: "first" },
+        { webhookEventId: "second", text: "second" },
+      ],
+      blocked: "first",
+      before: ["image"],
+      after: ["image", "first", "second"],
+      parts: 1,
+      queued: 2,
+      timeout: 20_000,
+      missing: false,
+    },
+    {
+      name: "holds a later image set behind an already queued message",
+      events: [
+        {
+          webhookEventId: "set-a",
+          messageId: "message-seta",
+          imageSet: { id: "set-a", index: 1, total: 3 },
+        },
+        { webhookEventId: "mid", text: "queued" },
+        ...[1, 2].map((index) => ({
+          webhookEventId: `set-b-${index}`,
+          messageId: `message-setb${index}`,
+          imageSet: { id: "set-b", index, total: 2 },
+        })),
+      ],
+      blocked: "queued",
+      before: ["seta"],
+      after: ["seta", "queued", "etb1"],
+      parts: 3,
+      queued: 1,
+      timeout: 30_000,
+      missing: false,
+    },
+  ])("$name", async ({ events, blocked, before, after, parts, queued, timeout, missing }) => {
     await withQueue(async (queue) => {
       const runtimeEnv = runtime();
-      // Keep the lane while media preparation is paused, not merely while buffering parts.
-      const delivery = orderedDelivery((message) => message.type, "image");
+      const delivery = orderedDelivery(
+        (message) =>
+          message.type === "text"
+            ? message.text
+            : blocked === "queued"
+              ? message.id.slice(-4)
+              : message.type,
+        blocked,
+      );
       const { deliver, order, entered, release } = delivery;
       const clock = createImageSetClockSpool(queue, deliver, runtimeEnv);
       const { spool } = clock;
       spool.start();
       try {
-        // An image set that never completes: only its timer can release the lane.
-        await acceptEvent(spool, {
-          webhookEventId: "event-incomplete",
-          userId: "user-order",
-          imageSet: { id: "set-order", index: 1, total: 3 },
-        });
-        await acceptEvent(spool, { webhookEventId: "event-after", userId: "user-order" });
-        await clock.flushAfterClaims(
-          ["message:message-event-incomplete", "message:message-event-after"],
-          1,
-          1,
-        );
-        await entered.promise;
-        expect(runtimeEnv.error).toHaveBeenCalledWith(
-          expect.stringContaining(
-            "image set set-order delivered 1 of the send's parts, 2 still missing",
-          ),
-        );
-        await vi.advanceTimersByTimeAsync(0);
-        expect(deliver).toHaveBeenCalledTimes(1);
-        expect(order).toEqual([]);
-        release.resolve();
-        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(2), {
-          interval: 0,
-          timeout: 20_000,
-        });
-        expect(order).toEqual(["image", "text"]);
-      } finally {
-        release.resolve();
-        await clock.stop();
-      }
-    });
-  });
-  it("delivers two messages queued behind an image set in arrival order", async () => {
-    await withQueue(async (queue) => {
-      // A slow first queued message must not be overtaken by the second.
-      const delivery = orderedDelivery(
-        (message) => (message.type === "text" ? message.text : message.type),
-        "first",
-      );
-      const { deliver, order, entered, release } = delivery;
-      const clock = createImageSetClockSpool(queue, deliver);
-      const { spool } = clock;
-      spool.start();
-      try {
-        await acceptEvent(spool, {
-          webhookEventId: "event-set-queue",
-          userId: "user-queue",
-          imageSet: { id: "set-queue", index: 1, total: 3 },
-        });
-        await acceptEvent(spool, {
-          webhookEventId: "event-first",
-          userId: "user-queue",
-          text: "first",
-        });
-        await acceptEvent(spool, {
-          webhookEventId: "event-second",
-          userId: "user-queue",
-          text: "second",
-        });
-        await clock.flushAfterClaims(
-          [
-            "message:message-event-set-queue",
-            "message:message-event-first",
-            "message:message-event-second",
-          ],
-          1,
-          2,
-        );
-        await entered.promise;
-        await vi.advanceTimersByTimeAsync(0);
-        expect(deliver).toHaveBeenCalledTimes(2);
-        expect(order).toEqual(["image"]);
-        expect(delivery.overlapped).toBe(false);
-        release.resolve();
-        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(3), {
-          interval: 0,
-          timeout: 20_000,
-        });
-        expect(order).toEqual(["image", "first", "second"]);
-        expect(delivery.overlapped).toBe(false);
-      } finally {
-        release.resolve();
-        await clock.stop();
-      }
-    });
-  });
-  it("keeps a later image set behind a message already queued on the lane", async () => {
-    await withQueue(async (queue) => {
-      // A complete later set must wait while the queued text builds its turn.
-      const delivery = orderedDelivery(
-        (message) => (message.type === "text" ? message.text : message.id.slice(-4)),
-        "queued",
-      );
-      const { deliver, order, entered, release } = delivery;
-      const clock = createImageSetClockSpool(queue, deliver);
-      const { spool } = clock;
-      spool.start();
-      try {
-        await acceptEvent(spool, {
-          webhookEventId: "event-set-a",
-          messageId: "message-seta",
-          userId: "user-mixed",
-          imageSet: { id: "set-a", index: 1, total: 3 },
-        });
-        await acceptEvent(spool, {
-          webhookEventId: "event-mid",
-          userId: "user-mixed",
-          text: "queued",
-        });
-        for (const index of [1, 2]) {
-          await acceptEvent(spool, {
-            webhookEventId: `event-set-b-${index}`,
-            messageId: `message-setb${index}`,
-            userId: "user-mixed",
-            imageSet: { id: "set-b", index, total: 2 },
-          });
+        for (const event of events) {
+          await acceptEvent(spool, { ...event, userId: "user-order" });
         }
         await clock.flushAfterClaims(
-          [
-            "message:message-seta",
-            "message:message-event-mid",
-            "message:message-setb1",
-            "message:message-setb2",
-          ],
-          3,
-          1,
+          events.map(
+            (event) =>
+              `message:${"messageId" in event ? event.messageId : `message-${event.webhookEventId}`}`,
+          ),
+          parts,
+          queued,
         );
         await entered.promise;
+        if (missing) {
+          expect(runtimeEnv.error).toHaveBeenCalledWith(
+            expect.stringContaining(
+              "image set set-order delivered 1 of the send's parts, 2 still missing",
+            ),
+          );
+        }
         await vi.advanceTimersByTimeAsync(0);
-        expect(deliver).toHaveBeenCalledTimes(2);
-        expect(order).toEqual(["seta"]);
+        expect(deliver).toHaveBeenCalledTimes(before.length + 1);
+        expect(order).toEqual(before);
         expect(delivery.overlapped).toBe(false);
         release.resolve();
-        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(3), {
+        await vi.waitFor(() => expect(deliver).toHaveBeenCalledTimes(after.length), {
           interval: 0,
-          timeout: 30_000,
+          timeout,
         });
-        expect(order).toEqual(["seta", "queued", "etb1"]);
+        expect(order).toEqual(after);
         expect(delivery.overlapped).toBe(false);
       } finally {
         release.resolve();

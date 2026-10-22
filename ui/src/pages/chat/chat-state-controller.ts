@@ -68,6 +68,7 @@ export function createChatState<TState extends ChatPageHost>(
     mentions: stateValue?.chatMentions ?? emptyMentions,
     attachments: stateValue?.chatAttachments ?? [],
     pendingAttachmentReads: attachmentReadsValue.pendingReads,
+    attachmentReadRevision: attachmentReadsValue.revision,
     goalDraftMode: stateValue?.chatGoalDraftMode,
   }));
   const attachmentChanged = () => {
@@ -478,6 +479,7 @@ export function createChatState<TState extends ChatPageHost>(
       draft.mentions !== publishedDraft.mentions ||
       draft.attachments !== publishedDraft.attachments ||
       draft.pendingAttachmentReads !== publishedDraft.pendingAttachmentReads ||
+      draft.attachmentReadRevision !== publishedDraft.attachmentReadRevision ||
       draft.goalDraftMode !== publishedDraft.goalDraftMode
     ) {
       publishComposerDraft();

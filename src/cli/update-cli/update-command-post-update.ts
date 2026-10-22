@@ -232,7 +232,7 @@ async function finishSettledUpdate(
           detail:
             "No retained previous package transaction is available; automatic package restoration was not attempted.",
         },
-        { env: params.opts.run.env },
+        params.opts.run,
       );
     }
     const recoveryParams = { ...params, preManagedServiceStop: currentServiceStop() };

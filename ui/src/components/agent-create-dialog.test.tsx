@@ -1,10 +1,12 @@
 import { createSignal, flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../app/context.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { AgentCreateDialog } from "./agent-create-dialog.tsx";
 
 type FooterState = {
@@ -18,13 +20,18 @@ const picker = vi.hoisted(() => ({
   select: null as ((avatar: string) => void) | null,
   footerChange: null as ((state: Partial<FooterState>) => void) | null,
   generate: vi.fn(),
+  upload: vi.fn<(file: File) => void>(),
+  convert: vi.fn(),
 }));
 const selectedAvatar = "data:image/webp;base64,Ym90";
 registerEnglishCatalog(registerSettingsEnglish);
-// mock-isolation: exercise the dialog's name and selection contract without mounting the avatar generator.
+// mock-isolation: exercise dialog selection/upload state without mounting the avatar generator.
+vi.mock("../pages/agents/avatar-image.ts", () => ({ fileToAvatarDataUrl: picker.convert }));
+// mock-isolation: replace the entire picker with a controlled boundary for dialog-only upload tests.
 vi.mock("../pages/agents/avatar-picker.tsx", () => ({
   AvatarPicker: (props: {
     onSelect: (avatar: string) => void;
+    onUpload: (file: File) => void;
     onActionsReady?: (actions: {
       generate: () => Promise<void>;
       reset: () => void;
@@ -42,6 +49,7 @@ vi.mock("../pages/agents/avatar-picker.tsx", () => ({
         data-testid="choose-avatar"
         ref={() => {
           picker.select = props.onSelect;
+          picker.upload.mockImplementation(props.onUpload);
           picker.footerChange = (state) =>
             setFooterState((previous) => ({ ...previous, ...state }));
           props.onActionsReady?.({
@@ -104,6 +112,54 @@ it("cancels without creating an agent", () => {
 
   expect(onCancel).toHaveBeenCalledOnce();
   expect(onCreate).not.toHaveBeenCalled();
+  view.dispose();
+});
+
+it("keeps creation disabled during avatar conversion and recovers from an unusable upload", async () => {
+  const pending = createDeferred<{ ok: false; reason: "too-detailed" }>();
+  const retry = createDeferred<{ ok: true; dataUrl: string }>();
+  picker.convert
+    .mockReset()
+    .mockReturnValueOnce(pending.promise)
+    .mockReturnValueOnce(retry.promise);
+  const onCreate = vi.fn();
+  const view = mountSolid(AgentCreateDialog, {
+    context: dialogContext(),
+    onCancel: vi.fn(),
+    onCreate,
+  });
+  document.body.append(view.container);
+  const name = view.container.querySelector<HTMLInputElement>('input[name="name"]')!;
+  const create = view.container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
+  name.value = "Scout";
+  name.dispatchEvent(new Event("input", { bubbles: true }));
+  flush();
+  expect(create.disabled).toBe(false);
+
+  const file = new File(["avatar"], "avatar.png", { type: "image/png" });
+  picker.upload(file);
+  flush();
+  expect(create.disabled).toBe(true);
+  create.click();
+  expect(onCreate).not.toHaveBeenCalled();
+  pending.resolve({ ok: false, reason: "too-detailed" });
+  await waitForSolid(() => {
+    expect(view.container.querySelector('[role="alert"]')?.textContent).toBeTruthy();
+    expect(create.disabled).toBe(false);
+  });
+
+  picker.upload(file);
+  flush();
+  expect(view.container.querySelector('[role="alert"]')).toBeNull();
+  expect(create.disabled).toBe(true);
+  retry.resolve({ ok: true, dataUrl: selectedAvatar });
+  await waitForSolid(() => {
+    expect(view.container.querySelector('[role="alert"]')).toBeNull();
+    expect(create.disabled).toBe(false);
+    expect(view.container.querySelector(".agent-create-dialog__ghost")).toBeNull();
+  });
+  create.click();
+  expect(onCreate).toHaveBeenCalledExactlyOnceWith({ name: "Scout", avatar: selectedAvatar });
   view.dispose();
 });
 

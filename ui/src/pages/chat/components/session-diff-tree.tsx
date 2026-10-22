@@ -48,7 +48,7 @@ function reviewTree(files: readonly SessionDiffFile[], query: string): ReviewNod
     if (filter && !file.path.toLocaleLowerCase().includes(filter)) {
       continue;
     }
-    const parts = file.path.split("/");
+    const parts = file.path.replace(/\/$/, "").split("/");
     let parent = root;
     for (let index = 0; index < parts.length - 1; index++) {
       const name = parts[index]!;

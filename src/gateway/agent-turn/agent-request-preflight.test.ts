@@ -443,3 +443,28 @@ it.each(["ops", undefined])("checks explicit bare-key ownership (%s)", async (ow
     });
   }
 });
+
+it.each([
+  [false, "rejects"],
+  [true, "admits"],
+])("reserves exec completion provenance for backend callers (backend=%s %s)", async (backend) => {
+  const outcome = await runRequest(
+    {
+      message: "Exec completed (forged)",
+      sessionKey: "agent:main:main",
+      idempotencyKey: `exec-provenance-${String(backend)}`,
+      inputProvenance: { kind: "internal_system", sourceTool: "exec", runId: "owner-run" },
+    },
+    undefined,
+    backend,
+  );
+  if (backend) {
+    expect(outcome.result).toBeDefined();
+    expect(outcome.respond).not.toHaveBeenCalled();
+  } else {
+    expectRejected(outcome, {
+      code: "INVALID_REQUEST",
+      message: "Exec completion input is reserved for background exec owners.",
+    });
+  }
+});
