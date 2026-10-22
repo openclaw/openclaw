@@ -1,7 +1,8 @@
 import { readFileSync, realpathSync, writeFileSync, writeSync } from "node:fs";
 import { Session } from "node:inspector/promises";
-import { syncBuiltinESMExports } from "node:module";
+import { registerHooks, syncBuiltinESMExports } from "node:module";
 import { availableParallelism } from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import v8, { getHeapSpaceStatistics, queryObjects, writeHeapSnapshot } from "node:v8";
 import { isMainThread } from "node:worker_threads";
@@ -57,6 +58,77 @@ function sampleResources(): GatewayResourceSnapshot {
 if (isMainThread) {
   if (!process.send) {
     throw new Error("Gateway profiling requires the benchmark IPC channel");
+  }
+  const broadcastTiming = process.env.OPENCLAW_BENCH_BROADCAST_TIMING === "1";
+  const sessionProjectionSource = process.env.OPENCLAW_BENCH_SESSION_PROJECTION_SOURCE;
+  let broadcastTimingInstalled = false;
+  if (broadcastTiming || sessionProjectionSource) {
+    const entry = new URL("../../src/entry.ts", import.meta.url);
+    if (!process.argv[1] || realpathSync(process.argv[1]) !== realpathSync(entry)) {
+      throw new Error(
+        "Broadcast timing and session projection sources require --entry src/entry.ts",
+      );
+    }
+    const projectionSources = new Map<string, string>();
+    if (sessionProjectionSource) {
+      for (const file of [
+        "session-event-projection.ts",
+        "session-row-presentation.ts",
+        "session-sharing-read.ts",
+        "session-utils-list.ts",
+      ]) {
+        projectionSources.set(
+          new URL(`../../src/gateway/${file}`, import.meta.url).href,
+          readFileSync(path.join(sessionProjectionSource, file), "utf8"),
+        );
+      }
+    }
+    const owner = new URL("../../src/gateway/server-broadcast.ts", import.meta.url).href;
+    registerHooks({
+      load(url, context, nextLoad) {
+        const loaded = nextLoad(url, context);
+        const projectionSource = projectionSources.get(url);
+        if (projectionSource !== undefined) {
+          // Preserve canonical imports and original TypeScript lines in sampled stacks.
+          return { ...loaded, format: "module-typescript", source: projectionSource };
+        }
+        if (!broadcastTiming || url !== owner) {
+          return loaded;
+        }
+        let source = readFileSync(new URL(url), "utf8");
+        const opening = "  ) => {\n    if (!retained) {";
+        const closing = "\n  };\n\n  const broadcast: GatewayBroadcastFn";
+        if (source.split(opening).length !== 2 || source.split(closing).length !== 2) {
+          throw new Error("Broadcast timing source anchors changed; update the benchmark observer");
+        }
+        // Keep the original body and early returns; only numeric timing crosses this private channel.
+        source = source
+          .replace(
+            opening,
+            `  ) => {
+    const benchmarkBroadcastStarted = benchmarkBroadcastChannel.hasSubscribers ? performance.now() : undefined;
+    try {
+    if (!retained) {`,
+          )
+          .replace(
+            closing,
+            `
+    } finally {
+      if (benchmarkBroadcastStarted !== undefined) {
+        benchmarkBroadcastChannel.publish({ operation: event, durationMs: performance.now() - benchmarkBroadcastStarted });
+      }
+    }
+  };
+
+  const broadcast: GatewayBroadcastFn`,
+          );
+        source = `import { channel as benchmarkBroadcastDiagnosticChannel } from "node:diagnostics_channel";
+const benchmarkBroadcastChannel = benchmarkBroadcastDiagnosticChannel("openclaw.benchmark.broadcast");
+${source}`;
+        broadcastTimingInstalled = true;
+        return { ...loaded, format: "module-typescript", source };
+      },
+    });
   }
   if (process.env.OPENCLAW_BENCH_FIRST_TEXT === "1") {
     const { onAgentEvent } = await import("../../src/infra/agent-events.js");
@@ -248,6 +320,10 @@ if (isMainThread) {
         ...(message.kind === "diagnostics" ? { captureId: message.captureId } : {}),
       });
     };
+    if (broadcastTiming && !broadcastTimingInstalled && message.action === "start") {
+      reply("Broadcast timing owner was not loaded; source attribution is unavailable");
+      return;
+    }
     if (message.kind === "diagnostics") {
       const captureId = message.captureId;
       if (message.action === "start") {
