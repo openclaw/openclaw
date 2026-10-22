@@ -106,3 +106,35 @@ export async function collectEvents(run: ReturnType<typeof captureAgentLoop>) {
   await run.result;
   return run.events;
 }
+
+export function captureToolLoop(options: {
+  tools: AgentTypes.AgentTool[];
+  config?: Partial<AgentTypes.AgentLoopConfig>;
+  onEvent?: (event: AgentTypes.AgentEvent) => void | Promise<void>;
+  onMessage?: (message: AgentTypes.AgentMessage) => void | Promise<void>;
+  signal?: AbortSignal;
+  streamFn?: AgentTypes.StreamFn;
+  prompt?: AgentTypes.AgentMessage;
+}) {
+  const response = createAssistantMessageEventStream();
+  const persisted: AgentTypes.AgentMessage[] = [];
+  const events: AgentTypes.AgentEvent[] = [];
+  const run = runAgentLoop(
+    [options.prompt ?? user("start", 0)],
+    { systemPrompt: "", messages: [], tools: options.tools },
+    { ...config, ...options.config },
+    (event) => {
+      events.push(event);
+      if (event.type === "message_end") {
+        persisted.push(event.message);
+        if (options.onMessage) {
+          return options.onMessage(event.message);
+        }
+      }
+      return options.onEvent?.(event);
+    },
+    options.signal,
+    options.streamFn ?? (() => response),
+  );
+  return { response, persisted, events, run };
+}

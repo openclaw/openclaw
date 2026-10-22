@@ -4,7 +4,7 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import { createStreamedSteeringConfig } from "./agent-loop-steering.js";
 import {
   config,
-  captureAgentLoop,
+  captureToolLoop,
   createTurnSequenceStream,
   makeAssistantMessage,
   makeCall,
@@ -78,16 +78,13 @@ function runLoop(
   prompt = "start",
 ) {
   const requests: Message[][] = [];
-  return {
-    ...captureAgentLoop(
-      [user(prompt)],
-      { systemPrompt: "", messages: [], tools },
-      { ...config, ...loopConfig },
-      undefined,
-      createTurnSequenceStream(turns, requests),
-    ),
-    requests,
-  };
+  const { run: result, events } = captureToolLoop({
+    tools,
+    config: loopConfig,
+    prompt: user(prompt),
+    streamFn: createTurnSequenceStream(turns, requests),
+  });
+  return { result, events, requests };
 }
 
 function expectInjectedOnce(events: AgentEvent[], message: AgentMessage) {
