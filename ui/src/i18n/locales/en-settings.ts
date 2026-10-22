@@ -1111,6 +1111,10 @@ const enSettings = {
         "The connection, agent, or access changed. No further credentials were removed.",
       partial: "Saved accounts removed so far: {count}. Remaining removals did not complete.",
     },
+    setup: {
+      action: "Set up",
+      done: "Provider configured. The active model has not changed.",
+    },
     add: {
       title: "Add provider",
       subtitle: "Choose a known model provider and save its API key.",

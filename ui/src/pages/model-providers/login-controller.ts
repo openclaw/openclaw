@@ -19,7 +19,12 @@ import type { ModelSetupWizardCompletion } from "../model-setup/wizard-runner.ts
 import type { ModelProviderRowMessage } from "./config-mutation.ts";
 import { buildModelProviderCards, type ModelProviderCard } from "./data.ts";
 import { createLoginSavingPresentation } from "./login-presentation.ts";
-import { buildLoginProviders, resolveLoginSelection } from "./login-providers.ts";
+import {
+  buildLoginProviders,
+  filterLoginProviders,
+  resolveLoginSelection,
+  resolveLoginStarterModel,
+} from "./login-providers.ts";
 import { createModelProviderStartChat } from "./login-start-chat.ts";
 import "../../styles/model-providers.css";
 registerEnglishCatalog(registerSettingsEnglish);
@@ -66,7 +71,7 @@ export function createModelProviderLogin(options: LoginOptions) {
   let presentationReady: (() => void) | undefined;
   let refreshWarning: string | null = null;
   let message: ModelProviderRowMessage | undefined;
-  let loginMode: "auth" | "activate" | "access" = "auth";
+  let loginMode: "auth" | "activate" | "access" | "prepare" = "auth";
   let authProviderId: string | undefined;
   let completionModel: ModelCatalogEntry | undefined;
   let verifiedModelRef: string | undefined;
@@ -143,6 +148,21 @@ export function createModelProviderLogin(options: LoginOptions) {
       onConnect: (card: ModelProviderCard) => open([card.id, ...card.credentialProviderIds]),
       canConnect: (card: ModelProviderCard) =>
         loginProviders([card.id, ...card.credentialProviderIds]).length > 0,
+      onSetupProvider: (
+        card: ModelProviderCard,
+        choice: NonNullable<ModelProviderCard["setupActions"]>[number],
+      ) => {
+        if (!options.canStart() || busy()) {
+          return;
+        }
+        authProviderId = card.id;
+        loginMode = "prepare";
+        message = undefined;
+        refreshWarning = null;
+        void run(() =>
+          runner.start(choice.choiceId, "openclaw.setup.prepare.start", {}, choice.modelTarget),
+        );
+      },
     };
   }
 
@@ -358,12 +378,15 @@ export function createModelProviderLogin(options: LoginOptions) {
   function wizardViewProps() {
     view.read();
     const current = wizard.viewProps({
-      mode: loginMode === "access" ? "auth" : loginMode,
+      mode: loginMode === "access" || loginMode === "prepare" ? "auth" : loginMode,
       busy: mutationActive,
       refreshWarning,
-      doneMessage: runner.state.authLabel
-        ? t("modelSetup.providerConnected", { provider: runner.state.authLabel })
-        : t("modelSetup.wizard.connected"),
+      doneMessage:
+        loginMode === "prepare"
+          ? t("modelProviders.setup.done")
+          : runner.state.authLabel
+            ? t("modelSetup.providerConnected", { provider: runner.state.authLabel })
+            : t("modelSetup.wizard.connected"),
       doneDescription: completionModel
         ? t("modelProviders.login.modelReady", { model: completionModel.name })
         : undefined,
@@ -413,16 +436,6 @@ export function createModelProviderLogin(options: LoginOptions) {
     const missing = selection().missing;
     const recovery =
       missing && accounts.some((card) => card.id === missing.provider) ? missing : null;
-    const search = query().trim().toLocaleLowerCase();
-    const matches = groups.filter((group) =>
-      [
-        group.id,
-        group.label,
-        ...(group.apiKeyProvider ? [t("modelProviders.status.apiKey")] : []),
-        ...group.choices.flatMap((choice) => [choice.label, choice.hint ?? ""]),
-      ].some((text) => text.toLocaleLowerCase().includes(search)),
-    );
-
     return {
       inventory: picker.inventory,
       unavailable: authStatus?.unavailable,
@@ -431,7 +444,7 @@ export function createModelProviderLogin(options: LoginOptions) {
       accounts,
       recovery,
       docsUrl,
-      matches,
+      matches: filterLoginProviders(groups, query()),
       disabled: !authStatus || !picker.isCurrent(),
       canStart: options.canStart(),
       showDiscover: !picker.providers && Boolean(options.onDiscover),
@@ -512,32 +525,17 @@ export function createModelProviderLogin(options: LoginOptions) {
   }
 
   function showVerifiedStarter(completion: ModelSetupWizardCompletion): void {
-    const modelRef = completion.modelActivation?.modelRef;
-    if (!modelRef) {
+    const activation = completion.modelActivation;
+    if (!activation?.modelRef) {
       return;
     }
     const { context, agentId } = options.getScope();
-    const catalog = readAgentModelCatalog(context.gateway.snapshot.client, agentId);
-    const slash = modelRef.indexOf("/");
-    const provider = modelRef.slice(0, slash);
-    const id = modelRef.slice(slash + 1);
-    const known = catalog.models.find((model) => model.provider === provider && model.id === id);
-    verifiedModelRef = modelRef;
-    const recommended =
-      !catalog.retired &&
-      catalog.models.find(
-        (model) =>
-          canonicalModelAuthProviderId(model.provider) === authProviderId &&
-          model.available === true &&
-          model.manualSelectionAllowed !== false &&
-          model.recommended === true,
-      );
-    const name = completion.modelActivation?.modelName ?? known?.name;
-    completionModel = recommended
-      ? { provider: recommended.provider, id: recommended.id, name: recommended.name }
-      : name
-        ? { provider, id, name }
-        : undefined;
+    verifiedModelRef = activation.modelRef;
+    completionModel = resolveLoginStarterModel(
+      readAgentModelCatalog(context.gateway.snapshot.client, agentId),
+      activation,
+      authProviderId,
+    );
     notify();
   }
 
@@ -560,16 +558,18 @@ export function createModelProviderLogin(options: LoginOptions) {
       kind: "success",
       text: activating
         ? t("modelProviders.login.activated")
-        : [
-            label,
-            t(
-              loginMode === "access"
-                ? "modelProviders.login.nativeDone"
-                : "modelProviders.login.done",
-            ),
-          ]
-            .filter(Boolean)
-            .join(": "),
+        : loginMode === "prepare"
+          ? t("modelProviders.setup.done")
+          : [
+              label,
+              t(
+                loginMode === "access"
+                  ? "modelProviders.login.nativeDone"
+                  : "modelProviders.login.done",
+              ),
+            ]
+              .filter(Boolean)
+              .join(": "),
       warning:
         [
           completion.modelActivation?.gatewayRestartRequired ? t("labsPage.restartRequired") : null,

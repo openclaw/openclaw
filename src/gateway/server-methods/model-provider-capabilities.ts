@@ -7,6 +7,7 @@ import {
 } from "../../plugins/provider-auth-choices.js";
 import { listProviderLoginOptions } from "../../plugins/provider-login-options.js";
 import {
+  listSetupInferencePrepareOptions,
   supportsSetupManualSecret,
   supportsSetupTextInference,
 } from "../../system-agent/setup-inference-auth-options.js";
@@ -36,6 +37,7 @@ export function resolveModelProviderCapabilities(params: {
     includeWorkspacePlugins: false,
   });
   const loginOptions = listProviderLoginOptions(loginChoices);
+  const setupOptions = listSetupInferencePrepareOptions(loginChoices);
   for (const choice of resolveManifestProviderAuthChoices(lookup)) {
     const provider = resolveProvider(choice.providerId);
     // Setup descriptors also include tools and media-only services, not just model accounts.
@@ -48,11 +50,22 @@ export function resolveModelProviderCapabilities(params: {
     const providerLoginOptions = loginOptions.filter(
       (option) => resolveProvider(option.brandId) === provider,
     );
+    const setupActions = setupOptions
+      .filter((option) => option.brandId && resolveProvider(option.brandId) === provider)
+      .map((option) =>
+        Object.assign(
+          { choiceId: option.id, label: option.label },
+          option.hint ? { hint: option.hint } : {},
+          option.actionLabel ? { actionLabel: option.actionLabel } : {},
+          option.modelTarget ? { modelTarget: option.modelTarget } : {},
+        ),
+      );
     capabilities.set(provider, {
       provider,
       apiKeySupported: current?.apiKeySupported === true || apiKeySupported,
       quickApiKeySetup: current?.quickApiKeySetup === true || quickApiKeySetup,
       ...(providerLoginOptions.length > 0 ? { loginOptions: providerLoginOptions } : {}),
+      ...(setupActions.length > 0 ? { setupActions } : {}),
     });
   }
   return {
