@@ -447,6 +447,7 @@ it("keeps core metrics exporting after worker and RPC families saturate", () => 
   metrics.record({
     type: "diagnostic.phase.completed",
     name: "worktree.preparation",
+    startedAt: 0,
     durationMs: 10,
     details: { kind: "managed", template: "warm", outcome: "returned" },
   });
@@ -528,6 +529,7 @@ it("keeps core metrics exporting after worker and RPC families saturate", () => 
     metrics.record({
       type: "diagnostic.phase.completed",
       name: `chat.send.${phase}`,
+      startedAt: 0,
       durationMs: 1,
       details: { stage: "request" },
     });
