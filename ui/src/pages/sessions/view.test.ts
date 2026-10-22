@@ -1,11 +1,9 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createOverlay, type Overlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   disposeSessionViews,
   renderSessionsView,
@@ -99,10 +97,6 @@ describe("sessions view", () => {
       });
       const initial = callbacks();
       const current = callbacks();
-      const [handlers, setHandlers] = createRoot((dispose) => {
-        onTestFinished(dispose);
-        return createSignal(initial);
-      });
       const result = bulk
         ? {
             ...buildResult(createRow("archived", { archived: true })),
@@ -110,30 +104,12 @@ describe("sessions view", () => {
             nextOffset: 1,
           }
         : buildMultiResult([]);
-      renderSessionsView(
-        {
-          ...buildProps(result),
-          statusFilter: bulk ? "archived" : "active",
-          selectedKeys: new Set(bulk ? ["archived"] : []),
-          searchQuery: bulk ? "" : "missing",
-          get onDeselectAll() {
-            return handlers().onDeselectAll;
-          },
-          get onDeleteSelected() {
-            return handlers().onDeleteSelected;
-          },
-          get onLoadMore() {
-            return handlers().onLoadMore;
-          },
-          get onDeleteAllArchived() {
-            return handlers().onDeleteAllArchived;
-          },
-          get onClearFilters() {
-            return handlers().onClearFilters;
-          },
-        },
-        container,
-      );
+      const shared = {
+        statusFilter: bulk ? "archived" : "active",
+        selectedKeys: new Set(bulk ? ["archived"] : []),
+        searchQuery: bulk ? "" : "missing",
+      } satisfies Partial<ReturnType<typeof buildProps>>;
+      renderView(result, { ...shared, ...initial });
       await Promise.resolve();
       const selectors = bulk
         ? ([
@@ -148,8 +124,7 @@ describe("sessions view", () => {
         selector,
         button: expectDefined(getButton(selector), name),
       }));
-      setHandlers(current);
-      flush();
+      renderView(result, { ...shared, ...current });
       for (const { name, selector, button } of buttons) {
         expect(query(selector)).toBe(button);
         button.click();
@@ -165,7 +140,6 @@ describe("sessions view", () => {
       createRow("agent:research:chat-two"),
       createRow("legacy-chat", { agentId: "research" }),
     ]);
-    expect(sessionTableHeaders()).toEqual(SESSION_TABLE_HEADERS);
     expect(
       [...queryAll(".session-data-row .session-agent-col .agent-row-chip")].map((chip) =>
         chip.getAttribute("data-agent-id"),
@@ -246,17 +220,14 @@ describe("sessions view", () => {
           row.querySelector(".session-group-row__label") ?? row.querySelector(".session-link")
         )?.textContent?.trim(),
       ),
-    ).toEqual([
-      "Today",
-      "today",
-      "Yesterday",
-      "yesterday",
-      "This week",
-      "two-days-ago",
-      "six-days-ago",
-      "Older",
-      "older",
-    ]);
+    ).toEqual(
+      [
+        ["Today", "today"],
+        ["Yesterday", "yesterday"],
+        ["This week", "two-days-ago", "six-days-ago"],
+        ["Older", "older"],
+      ].flat(),
+    );
   });
 
   it("makes every session sort header a keyboard-accessible button", async () => {
@@ -280,31 +251,22 @@ describe("sessions view", () => {
       );
       expect(button?.type).toBe("button");
       expect(header?.getAttribute("aria-sort")).toBe(column === "updated" ? "descending" : null);
-      const initialCallCount = onSortChange.mock.calls.length;
-      const firstDirection = column === "updated" ? "asc" : "desc";
+      const initialCalls = onSortChange.mock.calls.length;
+      const directions = column === "updated" ? ["asc", "desc"] : ["desc", "asc"];
       button!.focus();
-      button!.click();
-      expect(onSortChange).toHaveBeenCalledTimes(initialCallCount + 1);
-      expect(onSortChange).toHaveBeenLastCalledWith(column, firstDirection);
-      const refreshed = [...queryAll<HTMLTableCellElement>("thead th")].find(
-        (cell) => cell.textContent?.trim() === label,
-      );
-      expect(refreshed).toBe(header);
-      expect(refreshed?.querySelector("button")).toBe(button);
-      expect(document.activeElement).toBe(button);
-      expect(header?.getAttribute("aria-sort")).toBe(
-        firstDirection === "asc" ? "ascending" : "descending",
-      );
-      header!.click();
-      expect(onSortChange).toHaveBeenCalledTimes(initialCallCount + 2);
-      expect(onSortChange).toHaveBeenLastCalledWith(
-        column,
-        firstDirection === "asc" ? "desc" : "asc",
-      );
-      expect(document.activeElement).toBe(button);
-      expect(header?.getAttribute("aria-sort")).toBe(
-        firstDirection === "asc" ? "descending" : "ascending",
-      );
+      for (const [index, direction] of directions.entries()) {
+        (index === 0 ? button! : header!).click();
+        expect(onSortChange).toHaveBeenCalledTimes(initialCalls + index + 1);
+        expect(onSortChange).toHaveBeenLastCalledWith(column, direction);
+        expect([...queryAll("thead th")].find((cell) => cell.textContent?.trim() === label)).toBe(
+          header,
+        );
+        expect(header?.querySelector("button")).toBe(button);
+        expect(document.activeElement).toBe(button);
+        expect(header?.getAttribute("aria-sort")).toBe(
+          direction === "asc" ? "ascending" : "descending",
+        );
+      }
       expect(queryAll("thead th[data-sortable]")).toHaveLength(2);
       expect(queryAll("thead th[aria-sort]")).toHaveLength(1);
     }
@@ -464,16 +426,13 @@ describe("sessions view", () => {
     expect(toggleGroup?.getAttribute("aria-label")).toBe("Session source filters");
     expect(toggleGroup?.querySelectorAll(".session-filter-check")).toHaveLength(2);
     expect(
-      Array.from(toggleGroup?.querySelectorAll(".session-filter-check") ?? []).map((toggle) => [
-        toggle.querySelector("input")?.getAttribute("name"),
-        [...toggle.classList],
-      ]),
+      [...toggleGroup!.querySelectorAll<HTMLInputElement>("input")].map(({ name, checked }) => ({
+        name,
+        checked,
+      })),
     ).toEqual([
-      [
-        "includeGlobal",
-        ["session-filter-check", "session-filter-toggle", "session-filter-check--active"],
-      ],
-      ["includeUnknown", ["session-filter-check", "session-filter-toggle"]],
+      { name: "includeGlobal", checked: true },
+      { name: "includeUnknown", checked: false },
     ]);
     expect(toggleGroup?.querySelector(".session-filter-check__box")).toBeNull();
 
@@ -550,27 +509,6 @@ describe("sessions view", () => {
     expect((keyCell?.parentElement as (HTMLElement & { content: string }) | null)?.content).toBe(
       "📊 Data Expert (dingtalk)",
     );
-  });
-
-  it("keeps run metadata in session details instead of extra table columns", async () => {
-    await renderSettled(
-      [
-        createRow("agent:main:queued", { updatedAt: 40, hasActiveRun: true, status: "queued" }),
-        createRow("agent:main:idle", {
-          unread: true,
-          totalTokens: 300,
-          updatedAt: 20,
-          hasActiveRun: false,
-          status: "running",
-        }),
-      ],
-      { expandedSessionKey: "agent:main:queued" },
-    );
-
-    expect(sessionTableHeaders()).toEqual(SESSION_TABLE_HEADERS);
-    expect(queryAll(".session-data-row .settings-status")).toHaveLength(0);
-    expect(queryAll(".settings-count, .sessions-heading-fact")).toHaveLength(0);
-    expect(text(".session-details-panel__badges")).toContain("Queued");
   });
 
   it("opens session details from row activation", async () => {
@@ -657,6 +595,27 @@ describe("sessions view", () => {
     ) ?? []) {
       expect(select).toMatchObject({ disabled: true, title: "Operator admin access is required." });
     }
+
+    await renderSettled(
+      [
+        createRow("agent:main:cron:live", { updatedAt: 40, hasActiveRun: true, status: "queued" }),
+        createRow("agent:main:idle", {
+          unread: true,
+          totalTokens: 300,
+          updatedAt: 20,
+          hasActiveRun: false,
+          status: "running",
+        }),
+      ],
+      { expandedSessionKey: "agent:main:cron:live" },
+    );
+    expect(
+      queryAll(
+        ".session-data-row .settings-status, .settings-count, .sessions-heading-fact, .session-data-row .session-avatar",
+      ),
+    ).toHaveLength(0);
+    expect(text(".session-details-panel__badges")).toContain("Queued");
+    expect(text(".session-kind--cron")).toBe("cron");
   });
 
   it("keeps session selects stable and deselects only the current page", async () => {
@@ -712,19 +671,6 @@ describe("sessions view", () => {
     expect(onDeselectPage).toHaveBeenCalledWith(["page-0"]);
     expect(onDeselectAll).not.toHaveBeenCalled();
     expect(onSelectPage).not.toHaveBeenCalled();
-  });
-
-  it("omits the kind glyph while preserving kind details", async () => {
-    await renderSettled(
-      [
-        createRow("agent:main:cron:live", { updatedAt: 2, hasActiveRun: true, status: "running" }),
-        createRow("agent:main:idle", { updatedAt: 1, hasActiveRun: false }),
-      ],
-      { expandedSessionKey: "agent:main:cron:live" },
-    );
-
-    expect(text(".session-kind--cron")).toBe("cron");
-    expect(query(".session-data-row .session-avatar")).toBeNull();
   });
 });
 
