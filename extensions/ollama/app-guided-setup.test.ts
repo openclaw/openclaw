@@ -1,8 +1,12 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { capturePluginRegistration } from "openclaw/plugin-sdk/plugin-test-runtime";
+import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  capturePluginRegistration,
+  createTestWizardPrompter,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import { createModel } from "./model.test-support.js";
 import type { OllamaTagModel } from "./src/provider-models.js";
@@ -69,12 +73,15 @@ async function withOllamaServer(
   expect(unexpected).toEqual([]);
 }
 
-function guidedSetup() {
+function authMethod(id = "ollama") {
   return expectDefined(
-    capturePluginRegistration(plugin).providers.find((provider) => provider.id === "ollama")
-      ?.auth[0]?.appGuidedSetup,
-    "Ollama app-guided setup was not registered",
+    capturePluginRegistration(plugin).providers.find((provider) => provider.id === id)?.auth[0],
+    "Registered Ollama auth method",
   );
+}
+
+function guidedSetup() {
+  return expectDefined(authMethod().appGuidedSetup, "Ollama app-guided setup");
 }
 
 function prepare(baseUrl: string, model = selected, provider: Partial<ModelProviderConfig> = {}) {
@@ -100,7 +107,10 @@ describe("Ollama app-guided setup HTTP discovery", () => {
       {
         models: [{ name, ...tag }],
         loaded: [name],
-        show: { ...showInfo, model_info: { "model.context_length": 262_144 } },
+        show: {
+          ...showInfo,
+          model_info: { ...showInfo.model_info, "model.context_length": 262_144 },
+        },
       },
       async (baseUrl) => {
         const prepared = await prepare(baseUrl, name);
@@ -191,6 +201,86 @@ describe("Ollama app-guided setup HTTP discovery", () => {
       } else {
         expect(result).toBeNull();
       }
+    });
+  });
+});
+
+const keyError = "Ollama Cloud requires a hosted API key";
+
+const cloudAuthMethod = () => authMethod("ollama-cloud");
+
+function authContext(
+  options: Partial<Pick<ProviderAuthContext, "env" | "opts" | "secretInputMode">>,
+): ProviderAuthContext {
+  return {
+    config: {},
+    env: {},
+    opts: {},
+    secretInputMode: "plaintext",
+    prompter: createTestWizardPrompter({
+      multiselect: async () => {
+        throw new Error("Unexpected multiselect prompt");
+      },
+      text: async ({ initialValue }) => initialValue ?? "  ollama-local  ",
+      confirm: vi.fn(async () => true),
+    }),
+    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    isRemote: false,
+    openUrl: vi.fn(async () => {}),
+    oauth: {
+      createVpsAwareHandlers: () => {
+        throw new Error("Unexpected OAuth flow");
+      },
+    },
+    ...options,
+  };
+}
+
+describe("Ollama Cloud API key setup", () => {
+  it.each(["flag", "prompt", "env", "ref"] as const)(
+    "rejects local key from %s",
+    async (source) => {
+      await expect(
+        cloudAuthMethod().run(
+          authContext({
+            env: source === "env" || source === "ref" ? { OLLAMA_API_KEY: "ollama-local" } : {},
+            opts: source === "flag" ? { ollamaCloudApiKey: "ollama-local" } : {},
+            secretInputMode: source === "ref" ? "ref" : "plaintext",
+          }),
+        ),
+      ).rejects.toThrow(keyError);
+    },
+  );
+
+  it("rejects a resolved local placeholder before non-interactive persistence", async () => {
+    const method = cloudAuthMethod();
+    const toApiKeyCredential = vi.fn();
+    const ctx = {
+      authChoice: "ollama-cloud",
+      config: {},
+      baseConfig: {},
+      opts: {},
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      resolveApiKey: vi.fn(async () => ({ key: "ollama-local", source: "flag" as const })),
+      toApiKeyCredential,
+    };
+    await expect(method.validateNonInteractive?.(ctx)).rejects.toThrow(keyError);
+    await expect(method.runNonInteractive?.(ctx)).rejects.toThrow(keyError);
+    expect(toApiKeyCredential).not.toHaveBeenCalled();
+  });
+
+  it("preserves a hosted key and the Cloud default model", async () => {
+    const result = await cloudAuthMethod().run(
+      authContext({ opts: { ollamaCloudApiKey: "hosted-test-key" } }),
+    );
+    expect(result).toMatchObject({
+      profiles: [
+        {
+          profileId: "ollama-cloud:default",
+          credential: { provider: "ollama-cloud", type: "api_key", key: "hosted-test-key" },
+        },
+      ],
+      defaultModel: "ollama-cloud/minimax-m2.7",
     });
   });
 });
