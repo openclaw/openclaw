@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "./path-array-index.js";
 
@@ -266,16 +267,17 @@ export function readObjectPath(
 ): unknown {
   let current: unknown = root;
   for (const key of path) {
-    if (!current || typeof current !== "object") {
+    const parent = asOptionalObjectRecord(current);
+    if (!parent) {
       return undefined;
     }
-    if (arrayMode !== "raw" && Array.isArray(current)) {
+    if (arrayMode !== "raw" && Array.isArray(parent)) {
       const index = parseConfigPathArrayIndex(key);
-      if (index === undefined || (arrayMode === "bounded" && index >= current.length)) {
+      if (index === undefined || (arrayMode === "bounded" && index >= parent.length)) {
         return undefined;
       }
     }
-    current = (current as Record<string, unknown>)[key];
+    current = parent[key];
   }
   return current;
 }
