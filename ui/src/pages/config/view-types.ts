@@ -13,6 +13,7 @@ type ConfigData = {
     | "setSessionObserverUtilityModel"
     | "onNativeNotificationsSendTest"
     | "onImportCustomTheme"
+    | "onCameraSelect"
     | "onWebPushSubscribe"
     | "onWebPushUnsubscribe"
     | "onWebPushTest"

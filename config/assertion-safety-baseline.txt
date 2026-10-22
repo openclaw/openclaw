@@ -142,12 +142,12 @@ extensions/codex/src/session-upstream-activity.ts	1
 extensions/codex/src/web-search-provider.runtime.ts	1
 extensions/comfy/workflow-runtime.ts	2
 extensions/copilot-proxy/index.ts	1
-extensions/copilot/harness.ts	8
+extensions/copilot/harness.ts	7
 extensions/copilot/src/attempt-config.ts	8
 extensions/copilot/src/attempt-execution.ts	2
 extensions/copilot/src/attempt-finalize.ts	2
 extensions/copilot/src/attempt-prepare.ts	4
-extensions/copilot/src/attempt-transcript-journal.ts	21
+extensions/copilot/src/attempt-transcript-journal.ts	19
 extensions/copilot/src/byok-proxy.ts	1
 extensions/copilot/src/event-bridge-transcript.ts	4
 extensions/copilot/src/event-bridge.ts	1
@@ -542,7 +542,6 @@ extensions/nostr/src/nostr-cursor.ts	2
 extensions/nostr/src/nostr-ingress.ts	4
 extensions/nostr/src/nostr-profile-http.ts	1
 extensions/nostr/src/nostr-profile-import.ts	1
-extensions/nvidia/provider-catalog.ts	1
 extensions/oc-path/src/oc-path/find.ts	9
 extensions/oc-path/src/oc-path/universal.ts	2
 extensions/oc-path/src/oc-path/yaml/edit.ts	2
@@ -904,7 +903,7 @@ extensions/zalouser/src/text-styles-ranges.ts	1
 extensions/zalouser/src/tool.ts	1
 extensions/zalouser/src/zalo-js.ts	7
 extensions/zalouser/src/zca-client.ts	1
-packages/acp-core/src/runtime/errors.ts	6
+packages/acp-core/src/runtime/errors.ts	5
 packages/agent-core/src/agent-loop.ts	1
 packages/agent-core/src/harness/compaction/branch-summarization.ts	1
 packages/agent-core/src/harness/compaction/compaction.ts	1
@@ -1363,7 +1362,6 @@ src/auto-reply/heartbeat-filter.ts	2
 src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts	1
 src/auto-reply/reply/acp-reset-target.ts	1
 src/auto-reply/reply/agent-lifecycle-terminal.ts	2
-src/auto-reply/reply/agent-runner-event-handler.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
 src/auto-reply/reply/agent-runner-utils.ts	1
 src/auto-reply/reply/block-streaming.ts	3
@@ -1537,7 +1535,6 @@ src/cli/update-cli.ts	2
 src/cli/update-cli/update-command-config.ts	5
 src/cli/update-cli/update-command-plugins.ts	1
 src/cli/users-cli.ts	1
-src/commands/agent-exec.ts	1
 src/commands/agent-via-gateway.ts	2
 src/commands/agents.commands.identity.ts	1
 src/commands/agents.config.ts	1
@@ -1644,7 +1641,7 @@ src/config/io.write-safety.ts	3
 src/config/io.write.ts	1
 src/config/issue-location.ts	2
 src/config/legacy.default-agent-roles.ts	1
-src/config/legacy.ts	3
+src/config/legacy.ts	2
 src/config/markdown-tables.ts	3
 src/config/materialize.ts	2
 src/config/mcp-config.ts	1
@@ -2091,7 +2088,7 @@ src/node-host/skills.ts	1
 src/node-host/worker-support.ts	4
 src/plugin-sdk/acp-runtime.ts	1
 src/plugin-sdk/agent-harness-exec-review-runtime.ts	1
-src/plugin-sdk/allowlist-config-edit.ts	6
+src/plugin-sdk/allowlist-config-edit.ts	5
 src/plugin-sdk/api-baseline.ts	1
 src/plugin-sdk/approval-auth-helpers.ts	1
 src/plugin-sdk/approval-handler-runtime.ts	1
@@ -2206,7 +2203,7 @@ src/plugins/prepared-message-tool-catalog.ts	1
 src/plugins/provider-auth-choice-helpers.ts	5
 src/plugins/provider-discovery.runtime.ts	2
 src/plugins/provider-discovery.ts	1
-src/plugins/provider-model-compat.ts	6
+src/plugins/provider-model-compat.ts	3
 src/plugins/provider-openai-chatgpt-oauth.ts	1
 src/plugins/provider-policy-surface.ts	1
 src/plugins/provider-thinking-active.ts	1
@@ -2370,7 +2367,6 @@ src/utils/usage-format.ts	1
 src/version.ts	4
 src/web-fetch/runtime.ts	2
 src/web-search/runtime.ts	1
-src/web/provider-runtime-shared.ts	1
 src/wizard/clack-navigation-prompts.ts	11
 src/wizard/clack-prompter.ts	2
 src/wizard/navigation-prompter.ts	4

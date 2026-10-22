@@ -233,7 +233,6 @@ export {
   loadTranscriptEvents,
   loadTranscriptEventsSync,
   loadTranscriptHeaderSync,
-  persistCompactionBoundaryWithSessionEntrySync,
   persistCompactionBoundaryWithSessionEntryAsync,
   preflightSessionTranscriptForManualCompact,
   publishTranscriptUpdate,

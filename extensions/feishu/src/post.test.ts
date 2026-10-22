@@ -11,6 +11,9 @@ function file(file_key: string, file_name: string, is_folder = false) {
 function topLevelFile(key: string, fileName: string) {
   return { kind: "file", key, fileName, origin: "top-level" };
 }
+function localePost(content: unknown[][], extra: Record<string, unknown> = {}) {
+  return JSON.stringify({ post: { zh_cn: { title: "", content, ...extra } } });
+}
 function text(value: string, style?: string[]) {
   return { tag: "text", text: value, ...(style ? { style } : {}) };
 }
@@ -81,12 +84,11 @@ describe("parsePostContent", () => {
       ]),
     ]);
 
-    const result = parsePostContent(content);
-
-    expect(result.textContent).toBe(
-      "~~***[Docs \\[v2\\]](https://example.com/guide(a))***~~ <u>@alice\\_bob</u> @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
-    );
-    expect(result.mentionedOpenIds).toEqual(["ou_123"]);
+    expect(parsePostContent(content)).toMatchObject({
+      textContent:
+        "~~***[Docs \\[v2\\]](https://example.com/guide(a))***~~ <u>@alice\\_bob</u> @ou\\_123 [https://example.com/no\\-text](https://example.com/no-text)",
+      mentionedOpenIds: ["ou_123"],
+    });
   });
 
   it("inserts image placeholders and collects image attachments", () => {
@@ -135,7 +137,6 @@ describe("parsePostContent", () => {
     expect(parsePostContent(captioned)).toEqual(
       parsed("这是账本", [topLevelFile("file_v3_caption", "amount.csv")]),
     );
-
     const multiFile = post([[]], "", {
       content_v2: [[]],
       files: [
@@ -145,26 +146,16 @@ describe("parsePostContent", () => {
         file("invalid/key", "bad.csv"),
       ],
     });
-
     expect(parsePostContent(multiFile).attachments).toEqual([
       topLevelFile("file_v3_zip_aug", "aug.zip"),
       topLevelFile("file_v3_zip_sep", "sep.zip"),
     ]);
-
-    expect(
-      parsePostContent(
-        JSON.stringify({
-          post: {
-            zh_cn: {
-              title: "",
-              content: [[text("附件")]],
-              files: [file("file_v3_locale", "locale.csv")],
-            },
-          },
-        }),
-      ).attachments,
-    ).toEqual([topLevelFile("file_v3_locale", "locale.csv")]);
-
+    const localized = localePost([[text("附件")]], {
+      files: [file("file_v3_locale", "locale.csv")],
+    });
+    expect(parsePostContent(localized).attachments).toEqual([
+      topLevelFile("file_v3_locale", "locale.csv"),
+    ]);
     expect(
       parsePostContent(post([[]], "", { files: [{ file_key: "file_pdf" }] })).attachments,
     ).toEqual([{ kind: "file", key: "file_pdf", origin: "top-level" }]);

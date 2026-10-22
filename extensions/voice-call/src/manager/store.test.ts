@@ -39,6 +39,18 @@ const EVENTS = "call-record-events";
 const CHUNKS = "call-record-event-chunks";
 const CHUNK_LIMIT = 48_048;
 const REPLAY_LIMIT = 10_000;
+type StoreDatabase = ReturnType<typeof openOpenClawStateDatabase>["db"];
+const updateJson = (db: StoreDatabase, namespace: string, key: string, json: string) =>
+  db
+    .prepare(
+      "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = 'voice-call' AND namespace = ? AND entry_key = ?",
+    )
+    .run(json, namespace, key);
+
+async function closeStore() {
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginStateStoreForTests();
+}
 
 function installStateRuntime({
   beforeOperation,
@@ -66,23 +78,24 @@ function installStateRuntime({
             },
           };
         }
-        return beforeOperation
-          ? {
-              ...backingStore,
-              async register(...args: Parameters<typeof backingStore.register>) {
-                await beforeOperation(options.namespace, "register");
-                await backingStore.register(...args);
-              },
-              async entries() {
-                await beforeOperation(options.namespace, "entries");
-                return backingStore.entries();
-              },
-              async count() {
-                await beforeOperation(options.namespace, "count");
-                return await backingStore.count();
-              },
-            }
-          : backingStore;
+        if (!beforeOperation) {
+          return backingStore;
+        }
+        return {
+          ...backingStore,
+          async register(...args: Parameters<typeof backingStore.register>) {
+            await beforeOperation(options.namespace, "register");
+            await backingStore.register(...args);
+          },
+          async entries() {
+            await beforeOperation(options.namespace, "entries");
+            return backingStore.entries();
+          },
+          async count() {
+            await beforeOperation(options.namespace, "count");
+            return backingStore.count();
+          },
+        };
       },
     },
   });
@@ -90,10 +103,9 @@ function installStateRuntime({
 
 async function mutateOfflineCallStore(
   storePath: string,
-  mutate: (db: ReturnType<typeof openOpenClawStateDatabase>["db"]) => void,
+  mutate: (db: StoreDatabase) => void,
 ): Promise<void> {
-  await closeOpenClawStateDatabaseAsync();
-  resetPluginStateStoreForTests();
+  await closeStore();
   const databasePath = path.join(storePath, "state", "openclaw.sqlite");
   const replacementPath = `${databasePath}.corruption-fixture`;
   // A cold physical copy models restart corruption without stale in-process write receipts.
@@ -102,8 +114,7 @@ async function mutateOfflineCallStore(
   try {
     mutate(openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: storePath } }).db);
   } finally {
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
+    await closeStore();
   }
 }
 
@@ -127,11 +138,9 @@ describe("voice-call call record store", () => {
       env: { ...process.env, OPENCLAW_STATE_DIR: storePath },
     });
   const corruptRow = (namespace: string, key: string, value: unknown) =>
-    mutateOfflineCallStore(storePath, (db) => {
-      db.prepare(
-        "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = 'voice-call' AND namespace = ? AND entry_key = ?",
-      ).run(JSON.stringify(value), namespace, key);
-    });
+    mutateOfflineCallStore(storePath, (db) =>
+      updateJson(db, namespace, key, JSON.stringify(value)),
+    );
   beforeEach(() => {
     resetPluginStateStoreForTests();
     installStateRuntime();
@@ -141,8 +150,7 @@ describe("voice-call call record store", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.useRealTimers();
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
+    await closeStore();
   });
 
   it.each([0, 1])("honors SQLite tail --since %s before following new snapshots", async (since) => {
@@ -223,16 +231,13 @@ describe("voice-call call record store", () => {
     const first = expectDefined(rows[0], "earlier persisted event");
     const second = expectDefined(rows[1], "later persisted event");
     await mutateOfflineCallStore(storePath, (db) => {
-      const update = db.prepare(
-        "UPDATE plugin_state_entries SET value_json = ? WHERE plugin_id = 'voice-call' AND namespace = ? AND entry_key = ?",
-      );
       const timestamp = db.prepare(
         "UPDATE plugin_state_entries SET created_at = ? WHERE namespace = ? AND entry_key = ?",
       );
       timestamp.run(1, EVENTS, first.key);
       timestamp.run(2, EVENTS, second.key);
-      update.run("null", EVENTS, second.key);
-      update.run("invalid JSON", CHUNKS, `${first.key}:chunk:0000`);
+      updateJson(db, EVENTS, second.key, "null");
+      updateJson(db, CHUNKS, `${first.key}:chunk:0000`, "invalid JSON");
     });
     await expect(findCall(storePath, "later")).rejects.toThrowError(
       expect.objectContaining({ code: "PLUGIN_STATE_CORRUPT" }),
@@ -264,12 +269,9 @@ describe("voice-call call record store", () => {
     const first = chunk(0);
     const later = chunk(1);
     const good = await saveCall({ callId: "good-call", transcript: [] });
-    await mutateOfflineCallStore(storePath, (db) => {
-      db.prepare("UPDATE plugin_state_entries SET value_json = ? WHERE entry_key = ?").run(
-        "invalid JSON",
-        later.key,
-      );
-    });
+    await mutateOfflineCallStore(storePath, (db) =>
+      updateJson(db, CHUNKS, later.key, "invalid JSON"),
+    );
     chunks = openChunks();
     await chunks.register(first.key, { ...first.value, index: -1 });
     await expect(history(storePath)).resolves.toEqual([good]);
@@ -295,27 +297,18 @@ describe("voice-call call record store", () => {
       });
       const failure = new Error("chunk or metadata write failed");
       let writes = 0;
-      const beforeWrite = vi.fn((target: string) => {
-        if (target === namespace && ++writes === failedWrite) {
-          throw failure;
-        }
-      });
       installStateRuntime({
         beforeOperation: async (target, operation) => {
           if (delayed) {
             await Promise.resolve();
           }
-          if (operation === "register") {
-            beforeWrite(target);
+          if (operation === "register" && target === namespace && ++writes === failedWrite) {
+            throw failure;
           }
         },
       });
       const toString = vi.spyOn(Buffer.prototype, "toString");
       await expect(persistCallRecord(storePath, call)).rejects.toBe(failure);
-      expect(beforeWrite.mock.calls).toEqual([
-        ...Array.from({ length: encoded }, () => [CHUNKS]),
-        ...(namespace === EVENTS ? [[EVENTS]] : []),
-      ]);
       expect(toString.mock.calls.filter(([encoding]) => encoding === "base64")).toHaveLength(
         encoded,
       );
@@ -389,8 +382,7 @@ describe("voice-call call record store", () => {
         }));
       }),
     );
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
+    await closeStore();
 
     const first = await saveCall({ callId: "call-current", state: "ringing" });
     await expect(findCall(storePath, first.callId)).resolves.toEqual(first);

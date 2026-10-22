@@ -80,6 +80,10 @@ export function completeConfigContext(context: ApplicationContext): ApplicationC
   ]) {
     observeFixture(source);
   }
+  Object.assign(context.router, {
+    getState:
+      context.router.getState ?? (() => ({ location: { pathname: "/", search: "", hash: "" } })),
+  });
   if (!context.agentIdentity.get) {
     Object.assign(context.agentIdentity, { get: () => null });
   }

@@ -1,6 +1,6 @@
 /** Builds manifest registry records from installed plugin index snapshots. */
 import path from "node:path";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, omitUndefinedFields } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeOptionalString,
   readStringValue,
@@ -26,7 +26,6 @@ import type { InstalledPluginIndex, InstalledPluginIndexRecord } from "./install
 import { extractPluginInstallRecordsFromInstalledPluginIndex } from "./installed-plugin-index.js";
 import {
   normalizeManifestObjectList,
-  omitUndefinedManifestFields,
   optionalManifestFields,
 } from "./manifest-capability-normalizers.js";
 import {
@@ -157,7 +156,7 @@ function normalizePackageChannelPersistedAuthState(
   const exportName = normalizeOptionalString(persistedAuthState.exportName);
   const exportNameAsync = normalizeOptionalString(persistedAuthState.exportNameAsync);
   return specifier || exportName || exportNameAsync
-    ? omitUndefinedManifestFields({
+    ? omitUndefinedFields({
         specifier,
         exportName,
         exportNameAsync,
@@ -210,7 +209,7 @@ function normalizePackageChannelCliOptions(
     }
     const valueType =
       option.valueType === "int" || option.valueType === "list" ? option.valueType : undefined;
-    return omitUndefinedManifestFields<PluginPackageChannelCliOption>({
+    return omitUndefinedFields<PluginPackageChannelCliOption>({
       flags,
       description,
       defaultValue:
@@ -462,7 +461,7 @@ function toPluginCandidate(
   const rootDir = resolveInstalledPluginRootDir(record);
   const packageMetadata = resolveInstalledPackageMetadata(record, env);
   return recordPluginCandidateInstallOwner(
-    omitUndefinedManifestFields({
+    omitUndefinedFields({
       idHint: record.pluginId,
       effectivePluginId: record.pluginId,
       source: record.source ?? resolveFallbackPluginSource(record),

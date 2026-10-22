@@ -536,11 +536,39 @@ describe("ApprovalPage", () => {
     source.update({ phase: "reconnecting" });
     source.update({ phase: "connected" });
     await settle(page);
+    await waitForSolid(() => expect(text(page, "h1")).toBe("Approved"));
     resolveFirst({ approval: pendingApproval() });
     await settle(page);
     expect(request).toHaveBeenCalledTimes(2);
     expect(text(page, "h1")).toBe("Approved");
     expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
+  });
+
+  it("retains approval context and busy retry feedback during a foreground refresh", async () => {
+    const retry = Promise.withResolvers<ApprovalGetResult>();
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce({ approval: pendingApproval() } satisfies ApprovalGetResult)
+      .mockRejectedValueOnce(new Error("temporary Gateway failure"))
+      .mockReturnValueOnce(retry.promise);
+    const { page } = await createPage(request);
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitForSolid(() => expect(page.querySelector(".approval-page__callout")).not.toBeNull());
+    const button = page.querySelector<HTMLButtonElement>(".approval-page__callout button")!;
+    button.click();
+    await waitForSolid(() => {
+      expect(page.querySelector(".approval-page__card")?.getAttribute("aria-busy")).toBe("true");
+      expect(button.disabled).toBe(true);
+      expect(text(page, ".approval-page__preview")).toBe("printf safe");
+      expect(decision(page).disabled).toBe(true);
+    });
+    retry.resolve({ approval: pendingApproval() });
+    await waitForSolid(() => {
+      expect(page.querySelector(".approval-page__card")?.getAttribute("aria-busy")).toBe("false");
+      expect(page.querySelector(".approval-page__callout")).toBeNull();
+      expect(decision(page).disabled).toBe(false);
+    });
+    expect(request).toHaveBeenCalledTimes(3);
   });
 
   it("polls only while the pending document is visible", async () => {

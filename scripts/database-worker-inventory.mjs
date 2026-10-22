@@ -360,14 +360,6 @@ const reviewed = new Map([
     },
   ],
   [
-    "src/config/sessions/session-accessor.sqlite-compaction.ts",
-    {
-      priority: 99,
-      evidence:
-        "Gateway sessions.compact uses session-accessor.transcript.ts, which dispatches ordinary trimming to its worker but retains trimTranscriptForManualCompact for nativeSource/hasOpaqueCheck authority. session-mutation-guards.ts preserves opaque requester commit guards; the destructive trim cannot discard that authority contract.",
-    },
-  ],
-  [
     "src/config/sessions/session-accessor.sqlite-deletion.ts",
     {
       priority: 99,
@@ -1404,17 +1396,6 @@ const reviewedOperations = new Map([
         operations: ["reclaimSessionArchivePublicationInTransaction"],
         evidence:
           "Only session-accessor.sqlite-reclamation.ts:204 calls this archive-publish-prepare/record transaction. Incoming reclamation passes reclamation-run.ts:68,140: !isMainThread or exclusive schema/agent maintenance permits native work; ordinary runtime dispatches to session-accessor.sqlite-archive.worker.ts:500-512. Agent execution publication uses its own worker transaction.",
-      },
-    ],
-  ],
-  [
-    "src/config/sessions/session-accessor.sqlite-compaction.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["persistCompactionBoundary"],
-        evidence:
-          "agent-runner-memory.ts:489 uses the async compaction facade, which dispatches session.transcript.compactionBoundary via withSessionMetadataWorker to session-manager-metadata.worker.ts:141. The native Sync wrapper has no production value caller: accessor barrels only re-export it and session-accessor.sqlite-compaction-runtime.ts:17,37-38 uses its type. No SDK value export. Worker initialization uses ensureSessionEntryInTransaction; the unused native branch is not a new entry exemption.",
       },
     ],
   ],
@@ -3445,6 +3426,7 @@ const reviewedOperations = new Map([
   ],
 ]);
 const workerModules = new Set([
+  "src/config/sessions/session-accessor.sqlite-compaction.ts", // Only session-manager-metadata.worker.ts calls the required-worker entry point; the async facade imports its type only.
   "src/agents/sandbox/persistent-exec-store.kernel.ts", // Mutations and registry removal checks run in persistent-exec-store.worker.ts and registry-write.worker.ts; reads dispatch through openclaw-state-read-operation-registry.ts in the read worker.
   "src/state/openclaw-agent-execution-maintenance.ts", // Only openclaw-agent-execution.worker.ts constructs this owner; admission invokes its startup repair callback solely inside that worker.
   "src/config/sessions/session-accessor.sqlite-entry-identity.ts", // Only reaction (agent execution worker), suggestion (sharing/transcript workers), and sharing native (sharing worker; host imports are types) kernels call this reader.

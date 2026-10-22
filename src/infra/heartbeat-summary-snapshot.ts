@@ -4,17 +4,7 @@ import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../auto-reply/heartbeat.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
 import type { CronJob } from "../cron/types.js";
-
-export type HeartbeatSummary = {
-  enabled: boolean;
-  every: string;
-  everyMs: number | null;
-  prompt: string;
-  target: string;
-  model?: string;
-  session?: string;
-  ackMaxChars: number;
-};
+import type { HeartbeatSummary } from "./heartbeat-summary-projection.js";
 
 function resolveHeartbeatSummaryJobs(
   cfg: OpenClawConfig,

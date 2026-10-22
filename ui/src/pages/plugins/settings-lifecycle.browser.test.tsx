@@ -38,7 +38,7 @@ it("retains focused lifecycle controls across settings reads and uses current mu
     configUnsupportedPaths: [],
     pluginId: "workboard",
     inspection: null,
-    inspectionError: null,
+    inspectionRead: { receipt: () => null, value: () => null },
     configSchema: null,
     hostControlsSchema: null,
     backHref: "/settings/plugins",
