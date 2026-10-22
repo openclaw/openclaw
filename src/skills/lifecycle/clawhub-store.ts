@@ -269,12 +269,12 @@ export async function readClawHubSkillsLockfile(
   return { version: 1, skills: {} };
 }
 
-function writeGuardedClawHubTrackingJson(
+function writeClawHubTrackingJsonSync(
   filePath: string,
   value: ClawHubSkillsLockfile | ClawHubSkillOrigin,
-  assertCurrent: () => void,
+  assertCurrent?: () => void,
 ): void {
-  assertCurrent();
+  assertCurrent?.();
   replaceFileAtomicSync({
     filePath,
     content: `${JSON.stringify(value, null, 2)}\n`,
@@ -294,7 +294,7 @@ async function writeClawHubSkillsLockfile(
 ): Promise<void> {
   const filePath = path.join(workspaceDir, DOT_DIR, "lock.json");
   if (beforePersistentApply) {
-    writeGuardedClawHubTrackingJson(filePath, lockfile, beforePersistentApply);
+    writeClawHubTrackingJsonSync(filePath, lockfile, beforePersistentApply);
     return;
   }
   await writeJson(filePath, lockfile, {
@@ -393,7 +393,7 @@ async function writeClawHubSkillOrigin(
 ): Promise<void> {
   const filePath = path.join(skillDir, DOT_DIR, "origin.json");
   if (beforePersistentApply) {
-    writeGuardedClawHubTrackingJson(filePath, origin, beforePersistentApply);
+    writeClawHubTrackingJsonSync(filePath, origin, beforePersistentApply);
     return;
   }
   await writeJson(filePath, origin, { trailingNewline: true });
@@ -468,7 +468,7 @@ export function replaceClawHubSkillLockEntryExpected(params: {
       throw new Error(`Skill ${JSON.stringify(params.slug)} tracking changed during rollback.`);
     }
   };
-  writeGuardedClawHubTrackingJson(
+  writeClawHubTrackingJsonSync(
     path.join(params.workspaceDir, DOT_DIR, "lock.json"),
     next,
     beforeRename,
@@ -510,19 +510,12 @@ export async function untrackClawHubSkill(
   }
   // Keep the authority check and atomic publication in one synchronous commit section.
   // The async atomic writer awaits identity checks after its pre-rename callback.
-  const writeLock = (value: ClawHubSkillsLockfile, assertCurrent = beforePersistentApply) => {
-    assertCurrent?.();
-    return replaceFileAtomicSync({
-      filePath: path.join(workspaceDir, DOT_DIR, "lock.json"),
-      content: `${JSON.stringify(value, null, 2)}\n`,
-      mode: 0o600,
-      dirMode: 0o777 & ~process.umask(),
-      copyFallbackOnPermissionError: true,
-      syncTempFile: true,
-      syncParentDir: true,
-      beforeRename: assertCurrent,
-    });
-  };
+  const writeLock = (value: ClawHubSkillsLockfile, assertCurrent = beforePersistentApply) =>
+    writeClawHubTrackingJsonSync(
+      path.join(workspaceDir, DOT_DIR, "lock.json"),
+      value,
+      assertCurrent,
+    );
   delete lock.skills[trackedSlug];
   writeLock(lock);
   return async () => {
