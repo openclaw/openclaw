@@ -33,7 +33,7 @@ export function createTranslatorScenario(
     sessionStore.createSession({ sessionId, sessionKey, cwd: "/tmp" });
   }
   const connection = createAcpConnection({ requestPermission });
-  const sessionUpdate = connection.__sessionUpdateMock;
+  const sessionUpdate = connection["__sessionUpdateMock"];
   const agent = createAcpGatewayAgent(
     connection,
     createAcpGateway(request as GatewayClient["request"]),
