@@ -12,6 +12,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import "../../styles/custodian.css";
+import { createCustodianActions } from "./custodian-actions.ts";
 import { CustodianChangeHistory, type HistorySnapshot } from "./custodian-history.tsx";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import { CustodianSurface } from "./custodian-surface.tsx";
@@ -24,6 +25,7 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
   const gateway = projectGateway(context.gateway);
   const channels = projectChannels(context.channels);
   const store = projectOwner(host.store, (source) => source);
+  const presentation = createCustodianActions(() => host.store);
   const historyAvailable = createMemo(() => {
     const snapshot = gateway.read().snapshot;
     return (
@@ -74,6 +76,7 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
   }
   onSettled(() => {
     propertyReceipts.set(host, (key) => {
+      presentation.retire();
       if (key === "store") {
         store.replaceSource(host.store);
         void host.store.refreshTranscriptIfIdle();
@@ -219,6 +222,7 @@ function CustodianPageContent(props: Props, host: SolidBridgeElement<Props>) {
       <CustodianSurface
         class="custodian__column"
         store={props.store}
+        actions={presentation.actions}
         onboarding={props.onboarding}
         newAgentIntent={props.newAgentIntent}
         showChannelOnboardingNudge={showChannelOnboardingNudge()}
