@@ -180,8 +180,7 @@ it.each([
   const catalog = checkpointCatalog();
   const { resources } = catalog;
   const command = async (call: CommandCall) => {
-    const { argv } = call;
-    if (argv[2] === "delete" && !catalog.failDeletion) {
+    if (call.argv[2] === "delete" && !catalog.failDeletion) {
       await deletion.wait();
     }
     return catalog.command(call);
@@ -298,24 +297,18 @@ it.each(["capacity", "missing"])("retries debt after restart (%s)", async (clean
 
 it.each([false, true])("fences old retirement completion (fails=%s)", async (fails) => {
   const gate = pause();
-  let captures = 0;
+  const catalog = checkpointCatalog();
+  catalog.failDeletion = false;
   let blockDelete = true;
-  const s = scenario(async ({ argv }) => {
-    if (argv[2] === "create") {
-      return checkpointResult(
-        `chk_generation_${++captures}`,
-        argv[argv.indexOf("--id") + 1]!,
-        "available",
-      );
-    }
-    if (argv[2] === "delete" && blockDelete) {
+  const s = scenario(async (call) => {
+    if (call.argv[2] === "delete" && blockDelete) {
       blockDelete = false;
       await gate.wait();
       if (fails) {
         return commandResult({ code: 7, stderr: "late delete failure" });
       }
     }
-    return undefined;
+    return catalog.command(call);
   });
   const now = Date.now();
   const clock = vi.spyOn(Date, "now").mockReturnValue(now);
@@ -327,17 +320,17 @@ it.each([false, true])("fences old retirement completion (fails=%s)", async (fai
   try {
     clock.mockReturnValue(now + 2 * DAY_MS);
     await s.capture("newer-refresh");
-    expect(captures).toBe(3);
+    expect(catalog.captures).toBe(3);
   } finally {
     gate.release();
   }
   await stopping;
-  expect(await firstWarmImage()).toMatchObject({ checkpointId: "chk_generation_3" });
+  expect(await firstWarmImage()).toMatchObject({ checkpointId: "chk_capture_3" });
   expect((await firstWarmImage())?.retirement).toBeUndefined();
   expect(s.warn).not.toHaveBeenCalled();
   s.calls.length = 0;
   await s.provision("final-reuse");
-  expect(s.checkpoints("fork")[0]?.[3]).toBe("chk_generation_3");
+  expect(s.checkpoints("fork")[0]?.[3]).toBe("chk_capture_3");
 });
 it("reports current-image capacity deletion failures", async () => {
   let cleaning = false;
