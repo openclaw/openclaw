@@ -19,7 +19,11 @@ import { discordPlugin } from "../channel.js";
 import { EMPTY_DISCORD_TEST_CONFIG } from "../test-support/config.js";
 import { registerThreadBindingCompatibilityTests } from "./thread-bindings.compatibility.test-support.js";
 import { createThreadBindingManager, getThreadBindingManager } from "./thread-bindings.manager.js";
-import { ensureBindingsLoaded, ensureBindingsLoadedAsync } from "./thread-bindings.state.js";
+import {
+  MANAGERS_BY_ACCOUNT_ID,
+  ensureBindingsLoaded,
+  ensureBindingsLoadedAsync,
+} from "./thread-bindings.state.js";
 import { resetThreadBindingsForTests } from "./thread-bindings.test-support.js";
 import type { ThreadBindingManager, ThreadBindingRecord } from "./thread-bindings.types.js";
 
@@ -256,6 +260,24 @@ it("does not turn revoked bind authority into an in-memory fallback", async () =
   finish.resolve();
   await outcome;
   expect(manager.getByThreadId("thread-1")).toEqual(persistedBinding().value);
+});
+
+it("rethrows an activity touch that fails for a reason other than a runtime refusal", async () => {
+  const rows = installCanonicalRows([persistedBinding()]);
+  const manager = await persistentManager();
+  const { entered, finish } = pauseNextWrite(rows);
+  const touching = manager.touchThread({ threadId: "thread-1", at: 200 });
+  const outcome = expect(touching).rejects.toThrow("Discord thread binding manager was retired");
+  try {
+    await entered.promise;
+    MANAGERS_BY_ACCOUNT_ID.delete("work");
+    finish.resolve();
+    await outcome;
+    expect(rows.get("work:thread-1")?.lastActivityAt).toBe(100);
+  } finally {
+    finish.resolve();
+    await Promise.allSettled([touching, manager.stop()]);
+  }
 });
 
 registerThreadBindingCompatibilityTests({ stores, persistedBinding, persistentManager });

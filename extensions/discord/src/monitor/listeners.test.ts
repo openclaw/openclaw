@@ -438,6 +438,16 @@ describe("Discord monitor dispatch", () => {
     );
     expect(logger.info).not.toHaveBeenCalled();
   });
+
+  it("keeps a failed unbind of a deleted thread ahead of the session close", async () => {
+    const { client, logger } = createHarness();
+    lifecycle.unbindThread.mockRejectedValueOnce(new Error("unbind failed"));
+    await client.dispatchGatewayEvent("THREAD_DELETE", thread(false));
+    expect(lifecycle.closeDiscordThreadSessions).not.toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      expect.stringContaining("discord thread-delete handler failed: Error: unbind failed"),
+    );
+  });
 });
 
 describe("Discord guild join introductions", () => {

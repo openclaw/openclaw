@@ -4,6 +4,7 @@ import {
   resolveThreadBindingThreadName,
   unregisterSessionBindingAdapter,
 } from "openclaw/plugin-sdk/conversation-runtime";
+import { isPluginStateRuntimeInactiveError } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import {
   getRuntimeConfigSnapshot,
@@ -18,6 +19,7 @@ import { registerSessionBindingAdapterV2 } from "openclaw/plugin-sdk/thread-bind
 import { warnPluginSdkDeprecation } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { createDiscordRestClient } from "../client.js";
 import { getChannel } from "../internal/discord.js";
+import { getOptionalDiscordRuntime } from "../runtime.js";
 import {
   createThreadForBinding,
   createWebhookForChannel,
@@ -29,6 +31,7 @@ import {
   summarizeDiscordError,
 } from "./thread-bindings.discord-api.js";
 import {
+  assertBindingRuntimeActive,
   commitBindingRecord,
   updateBindingRecordSync,
   runThreadBindingMutation,
@@ -42,6 +45,7 @@ import { createThreadBindingSessionAdapter } from "./thread-bindings.session-ada
 import {
   BINDINGS_BY_THREAD_ID,
   forgetThreadBindingToken,
+  getThreadBindingRuntime,
   getThreadBindingToken,
   MANAGERS_BY_ACCOUNT_ID,
   PERSIST_BY_ACCOUNT_ID,
@@ -57,6 +61,7 @@ import {
   resolvePreparedThreadBindingLifecycle,
   resolveThreadBindingMaxAgeMs,
   THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
+  THREAD_BINDINGS_STATE,
   shouldDefaultPersist,
 } from "./thread-bindings.state.js";
 import {
@@ -106,10 +111,23 @@ function createLoadedThreadBindingManager(
 ): ThreadBindingManager {
   const accountId = normalizeAccountId(params.accountId);
   const existing = MANAGERS_BY_ACCOUNT_ID.get(accountId);
-  rememberThreadBindingToken({ accountId, token: params.token });
+  const runtime = getOptionalDiscordRuntime();
   if (existing) {
-    return existing;
+    try {
+      assertBindingRuntimeActive(getThreadBindingRuntime(existing));
+      rememberThreadBindingToken({ accountId, token: params.token });
+      return existing;
+    } catch (error) {
+      if (!isPluginStateRuntimeInactiveError(error) || !runtime) {
+        throw error;
+      }
+    }
   }
+  assertBindingRuntimeActive(runtime);
+  // A timed-out provider may still hold the retired manager. Replace its registration,
+  // never its captured runtime, and let its identity-checked cleanup finish separately.
+  void existing?.stop();
+  rememberThreadBindingToken({ accountId, token: params.token });
 
   const persist = params.persist ?? shouldDefaultPersist();
   PERSIST_BY_ACCOUNT_ID.set(accountId, persist);
@@ -254,6 +272,7 @@ function createLoadedThreadBindingManager(
     }
     const { bindingKey, record: existingLocal } = binding;
     await commitBindingRecord({
+      runtime,
       bindingKey,
       previous: existingLocal,
       next: null,
@@ -324,6 +343,7 @@ function createLoadedThreadBindingManager(
       }
       const at = normalizeTouchTimestamp(input.at);
       return updateBindingRecordSync({
+        runtime,
         bindingKey: key,
         transform: (record) => touchBindingRecord(record, at),
         persist: (input.persist ?? persist) && shouldPersistAnyBindingState(),
@@ -342,14 +362,23 @@ function createLoadedThreadBindingManager(
         }
         const { bindingKey, record: existingResult } = binding;
         const nextRecord = touchBindingRecord(existingResult, touchParams.at);
-        await commitBindingRecord({
-          bindingKey,
-          previous: existingResult,
-          next: nextRecord,
-          persist: (touchParams.persist ?? persist) && shouldPersistAnyBindingState(),
-          minIntervalMs: THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
-          assertCurrent: assertManagerCurrent,
-        });
+        try {
+          await commitBindingRecord({
+            runtime,
+            bindingKey,
+            previous: existingResult,
+            next: nextRecord,
+            persist: (touchParams.persist ?? persist) && shouldPersistAnyBindingState(),
+            minIntervalMs: THREAD_BINDING_TOUCH_PERSIST_MIN_INTERVAL_MS,
+            assertCurrent: assertManagerCurrent,
+          });
+        } catch (error) {
+          // Activity is best effort. A retired owner must not fail the inbound turn.
+          if (isPluginStateRuntimeInactiveError(error)) {
+            return null;
+          }
+          throw error;
+        }
         return nextRecord;
       });
     },
@@ -484,6 +513,7 @@ function createLoadedThreadBindingManager(
         }
         await runThreadBindingMutation(() =>
           commitBindingRecord({
+            runtime,
             bindingKey: toBindingRecordKey({ accountId, threadId }),
             previous: existingValue,
             next: record,
@@ -609,6 +639,8 @@ function createLoadedThreadBindingManager(
   registerSessionBindingAdapterV2(sessionBindingAdapter);
 
   MANAGERS_BY_ACCOUNT_ID.set(accountId, manager);
+  // Session-wide helpers must retain this owner even when called from another plugin instance.
+  THREAD_BINDINGS_STATE.runtimeByManager.set(manager, runtime);
   return manager;
 }
 

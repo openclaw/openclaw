@@ -533,6 +533,21 @@ describe("codex detach command", () => {
     });
   });
 
+  it("reports a refused Discord detach and restores the native binding", async () => {
+    const f = await nativeFixture();
+    f.detach.mockRejectedValue(
+      Object.assign(new Error('Plugin "discord" runtime is no longer active.'), {
+        code: "PLUGIN_STATE_RUNTIME_INACTIVE",
+      }),
+    );
+    await expect(f.run()).resolves.toEqual({
+      text: 'Codex command failed: Plugin "discord" runtime is no longer active.',
+    });
+    expect(f.detach).toHaveBeenCalledOnce();
+    expect(f.mutate.mock.calls.map(([, mutation]) => mutation.kind)).toEqual(["clear", "set"]);
+    expect(f.read()).toMatchObject(f.original);
+  });
+
   it("shows actionable thread recovery when public detach rollback returns false", async () => {
     const f = await nativeFixture({ cwd: detachStateDir });
     f.mutate.mockImplementation(async (...args) =>
