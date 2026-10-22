@@ -19,6 +19,7 @@ export function parseTeamShapeOptions(argv: string[]) {
     options: {
       "state-dir": { type: "string" },
       sessions: { type: "string" },
+      agents: { type: "string" },
       runs: { type: "string" },
       approvals: { type: "string" },
       cron: { type: "string" },
@@ -82,6 +83,7 @@ export function parseTeamShapeOptions(argv: string[]) {
   return {
     stateDir: path.resolve(values["state-dir"] ?? "."),
     sessions,
+    agents: integer("agents", 1, 1),
     retainedRuns,
     approvals: integer("approvals", 200),
     cronJobs: integer("cron", 100),
@@ -145,26 +147,48 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
       cron: { enabled: false },
       update: { checkOnStart: false },
       agents: {
-        entries: { main: { workspace: path.join(stateDir, "workspace") } },
+        ...(options.agents > 1
+          ? {
+              ownership: "explicit" as const,
+              defaults: { systemAgent: { agentId: "main" } },
+            }
+          : {}),
+        entries: Object.fromEntries(
+          Array.from({ length: options.agents }, (_, index) => [
+            index === 0 ? "main" : `team-shape-agent-${index}`,
+            { workspace: path.join(stateDir, "workspace") },
+          ]),
+        ),
       },
       logging: { file: path.join(stateDir, "gateway.log") },
     } satisfies OpenClawConfig;
     writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`);
 
     // Resolvers capture environment on import; bind the fixture before loading storage owners.
-    const [{ seedTeamShapeSessions }, { seedTeamShapeExtras }, agentDb, stateDb] =
-      await Promise.all([
-        import("./team-shape-sessions.ts"),
-        import("./team-shape-extras.ts"),
-        import("../../src/state/openclaw-agent-db.js"),
-        import("../../src/state/openclaw-state-db.js"),
-      ]);
+    const [
+      { seedTeamShapeSessions, waitForTeamShapeWriteBudget },
+      { seedTeamShapeExtras },
+      agentDb,
+      stateDb,
+    ] = await Promise.all([
+      import("./team-shape-sessions.ts"),
+      import("./team-shape-extras.ts"),
+      import("../../src/state/openclaw-agent-db.js"),
+      import("../../src/state/openclaw-state-db.js"),
+    ]);
     const agent = agentDb.openOpenClawAgentDatabase({ agentId: "main" });
     const state = stateDb.openOpenClawStateDatabase();
     let summary;
     try {
       const seeded = await seedTeamShapeSessions(options);
       const extras = await seedTeamShapeExtras({ ...options, sessions: seeded.sessions });
+      for (let index = 1; index < options.agents; index++) {
+        await waitForTeamShapeWriteBudget();
+        const additional = agentDb.openOpenClawAgentDatabase({
+          agentId: `team-shape-agent-${index}`,
+        });
+        await agentDb.closeOpenClawAgentDatabaseByPathAsync(additional.path);
+      }
       agent.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       state.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
       const { sessions, generationMs: sessionGenerationMs, ...sessionMetrics } = seeded;
@@ -174,6 +198,7 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
         seed: options.seed,
         now: options.now,
         sessionCount: sessions.length,
+        agentCount: options.agents,
         ...sessionMetrics,
         sessionGenerationMs,
         ...extras,
@@ -200,12 +225,13 @@ async function main() {
   const options = parseTeamShapeOptions(process.argv.slice(2));
   if (options.help) {
     console.log(`Usage: node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts --state-dir <new-dir> [options]
-  --sessions 5000 --runs 6000 --approvals 200 --cron 100 --projects 12
+  --sessions 5000 --agents 1 --runs 6000 --approvals 200 --cron 100 --projects 12
   --seed 967 --now <epoch-ms> --transcript-mib 64
   --long-transcript-entries 0 --long-transcript-sessions 4
   --worktree-files 0 --nested-repository
   --github-options-connected  Register synthetic GitHub origins for dashboard measurements.
   --launch --port 40967    Start an isolated loopback dev Gateway after generation.
+Additional agents have empty, independently owned stores and share the synthetic workspace.
 State is synthetic and must not exist. Existing state is never overwritten.
 Transcript MiB is logical text before compression; actual database sizes are reported.
 Long transcript entries append 1 KiB messages with distinct 16 KiB assistant thinking signatures.

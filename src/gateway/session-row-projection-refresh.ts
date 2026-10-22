@@ -457,6 +457,15 @@ export function createSessionRowRefresh(
         break;
       }
     }
+    if (selected.size === 0) {
+      // Empty row batches still renew projection metadata for the completed revision.
+      owner.prepare();
+      // Only exact-owned rows remain dirty; wait for them instead of spinning the drain.
+      await Promise.allSettled(held);
+      // Let exact callers install their held snapshots before preparing placements again.
+      await yieldSessionListWork();
+      return;
+    }
     const read = createDeferredCore();
     for (const id of selected) {
       bulkReads.set(id, read.promise);
@@ -470,12 +479,6 @@ export function createSessionRowRefresh(
         }
       }
       read.resolve();
-    }
-    if (selected.size === 0) {
-      // Only exact-owned rows remain dirty; wait for them instead of spinning the drain.
-      await Promise.allSettled(held);
-      // Let exact callers install their held snapshots before preparing placements again.
-      await yieldSessionListWork();
     }
   }
   return {

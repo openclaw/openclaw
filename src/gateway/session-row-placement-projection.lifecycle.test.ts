@@ -1,4 +1,5 @@
-import { expect, it } from "vitest";
+import { performance } from "node:perf_hooks";
+import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withTestTimeout } from "../../test/helpers/promise.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -65,6 +66,189 @@ function placementSnapshot(reconciling: readonly string[]): WorkerSessionPlaceme
     workspaceRecoveryPendingSessionIds: new Set(),
   };
 }
+
+it.each([
+  ["exact", "pending"],
+  ["all", "pending"],
+  ["exact", "settled"],
+  ["all", "settled"],
+] as const)(
+  "shares a held placement read only until %s invalidation while %s",
+  async (scope, phase) => {
+    const { read } = placementReadView();
+    const id = "held-placement";
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const sourceEntered = createDeferredCore();
+    const releaseSource = createDeferredCore();
+    let holding = true;
+    let reconciling = true;
+    const readProjection = vi.fn(async () => {
+      const snapshot = placementSnapshot(reconciling ? [id] : []);
+      sourceEntered.resolve();
+      await releaseSource.promise;
+      return snapshot;
+    });
+    const owner = createSessionRowPlacementProjection({ readProjection }, () => undefined);
+    const consume = () => owner.getProjectionFacts(id)?.workspaceResultReconciling;
+    const first = read(owner, id, consume, () => {
+      if (holding) {
+        entered.resolve();
+        return release.promise;
+      }
+      return undefined;
+    });
+    const settled = Promise.allSettled([first]);
+    try {
+      await awaitGateBeforeSettlement(sourceEntered.promise, first, "Placement read did not enter");
+      if (phase === "pending") {
+        reconciling = false;
+        owner.invalidate(scope === "exact" ? id : undefined);
+      }
+      releaseSource.resolve();
+      await awaitGateBeforeSettlement(entered.promise, first, "Row preparation did not enter");
+      if (phase === "settled") {
+        await expect(read(owner, id, consume)).resolves.toBe(true);
+        expect(readProjection).toHaveBeenCalledOnce();
+
+        reconciling = false;
+        owner.invalidate(scope === "exact" ? id : undefined);
+      }
+      // Residency must not revive a snapshot retired by the publication.
+      owner.register(id);
+      await expect(read(owner, id, consume)).resolves.toBe(false);
+      expect(readProjection).toHaveBeenCalledTimes(2);
+
+      holding = false;
+      release.resolve();
+      await expect(first).resolves.toBe(false);
+      expect(readProjection).toHaveBeenCalledTimes(2);
+    } finally {
+      holding = false;
+      releaseSource.resolve();
+      release.resolve();
+      owner.dispose();
+      await settled;
+    }
+  },
+);
+
+it("lets I/O update later ready reads without waiting for an unrelated preparation", async () => {
+  vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
+  let now = 0;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  const { read } = placementReadView();
+  const owner = createSessionRowPlacementProjection(undefined, () => undefined);
+  const held = createDeferredCore();
+  let holding = true;
+  let current = "before I/O";
+  let atIo = -1;
+  const observed: string[] = [];
+  setImmediate(() => {
+    atIo = observed.length;
+    current = "after I/O";
+  });
+  const requests = Array.from({ length: 12 }, (_, index) =>
+    read(
+      owner,
+      `ready-${index}`,
+      () => {
+        observed.push(current);
+        now += 7;
+      },
+      () => (index === 0 && holding ? held.promise : undefined),
+    ),
+  );
+  const settled = Promise.all(requests);
+  try {
+    await vi.runAllTimersAsync();
+    expect(atIo).toBeGreaterThan(0);
+    expect(atIo).toBeLessThan(11);
+    expect(observed).toContain("after I/O");
+    expect(observed).toHaveLength(11);
+  } finally {
+    holding = false;
+    held.resolve();
+    await vi.runAllTimersAsync();
+    await settled;
+    owner.dispose();
+    clock.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
+it("finishes a private read whose preparation exhausts its turn budget", async () => {
+  vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
+  let now = 0;
+  let cost = 7;
+  const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+  const { query, read } = placementReadView();
+  const owner = createSessionRowPlacementProjection(undefined, () => undefined);
+  const consumed = vi.fn();
+  let selections = 0;
+  const reading = read(
+    owner,
+    () => {
+      selections++;
+      now += cost;
+      return [query("agent:main:dashboard:incognito-slow")];
+    },
+    consumed,
+  );
+  const settled = Promise.allSettled([reading]);
+  try {
+    expect(consumed).not.toHaveBeenCalled();
+    for (let turn = 0; turn < 4 && consumed.mock.calls.length === 0; turn++) {
+      await vi.advanceTimersToNextTimerAsync();
+    }
+    expect(consumed).toHaveBeenCalledOnce();
+    expect(selections).toBeGreaterThan(1);
+    await reading;
+  } finally {
+    cost = 0;
+    await vi.runAllTimersAsync();
+    await settled;
+    owner.dispose();
+    clock.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
+it.each(["cancelled", "disposed"] as const)(
+  "settles a %s read waiting for its turn",
+  async (outcome) => {
+    vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
+    let now = 0;
+    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
+    const { read } = placementReadView();
+    const owner = createSessionRowPlacementProjection(undefined, () => undefined);
+    const work = new AsyncWorkScope();
+    const cancelled = new Error("Requesting connection closed");
+    const consumed = vi.fn();
+    try {
+      await read(owner, "first", () => {
+        now += 7;
+      });
+      const queued = work.track(() => read(owner, "queued", consumed));
+      const rejected = expect(queued).rejects.toThrow(
+        outcome === "cancelled" ? cancelled.message : "no longer active",
+      );
+      if (outcome === "cancelled") {
+        work.beginClose(cancelled);
+      } else {
+        owner.dispose();
+      }
+      await vi.runAllTimersAsync();
+      await rejected;
+      expect(consumed).not.toHaveBeenCalled();
+    } finally {
+      owner.dispose();
+      await work.drain();
+      clock.mockRestore();
+      vi.useRealTimers();
+    }
+  },
+);
 
 it.each([false, true])(
   "settles native results before later topology changes (placement reader: %s)",

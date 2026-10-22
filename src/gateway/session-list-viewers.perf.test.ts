@@ -368,14 +368,33 @@ test("shares concurrent list selection across row modes and refilters only publi
       }
       using stringify = vi.spyOn(JSON, "stringify");
       using present = vi.spyOn(projection, "present");
+      let consumeEncodings = 0;
+      const prepare = projection.withPreparedExactRows.bind(projection);
+      using preparedRead = vi
+        .spyOn(projection, "withPreparedExactRows")
+        .mockImplementation((queries, consume, options) =>
+          prepare(
+            queries,
+            (view) => {
+              const before = stringify.mock.calls.length;
+              try {
+                return consume(view);
+              } finally {
+                // Readiness can yield to unrelated work; presentation and row encoding cannot.
+                consumeEncodings += stringify.mock.calls.length - before;
+              }
+            },
+            options,
+          ),
+        );
       for (const client of [alice, bob, alice, bob]) {
         for (const rowMode of ["compact", "sidebar"] as const) {
-          stringify.mockClear();
+          consumeEncodings = 0;
           await read(rowMode, client, 2);
-          const smallPageEncodings = stringify.mock.calls.length;
-          stringify.mockClear();
+          const smallPageEncodings = consumeEncodings;
+          consumeEncodings = 0;
           const result = await read(rowMode, client, 128);
-          const encodings = stringify.mock.calls.length;
+          const encodings = consumeEncodings;
           expect(result.totalCount).toBe(128);
           // Fixed request preparation may encode facts; additional warm rows must not.
           expect(encodings, `warm ${rowMode} serialization scales with row count`).toBe(
@@ -392,6 +411,7 @@ test("shares concurrent list selection across row modes and refilters only publi
         }
       }
       expect(present).not.toHaveBeenCalled();
+      preparedRead.mockRestore();
       stringify.mockRestore();
       present.mockRestore();
       owner.mockClear();

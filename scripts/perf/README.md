@@ -389,7 +389,10 @@ The launcher intentionally does not reuse an operator's package-manager cache.
 
 Defaults are 5,000 sessions in the `main` agent, 6,000 retained subagent runs,
 200 pending approval recovery records, 100 disabled cron jobs, and 12 registered
-projects with committed synthetic Git repositories and real worktrees.
+projects with committed synthetic Git repositories and real worktrees. `--agents 128`
+adds a synthetic agent roster sharing the workspace, with independently owned
+empty stores prepared sequentially. Sessions remain owned by `main`. This
+exercises roster size without duplicating transcript payloads across databases.
 
 Sessions have 24 synthetic human identities, assigned owners, 1–5 participants,
 a 70/10/10/10 split of shared/read-only/suggest/draft visibility, pinned rows and
@@ -765,10 +768,45 @@ The profiler affects both sides equally; no inspector listener is exposed.
 Use identical fresh fixtures and options for A/B. `--start-at <epoch-ms>` waits
 after readiness and fails if the deadline has already passed, allowing both
 sides of a concurrent pair to begin together. Apply the current host policy:
-hold the shared measurement lock, place A and B on their separate 16-core halves,
-then swap halves for the next pair. Record the exact revision, fixture counts
+hold one shared measurement-slot lock, place A and B on interleaved 16-CPU sets
+within that slot, then swap sets for the next pair. Account for SMT sibling
+placement when selecting the sets. Record the exact revision, fixture counts
 and physical database bytes; a 64 MiB text fixture preserves roster/run shape
 but does not reproduce multi-GB transcript page-cache pressure.
+
+For shared prepared-row reads, add `--prepared-rows --entry src/entry.ts`:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/team-shape-measure.ts \
+  --state-dir /path/to/team-shape --port 40967 --prepared-rows \
+  --entry src/entry.ts --clients 24 --samples 300 --limit 100 \
+  --poll-ms 100 --mutation-ms 1000 --revision <commit-sha>
+```
+
+This mode mixes full, sidebar, and compact session lists with exact-key
+`sessions.describe`, one-key `sessions.preview`, and `agents.list` reads in each
+cohort. It runs the same fixed operation sequence in separate CPU and sampled
+allocation phases. Label mutations occur at fixed cohort indices, so differing
+response speeds cannot change the number of writes. The report includes counts
+for every latency percentile, event-loop samples, total and major GC, sampled
+allocation bytes, and the maximum synchronous async callback. A benchmark-only
+async hook also arms one immediate per occupied turn; its delay and count above
+one second expose chains of individually short microtasks that starve I/O.
+These occupied-turn delays include scheduling time and are distinct from the
+maximum callback duration. Profiling and hooks apply equally to both sides.
+Prepared-row runs also enable V8 GC tracing in `gateway.log`; after the process
+exits and its log drains, `readGatewayGcTrace` can extract main-isolate promoted
+bytes for the heap profile's capture window.
+For concurrent pairs, provide the same `--start-at` and `--phase-gap-ms` to both
+sides; the latter schedules the heap phase that many milliseconds after the
+shared start and must exceed the CPU workload duration. A missed phase start
+fails the run. `--preload` loads a benchmark-only source override module before
+the Gateway entry, allowing narrow baseline/candidate owner substitutions.
+Record the exact source revision and override hashes alongside each result.
+
+Use at least 1,000 observations per side before treating p99 as a decision
+metric, or 200 for p95; smaller tails are context only. Major GC is context
+below 50 collections per side, while total GC remains part of the comparison.
 
 ## Measure branch reads across idle worker retirement
 

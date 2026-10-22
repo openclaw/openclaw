@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { performance } from "node:perf_hooks";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import {
   getSessionActorStorageBinding,
@@ -6,6 +7,7 @@ import {
 } from "../config/sessions/session-actor-storage-binding.js";
 import { captureSessionTranscriptStorageEnvironment } from "../config/sessions/transcript-target-binding.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getMainThreadTaskName, runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -34,6 +36,8 @@ import type { WorkerSessionPlacementStore } from "./worker-environments/placemen
 const MAX_CONCURRENT_PLACEMENT_READS = 2;
 const MAX_COALESCED_PLACEMENT_IDS = 256;
 const MAX_COALESCED_PLACEMENT_BYTES = 64 * 1024;
+const READS_PER_TURN = 8;
+const READ_BUDGET_MS = 6;
 type PlacementReadKind = "resident" | "exact";
 type PlacementReadBatch = {
   kind: PlacementReadKind;
@@ -62,9 +66,64 @@ export function createSessionRowPlacementProjection(
   const dirty = new Set<string>();
   let exact: ReadonlyMap<string, SessionRowPlacementFacts> | undefined;
   let disposed = false;
+  let started = 0;
+  let startedAt = 0;
+  let reset: ReturnType<typeof setImmediate> | undefined;
+  let wake: ReturnType<typeof setImmediate> | undefined;
+  const waiting = new Set<() => void>();
+  function wakeNext() {
+    wake ??= setImmediate(() => {
+      wake = undefined;
+      clearImmediate(reset);
+      reset = undefined;
+      const resume = waiting.values().next().value;
+      if (resume) {
+        waiting.delete(resume);
+        resume();
+      }
+      if (waiting.size > 0) {
+        wakeNext();
+      }
+    });
+  }
+  function claimTurn(resumed: boolean) {
+    const now = performance.now();
+    if (!reset) {
+      started = 0;
+      startedAt = now;
+      reset = setImmediate(() => {
+        reset = undefined;
+      });
+      reset.unref?.();
+    }
+    if (
+      (!resumed && (wake || waiting.size > 0)) ||
+      started >= READS_PER_TURN ||
+      now - startedAt >= READ_BUDGET_MS
+    ) {
+      return new Promise<void>((resolve) => {
+        waiting.add(resolve);
+        wakeNext();
+      });
+    }
+    started++;
+    return undefined;
+  }
   const activeReads = new Set<PlacementReadBatch>();
   const queuedReads: PlacementReadBatch[] = [];
   const reads = new Set<PlacementReadBatch>();
+  const retireStartedReads = (id?: string) => {
+    for (const read of reads) {
+      // Dispatched reads may settle with an older snapshot; queued reads have not captured one.
+      if (read.started) {
+        if (id) {
+          read.ids.delete(id);
+        } else {
+          read.ids.clear();
+        }
+      }
+    }
+  };
   let retainedInputBytes = 0;
   const releaseRead = (read: PlacementReadBatch) => {
     if (read.settled && read.readers === 0 && reads.delete(read)) {
@@ -103,7 +162,8 @@ export function createSessionRowPlacementProjection(
     const covers = (batch: PlacementReadBatch) =>
       batch.kind === kind && ids.every((id) => batch.ids.has(id));
     // Exact requests must not join broader resident preparation and wait for unrelated work.
-    let read = [...activeReads].find(covers) ?? queuedReads.find(covers);
+    // Later turns can join successful snapshots still held by overlapping row preparation.
+    let read = [...reads].find((batch) => (!batch.settled || batch.snapshot) && covers(batch));
     let addedBytes = 0;
     if (!read) {
       const tail = queuedReads.at(-1);
@@ -219,6 +279,7 @@ export function createSessionRowPlacementProjection(
       }
     },
     forget(id: string) {
+      retireStartedReads(id);
       registered.delete(id);
       dirty.delete(id);
       resident.delete(id);
@@ -228,11 +289,13 @@ export function createSessionRowPlacementProjection(
       if (!published?.placements.has(id) || !registered.has(id)) {
         return false;
       }
+      retireStartedReads(id);
       resident.set(id, select(published, id));
       dirty.delete(id);
       return true;
     },
     invalidate(id?: string) {
+      retireStartedReads(id);
       if (id) {
         resident.delete(id);
         if (registered.has(id)) {
@@ -287,6 +350,7 @@ export function createSessionRowPlacementProjection(
       consume: (read: SessionRowReadView, queries: readonly Lookup[]) => T,
       prepareSelection?: () => Promise<void> | undefined,
     ): Promise<T> {
+      const task = `${getMainThreadTaskName() ?? "gateway"}:session-rows`;
       const signal = getAsyncWorkSignal();
       const memory = getSessionActorStorageBinding({});
       const assertActive = () => {
@@ -297,138 +361,171 @@ export function createSessionRowPlacementProjection(
       };
       const prepareFacts = () => prepareReadFacts() ?? prepareSelection?.();
       let preparedQueries: readonly Lookup[] = [];
-      let hasPrivateQueries = false;
+      let privateQueries: Lookup[] = [];
       let selectedIds: readonly string[] = [];
       const privateRepositories = new Map<string, PreparedPrivateSessionRepository>();
       let privateSelections: Array<{ key: string; row: Row; workspaceId: string }> = [];
       let selectedConfig: OpenClawConfig | undefined;
-      const selectRows = () => {
-        const cfg = projection.state.cfg;
-        if (selectedConfig !== cfg) {
-          privateRepositories.clear();
-          selectedConfig = cfg;
-        }
-        privateSelections = [];
-        preparedQueries = queries(cfg);
-        hasPrivateQueries = false;
-        const ids: string[] = [];
-        for (const query of preparedQueries) {
-          const key = privateSessionRowReadKey(cfg, query);
-          hasPrivateQueries ||= key !== undefined;
-          const privateMemory = key
-            ? captureSessionActorStorageOwner(
-                { ...query, sessionKey: query.key, sessionActor: memory, env },
-                { assertCurrent: assertActive, authorize: assertActive },
-              )
-            : undefined;
-          const snapshot = privateMemory?.owner?.readSession(query.key, privateMemory.authority);
-          const assertSessionCurrent = privateMemory?.owner?.captureSessionReadGuard(query.key);
-          const row = privateMemory
-            ? snapshot?.entry &&
-              createIncognitoSessionRow({
-                cfg,
-                key: query.key,
-                agentId: query.agentId,
-                storePath: privateMemory.path,
-                entry: snapshot.entry,
-                membership: new Set(snapshot.members.map((member) => member.identityId)),
-                source: {
-                  identity: snapshot.version.epoch,
-                  assertCurrent() {
-                    assertActive();
-                    assertSessionCurrent?.();
-                    privateMemory.authority.assertCurrent();
+      const selectRows = () =>
+        runWithMainThreadTask(`${task}:select`, () => {
+          const cfg = projection.state.cfg;
+          if (selectedConfig !== cfg) {
+            privateRepositories.clear();
+            selectedConfig = cfg;
+          }
+          privateSelections = [];
+          preparedQueries = queries(cfg);
+          privateQueries = [];
+          const ids: string[] = [];
+          for (const query of preparedQueries) {
+            const key = privateSessionRowReadKey(cfg, query);
+            if (key) {
+              privateQueries.push(query);
+            }
+            const privateMemory = key
+              ? captureSessionActorStorageOwner(
+                  { ...query, sessionKey: query.key, sessionActor: memory, env },
+                  { assertCurrent: assertActive, authorize: assertActive },
+                )
+              : undefined;
+            const snapshot = privateMemory?.owner?.readSession(query.key, privateMemory.authority);
+            const assertSessionCurrent = privateMemory?.owner?.captureSessionReadGuard(query.key);
+            const row = privateMemory
+              ? snapshot?.entry &&
+                createIncognitoSessionRow({
+                  cfg,
+                  key: query.key,
+                  agentId: query.agentId,
+                  storePath: privateMemory.path,
+                  entry: snapshot.entry,
+                  membership: new Set(snapshot.members.map((member) => member.identityId)),
+                  source: {
+                    identity: snapshot.version.epoch,
+                    assertCurrent() {
+                      assertActive();
+                      assertSessionCurrent?.();
+                      privateMemory.authority.assertCurrent();
+                    },
                   },
-                },
-              })
-            : inOwnerContext(() => lookup(query));
-          if (key && row?.entry?.repositoryWorkspaceId) {
-            privateSelections.push({ key, row, workspaceId: row.entry.repositoryWorkspaceId });
-          }
-          if (row?.entry) {
-            ids.push(row.entry.sessionId);
-          }
-        }
-        selectedIds = ids;
-        if (privateRepositories.size) {
-          const selectedPrivateKeys = new Set(privateSelections.map(({ key }) => key));
-          for (const key of privateRepositories.keys()) {
-            if (!selectedPrivateKeys.has(key)) {
-              privateRepositories.delete(key);
+                })
+              : inOwnerContext(() => lookup(query));
+            if (key && row?.entry?.repositoryWorkspaceId) {
+              privateSelections.push({ key, row, workspaceId: row.entry.repositoryWorkspaceId });
+            }
+            if (row?.entry) {
+              ids.push(row.entry.sessionId);
             }
           }
-        }
-      };
-      const prepareSelectedRows = () => {
-        let pending = inOwnerContext(() => prepareRows(preparedQueries));
-        if (pending) {
+          selectedIds = ids;
+          if (privateRepositories.size) {
+            const selectedPrivateKeys = new Set(privateSelections.map(({ key }) => key));
+            for (const key of privateRepositories.keys()) {
+              if (!selectedPrivateKeys.has(key)) {
+                privateRepositories.delete(key);
+              }
+            }
+          }
+        });
+      const prepareSelectedRows = () =>
+        runWithMainThreadTask(`${task}:prepare`, () => {
+          let pending = inOwnerContext(() => prepareRows(preparedQueries));
+          if (pending) {
+            return pending;
+          }
+          for (const { key, row, workspaceId } of privateSelections) {
+            const existing = privateRepositories.get(key);
+            if (existing?.workspaceId === workspaceId && isCurrentGeneration(existing.row, row)) {
+              continue;
+            }
+            const cfg = selectedConfig;
+            pending = inOwnerContext(async () => {
+              const repository = await getSessionRepositoryWorkspaceStore().prepare(workspaceId);
+              assertActive();
+              if (projection.state.cfg === cfg) {
+                privateRepositories.set(key, { row, workspaceId, repository });
+              }
+            });
+            break;
+          }
           return pending;
-        }
-        for (const { key, row, workspaceId } of privateSelections) {
-          const existing = privateRepositories.get(key);
-          if (existing?.workspaceId === workspaceId && isCurrentGeneration(existing.row, row)) {
-            continue;
-          }
-          const cfg = selectedConfig;
-          pending = inOwnerContext(async () => {
-            const repository = await getSessionRepositoryWorkspaceStore().prepare(workspaceId);
-            assertActive();
-            if (projection.state.cfg === cfg) {
-              privateRepositories.set(key, { row, workspaceId, repository });
-            }
-          });
-          break;
-        }
-        return pending;
-      };
+        });
       const stalePrivatePreparation = Symbol("stale-private-row-preparation");
+      let privateResumed = false;
       const consumeRows = (placement?: ReadonlyMap<string, SessionRowPlacementFacts>) => {
         const cfg = projection.state.cfg;
+        let privateTurn: Promise<void> | undefined;
         const consumePrepared = (
           privateRows?: ReadonlyMap<string, Row | undefined>,
-        ): ReturnType<typeof readPreparedSessionRows<T>> | typeof stalePrivatePreparation => {
-          assertActive();
-          const privateIds = privateRows
-            ? [...privateRows.values()].flatMap((row) => (row?.entry ? [row.entry.sessionId] : []))
-            : [];
-          if (
-            projection.state.cfg !== cfg ||
-            missing(privateIds).some((id) => !placement?.has(id))
-          ) {
-            return stalePrivatePreparation;
-          }
-          const previous = exact;
-          if (placement) {
-            exact = placement;
-          }
-          try {
-            return readPreparedSessionRows(
-              projection,
-              isActive,
-              () => preparedQueries,
-              (read) => consume(read, preparedQueries),
-              privateRepositories,
-              privateRows,
-            );
-          } finally {
-            exact = previous;
-          }
-        };
-        return hasPrivateQueries
-          ? withBoundIncognitoSessionRows(cfg, preparedQueries, consumePrepared, env)
+        ): ReturnType<typeof readPreparedSessionRows<T>> | typeof stalePrivatePreparation =>
+          runWithMainThreadTask(`${task}:consume`, () => {
+            assertActive();
+            if (privateRows && !privateResumed && (privateTurn = claimTurn(true))) {
+              return stalePrivatePreparation;
+            }
+            // A granted retry must finish even if preparing its private frame exceeds the budget.
+            privateResumed = false;
+            const privateIds = privateRows
+              ? [...privateRows.values()].flatMap((row) =>
+                  row?.entry ? [row.entry.sessionId] : [],
+                )
+              : [];
+            if (
+              projection.state.cfg !== cfg ||
+              missing(privateIds).some((id) => !placement?.has(id))
+            ) {
+              return stalePrivatePreparation;
+            }
+            const previous = exact;
+            if (placement) {
+              exact = placement;
+            }
+            try {
+              return readPreparedSessionRows(
+                projection,
+                isActive,
+                () => privateQueries,
+                (read) => consume(read, preparedQueries),
+                privateRepositories,
+                privateRows,
+              );
+            } finally {
+              exact = previous;
+            }
+          });
+        return privateQueries.length > 0
+          ? withBoundIncognitoSessionRows(cfg, privateQueries, consumePrepared, env).then(
+              async (result) => {
+                if (privateTurn) {
+                  await privateTurn;
+                  resumed = true;
+                  privateResumed = true;
+                }
+                return result;
+              },
+            )
           : consumePrepared();
       };
-      const prepare = () => {
+      let resumed = false;
+      const prepareSelectionFrame = () => {
         const pending = prepareFacts();
         if (pending) {
           return pending;
         }
+        // Admit before selection: ready bursts yield without discarding and rebuilding a view.
+        const turn = claimTurn(resumed);
+        resumed = false;
+        if (turn) {
+          return turn.then(() => {
+            resumed = true;
+          });
+        }
         selectRows();
-        return prepareSelectedRows();
+        return undefined;
       };
+      const prepare = () => prepareSelectionFrame() ?? prepareSelectedRows();
       const assertPublicationCurrent = () => {
         // Only actor-backed preparation retains resources past the synchronous consumer.
-        if (!hasPrivateQueries) {
+        if (privateQueries.length === 0) {
           return;
         }
         assertActive();
@@ -438,11 +535,10 @@ export function createSessionRowPlacementProjection(
       };
       while (true) {
         assertActive();
-        for (let pending = prepareFacts(); pending; pending = prepareFacts()) {
+        for (let pending = prepareSelectionFrame(); pending; pending = prepareSelectionFrame()) {
           await pending;
           assertActive();
         }
-        selectRows();
         const requested = missing(selectedIds);
         if (!reader || requested.length === 0) {
           const pending = prepareSelectedRows();
@@ -522,6 +618,12 @@ export function createSessionRowPlacementProjection(
     },
     dispose() {
       disposed = true;
+      clearImmediate(reset);
+      clearImmediate(wake);
+      for (const resume of waiting) {
+        resume();
+      }
+      waiting.clear();
       for (const read of queuedReads) {
         read.settled = true;
         read.completion.reject(new Error("Session row projection is no longer active"));

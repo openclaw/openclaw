@@ -418,11 +418,13 @@ describe("prepared resident resolution", () => {
 
       const found = [true, { ...targetResult, displayName: entry.label }, undefined];
       const hidden = [true, { ok: false }, undefined];
-      expect(publications).toEqual([
-        { visibility: "shared", response: found },
-        { visibility: "shared", response: found },
-        { visibility: "draft", response: hidden },
-      ]);
+      expect(publications).toHaveLength(3);
+      expect(publications[0]).toEqual({ visibility: "shared", response: found });
+      expect(publications[2]).toEqual({ visibility: "draft", response: hidden });
+      // A ready read may yield before selection; visibility at publication owns the response.
+      for (const { visibility, response } of publications) {
+        expect(response).toEqual(visibility === "shared" ? found : hidden);
+      }
     });
   });
 

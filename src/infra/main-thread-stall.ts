@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
@@ -6,12 +7,17 @@ const MAX_PENDING_STALLS = 8;
 
 type Stall = { elapsedMs: number; task: string; taskMs: number };
 type TaskObserver = { enter(name: string): () => void; stop(): void };
-type MainThreadTaskState = { observer?: TaskObserver };
+type MainThreadTaskState = { observer?: TaskObserver; context: AsyncLocalStorage<string> };
 
 const taskState = resolveGlobalSingleton<MainThreadTaskState>(
   Symbol.for("openclaw.mainThreadTask"),
-  () => ({}),
+  () => ({ context: new AsyncLocalStorage<string>() }),
 );
+
+/** Carry the code-owned caller name across waits without measuring those waits as work. */
+export function getMainThreadTaskName(): string | undefined {
+  return taskState.context.getStore();
+}
 
 /** Name code-owned work only; request text, paths, and identifiers do not belong in labels. */
 export function runWithMainThreadTask<T>(name: string, run: () => T): T {
@@ -21,7 +27,7 @@ export function runWithMainThreadTask<T>(name: string, run: () => T): T {
   }
   const exit = observer.enter(name);
   try {
-    return run();
+    return taskState.context.run(name, run);
   } finally {
     exit();
   }
@@ -56,6 +62,7 @@ export function createMainThreadStallMonitor(now: () => number = () => performan
       stopped = true;
       if (taskState.observer === observer) {
         delete taskState.observer;
+        taskState.context.disable();
       }
       pending.length = 0;
       dropped = 0;

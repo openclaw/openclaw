@@ -14,6 +14,7 @@ import {
   controlGatewayProfile,
   measureGatewayCpuUsage,
   readGatewayCpuProfile,
+  readGatewayHeapProfile,
   readGatewayCpuUsage,
 } from "../lib/gateway-bench-profile.ts";
 import { buildGatewayBenchChildArgs, createGatewayBenchEnv } from "../lib/gateway-bench-runtime.ts";
@@ -29,9 +30,12 @@ const { values } = parseArgs({
     "poll-ms": { type: "string", default: "5000" },
     "state-dir": { type: "string" },
     entry: { type: "string", default: "dist/entry.js" },
+    preload: { type: "string" },
     revision: { type: "string" },
     "start-at": { type: "string" },
+    "phase-gap-ms": { type: "string", default: "0" },
     "mutation-ms": { type: "string", default: "0" },
+    "prepared-rows": { type: "boolean", default: false },
   },
 });
 const integer = (raw: string, label: string, min = 1) =>
@@ -45,6 +49,12 @@ const limit = integer(values.limit, "--limit");
 const clientCount = integer(values.clients, "--clients");
 const pollMs = integer(values["poll-ms"], "--poll-ms", 0);
 const mutationMs = integer(values["mutation-ms"], "--mutation-ms", 0);
+const phaseGapMs = integer(values["phase-gap-ms"], "--phase-gap-ms", 0);
+if (values["prepared-rows"] && values["start-at"] && phaseGapMs === 0) {
+  throw new Error(
+    "--prepared-rows with --start-at requires --phase-gap-ms for aligned CPU and heap phases",
+  );
+}
 if (!values["state-dir"]) {
   throw new Error("--state-dir is required (offline team-shape fixture)");
 }
@@ -137,14 +147,24 @@ for (const signal of ["SIGINT", "SIGTERM"] as const) {
   });
 }
 try {
-  let fixture: unknown;
+  const fixture: unknown = JSON.parse(
+    readFileSync(path.join(root, "team-shape-summary.json"), "utf8"),
+  );
+  if (
+    !isRecord(fixture) ||
+    fixture.format !== "openclaw-team-shape-v1" ||
+    typeof fixture.sessionCount !== "number" ||
+    !Number.isSafeInteger(fixture.sessionCount) ||
+    fixture.sessionCount < 1
+  ) {
+    throw new Error(
+      "--state-dir must contain a generated team-shape fixture with a positive session count; never use live state",
+    );
+  }
+  const sessionKeyCount = Math.min(999, fixture.sessionCount - 1);
+  const fixtureSessionKey = (index: number) =>
+    `agent:main:team-shape-session-${sessionKeyCount > 0 ? 1 + (index % sessionKeyCount) : 0}`;
   {
-    fixture = JSON.parse(readFileSync(path.join(root, "team-shape-summary.json"), "utf8"));
-    if (!isRecord(fixture) || fixture.format !== "openclaw-team-shape-v1") {
-      throw new Error(
-        "--state-dir must contain a generated team-shape fixture; never use live state",
-      );
-    }
     mkdirSync(output);
     const probe = createServer();
     await new Promise<void>((resolve, reject) => {
@@ -164,6 +184,8 @@ try {
       preload,
       `import { isMainThread } from 'node:worker_threads';
 import { channel } from 'node:diagnostics_channel';
+import { createHook } from 'node:async_hooks';
+import { performance } from 'node:perf_hooks';
 const sessionLists = channel('openclaw.session.list');
 if (isMainThread) {
   const { onTrustedInternalDiagnosticEvent, setDiagnosticsEnabledForProcess, waitForDiagnosticEventsDrained } =
@@ -171,25 +193,76 @@ if (isMainThread) {
   setDiagnosticsEnabledForProcess(true);
   let rows;
   let rowWork;
+  let namedStalls;
+  let callbacks;
+  let turns;
+  let callbackStarts = [];
+  let turnStart;
+  let probeId;
+  let schedulingProbe = false;
+  let pendingProbe;
+  const hook = createHook({
+    init(id, type) { if (schedulingProbe && type === 'Immediate') probeId = id; },
+    before(id) {
+      if (!rows || id === probeId) return;
+      const at = performance.now();
+      callbackStarts.push(at);
+      if (pendingProbe) return;
+      turnStart = at;
+      schedulingProbe = true;
+      pendingProbe = setImmediate(() => {
+        if (turns) {
+          const elapsed = performance.now() - turnStart;
+          turns.count++;
+          turns.maxMs = Math.max(turns.maxMs, elapsed);
+          if (elapsed > 1000) turns.overOneSecond++;
+        }
+        pendingProbe = undefined;
+      });
+      schedulingProbe = false;
+    },
+    after(id) {
+      if (!rows || id === probeId) return;
+      const started = callbackStarts.pop();
+      if (started === undefined || callbackStarts.length) return;
+      const elapsed = performance.now() - started;
+      callbacks.count++;
+      callbacks.maxMs = Math.max(callbacks.maxMs, elapsed);
+      if (elapsed > 1000) callbacks.overOneSecond++;
+    },
+  });
   sessionLists.subscribe(event => {
     if (rowWork && event.operation === 'sessions.list') rowWork.push({ selected: event.selectedRowCount, dirty: event.dirtyRowCount,
       materialized: event.materializedRowCount, reused: event.reusedRowCount });
   });
   onTrustedInternalDiagnosticEvent(event => {
-    if (rows && event.type === 'gateway.rpc' && event.method === 'sessions.list') {
+    if (namedStalls && event.type === 'gateway.main_thread.stall') namedStalls.push({ stalls: event.stalls, dropped: event.dropped });
+    if (rows && event.type === 'gateway.rpc' && (${values["prepared-rows"]} || event.method === 'sessions.list')) {
       if (rows.length >= 100000) throw new Error('RPC capture exceeded its bound');
-      rows.push({ phase: event.phase, durationMs: event.durationMs,
+      rows.push({ method: event.method, phase: event.phase, durationMs: event.durationMs,
         admissionMs: event.admissionMs, queueWaitMs: event.queueWaitMs });
     }
-  }, { includeTrusted: ['gateway.rpc'] });
+  }, { includeTrusted: ['gateway.rpc', 'gateway.main_thread.stall'] });
   process.on('message', async message => {
-    if (message?.channel !== 'openclaw-gateway-bench-profile' || message.kind !== 'cpu') return;
-    if (message.action === 'start') { rows = []; rowWork = []; }
-    if (message.action === 'stop') {
+    if (message?.channel === 'list-rpc-capture' && message.action === 'arm') {
       await waitForDiagnosticEventsDrained();
-      process.send({ channel: 'list-rpc-capture', rows, rowWork });
+      rows = []; rowWork = []; namedStalls = []; callbackStarts = [];
+      callbacks = { count: 0, maxMs: 0, overOneSecond: 0 };
+      turns = { count: 0, maxMs: 0, overOneSecond: 0 };
+      hook.enable();
+      process.send({ channel: 'list-rpc-capture', action: 'armed' });
+      return;
+    }
+    if (message?.channel !== 'openclaw-gateway-bench-profile' || !['cpu', 'heap'].includes(message.kind)) return;
+    if (message.action === 'stop') {
+      hook.disable();
+      clearImmediate(pendingProbe);
+      pendingProbe = undefined;
+      await waitForDiagnosticEventsDrained();
+      process.send({ channel: 'list-rpc-capture', rows, rowWork, callbacks, turns, namedStalls });
       rows = undefined;
       rowWork = undefined;
+      namedStalls = undefined;
     }
   });
 }`,
@@ -198,8 +271,10 @@ if (isMainThread) {
     gateway = spawn(
       process.execPath,
       buildGatewayBenchChildArgs(values.entry, port, [
+        ...(values["prepared-rows"] ? ["--trace-gc-nvp"] : []),
         "--import",
         "./scripts/tsx.mjs",
+        ...(values.preload ? ["--import", path.resolve(values.preload)] : []),
         "--import",
         preload,
         "--import",
@@ -253,6 +328,7 @@ if (isMainThread) {
     await readGatewayCpuUsage(gateway);
     await delay(10_000);
   }
+  const fixtureAgentCount = typeof fixture.agentCount === "number" ? fixture.agentCount : 1;
   const variants: Array<{ name: string; params: SessionsListParams }> = [
     { name: "sidebar", params: { rowMode: "sidebar", source: "sidebar" } },
     { name: "general", params: { source: "sessions-page" } },
@@ -327,7 +403,171 @@ if (isMainThread) {
   const revisionsByVariant = new Map(
     variants.map((variant) => [variant.name, new Map<(typeof clients)[number], string>()]),
   );
-  for (const phase of ["reconnect", "steady"] as const) {
+  if (values["prepared-rows"]) {
+    const operations = ["broad", "sidebar", "compact", "describe", "preview", "roster"] as const;
+    for (const kind of ["cpu", "heap"] as const) {
+      if (kind === "heap" && values["start-at"]) {
+        const nextPhaseAt = integer(values["start-at"], "--start-at") + phaseGapMs;
+        if (Date.now() >= nextPhaseAt) {
+          throw new Error("CPU workload missed the scheduled heap phase; increase --phase-gap-ms");
+        }
+        await delay(nextPhaseAt - Date.now());
+      }
+      const profilePath = path.join(output, `prepared-rows.${kind}profile`);
+      const timings = new Map<string, number[]>();
+      let requestCount = 0;
+      let mutations = 0;
+      await controlGatewayProfile(child, kind, "start", profilePath);
+      await new Promise<void>((resolve, reject) => {
+        const finish = (error?: Error) => {
+          clearTimeout(timer);
+          child.off("message", listener);
+          if (error) {
+            reject(error);
+          } else {
+            resolve();
+          }
+        };
+        const listener = (message: unknown) => {
+          if (
+            isRecord(message) &&
+            message.channel === "list-rpc-capture" &&
+            message.action === "armed"
+          ) {
+            finish();
+          }
+        };
+        const timer = setTimeout(() => finish(new Error("RPC capture arm timed out")), 30_000);
+        child.on("message", listener);
+        child.send({ channel: "list-rpc-capture", action: "arm" }, (error) => {
+          if (error) {
+            finish(error);
+          }
+        });
+      });
+      const before = await readGatewayCpuUsage(child);
+      for (let round = 0; round < samples; round++) {
+        const at = performance.now();
+        if (
+          mutationMs > 0 &&
+          round % Math.max(1, Math.ceil(mutationMs / Math.max(1, pollMs))) === 0
+        ) {
+          await rpc(clients[0]!, "sessions.patch", {
+            key: fixtureSessionKey(round),
+            label: `Synthetic prepared-row ${kind} ${round}`,
+          });
+          mutations++;
+        }
+        await Promise.all(
+          clients.map(async (client, index) => {
+            const operation = operations[(round + index) % operations.length]!;
+            const key = fixtureSessionKey(round * clientCount + index);
+            const method =
+              operation === "describe"
+                ? "sessions.describe"
+                : operation === "preview"
+                  ? "sessions.preview"
+                  : operation === "roster"
+                    ? "agents.list"
+                    : "sessions.list";
+            const params =
+              operation === "describe"
+                ? { key }
+                : operation === "preview"
+                  ? { keys: [key], limit: 1, maxChars: 80 }
+                  : operation === "roster"
+                    ? {}
+                    : {
+                        limit,
+                        archived: "all",
+                        source: operation === "compact" ? "agent-roster" : "sessions-page",
+                        ...(operation === "broad" ? {} : { rowMode: operation }),
+                      };
+            const started = performance.now();
+            const payload = await rpc(client, method, params);
+            if (
+              !isRecord(payload) ||
+              (method === "sessions.list" &&
+                !(typeof payload.count === "number" && payload.count > 0)) ||
+              (method === "sessions.describe" && !isRecord(payload.session)) ||
+              (method === "sessions.preview" &&
+                (!Array.isArray(payload.previews) ||
+                  payload.previews.length !== 1 ||
+                  !isRecord(payload.previews[0]) ||
+                  !["ok", "empty"].includes(String(payload.previews[0].status)))) ||
+              (method === "agents.list" &&
+                (!Array.isArray(payload.agents) || payload.agents.length !== fixtureAgentCount))
+            ) {
+              throw new Error(`${operation}: empty or malformed synthetic response`);
+            }
+            const observed = timings.get(operation) ?? [];
+            observed.push(performance.now() - started);
+            timings.set(operation, observed);
+            requestCount++;
+          }),
+        );
+        if (clientFailure) {
+          throw clientFailure;
+        }
+        if (round + 1 < samples) {
+          await delay(Math.max(0, pollMs - (performance.now() - at)));
+        }
+      }
+      const cpu = measureGatewayCpuUsage(before, await readGatewayCpuUsage(child));
+      const capture = new Promise<unknown>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          child.off("message", listener);
+          reject(new Error("RPC capture timed out"));
+        }, 30_000);
+        const listener = (message: unknown) => {
+          if (isRecord(message) && message.channel === "list-rpc-capture") {
+            clearTimeout(timer);
+            child.off("message", listener);
+            resolve(message);
+          }
+        };
+        child.on("message", listener);
+      });
+      await controlGatewayProfile(child, kind, "stop", profilePath);
+      const rpcPhases = await capture;
+      writeFileSync(
+        path.join(output, `prepared-rows.${kind}.capture.json`),
+        JSON.stringify(rpcPhases),
+      );
+      const capturedHandlers =
+        isRecord(rpcPhases) && Array.isArray(rpcPhases.rows)
+          ? rpcPhases.rows.filter((event: unknown) => isRecord(event) && event.phase === "handler")
+              .length
+          : 0;
+      const profile =
+        kind === "cpu" ? readGatewayCpuProfile(profilePath) : readGatewayHeapProfile(profilePath);
+      if (
+        !profile.diagnostics ||
+        profile.diagnostics.collectionErrors ||
+        profile.diagnostics.droppedEvents ||
+        profile.diagnostics.droppedHistogramSamples ||
+        capturedHandlers !== requestCount + mutations
+      ) {
+        throw new Error(
+          `Incomplete diagnostic capture: ${capturedHandlers}/${requestCount + mutations} handlers; see ${output}`,
+        );
+      }
+      const result = {
+        variant: "prepared-rows",
+        phase: kind,
+        requestCount,
+        mutations,
+        latencyMs: summarize([...timings.values()].flat()),
+        operations: Object.fromEntries([...timings].map(([name, rows]) => [name, summarize(rows)])),
+        cpu,
+        profile,
+        rpcPhases,
+      };
+      results.push(result);
+      console.log(JSON.stringify(result));
+    }
+  }
+  for (const phase of values["prepared-rows"] ? [] : (["reconnect", "steady"] as const)) {
     for (const variant of variants) {
       const revisions = revisionsByVariant.get(variant.name)!;
       const count = phase === "reconnect" ? 1 : samples;
@@ -356,7 +596,7 @@ if (isMainThread) {
               }
               mutationBusy = true;
               mutation = rpc(clients[0]!, "sessions.patch", {
-                key: `agent:main:team-shape-session-${1 + (mutations % 999)}`,
+                key: fixtureSessionKey(mutations),
                 label: `Synthetic ${variant.name} mutation ${mutations}`,
               })
                 .then(
@@ -496,6 +736,7 @@ if (isMainThread) {
     limit,
     pollMs,
     mutationMs,
+    phaseGapMs,
     reconnectMs,
     results,
   };

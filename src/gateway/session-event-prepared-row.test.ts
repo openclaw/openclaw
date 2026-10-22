@@ -12,74 +12,10 @@ import {
   withPreparedSessionEventRow,
 } from "./session-event-prepared-row.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
 import { readPreparedSessionRows, type SessionRowReadView } from "./session-row-prepared-read.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { createSessionRowProjectionFixture } from "./session-row-projection.test-support.js";
-
-it.each([0, 7])(
-  "lets I/O progress through a ready burst (publication cost %i ms)",
-  async (cost) => {
-    vi.useFakeTimers({ toFake: ["setImmediate", "clearImmediate"] });
-    let now = 0;
-    const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
-    const cfg = { agents: { entries: { main: {} } } };
-    setRuntimeConfigSnapshot(cfg);
-    const keys = Array.from({ length: 12 }, (_, index) => `agent:main:burst-${index}`);
-    const yieldedKey = "agent:main:burst-9";
-    const projection = createSessionRowProjectionFixture({
-      cfg,
-      store: Object.fromEntries(keys.map((key) => [key, { sessionId: key, updatedAt: 1 }])),
-    });
-    const held = createDeferredCore();
-    let preparations = 0;
-    projection.withPreparedExactRows = async (queries, consume) => {
-      preparations++;
-      if (queries(cfg)[0]?.key === keys[0]) {
-        await held.promise;
-      }
-      return readPreparedSessionRows(projection, () => true, queries, consume);
-    };
-    const published: string[] = [];
-    const labels = new Map<string, string | undefined>();
-    let atIo = -1;
-    setImmediate(() => {
-      atIo = published.length;
-      projection.setEntry(yieldedKey, {
-        sessionId: yieldedKey,
-        updatedAt: 2,
-        label: "after yield",
-      });
-    });
-    const work = keys.map((key) =>
-      withPreparedSessionEventRow(projection, key, "main", () => {
-        published.push(key);
-        labels.set(key, projection.snapshot({ key, agentId: "main" }).row?.label);
-        now += cost;
-      }),
-    );
-    const settled = Promise.all(work);
-    try {
-      await vi.runAllTimersAsync();
-      expect(atIo).toBeGreaterThan(0);
-      expect(atIo).toBeLessThan(keys.length - 1);
-      expect(published).toEqual(keys.slice(1));
-      expect(labels.get(yieldedKey)).toBe("after yield");
-      held.resolve();
-      await vi.runAllTimersAsync();
-      await settled;
-      await drainSessionEventPublications(projection);
-      expect(published).toEqual([...keys.slice(1), keys[0]]);
-      expect(preparations).toBeLessThanOrEqual(keys.length * 2);
-    } finally {
-      held.resolve();
-      await vi.runAllTimersAsync();
-      await settled;
-      projection.dispose();
-      clock.mockRestore();
-      vi.useRealTimers();
-    }
-  },
-);
 
 it.each(["replacement", "reset"])(
   "drops an old lifecycle receipt after a yielded %s",
@@ -95,6 +31,16 @@ it.each(["replacement", "reset"])(
       cfg,
       store: Object.fromEntries(keys.map((key) => [key, { sessionId: key, updatedAt: 1 }])),
     });
+    const placement = createSessionRowPlacementProjection(undefined, () => undefined);
+    projection.withPreparedExactRows = (queries, consume) =>
+      placement.withPreparedRows(
+        projection,
+        () => true,
+        (query) => projection.capture(query),
+        queries,
+        () => undefined,
+        consume,
+      );
     const broadcastToConnIds = vi.fn(() => {
       now += 7;
     });
@@ -116,6 +62,7 @@ it.each(["replacement", "reset"])(
       await Promise.allSettled(publications);
       await drainSessionEventPublications(projection);
       projection.dispose();
+      placement.dispose();
       vi.restoreAllMocks();
       vi.useRealTimers();
     });

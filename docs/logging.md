@@ -1294,6 +1294,15 @@ before sharing them. Already-masked historical content cannot be reconstructed.
 
 ## Diagnostics and OpenTelemetry
 
+The Gateway's `main-thread stall` warnings identify named synchronous work lasting
+at least 250 ms. Prepared session-row reads retain their caller across asynchronous
+waits and add `session-rows:select`, `session-rows:prepare`, or
+`session-rows:consume` to the task name. For example,
+`gateway:rpc:sessions.list:session-rows:select` identifies list selection.
+For these scopes, `elapsedMs` and `taskMs` exclude the asynchronous wait; `task=unattributed`
+means the delayed work had no explicit synchronous scope. Task labels contain
+code-owned operation names, not session keys or request content.
+
 Diagnostics are structured, machine-readable events for model runs and
 message-flow telemetry (webhooks, queueing, session state). They do **not**
 replace logs — they feed metrics, traces, and exporters. Events are emitted

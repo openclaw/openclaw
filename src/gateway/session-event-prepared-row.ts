@@ -1,4 +1,3 @@
-import { performance } from "node:perf_hooks";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import { parseSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
@@ -13,8 +12,6 @@ import {
 import type { Lookup } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
-const PUBLICATIONS_PER_TURN = 8;
-const PUBLICATION_BUDGET_MS = 6;
 const publicationOwners = new WeakMap<
   SessionRowProjection,
   ReturnType<typeof createPublicationOwner>
@@ -22,76 +19,10 @@ const publicationOwners = new WeakMap<
 
 function createPublicationOwner(projection: SessionRowProjection) {
   const pending = new Set<Promise<unknown>>();
-  const deferred = Symbol("publication-deferred");
-  let started = 0;
-  let startedAt = 0;
-  let reset: ReturnType<typeof setImmediate> | undefined;
-  let wake: ReturnType<typeof setImmediate> | undefined;
-  const waiting = new Set<() => void>();
   const track = createPendingPromiseTracker(pending);
-  function wakeNext() {
-    wake ??= setImmediate(() => {
-      wake = undefined;
-      clearImmediate(reset);
-      reset = undefined;
-      const resume = waiting.values().next().value;
-      if (resume) {
-        waiting.delete(resume);
-        resume();
-      }
-      if (waiting.size > 0) {
-        wakeNext();
-      }
-    });
-  }
-  function claimTurn(resumed: boolean) {
-    const now = performance.now();
-    if (!reset) {
-      started = 0;
-      startedAt = now;
-      reset = setImmediate(() => {
-        reset = undefined;
-      });
-      reset.unref?.();
-    }
-    if (
-      (!resumed && (wake || waiting.size > 0)) ||
-      started >= PUBLICATIONS_PER_TURN ||
-      now - startedAt >= PUBLICATION_BUDGET_MS
-    ) {
-      // Grant one retry per turn; waking every prepared row repeats their work quadratically.
-      return new Promise<void>((resolve) => {
-        waiting.add(resolve);
-        wakeNext();
-      });
-    }
-    started++;
-    return undefined;
-  }
   const rows: Pick<SessionRowProjection, "withPreparedExactRows"> = {
     withPreparedExactRows(queries, consume, options) {
-      return track(
-        (async () => {
-          let resumed = false;
-          for (;;) {
-            let yieldUntil: Promise<void> | undefined;
-            const prepared = await projection.withPreparedExactRows(
-              queries,
-              (read) => {
-                yieldUntil = claimTurn(resumed);
-                return yieldUntil ? deferred : consume(read);
-              },
-              options,
-            );
-            if (prepared !== deferred) {
-              return prepared;
-            }
-            // Prepared views expire synchronously; reacquire facts and authority after yielding.
-            await yieldUntil;
-            resumed = true;
-          }
-        })(),
-      );
+      return track(projection.withPreparedExactRows(queries, consume, options));
     },
   };
   return {
@@ -110,13 +41,11 @@ function createPublicationOwner(projection: SessionRowProjection) {
       while (pending.size > 0) {
         await Promise.allSettled(pending);
       }
-      clearImmediate(reset);
-      reset = undefined;
     },
   };
 }
 
-/** Independent prepared publishers share a budget without serializing row preparation. */
+/** Track accepted publications while the projection owns preparation and its per-turn budget. */
 export function sessionEventPublicationRows(projection: SessionRowProjection) {
   let owner = publicationOwners.get(projection);
   if (!owner) {

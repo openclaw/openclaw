@@ -34,6 +34,7 @@ import {
   requestContext,
   sessionReadHandlers,
 } from "./server-methods/sessions-read-cache.test-support.js";
+import { yieldSessionListWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { ready } from "./session-row-projection-record.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
@@ -663,11 +664,15 @@ it("publishes local placement receipts without rereading or adopting another sto
       const reads = vi.spyOn(placements, "readProjection");
       const rowReads = vi.spyOn(history, "withSessionHistoryWorkerDatabases");
       const metadataReads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
-      const claim = await placements.claimTurn(claimInput);
-      await describe(10);
-      nowMs = 20;
-      await placements.releaseTurn(claim);
-      await describe(20);
+      await projection.withSelectionPreparation(async () => {
+        const claim = await placements.claimTurn(claimInput);
+        await yieldSessionListWork();
+        await describe(10);
+        nowMs = 20;
+        await placements.releaseTurn(claim);
+        await describe(20);
+      });
+      await projection.ensureMaterialized();
       expect(reads).not.toHaveBeenCalled();
       expect(rowReads).not.toHaveBeenCalled();
       expect(

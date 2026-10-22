@@ -8,6 +8,7 @@ import {
   generateTeamShapeFixture,
   parseTeamShapeOptions,
 } from "../../scripts/perf/team-shape-fixture.ts";
+import { prepareUsageCostWorker } from "../../src/infra/session-cost-usage-worker-runtime.js";
 import { flushLogger, resetLogger } from "../../src/logging/logger.js";
 import { captureFullEnv } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -146,7 +147,7 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
       parseTeamShapeOptions([
         "--state-dir",
         stateDir,
-        ..."--sessions 20 --runs 20 --approvals 3 --cron 2 --projects 1 --transcript-mib 1".split(
+        ..."--sessions 20 --agents 3 --runs 20 --approvals 3 --cron 2 --projects 1 --transcript-mib 1".split(
           " ",
         ),
       ]),
@@ -160,6 +161,10 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
       ...Object.fromEntries(["TMPDIR", "TMP", "TEMP"].map((key) => [key, at("tmp")])),
       USERPROFILE: at("home"),
     });
+    const config = readJson(at("openclaw.json"));
+    for (const agentId of Object.keys(config.agents.entries)) {
+      expect(() => prepareUsageCostWorker({ agentId, config, env: generated.env })).not.toThrow();
+    }
   } finally {
     await flushLogger();
     environment.restore();
@@ -170,6 +175,7 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
   const summary = readJson(at("team-shape-summary.json"));
   expect(summary).toMatchObject({
     sessionCount: 20,
+    agentCount: 3,
     retainedRuns: 20,
     approvals: 3,
     cronJobs: 2,

@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
-import { createMainThreadStallMonitor, runWithMainThreadTask } from "./main-thread-stall.js";
+import {
+  createMainThreadStallMonitor,
+  getMainThreadTaskName,
+  runWithMainThreadTask,
+} from "./main-thread-stall.js";
 
 const monitors: ReturnType<typeof createMainThreadStallMonitor>[] = [];
 afterEach(() => {
@@ -47,7 +51,43 @@ describe("main-thread stall attribution", () => {
     expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
   });
 
-  it("returns the original promise without observing its continuations", async () => {
+  it("keeps interleaved callers across waits while timing only resumed synchronous work", async () => {
+    const { monitor, elapse } = fixture();
+    const firstReady = createDeferredCore();
+    const secondReady = createDeferredCore();
+    const first = runWithMainThreadTask("gateway:rpc:sessions.list", async () => {
+      await firstReady.promise;
+      runWithMainThreadTask(`${getMainThreadTaskName()}:session-rows:select`, () => elapse(1_200));
+    });
+    const second = runWithMainThreadTask("scheduler:maintenance", async () => {
+      await secondReady.promise;
+      runWithMainThreadTask(`${getMainThreadTaskName()}:session-rows:select`, () => elapse(1_300));
+    });
+    elapse(5_000);
+    secondReady.resolve();
+    await second;
+    firstReady.resolve();
+    await first;
+    expect(getMainThreadTaskName()).toBeUndefined();
+    expect(monitor.drain()).toEqual({
+      stalls: [
+        {
+          elapsedMs: 1_300,
+          task: "scheduler:maintenance:session-rows:select",
+          taskMs: 1_300,
+        },
+        {
+          elapsedMs: 1_200,
+          task: "gateway:rpc:sessions.list:session-rows:select",
+          taskMs: 1_200,
+        },
+      ],
+      dropped: 0,
+      delayMaxMs: 1_300,
+    });
+  });
+
+  it("returns the original promise without timing its continuations", async () => {
     const { monitor, elapse } = fixture();
     const ready = createDeferredCore();
     const operation = ready.promise.then(() => elapse(1_200));
@@ -78,7 +118,10 @@ describe("main-thread stall attribution", () => {
     expect(report.stalls).toHaveLength(8);
     expect(report.dropped).toBe(4);
     monitor.stop();
-    runWithMainThreadTask("maintenance", () => elapse(1_001));
+    runWithMainThreadTask("maintenance", () => {
+      expect(getMainThreadTaskName()).toBeUndefined();
+      elapse(1_001);
+    });
     expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
   });
 });
