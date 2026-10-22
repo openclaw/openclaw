@@ -146,12 +146,7 @@ describe("creator namespace upgrades", () => {
       const storePath = state.statePath("cron", "jobs.json");
       await saveCronStore(storePath, {
         version: 1,
-        jobs: [
-          {
-            ...makeCronJob({}),
-            createdActor: { ...actor, source: "profile" },
-          },
-        ],
+        jobs: [makeCronJob({ createdActor: { ...actor, source: "profile" } })],
       });
       const initial = openOpenClawStateDatabase({ env: state.env });
       addPreCutoverClientCredentialTablesForTest(initial.db);

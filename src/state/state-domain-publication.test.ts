@@ -47,6 +47,10 @@ function observe(publication: ReturnType<typeof domain>) {
 const postimages = (...rows: Row[]) =>
   new Map(rows.map((value) => [value.id, { kind: "postimage", value }]));
 const kinds = (changes: StateDomainChange<Row>[]) => changes.map(({ kind }) => kind);
+const committedKeys = (changes: StateDomainChange<Row>[]) =>
+  changes.flatMap((change) =>
+    change.kind === "committed" ? [...change.receipt.facts.keys()] : [],
+  );
 
 function fixture(publishPending = true) {
   const db = openTrackedStateDatabase(
@@ -97,8 +101,10 @@ it("publishes committed facts under the domain's admitted source identity", () =
 it("captures only committed postimages across nested rollback and waits for the outer commit", () => {
   const { db, publication, transaction, capture, write } = fixture();
   const changes = observe(publication);
+  const kept = { id: "kept", version: 1 };
+  const sibling = { id: "sibling", version: 3 };
   const captured = capture(() => {
-    write({ id: "kept", version: 1 });
+    write(kept);
     expect(() =>
       transaction(() => {
         write({ id: "kept", version: 2 });
@@ -106,16 +112,11 @@ it("captures only committed postimages across nested rollback and waits for the 
         throw new Error("rollback");
       }),
     ).toThrow("rollback");
-    transaction(() => write({ id: "sibling", version: 3 }));
+    transaction(() => write(sibling));
     expect(changes).toEqual([]);
   });
-  expect(captured.receipt.facts).toEqual(
-    postimages({ id: "kept", version: 1 }, { id: "sibling", version: 3 }),
-  );
-  expect(db.prepare("SELECT * FROM facts ORDER BY id").all()).toEqual([
-    { id: "kept", version: 1 },
-    { id: "sibling", version: 3 },
-  ]);
+  expect(captured.receipt.facts).toEqual(postimages(kept, sibling));
+  expect(db.prepare("SELECT * FROM facts ORDER BY id").all()).toEqual([kept, sibling]);
   expect(changes).toHaveLength(2);
 });
 
@@ -174,28 +175,17 @@ it("installs all worker domains when their shared publication batch completes", 
       write({ id: "grant", version: 1 }, sibling);
     }),
   );
-  const installed = new Set<string>();
-  for (const owner of [publication, sibling]) {
-    cleanup.push(
-      owner.subscribeFacts((change) => {
-        if (change.kind === "committed") {
-          for (const key of change.receipt.facts.keys()) {
-            installed.add(key);
-          }
-        }
-      }),
-    );
-  }
+  const changes = [observe(publication), observe(sibling)];
   const first = begin();
   const second = begin(sibling);
   batchStateDomainPublications(() => {
     first.committed(captured.receipt);
     second.committed(captured.result.receipt);
-    expect(installed.size).toBe(0);
+    expect(changes.flatMap(committedKeys)).toEqual([]);
   });
   first.finish(true);
   second.finish(true);
-  expect([...installed].toSorted()).toEqual(["approval", "grant"]);
+  expect(changes.flatMap(committedKeys).toSorted()).toEqual(["approval", "grant"]);
 });
 
 it.each([true, false])(
