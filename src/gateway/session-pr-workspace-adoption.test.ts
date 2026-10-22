@@ -702,7 +702,7 @@ it("prepares an own PR in an ordinary sandboxed chat through the registered hand
     assert(earlier, "The earlier message must be persisted");
     await fs.writeFile(path.join(state.workspaceDir, "notes.md"), "original notes\n");
     vi.spyOn(requester, "prepareGitHubPublicationRequesterV2").mockResolvedValue({
-      requester: { assertCurrent() {} },
+      requester: { snapshot: { actor: { kind: "system" } }, assertCurrent() {} },
       release() {},
     } as never);
     stubPullRequestPreparation(target.sessionKey);
@@ -823,7 +823,9 @@ it("refuses another guest and lost access before binding, PR import and earlier 
       const allocateWorkspace = allocation.prepareSessionWorktree;
       const allocate = vi.spyOn(allocation, "prepareSessionWorktree");
       try {
+        // Another guest fails the publication requester; an admin passes it but is not the owner.
         await expect(prepare(otherClient)).rejects.toThrow("no longer authorized");
+        await expect(prepare(adminClient)).rejects.toThrow("Only this conversation's owner");
         expect(allocate).not.toHaveBeenCalled();
         unbound();
 
