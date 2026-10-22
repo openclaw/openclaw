@@ -1,14 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import {
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  Show,
-  For,
-  Errored,
-  Loading,
-} from "solid-js";
+import { createMemo, createSignal, onSettled, Show, For, Errored, Loading } from "solid-js";
 import type { CapabilityConsentErrorDetails } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
   PLUGIN_DECLARED_SURFACE_GROUPS,
