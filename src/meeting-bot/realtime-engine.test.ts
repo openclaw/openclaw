@@ -1,6 +1,6 @@
 import { setImmediate } from "node:timers/promises";
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { withTestTimeout } from "../../test/helpers/promise.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withinTest } from "../../test/helpers/promise.js";
 import { createPluginRuntime } from "../plugins/runtime/index.js";
 import type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -33,6 +33,10 @@ it("retains the latest sixteen stale output responses and clears them on reset",
 });
 
 const cleanups: Array<() => Promise<void>> = [];
+let testSignal: AbortSignal;
+beforeEach(({ signal }) => {
+  testSignal = signal;
+});
 afterEach(async () => {
   try {
     for (const cleanup of cleanups.splice(0).toReversed()) {
@@ -59,6 +63,7 @@ async function createEngineFixture(
     handleToolCall?: (params: MeetingRealtimeToolCallParams) => Promise<void>;
   } = {},
 ) {
+  const signal = testSignal;
   const continuous = options.continuous ?? options.native ?? false;
   let callbacks: RealtimeVoiceBridgeCreateRequest | undefined;
   let onHumanBargeIn: ((audio: Buffer) => boolean) | undefined;
@@ -206,11 +211,7 @@ async function createEngineFixture(
     handleBargeIn,
     submitToolResult,
     async waitForWriteStart(count: number) {
-      await withTestTimeout(
-        writeStart(count).promise,
-        1_000,
-        `Output write ${count} did not start`,
-      );
+      await withinTest(writeStart(count).promise, signal);
       // Give detached work a turn without completing the write.
       await setImmediate();
     },
