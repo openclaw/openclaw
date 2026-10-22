@@ -9,7 +9,7 @@ import { createMountedPanes, refreshPane } from "./chat-pane-mounted.test-suppor
 import { refreshChatModelAuthStatus } from "./chat-state-refresh.ts";
 import { createSessionEventState } from "./chat-state.test-support.ts";
 
-it("updates the open popover after two quick runs with one shared usage read each", async () => {
+it("updates the open popover after the Gateway deadline without per-run requests", async () => {
   const startedAt = Date.now();
   let now = startedAt;
   const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -21,6 +21,7 @@ it("updates the open popover after two quick runs with one shared usage read eac
   let usedPercent = 1;
   const auth = vi.fn((_method: string, _params: unknown): ModelAuthStatusResult => ({
     ts: now,
+    usageRefreshAt: now + 120_000,
     providers: [
       {
         provider: "openai",
@@ -80,8 +81,14 @@ it("updates the open popover after two quick runs with one shared usage read eac
   expect(auth).toHaveBeenCalledTimes(1);
   // Keep rendering setup on real timers; advance idle time only to detect polling.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  for (const [index, nextUsage] of [18, 22].entries()) {
-    now = startedAt + (index + 1) * 10_000;
+  for (const [index, [elapsed, nextUsage, expectedUsage, calls]] of (
+    [
+      [10_000, 18, 18, 2],
+      [20_000, 22, 18, 2],
+      [130_000, 25, 25, 3],
+    ] as const
+  ).entries()) {
+    now = startedAt + elapsed;
     usedPercent = nextUsage;
     fixture.emitGatewayEvent("chat", {
       sessionKey: key,
@@ -95,9 +102,9 @@ it("updates the open popover after two quick runs with one shared usage read eac
       expect(
         pane.element.querySelector(".context-usage__limit")?.textContent,
         "refreshed usage",
-      ).toContain(String(nextUsage) + "%"),
+      ).toContain(String(expectedUsage) + "%"),
     );
-    expect(auth).toHaveBeenCalledTimes(2 + index);
+    expect(auth).toHaveBeenCalledTimes(calls);
     expect(pane.element.querySelector<HTMLDetailsElement>(".context-usage details")?.open).toBe(
       true,
     );

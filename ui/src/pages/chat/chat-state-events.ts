@@ -475,7 +475,7 @@ function applyPageGatewayEvent(
           }
           if (terminalPayload && sessionMatches) {
             clearPendingQueueItemsForRun(state, terminalPayload.runId);
-            // Bypass cached usage after each run; split panes share the refresh.
+            // Refresh stale usage after a run; split panes share the Gateway deadline.
             void refreshChatModelAuthStatus(state, terminalPayload.runId);
           }
           if (shouldRefreshPullRequests && payload) {

@@ -7,7 +7,6 @@ import { authReads, type ModelAuthRequest } from "./model-auth-request-state.ts"
 import { subscribeToSharedRequest } from "./shared-request-subscription.ts";
 
 const EMPTY_AUTH_STATUS: ModelAuthStatusResult = { ts: 0, providers: [] };
-const USAGE_STATUS_MAX_AGE_MS = 60_000;
 const authRefreshDeadlines = new WeakMap<ModelAuthStatusResult, number | undefined>();
 /** Map credential-runtime aliases onto the provider card/attention identity. */
 export function canonicalModelAuthProviderId(provider: string): string {
@@ -114,14 +113,9 @@ export async function loadModelAuthStatus(
     state = { entries: new Map(), refreshes: 0 };
     authReads.set(client, state);
   }
-  if (opts.refresh || opts.refreshUsage) {
-    // Auth refresh can affect every agent; usage refresh retires only this agent.
-    // Do not retain ordinary reads while a refresh can still publish newer facts.
-    if (opts.refresh) {
-      state.entries.clear();
-    } else {
-      state.entries.delete(opts.agentId);
-    }
+  if (opts.refresh) {
+    // Explicit auth refresh can change every agent's shared credentials.
+    state.entries.clear();
     state.refreshes += 1;
     try {
       return await request(opts.signal);
@@ -134,35 +128,33 @@ export async function loadModelAuthStatus(
   }
   // Connection-owned reads survive presenter unmounts, but usage must not live until token expiry.
   const requests = state.entries;
-  const agentId = opts.agentId;
-  let pending = requests.get(agentId);
+  // Ordinary reads must not wait behind a provider fetch. Share each read mode
+  // independently; both consume the Gateway-owned usage freshness deadline.
+  const key = JSON.stringify([opts.agentId, Boolean(opts.refreshUsage)]);
+  let pending = requests.get(key);
   if (pending?.refreshAt !== undefined && pending.refreshAt <= Date.now()) {
-    requests.delete(agentId);
+    requests.delete(key);
     pending = undefined;
   }
   if (!pending) {
     const requestedAt = Date.now();
     const shared: ModelAuthRequest = { promise: request(), subscribers: new Set<object>() };
-    requests.set(agentId, shared);
+    requests.set(key, shared);
     const finish = () => {
       // A retired read can settle after its replacement; only remove this flight.
-      if (requests.get(agentId) === shared) {
-        requests.delete(agentId);
+      if (requests.get(key) === shared) {
+        requests.delete(key);
       }
     };
     void shared.promise.then((result) => {
       if (result === EMPTY_AUTH_STATUS || result.unavailable || !Array.isArray(result.providers)) {
         finish();
-      } else if (requests.get(agentId) === shared) {
+      } else if (requests.get(key) === shared) {
         shared.refreshAt = nextModelAuthStatusRefreshAt(result);
-        // Refreshable credentials can have no usage yet on a cold Gateway read.
-        // Bound those responses too, without changing credential-warning deadlines.
-        if (
-          result.providers.some((provider) => provider.usage || isMonitoredAuthProvider(provider))
-        ) {
+        if (result.usageRefreshAt !== undefined) {
           shared.refreshAt = Math.min(
             shared.refreshAt ?? Infinity,
-            requestedAt + USAGE_STATUS_MAX_AGE_MS,
+            requestedAt + (result.usageRefreshAt - result.ts),
           );
         }
       }
@@ -170,30 +162,4 @@ export async function loadModelAuthStatus(
     pending = shared;
   }
   return await subscribeToSharedRequest(pending, {}, opts.signal);
-}
-
-// A terminal event reaches every split pane. Share its usage read per connection, agent, and run.
-const postRunReads = new WeakMap<
-  GatewayBrowserClient,
-  Map<string, Promise<ModelAuthStatusResult>>
->();
-
-export async function loadModelAuthStatusAfterRun(
-  client: GatewayBrowserClient,
-  opts: { agentId: string; runId: string },
-): Promise<ModelAuthStatusResult> {
-  let reads = postRunReads.get(client);
-  if (!reads) {
-    reads = new Map();
-    postRunReads.set(client, reads);
-  }
-  const key = JSON.stringify([opts.agentId, opts.runId]);
-  let pending = reads.get(key);
-  if (!pending) {
-    pending = loadModelAuthStatus(client, { agentId: opts.agentId, refreshUsage: true }).finally(
-      () => reads.delete(key),
-    );
-    reads.set(key, pending);
-  }
-  return await pending;
 }

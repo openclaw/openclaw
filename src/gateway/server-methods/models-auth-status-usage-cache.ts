@@ -16,7 +16,7 @@ import {
 } from "./provider-usage-runtime.js";
 
 const log = createSubsystemLogger("provider-usage-cache");
-const USAGE_CACHE_TTL_MS = 60_000;
+const DEFAULT_USAGE_CACHE_TTL_MS = 60_000;
 
 export type ProviderUsageStatus = Pick<
   ProviderUsageSnapshot,
@@ -222,7 +222,8 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
   const needsRefresh =
     params.forceRefresh === true ||
     !matching ||
-    params.now - matching.refreshedAt >= USAGE_CACHE_TTL_MS;
+    params.now - matching.refreshedAt >=
+      (params.configRef.models?.usage?.cacheTtlMs ?? DEFAULT_USAGE_CACHE_TTL_MS);
   return {
     matching,
     needsRefresh,
@@ -239,37 +240,37 @@ function resolveProviderUsageCacheRead(params: ProviderUsageCacheParams) {
   };
 }
 
-export function readProviderUsageStaleWhileRevalidate(
-  params: ProviderUsageCacheParams,
-): Map<string, ProviderUsageStatus> {
+/** Ordinary reads stay nonblocking; post-run reads await only cold or stale usage. */
+export async function readProviderUsage(
+  params: ProviderUsageCacheParams & { awaitRefresh?: boolean },
+): Promise<{ usageByProvider: Map<string, ProviderUsageStatus>; refreshAt?: number }> {
   if (params.providerIds.length === 0) {
     usageCacheByAgentId.delete(params.agentId);
-    return new Map();
+    return { usageByProvider: new Map() };
   }
   const { matching, needsRefresh, refreshParams } = resolveProviderUsageCacheRead(params);
+  let published = matching;
   if (needsRefresh) {
-    // Never couple the RPC deadline to provider HTTP. A cold call returns auth
-    // without usage; stale calls return the last snapshot while one refresh runs.
-    void scheduleProviderUsageRefresh(refreshParams).catch(() => {});
+    const refresh = scheduleProviderUsageRefresh(refreshParams);
+    if (params.awaitRefresh) {
+      const usage = await refresh;
+      const failed = usage.providers.find((provider) => provider.error);
+      if (failed) {
+        throw new Error(`Provider usage refresh failed for ${failed.provider}. Try again later.`);
+      }
+      // Logout or credential replacement can retire an in-flight publication.
+      published = resolveProviderUsageCacheRead(params).matching;
+    } else {
+      void refresh.catch(() => {});
+    }
   }
-  return matching?.usageByProvider ?? new Map();
-}
-
-/** Await the existing bounded provider fetch without rediscovering authentication. */
-export async function refreshProviderUsage(
-  params: ProviderUsageCacheParams,
-): Promise<Map<string, ProviderUsageStatus>> {
-  if (params.providerIds.length === 0) {
-    return new Map();
-  }
-  const { refreshParams } = resolveProviderUsageCacheRead(params);
-  const usage = await scheduleProviderUsageRefresh(refreshParams);
-  const failed = usage.providers.find((provider) => provider.error);
-  if (failed) {
-    throw new Error(`Provider usage refresh failed for ${failed.provider}. Try again later.`);
-  }
-  // Only return published usage: logout or credential replacement may retire this fetch.
-  return resolveProviderUsageCacheRead(params).matching?.usageByProvider ?? new Map();
+  return {
+    usageByProvider: published?.usageByProvider ?? new Map(),
+    refreshAt: published
+      ? published.refreshedAt +
+        (params.configRef.models?.usage?.cacheTtlMs ?? DEFAULT_USAGE_CACHE_TTL_MS)
+      : params.now,
+  };
 }
 
 /** Shares the models.authStatus cache contract with the unscoped usage.status RPC. */

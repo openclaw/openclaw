@@ -24,6 +24,10 @@ const sharedClientMocks = vi.hoisted(() => ({
   retireSharedCodexAppServerClientIfCurrent: vi.fn(),
 }));
 
+vi.mock("./shared-client-usage.js", () => ({
+  readSharedCodexAppServerUsage: vi.fn(async () => undefined),
+}));
+
 vi.mock("./shared-client.js", () => ({
   ...sharedClientMocks,
   getLeasedSharedCodexAppServerClient: sharedClientMocks.getSharedCodexAppServerClient,

@@ -12,7 +12,7 @@ import {
   retireChatMetadataRefresh,
 } from "../../lib/chat/chat-metadata-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { loadModelAuthStatus, loadModelAuthStatusAfterRun } from "../../lib/model-auth.ts";
+import { loadModelAuthStatus } from "../../lib/model-auth.ts";
 import { hasUnrestrictedModelCatalogSnapshot } from "../../lib/model-catalog-cache.ts";
 import { loadModelCatalog, peekModelCatalog } from "../../lib/model-catalog-store.ts";
 import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
@@ -383,9 +383,7 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost, runId?: str
     host.sessionKey === sessionKey &&
     resolveChatAgentId(host) === agentId;
   try {
-    const result = runId
-      ? await loadModelAuthStatusAfterRun(client, { agentId, runId })
-      : await loadModelAuthStatus(client, { agentId });
+    const result = await loadModelAuthStatus(client, { agentId, refreshUsage: Boolean(runId) });
     if (!ownsRequest()) {
       return;
     }
