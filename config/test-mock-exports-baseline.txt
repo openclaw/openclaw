@@ -6763,7 +6763,6 @@
 ["src/projects/project-registry.authority.test.ts","../infra/node-sqlite.js","babb51365116462a763ce2ee450976ea22173f6a63b18f44f085fce533e3efca",1]
 ["src/projects/project-registry.authority.test.ts","../state/openclaw-state-db-readonly.js","985769830b192104474f100995df08c7f4af290b2c483b302238513d65dd7109",1]
 ["src/projects/project-registry.authority.test.ts","../state/openclaw-state-db.js","8244758a594a5d28976843f2f8d7826996bd6aad747af97f1ee3c2360671ae8f",1]
-["src/projects/project-registry.authority.test.ts","../state/openclaw-state-lease-heartbeat.js","266c93228ff0345ac764fadbef41c64f4ac8623f28cbd62838e8b5ad4af22795",1]
 ["src/projects/project-registry.authority.test.ts","./project-clone-runtime.js","30bad5d87e1f7c0a12bbeab7df76ee2ac6110ab8017aa633c66ddb0329ea9715",1]
 ["src/projects/project-registry.authority.test.ts","./project-registry.kernel.js","63ec735f46b2aa248d3b87369d69a6004d57330d7b179818a605fe32738904df",1]
 ["src/proxy-capture/proxy-server.test.ts","./ca.js","b34ca81edafff73599ab21063a587b4c118aedca156f238e010ad916c1756fd4",1]
