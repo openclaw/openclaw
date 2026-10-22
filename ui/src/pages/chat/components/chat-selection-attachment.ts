@@ -15,6 +15,19 @@ export function formatChatSelectionAnnotation(annotation: ChatSelectionAnnotatio
       `Source session: ${annotation.sessionKey}`,
       ...(annotation.messageId ? [`Source message: ${annotation.messageId}`] : []),
       ...(annotation.entryId ? [`Source entry: ${annotation.entryId}`] : []),
+      ...(annotation.file
+        ? [
+            `Source file: ${JSON.stringify(annotation.file.path)}`,
+            `Source lines: ${annotation.file.startLine}-${annotation.file.endLine}`,
+            ...(annotation.file.side ? [`Source diff side: ${annotation.file.side}`] : []),
+          ]
+        : []),
+      ...(annotation.pdf
+        ? [
+            `Source PDF: ${JSON.stringify(annotation.pdf.name)}`,
+            `Source page: ${annotation.pdf.page}`,
+          ]
+        : []),
       `Selected text UTF-16 length: ${annotation.text.length}`,
       `DOM text UTF-16 range: [${annotation.start}, ${annotation.end})`,
     ].join("\n"),

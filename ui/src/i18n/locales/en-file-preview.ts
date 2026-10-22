@@ -68,6 +68,18 @@ const catalog = {
     },
   },
   filePreview: {
+    pdf: {
+      previousPage: "Previous page",
+      nextPage: "Next page",
+      page: "Page {page}",
+      pageCount: "Page {page} of {total}",
+      zoomIn: "Zoom in",
+      zoomOut: "Zoom out",
+      openOriginal: "Open original PDF",
+      noText:
+        "This page has no selectable text. Scanned pages need OCR before you can comment on text.",
+      unavailable: "This PDF could not be displayed. Open the original to view or unlock it.",
+    },
     skill: {
       title: "Skill file preview",
       source: "Skill source",

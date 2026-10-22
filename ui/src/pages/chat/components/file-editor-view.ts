@@ -11,6 +11,7 @@ import {
 } from "@codemirror/view";
 import { classHighlighter } from "@lezer/highlight";
 import { loadCodeLanguage } from "../../../components/code-language.ts";
+import type { ChatFileSelection, ChatSelectionSource } from "../../../lib/chat/chat-types.ts";
 import { observeFileScroll } from "./chat-file-scroll.ts";
 import { detectLineSeparator } from "./file-line-separator.ts";
 
@@ -48,6 +49,11 @@ export async function createFileEditorView(params: {
   scrollFades?: boolean;
   onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   onSelectContent?: () => void;
+  onCommentSelection?: (
+    selection: ChatSelectionSource & { file: ChatFileSelection },
+    range: Range,
+    signal: AbortSignal,
+  ) => void;
   onSave: () => void;
 }) {
   const editable = new Compartment();
@@ -60,6 +66,7 @@ export async function createFileEditorView(params: {
   }
   let docChanged: ((content: string) => void) | null = null;
   let destroyed = false;
+  const commentScope = new AbortController();
   let isEditable = params.editable === true;
   let isWrapped = params.wrap === true;
   let isHighlighted = params.highlight !== false;
@@ -97,6 +104,16 @@ export async function createFileEditorView(params: {
         editable.of([EditorState.readOnly.of(!isEditable), EditorView.editable.of(isEditable)]),
         wrapping.of(isWrapped ? EditorView.lineWrapping : []),
         lineDecorations,
+        EditorView.domEventHandlers({
+          pointerup: (_event, editor) => {
+            offerSelection(editor);
+          },
+          keyup: (event, editor) => {
+            if (event.key.startsWith("Arrow") && event.shiftKey) {
+              offerSelection(editor);
+            }
+          },
+        }),
         EditorView.updateListener.of((update) => {
           if (update.selectionSet && !update.state.selection.main.empty) {
             params.onSelectContent?.();
@@ -107,6 +124,48 @@ export async function createFileEditorView(params: {
         }),
       ],
     });
+
+  function offerSelection(editor: EditorView) {
+    const selection = editor.dom.ownerDocument.getSelection();
+    if (
+      !params.onCommentSelection ||
+      !selection ||
+      selection.isCollapsed ||
+      selection.rangeCount !== 1
+    ) {
+      return;
+    }
+    const range = selection.getRangeAt(0);
+    if (
+      !editor.contentDOM.contains(range.startContainer) ||
+      !editor.contentDOM.contains(range.endContainer)
+    ) {
+      return;
+    }
+    const start = editor.posAtDOM(range.startContainer, range.startOffset);
+    const end = editor.posAtDOM(range.endContainer, range.endOffset);
+    if (end <= start) {
+      return;
+    }
+    const text = editor.state.doc.sliceString(start, end);
+    if (!text.trim()) {
+      return;
+    }
+    params.onCommentSelection(
+      {
+        text,
+        start,
+        end,
+        file: {
+          path: params.name,
+          startLine: editor.state.doc.lineAt(start).number,
+          endLine: editor.state.doc.lineAt(Math.max(start, end - 1)).number,
+        },
+      },
+      range.cloneRange(),
+      commentScope.signal,
+    );
+  }
 
   const initialState = buildState(params.content);
   let sourceDocument = initialState.doc;
@@ -137,6 +196,7 @@ export async function createFileEditorView(params: {
     destroy: () => {
       if (!destroyed) {
         destroyed = true;
+        commentScope.abort();
         scrollFades.destroy();
         releaseScrollPort?.();
         view.destroy();

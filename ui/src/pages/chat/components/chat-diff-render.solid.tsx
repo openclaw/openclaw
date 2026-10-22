@@ -304,7 +304,11 @@ export function DiffBlock(props: {
                 <span class="chat-diff__sign">
                   {line.kind === "add" ? "+" : line.kind === "del" ? "-" : ""}
                 </span>
-                <span class="chat-diff__text">
+                <span
+                  class="chat-diff__text"
+                  data-comment-line={line.kind !== "skip" ? line.lineNo : undefined}
+                  data-comment-side={line.kind === "del" ? "old" : "new"}
+                >
                   {line.kind === "skip"
                     ? (props.renderSkip?.(line) ?? line.text) || "⋯"
                     : renderLine(line)}

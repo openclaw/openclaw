@@ -4,6 +4,7 @@ import {
   createSignal,
   Errored,
   isPending,
+  lazy,
   Loading,
   onCleanup,
   onSettled,
@@ -13,6 +14,10 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import { AttachmentPreviewSkeleton, CompactAttachmentCard } from "./chat-attachment-card-solid.tsx";
 import { safeAttachmentHref } from "./chat-attachment-href.ts";
 import { readResponseBytesWithinLimit } from "./chat-response-bytes.ts";
+
+const PdfDocumentView = lazy(() => import("./chat-pdf-document.tsx"), {
+  export: "PdfDocumentView",
+});
 
 const PDF_PREVIEW_MAX_BYTES = 16 * 1024 * 1024;
 const PDF_PREVIEW_TIMEOUT_MS = 10_000;
@@ -26,6 +31,9 @@ export function isPdfAttachment(rawMimeType: string, filename: string): boolean 
 }
 
 type PdfPreviewProps = {
+  resourceBasePath?: string;
+  attachmentChat?: import("./chat-composer-types.ts").ChatComposerProps;
+  active?: boolean;
   src: string;
   sourceIdentity: string;
   label: string;
@@ -35,7 +43,7 @@ type PdfPreviewProps = {
 
 type PdfRead = { ok: true; bytes: ArrayBuffer } | { ok: false; cause: unknown };
 
-/** Owns the bounded, browser-native PDF surface for same-origin attachments. */
+/** Owns bounded PDF bytes and ticket revalidation; the lazy reader owns selection. */
 export function ChatPdfPreview(props: PdfPreviewProps) {
   // A new ticket keeps its reader; a different attachment or missing source retires it.
   const source = createMemo(
@@ -121,7 +129,7 @@ export function ChatPdfPreview(props: PdfPreviewProps) {
       }
       return null;
     };
-    // The reader survives changed bytes; only its settled Blob URL changes lifetime.
+    // Each accepted byte revision owns one Blob URL and one PDF document.
     const renderFrame = (value: Accessor<ArrayBuffer>) => {
       const [url, setUrl] = createSignal<string>();
       return (
@@ -136,13 +144,20 @@ export function ChatPdfPreview(props: PdfPreviewProps) {
               return null;
             }}
           </Show>
-          <Show when={url()}>
-            <iframe
-              class="sidebar-pdf-preview__frame"
-              title={props.label}
-              src={url()}
-              referrerpolicy="no-referrer"
-            />
+          <Show when={url()} keyed>
+            {(documentUrl) => (
+              <Errored fallback={(_error) => unavailable()}>
+                <Loading fallback={<AttachmentPreviewSkeleton />}>
+                  <PdfDocumentView
+                    url={documentUrl}
+                    resourceBasePath={props.resourceBasePath}
+                    label={props.label}
+                    active={props.active}
+                    attachmentChat={props.attachmentChat}
+                  />
+                </Loading>
+              </Errored>
+            )}
           </Show>
         </>
       );

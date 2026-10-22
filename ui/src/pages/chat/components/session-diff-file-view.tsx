@@ -11,7 +11,9 @@ import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import { createDiffPresentation } from "./chat-diff-render.solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
+import { offerFileComment } from "./chat-file-comment.ts";
 import { FileDisclosure } from "./file-disclosure.tsx";
+import { readDiffCommentSelection } from "./session-diff-comment.ts";
 import { SessionDiffOpenIcon } from "./session-diff-icons.tsx";
 import type { SessionDiffViewBindings } from "./session-diff-presentation.ts";
 import { FILE_STATUS_LABELS, diffStat, splitPath } from "./session-diff-presentation.ts";
@@ -147,6 +149,31 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
   }
   function File(fileProps: { view: FileView; result: SessionsDiffResult }) {
     let fileElement!: HTMLElement;
+    const commentScope = new AbortController();
+    onSettled(() => () => commentScope.abort());
+    const commentSelection = () => {
+      const chat = props.attachmentChat;
+      const selected = readDiffCommentSelection(fileElement, file().path, file().oldPath);
+      if (!chat || !selected) {
+        return;
+      }
+      const capturedSource = source();
+      const capturedOwner = props.owner;
+      const signal = chat.readSignal
+        ? AbortSignal.any([commentScope.signal, chat.readSignal])
+        : commentScope.signal;
+      offerFileComment({
+        readChat: () => props.attachmentChat,
+        ...selected,
+        signal,
+        isCurrent: () =>
+          fileElement.isConnected &&
+          props.active !== false &&
+          !collapsed() &&
+          source() === capturedSource &&
+          props.owner === capturedOwner,
+      });
+    };
     let fileToggle: HTMLButtonElement | undefined;
     // The keyed list retains this owner by source, not refreshed metadata.
     const source = () => fileProps.view.source;
@@ -189,7 +216,16 @@ export function createSessionDiffFileView(bindings: SessionDiffViewBindings) {
     };
     const statusLabel = () => FILE_STATUS_LABELS[file().status] ?? FILE_STATUS_LABELS.modified;
     const body = () => (
-      <div class="session-diff__file-body" style={{ "contain-intrinsic-size": intrinsicSize() }}>
+      <div
+        class="session-diff__file-body"
+        style={{ "contain-intrinsic-size": intrinsicSize() }}
+        onPointerUp={commentSelection}
+        onKeyUp={(event) => {
+          if (event.shiftKey && event.key.startsWith("Arrow")) {
+            commentSelection();
+          }
+        }}
+      >
         <SessionDiffFileBody
           file={file()}
           parsed={source().parsed}

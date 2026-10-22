@@ -21,7 +21,8 @@ registerChatMessageMetadataEnglish();
 type ChatSelectionPopupActions = {
   paneId: string;
   onAddToChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
-  onAskSideChat: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+  onAskSideChat?: (selection: ChatSelectionSource, anchorRect: DOMRect) => void;
+  readSignal?: AbortSignal;
 };
 
 let activeSelectionPopup: {
@@ -162,11 +163,14 @@ function mountPopup(
   return signal;
 }
 
-function showChatSelectionPopup(
+export function showChatSelectionPopup(
   anchor: DOMRect,
   selection: ChatSelectionSource,
   actions: ChatSelectionPopupActions,
 ) {
+  if (actions.readSignal?.aborted) {
+    return;
+  }
   removeChatSelectionPopup();
   let popup!: HTMLDivElement;
   const activate = (action: () => void) => {
@@ -195,19 +199,30 @@ function showChatSelectionPopup(
               {t("chat.messages.addToChat")}
             </button>
           ) : undefined}
-          <button
-            type="button"
-            aria-label={t("chat.messages.askInSideChat")}
-            onClick={() => activate(() => actions.onAskSideChat(selection, anchor))}
-          >
-            {t("chat.messages.askInSideChat")}
-          </button>
+          {actions.onAskSideChat && (
+            <button
+              type="button"
+              aria-label={t("chat.messages.askInSideChat")}
+              onClick={() => activate(() => actions.onAskSideChat?.(selection, anchor))}
+            >
+              {t("chat.messages.askInSideChat")}
+            </button>
+          )}
         </div>
       </Portal>
     ),
     document.createElement("div"),
   );
   const signal = mountPopup(popup, () => positionPopup(popup, anchor), actions.paneId, dispose);
+  if (actions.readSignal) {
+    const stop = listen(
+      actions.readSignal,
+      "abort",
+      () => removeChatSelectionPopup(actions.paneId),
+      { once: true },
+    );
+    listen(signal, "abort", stop, { once: true });
+  }
   listen(
     document,
     "selectionchange",

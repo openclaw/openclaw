@@ -265,7 +265,14 @@ composer. The optional comment field starts on one line, grows to five lines,
 then scrolls internally. Confirm or press Enter to save; Shift+Enter adds a line.
 Saving keeps your existing draft and does not send a message.
 
-Saving leaves a small, filled comment marker beside the selected passage. Click
+In a file’s source view or **Review** diff, select code and choose **Add to chat**
+to use the same comment editor. The comment preview shows the file path and line
+range; Review comments also identify the old or new side. Saving stages the
+selected code and your comment without changing the file, sending a message, or
+replacing your chat draft. Send the message when your feedback is ready.
+Selections crossing diff sides or omitted lines must be commented separately.
+
+Saving a chat-text comment leaves a small, filled comment marker beside the selected passage. Click
 that marker, or the pencil in the comment count's hover preview, to reopen the
 same editor beside it. **Save** or Enter saves changes; **Cancel** or Escape discards the edit; and the trash
 button deletes the comment. Hover, keyboard-focus, or click the composer's comment
@@ -572,7 +579,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - `chat.send` is **non-blocking**: it acknowledges admission with `{ runId, status: "started" }` and the response streams via `chat` events. An optional `messageSeq` identifies an already committed transcript position; it is omitted when input remains only in accepted custody. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.
     - Chat uploads accept images, videos, and other files. Images keep the native image path; other files are stored as managed media and shown in history as attachment links. Files appear in their final composer slots as soon as preparation starts, with a per-file progress fill and an in-place error icon if reading fails. Before sending, use **Remove attachment** at the corner of a staged attachment, including one still being prepared; the control supports touch and keyboard input in both Chat and New Session.
     - Opening a Markdown attachment (`.md`, `.markdown`, or a Markdown MIME type) in the side panel shows formatted headings, lists, tables, and code blocks. HTML attachments open a sandboxed page with a **Source** switch; other text attachments stay literal. HTML attachment previews accept up to 2 MiB of UTF-8 content; other text previews keep the 256 KiB limit. All retain the original download link; Markdown does not execute embedded HTML or automatically load remote images.
-    - Same-origin PDF attachments up to 16 MiB open in a native reader that fills the side panel. Background download-link renewal keeps the reader’s page and zoom when the document is unchanged. Unavailable or oversized previews offer the original download instead; external PDFs and Office documents remain download-only.
+    - Same-origin PDF attachments up to 16 MiB open in a selectable-text reader that fills the side panel. Use the page and zoom controls, then select text and choose **Add to chat** to attach a comment with the document name and page number. Comments do not modify the PDF. Each comment covers one page; image-only or scanned pages require OCR outside this reader. Background download-link renewal keeps the reader’s page and zoom when the document is unchanged. **Open original PDF** opens the browser reader for printing, search, forms, or password entry. Unavailable or oversized previews offer the original download instead; external PDFs and Office documents remain download-only.
     - Staged attachments scroll horizontally when they no longer fit. Faded edges show where more attachments remain, including after adding files or resizing the composer.
     - Re-sending with the same `idempotencyKey` returns `{ status: "in_flight" }` while running, and `{ status: "ok" }` after completion. A replayed receipt for an earlier input preserves any other active response, tool activity, and Stop target in the same conversation.
     - `chat.history` responses are size-bounded for UI safety. When transcript entries are too large, Gateway may truncate long text fields, omit heavy metadata blocks, and replace oversized messages with a placeholder (`[chat.history omitted: message too large]`).

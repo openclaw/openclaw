@@ -28,6 +28,25 @@ export function CommentPreviewRow(props: { comment: CommentPreview; children?: J
   return (
     <li class="chat-comment-preview__item">
       <div class="chat-comment-preview__body">
+        <Show when={props.comment.pdf}>
+          {(pdf) => (
+            <code>
+              {t("chat.messages.annotationPdfSource", {
+                name: pdf().name,
+                page: String(pdf().page),
+              })}
+            </code>
+          )}
+        </Show>
+        <Show when={props.comment.file}>
+          {(file) => (
+            <code>
+              {file().path}:{file().startLine}
+              {file().endLine !== file().startLine ? `–${file().endLine}` : ""}
+              {file().side ? ` (${file().side === "old" ? "−" : "+"})` : ""}
+            </code>
+          )}
+        </Show>
         <span class="muted">{t("chat.messages.annotationSelectedText")}</span>
         <div class="chat-comment-preview__text chat-comment-preview__text--selection">
           {props.comment.text}

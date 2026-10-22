@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ChatSelectionAnnotation } from "./chat-types.ts";
+import type { ChatFileSelection, ChatSelectionAnnotation } from "./chat-types.ts";
 
 /** Reads optional annotation presentation metadata without discarding its file payload. */
 export function readChatSelectionAnnotation(value: unknown): ChatSelectionAnnotation | undefined {
@@ -19,7 +19,46 @@ export function readChatSelectionAnnotation(value: unknown): ChatSelectionAnnota
   ) {
     return undefined;
   }
+  let file: ChatFileSelection | undefined;
+  if (value.file !== undefined) {
+    const source = value.file;
+    if (
+      !isRecord(source) ||
+      typeof source.path !== "string" ||
+      typeof source.startLine !== "number" ||
+      !Number.isSafeInteger(source.startLine) ||
+      source.startLine < 1 ||
+      typeof source.endLine !== "number" ||
+      !Number.isSafeInteger(source.endLine) ||
+      source.endLine < source.startLine ||
+      (source.side !== undefined && source.side !== "old" && source.side !== "new")
+    ) {
+      return undefined;
+    }
+    file = {
+      path: source.path,
+      startLine: source.startLine,
+      endLine: source.endLine,
+      ...(source.side === "old" || source.side === "new" ? { side: source.side } : {}),
+    };
+  }
+  let pdf: ChatSelectionAnnotation["pdf"];
+  if (value.pdf !== undefined) {
+    const source = value.pdf;
+    if (
+      !isRecord(source) ||
+      typeof source.name !== "string" ||
+      typeof source.page !== "number" ||
+      !Number.isSafeInteger(source.page) ||
+      source.page < 1
+    ) {
+      return undefined;
+    }
+    pdf = { name: source.name, page: source.page };
+  }
   return {
+    ...(pdf ? { pdf } : {}),
+    ...(file ? { file } : {}),
     text: value.text,
     comment: value.comment,
     sessionKey: value.sessionKey,

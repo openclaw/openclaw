@@ -1,0 +1,103 @@
+.pdf-document {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.pdf-document__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+  font-size: 12px;
+}
+
+.pdf-document__scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  scrollbar-gutter: stable;
+  background: var(--bg-accent);
+}
+
+.pdf-document__page-container {
+  width: max-content;
+  min-width: 100%;
+  padding: 12px;
+  box-sizing: border-box;
+}
+
+.pdf-document__page {
+  position: relative;
+  margin-inline: auto;
+  /* PDF paper is intrinsic document content, not the application theme. */
+  background: white;
+  box-shadow: var(--shadow-sm);
+  --scale-round-x: 1px;
+  --scale-round-y: 1px;
+}
+
+.pdf-document__page canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.pdf-document__notice {
+  max-width: 40ch;
+  padding: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* PDF.js TextLayer geometry contract (Mozilla, Apache-2.0). Keep these scale
+   variables aligned with the pinned renderer; no global viewer styles. */
+.pdf-document .textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  text-align: initial;
+  letter-spacing: normal;
+  word-spacing: normal;
+  text-size-adjust: none;
+  forced-color-adjust: none;
+  transform-origin: 0 0;
+  color-scheme: only light;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+
+.pdf-document .textLayer :is(span, br) {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  cursor: text;
+  transform-origin: 0 0;
+  user-select: text;
+}
+
+.pdf-document .textLayer > :not(.markedContent),
+.pdf-document .textLayer .markedContent span:not(.markedContent) {
+  --font-height: 0;
+  --scale-x: 1;
+  --rotate: 0deg;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+
+.pdf-document .textLayer .markedContent {
+  display: contents;
+}
+
+.pdf-document .textLayer ::selection {
+  color: transparent;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+}

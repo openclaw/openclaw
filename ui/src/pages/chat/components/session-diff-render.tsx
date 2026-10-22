@@ -37,7 +37,11 @@ function SplitSide(props: {
       <span class="session-diff-split__sign">
         {props.line ? (props.side === "left" ? "-" : "+") : ""}
       </span>
-      <span class="session-diff-split__text">
+      <span
+        class="session-diff-split__text"
+        data-comment-line={props.line?.lineNo}
+        data-comment-side={props.side === "left" ? "old" : "new"}
+      >
         {props.line ? props.presentation.renderLine(props.line) : ""}
       </span>
     </div>
@@ -73,7 +77,11 @@ function SessionSplitDiff(props: {
                   {row.line.lineNo ?? ""}
                 </span>
                 <span class="session-diff-split__sign" />
-                <span class="session-diff-split__text">
+                <span
+                  class="session-diff-split__text"
+                  data-comment-line={row.line.lineNo}
+                  data-comment-side="new"
+                >
                   {props.presentation.renderLine(row.line)}
                 </span>
               </div>

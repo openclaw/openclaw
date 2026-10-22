@@ -49,6 +49,7 @@
     "markdown-it-emoji": "3.1.0",
     "mediabunny": "1.61.4",
     "parse5": "8.0.1",
+    "pdfjs-dist": "6.4.299",
     "remend": "1.4.0",
     "solid-js": "2.0.0-rc.16",
     "zod": "4.6.7"

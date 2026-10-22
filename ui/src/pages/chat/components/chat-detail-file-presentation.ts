@@ -514,6 +514,7 @@ export function renderFilePanelPresentation(context: {
     onViewRawText: context.actions.showRawText,
     onClick: context.actions.handlePanelClick,
     onKeydown: context.actions.handlePanelKeyDown,
+    attachmentChat: context.props.attachmentChat,
     attachmentRuntime: context.props.attachmentRuntime,
     attachmentDownload: context.attachmentDownload,
   };

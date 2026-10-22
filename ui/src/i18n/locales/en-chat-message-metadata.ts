@@ -52,6 +52,7 @@ const enChatMessageMetadata = {
       annotations: "Comments",
       editAnnotation: "Edit comment {number}",
       removeAnnotations: "Remove all comments",
+      annotationPdfSource: "{name} · Page {page}",
       annotationSelectedText: "Highlighted passage:",
       annotationUserComment: "Your comment:",
       rewind: "Rewind",

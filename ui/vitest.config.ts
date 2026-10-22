@@ -29,6 +29,7 @@ import {
   uiTimingTestFiles,
 } from "../test/vitest/vitest.ui-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
+import { controlUiPdfAssetsPlugin } from "./config/control-ui-pdf-assets.ts";
 import { controlUiSolidPlugin } from "./config/control-ui-solid.ts";
 import { resolvePlaywrightChromiumExecutablePath } from "./src/test-helpers/playwright-chromium.ts";
 import { overlayEmulateMedia } from "./test/overlay-browser-commands.ts";
@@ -176,6 +177,7 @@ export function createUiBrowserVitestConfig(
   return defineProject({
     root: here,
     plugins: [
+      controlUiPdfAssetsPlugin(),
       controlUiSolidPlugin(),
       mermaidClassicBundlePlugin(),
       controlUiLocaleModulesPlugin(),
@@ -214,6 +216,7 @@ export function createUiBrowserVitestConfig(
         "markdown-it",
         "markdown-it-cjk-friendly",
         "markdown-it-emoji/lib/data/full.mjs",
+        "pdfjs-dist",
         "remend",
         "string-width",
         "typebox",

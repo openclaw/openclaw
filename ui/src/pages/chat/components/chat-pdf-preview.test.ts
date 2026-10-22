@@ -7,6 +7,18 @@ import * as responseBytes from "./chat-response-bytes.ts";
 import "./chat-detail-panel.tsx";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 
+// JSDOM cannot render PDF canvases. These tests cover byte admission and ticket
+// custody; chat-pdf-comments.e2e.test.ts exercises the actual PDF.js worker.
+vi.mock("./chat-pdf-document.tsx", () => ({
+  PdfDocumentView: (props: { url: string; label: string }) => {
+    const reader = document.createElement("div");
+    reader.className = "pdf-document";
+    reader.setAttribute("data-document-url", props.url);
+    reader.setAttribute("aria-label", props.label);
+    return reader;
+  },
+}));
+
 const PDF_PREVIEW_MAX_BYTES = 16 * 1024 * 1024;
 const source = "/__openclaw__/assistant-media?mediaTicket=pdf-preview";
 
@@ -82,7 +94,7 @@ it.each(["metadata", "header", "timeout"] as const)(
       await vi.advanceTimersByTimeAsync(10_000);
     }
     await vi.waitFor(() => expect(panel.textContent).toContain("Preview unavailable"));
-    expect(panel.querySelector("iframe")).toBeNull();
+    expect(panel.querySelector(".pdf-document")).toBeNull();
     if (failure === "metadata") {
       expect(fetchMock).not.toHaveBeenCalled();
       const download = panel.querySelector<HTMLAnchorElement>("a[download]");
@@ -114,13 +126,13 @@ it("aborts an interrupted PDF load and reloads it after reconnect", async () => 
   panel.remove();
   await waitForSolid(() => expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true));
   document.body.append(panel);
-  await vi.waitFor(() => expect(panel.querySelector("iframe")).not.toBeNull());
+  await vi.waitFor(() => expect(panel.querySelector(".pdf-document")).not.toBeNull());
   expect(fetchMock).toHaveBeenCalledTimes(2);
   expect(objectUrls.createObjectURL).toHaveBeenCalledOnce();
   expect(objectUrls.revokeObjectURL).not.toHaveBeenCalled();
-  const frame = panel.querySelector<HTMLIFrameElement>("iframe")!;
-  expect(frame).toMatchObject({ className: "sidebar-pdf-preview__frame", title: "brief.pdf" });
-  expect(frame.getAttribute("src")).toBe("blob:pdf-preview");
+  const frame = panel.querySelector<HTMLElement>(".pdf-document")!;
+  expect(frame.getAttribute("aria-label")).toBe("brief.pdf");
+  expect(frame.getAttribute("data-document-url")).toBe("blob:pdf-preview");
   expect(panel.querySelector(".sidebar-file-toolbar")).toBeNull();
   expect(panel.querySelector("object")).toBeNull();
   expect(fetchMock).toHaveBeenCalledWith(
@@ -155,9 +167,11 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
     original.resolve(bytes);
     await original.promise;
     await waitForSolid(() =>
-      expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:original"),
+      expect(panel.querySelector(".pdf-document")?.getAttribute("data-document-url")).toBe(
+        "blob:original",
+      ),
     );
-    const frame = panel.querySelector("iframe")!;
+    const frame = panel.querySelector(".pdf-document")!;
 
     panel.content = {
       ...panel.content,
@@ -172,8 +186,8 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
         expect(frame.isConnected).toBe(false);
         expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
       } else {
-        expect(panel.querySelector("iframe")).toBe(frame);
-        expect(frame.getAttribute("src")).toBe("blob:original");
+        expect(panel.querySelector(".pdf-document")).toBe(frame);
+        expect(frame.getAttribute("data-document-url")).toBe("blob:original");
         expect(urls.revokeObjectURL).not.toHaveBeenCalled();
       }
     });
@@ -195,19 +209,21 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
     await refreshed.promise;
     await waitForSolid(() => {
       if (change === "unchanged") {
-        expect(panel.querySelector("iframe")).toBe(frame);
-        expect(frame.getAttribute("src")).toBe("blob:original");
+        expect(panel.querySelector(".pdf-document")).toBe(frame);
+        expect(frame.getAttribute("data-document-url")).toBe("blob:original");
         expect(urls.createObjectURL).toHaveBeenCalledOnce();
         expect(urls.revokeObjectURL).not.toHaveBeenCalled();
       } else {
         expect(urls.revokeObjectURL).toHaveBeenCalledWith("blob:original");
         if (change === "failed") {
-          expect(panel.querySelector("iframe")).toBeNull();
+          expect(panel.querySelector(".pdf-document")).toBeNull();
           expect(panel.querySelector("a[download]")?.getAttribute("href")).toContain("renewed");
         } else {
-          expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:replacement");
+          expect(panel.querySelector(".pdf-document")?.getAttribute("data-document-url")).toBe(
+            "blob:replacement",
+          );
           if (change === "changed") {
-            expect(panel.querySelector("iframe")).toBe(frame);
+            expect(panel.querySelector(".pdf-document")).not.toBe(frame);
           }
         }
       }
@@ -225,13 +241,15 @@ it.each(["unchanged", "changed", "failed", "identity", "oversized"] as const)(
         expect(readBytes).toHaveBeenCalledTimes(3);
         expect(panel.querySelector(".sidebar-attachment-preview__loading")).not.toBeNull();
         expect(panel.querySelector("[role=alert]")).toBeNull();
-        expect(panel.querySelector("iframe")).toBeNull();
+        expect(panel.querySelector(".pdf-document")).toBeNull();
       });
       recovered.resolve(bytes.slice(0));
       await recovered.promise;
       await waitForSolid(() => {
-        expect(panel.querySelector("iframe")?.getAttribute("src")).toBe("blob:replacement");
-        expect(panel.querySelector("iframe")).not.toBe(frame);
+        expect(panel.querySelector(".pdf-document")?.getAttribute("data-document-url")).toBe(
+          "blob:replacement",
+        );
+        expect(panel.querySelector(".pdf-document")).not.toBe(frame);
         expect(urls.createObjectURL).toHaveBeenCalledTimes(2);
         expect(urls.revokeObjectURL).toHaveBeenCalledExactlyOnceWith("blob:original");
         expect(panel.querySelector("[role=alert]")).toBeNull();

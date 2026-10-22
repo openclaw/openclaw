@@ -24,6 +24,7 @@ import {
   detailPanelOperationLifetime,
   registerDetailPanelRetirement,
 } from "./chat-detail-panel-operation-lifetime.ts";
+import { offerReaderComment } from "./chat-file-comment.ts";
 import { createFileCopy } from "./chat-file-copy.ts";
 import { captureFileEditorDraft, readFileDraft, setFileDraft } from "./chat-file-drafts.ts";
 import { createFileSessionAttachment } from "./chat-file-session-attachment.ts";
@@ -88,6 +89,11 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
   let fileHash = "";
   let publishedDraft: FileReaderDraftState | null = null;
   let draftListener: ChatDetailPanelProps["onFileDraftChange"];
+
+  const currentFileText = (): string =>
+    fileEditor?.getContent() ??
+    fileDraftContent ??
+    (visibleContent?.kind === "file" ? visibleContent.content : "");
 
   const {
     syncFileEditor,
@@ -237,14 +243,6 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
     }
   }
 
-  function currentFileText(): string {
-    return (
-      fileEditor?.getContent() ??
-      fileDraftContent ??
-      (visibleContent?.kind === "file" ? visibleContent.content : "")
-    );
-  }
-
   const toggleHtmlSource = () => {
     presentation.fileSearchOpen = false;
     htmlPreview.toggle();
@@ -302,6 +300,8 @@ function DetailPanel(props: ChatDetailPanelProps, host: ChatDetailPanel) {
           scrollFades: props.filePresentation === "mobile",
           onScrollPortRef: props.onScrollPortRef,
           onSelectContent: () => interact("selection"),
+          onCommentSelection: (selection, range, signal) =>
+            offerReaderComment(props, content, selection, range, signal, isConnected),
           onSave: () => void saveFile(),
         });
         if (version !== fileOperationVersion || !isConnected()) {

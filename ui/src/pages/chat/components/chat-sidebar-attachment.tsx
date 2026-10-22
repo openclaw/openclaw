@@ -30,6 +30,8 @@ import {
 import { ChatTextAttachment } from "./chat-text-attachment.tsx";
 
 type SidebarAttachmentProps = {
+  attachmentChat?: import("./chat-composer-types.ts").ChatComposerProps;
+  active?: boolean;
   content: Extract<SidebarContent, { kind: "attachment" }>;
   runtime: AttachmentSidebarRuntime;
   embedSandboxMode: EmbedSandboxMode;
@@ -197,6 +199,9 @@ function AttachmentPreview(props: SidebarAttachmentProps) {
         }
       >
         <ChatPdfPreview
+          attachmentChat={props.attachmentChat}
+          resourceBasePath={props.runtime.resourceBasePath}
+          active={props.active}
           src={model().src ?? ""}
           sourceIdentity={model().sourceIdentity}
           label={props.content.title}

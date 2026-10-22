@@ -666,8 +666,7 @@ openclaw-chat-html-preview {
   overflow: auto;
 }
 
-.chat-html-preview__frame,
-.sidebar-pdf-preview__frame {
+.chat-html-preview__frame {
   display: block;
   flex: 1 1 auto;
   width: 100%;
@@ -1040,10 +1039,6 @@ button.sidebar-image-view__image {
 
 .sidebar-pdf-preview__surface > .sidebar-attachment-preview__loading {
   flex: 1;
-}
-
-.sidebar-pdf-preview__frame {
-  min-width: 0;
 }
 
 .sidebar-attachment-preview__markdown {
