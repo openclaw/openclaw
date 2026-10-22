@@ -17,7 +17,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { afterEach, beforeEach, expect } from "vitest";
+import { afterEach, beforeEach } from "vitest";
 
 type AuthoredAgents = NonNullable<OpenClawConfig["agents"]>;
 type AuthoredEntry = NonNullable<AuthoredAgents["entries"]>[string];
@@ -95,12 +95,6 @@ export function useDoctorWorkspace(prefix: string, resetDreaming?: () => void) {
 }
 
 export const read = (file: string) => fs.readFile(file, "utf8");
-export function hostEvent(query: string, timestamp = "2026-07-01T00:00:00.000Z") {
-  return { type: "memory.recall.recorded" as const, timestamp, query, resultCount: 0, results: [] };
-}
-export async function expectMissing(file: string) {
-  await expect(fs.access(file)).rejects.toMatchObject({ code: "ENOENT" });
-}
 export async function writeFiles(files: string[], contents: string) {
   for (const file of files) {
     await fs.mkdir(path.dirname(file), { recursive: true });

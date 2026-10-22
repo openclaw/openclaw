@@ -144,6 +144,8 @@ const repositoryScriptEntries = [
   "scripts/perf/seal-version-restart.ts!",
   // #178599 documents: node --expose-gc scripts/perf/heap-headroom.ts.
   "scripts/perf/heap-headroom.ts!",
+  // Maintainers invoke this isolated Doctor metadata-retention benchmark by path.
+  "scripts/perf/doctor-metadata-retention.ts!",
   // Worker-environment shutdown proof invokes this measurement CLI by path.
   "scripts/perf/worker-environment-shutdown-measure.ts!",
   // The branch-rotation guide invokes the driver, which loads its IPC preload by path.
@@ -930,6 +932,10 @@ const config = {
     "src/infra/database-engine/physical-facts.ts": ["exports"],
     // The full-tree companion config makes tests entrypoints; these contracts
     // are intentionally test-only in the production graph.
+    // Native-command tests exercise requester authorization and cancellation at this runtime gate.
+    "src/auto-reply/reply/request-native-subagent.ts": ["exports"],
+    // Scheduled-command tests exercise registry replacement and persisted-job validation at the owner.
+    "src/gateway/plugin-command-scheduled-run.ts": ["exports"],
     // Diagnostic fixtures reset owner-private state; the full-tree audit checks these consumers.
     "src/logging/diagnostic-memory.ts": ["exports"],
     "src/logging/diagnostic-phase.ts": ["exports"],

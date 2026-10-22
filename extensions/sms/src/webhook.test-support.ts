@@ -9,9 +9,8 @@ import type { ResolvedSmsAccount } from "./types.js";
 
 let testAccountSequence = 0;
 let activeAccountId = "test-0";
-export const SMS_TEST_WEBHOOK = "https://gateway.example.com/webhooks/sms";
-export const SMS_TEST_FROM = "+15557654321";
-export const SMS_TEST_TO = "+15551234567";
+const SMS_TEST_WEBHOOK = "https://gateway.example.com/webhooks/sms";
+const SMS_TEST_FROM = "+15557654321";
 
 // Each test gets its own account id so the handler's per-account rate-limiter
 // buckets never carry a previous test's counters into the next one.
@@ -113,24 +112,4 @@ export function createSmsTestResponse() {
     setHeaderMock: setHeader,
     endMock: end,
   } as unknown as ServerResponse & { setHeaderMock: typeof setHeader; endMock: typeof end };
-}
-
-export function createSmsTestPhoneNumber(overrides: Record<string, unknown> = {}) {
-  return {
-    phone_number: SMS_TEST_FROM,
-    sms_url: SMS_TEST_WEBHOOK,
-    sms_method: "POST",
-    ...overrides,
-  };
-}
-
-export function createSmsTestMessage(overrides: Record<string, unknown> = {}) {
-  return {
-    sid: "SM123",
-    direction: "inbound",
-    status: "received",
-    to: SMS_TEST_FROM,
-    from: SMS_TEST_TO,
-    ...overrides,
-  };
 }
