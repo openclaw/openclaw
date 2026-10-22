@@ -21,6 +21,11 @@ describe("resolveSkillManifestMetadata install validation", () => {
     return resolveSkillManifestMetadata({ metadata: JSON.stringify({ openclaw: { install } }) })
       ?.install;
   }
+  const download = (sha256: unknown) => ({
+    kind: "download",
+    url: "https://example.com/runtime.tar.bz2",
+    sha256,
+  });
 
   it.each([
     { kind: "brew", formula: "wget --HEAD" },
@@ -44,27 +49,13 @@ describe("resolveSkillManifestMetadata install validation", () => {
 
   it("normalizes a download installer's optional SHA-256 digest", () => {
     const sha256 = "a".repeat(64);
-    const install = resolveInstall({
-      kind: "download",
-      url: "https://example.com/runtime.tar.bz2",
-      sha256: ` ${sha256.toUpperCase()} `,
-    });
-
-    expect(install).toEqual([
-      { kind: "download", url: "https://example.com/runtime.tar.bz2", sha256 },
-    ]);
+    expect(resolveInstall(download(` ${sha256.toUpperCase()} `))).toEqual([download(sha256)]);
   });
 
   it.each(["g".repeat(64), 123])(
     "drops a download installer declaring an invalid SHA-256 digest (%j)",
     (sha256) => {
-      const install = resolveInstall({
-        kind: "download",
-        url: "https://example.com/runtime.tar.bz2",
-        sha256,
-      });
-
-      expect(install).toBeUndefined();
+      expect(resolveInstall(download(sha256))).toBeUndefined();
     },
   );
 
@@ -77,8 +68,7 @@ metadata:
   openclaw:
     homepage: https://link.com/agents
     requires:
-      bins:
-        - link-cli
+      bins: [link-cli]
     install:
       - kind: node
         package: "@stripe/link-cli"
@@ -87,14 +77,12 @@ user-invocable: true
 ---
 `);
 
-    const metadata = resolveSkillManifestMetadata(frontmatter);
-
     expect(frontmatter).toMatchObject({
       name: "create-payment-credential",
       description: expect.stringContaining("one-time-use payment credentials"),
     });
     expect(resolveSkillInvocationPolicy(frontmatter).userInvocable).toBe(true);
-    expect(metadata).toEqual({
+    expect(resolveSkillManifestMetadata(frontmatter)).toEqual({
       homepage: "https://link.com/agents",
       requires: { bins: ["link-cli"], anyBins: [], env: [], config: [] },
       install: [{ kind: "node", package: "@stripe/link-cli", bins: ["link-cli"] }],

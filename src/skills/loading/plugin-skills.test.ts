@@ -96,13 +96,24 @@ async function writeRawSkill(dir: string, content: string) {
   await fs.writeFile(path.join(dir, "SKILL.md"), content);
 }
 
-function buildRegistry(params: { acpxRoot: string; helperRoot: string }): PluginManifestRegistry {
+async function fixture() {
+  const workspaceDir = await tempDirs.make("plugin-skills-");
+  const pluginRoot = path.join(workspaceDir, "plugin");
+  const pluginSkillsDir = path.join(workspaceDir, "managed");
+  const outsideDir = path.join(workspaceDir, "outside");
+  await Promise.all([pluginRoot, pluginSkillsDir, outsideDir].map((dir) => fs.mkdir(dir)));
+  const skillsRoot = path.join(pluginRoot, "skills");
+  const config = enabledConfig("helper");
   return {
-    diagnostics: [],
-    plugins: [
-      makePlugin(params.acpxRoot, { id: "acpx", name: "ACPX Runtime" }),
-      makePlugin(params.helperRoot),
-    ],
+    workspaceDir,
+    pluginRoot,
+    pluginSkillsDir,
+    outsideDir,
+    skillsRoot,
+    config,
+    resolve: (nextConfig: OpenClawConfig = config) =>
+      resolvePluginSkillRoots({ workspaceDir, pluginSkillsDir, config: nextConfig }),
+    link: (name: string) => fsSync.readlinkSync(path.join(pluginSkillsDir, name)),
   };
 }
 
@@ -115,13 +126,14 @@ function registerPlugin(root: string, overrides: Partial<PluginManifestRecord> =
 }
 
 async function setupAcpxAndHelperRegistry() {
-  const workspaceDir = await tempDirs.make("openclaw-");
-  const acpxRoot = await tempDirs.make("openclaw-acpx-plugin-");
-  const helperRoot = await tempDirs.make("openclaw-helper-plugin-");
-  await fs.mkdir(path.join(acpxRoot, "skills"), { recursive: true });
-  await fs.mkdir(path.join(helperRoot, "skills"), { recursive: true });
-  register(...buildRegistry({ acpxRoot, helperRoot }).plugins);
-  return { workspaceDir, acpxRoot, helperRoot };
+  const { workspaceDir, pluginRoot: acpxRoot, outsideDir: helperRoot } = await fixture();
+  await Promise.all([acpxRoot, helperRoot].map((root) => fs.mkdir(path.join(root, "skills"))));
+  const manifestRegistry = {
+    diagnostics: [],
+    plugins: [makePlugin(acpxRoot, { id: "acpx", name: "ACPX Runtime" }), makePlugin(helperRoot)],
+  };
+  register(...manifestRegistry.plugins);
+  return { workspaceDir, acpxRoot, helperRoot, manifestRegistry };
 }
 
 function useStableMetadataSnapshot(manifestRegistry: PluginManifestRegistry): void {
@@ -132,17 +144,9 @@ function useStableMetadataSnapshot(manifestRegistry: PluginManifestRegistry): vo
       manifestRegistry.plugins.find((plugin) => plugin.legacyPluginIds?.includes(pluginId))?.id ??
       pluginId,
   };
-  hoisted.loadPluginMetadataSnapshot
-    .mockReturnValueOnce(snapshot)
-    .mockReturnValueOnce(snapshot)
-    .mockReturnValueOnce(snapshot);
-}
-
-async function setupPluginOutsideSkills() {
-  const workspaceDir = await tempDirs.make("openclaw-");
-  const pluginRoot = await tempDirs.make("openclaw-plugin-");
-  const outsideDir = await tempDirs.make("openclaw-outside-");
-  return { workspaceDir, pluginRoot, outsideSkills: path.join(outsideDir, "skills") };
+  for (let i = 0; i < 3; i++) {
+    hoisted.loadPluginMetadataSnapshot.mockReturnValueOnce(snapshot);
+  }
 }
 
 function registerHealthyAcpBackend() {
@@ -182,26 +186,20 @@ describe("resolvePluginSkillRoots", () => {
   });
 
   it("keeps package skill targets stable across config changes while publishing live selection", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-workspace-");
-    const pluginRoot = await tempDirs.make("openclaw-plugin-");
-    const pluginSkillsDir = await tempDirs.make("managed-plugin-skills-");
-    const skillsRoot = path.join(pluginRoot, "skills");
+    const { pluginRoot, pluginSkillsDir, skillsRoot, config, resolve, link } = await fixture();
     const original = path.join(skillsRoot, "original");
     const added = path.join(skillsRoot, "added");
     await writeRawSkill(original, "# Original\n");
     registerPlugin(pluginRoot);
-    const config = enabledConfig("helper");
-    const resolve = (nextConfig = config) =>
-      resolvePluginSkillRoots({ workspaceDir, config: nextConfig, pluginSkillsDir });
     resolve();
-    expect(fsSync.readlinkSync(path.join(pluginSkillsDir, "original"))).toBe(original);
+    expect(link("original")).toBe(original);
 
     await writeRawSkill(added, "# Added\n");
     resolve({ ...config });
     await expectPathMissing(path.join(pluginSkillsDir, "added"));
 
     withPluginCache(createPluginCache(), () => resolve({ ...config }));
-    expect(fsSync.readlinkSync(path.join(pluginSkillsDir, "added"))).toBe(added);
+    expect(link("added")).toBe(added);
     resolve({ ...config });
     await expectPathMissing(path.join(pluginSkillsDir, "added"));
 
@@ -210,9 +208,8 @@ describe("resolvePluginSkillRoots", () => {
   });
 
   it("honors a disabled manifest channel whose id differs from the plugin id", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-");
-    const pluginRoot = await tempDirs.make("openclaw-demo-plugin-");
-    await fs.mkdir(path.join(pluginRoot, "skills"), { recursive: true });
+    const { pluginRoot, skillsRoot, resolve } = await fixture();
+    await fs.mkdir(skillsRoot);
     registerPlugin(pluginRoot, {
       id: "openclaw-demo",
       name: "Demo",
@@ -220,13 +217,10 @@ describe("resolvePluginSkillRoots", () => {
       origin: "bundled",
     });
 
-    const roots = resolvePluginSkillRoots({
-      workspaceDir,
-      config: {
-        channels: { demo: { enabled: false } },
-        plugins: { entries: { "openclaw-demo": { enabled: true } } },
-      } as OpenClawConfig,
-    });
+    const roots = resolve({
+      channels: { demo: { enabled: false } },
+      plugins: { entries: { "openclaw-demo": { enabled: true } } },
+    } as OpenClawConfig);
 
     expect(roots.map((root) => root.dir)).toEqual([]);
   });
@@ -247,8 +241,8 @@ describe("resolvePluginSkillRoots", () => {
   it.each([false, true])(
     "invalidates the memo when ACP availability changes from %s with stable inputs",
     async (initiallyAvailable) => {
-      const { workspaceDir, acpxRoot, helperRoot } = await setupAcpxAndHelperRegistry();
-      const manifestRegistry = buildRegistry({ acpxRoot, helperRoot });
+      const { workspaceDir, acpxRoot, helperRoot, manifestRegistry } =
+        await setupAcpxAndHelperRegistry();
       useStableMetadataSnapshot(manifestRegistry);
       const config = { acp: { enabled: true }, ...enabledConfig("acpx", "helper") };
       if (initiallyAvailable) {
@@ -275,8 +269,7 @@ describe("resolvePluginSkillRoots", () => {
   );
 
   it("publishes generated links in each active private state scope through the workspace loader", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-private-skills-");
-    const pluginRoot = await tempDirs.make("openclaw-plugin-");
+    const { workspaceDir, pluginRoot } = await fixture();
     const skillDir = path.join(pluginRoot, "skills", "helper");
     await writeRawSkill(skillDir, "---\nname: helper\ndescription: Helper\n---\n");
     registerPlugin(pluginRoot);
@@ -292,9 +285,9 @@ describe("resolvePluginSkillRoots", () => {
   });
 
   it.each([false, true])("rejects plugin root escapes (symlink=%s)", async (symlink) => {
-    const { workspaceDir, pluginRoot, outsideSkills } = await setupPluginOutsideSkills();
+    const { pluginRoot, outsideDir, skillsRoot: safe, resolve } = await fixture();
+    const outsideSkills = path.join(outsideDir, "skills");
     await fs.mkdir(outsideSkills, { recursive: true });
-    const safe = path.join(pluginRoot, "skills");
     if (symlink) {
       await fs.symlink(outsideSkills, path.join(pluginRoot, "skills-link"), directorySymlinkType);
     } else {
@@ -303,7 +296,7 @@ describe("resolvePluginSkillRoots", () => {
     registerPlugin(pluginRoot, {
       skills: symlink ? ["./skills-link"] : ["./skills", path.relative(pluginRoot, outsideSkills)],
     });
-    const roots = resolvePluginSkillRoots({ workspaceDir, config: enabledConfig("helper") });
+    const roots = resolve();
     expect(roots).toStrictEqual(symlink ? [] : [{ dir: safe, rejectHardlinks: true }]);
   });
 
@@ -335,10 +328,7 @@ describe("resolvePluginSkillRoots", () => {
   });
 
   it("limits Agent Plugins skills to valid immediate child directories", async () => {
-    const workspaceDir = await tempDirs.make("openclaw-");
-    const pluginRoot = await tempDirs.make("openclaw-agent-bundle-");
-    const pluginSkillsDir = await tempDirs.make("managed-plugin-skills-");
-    const skillsRoot = path.join(pluginRoot, "skills");
+    const { pluginRoot, pluginSkillsDir, skillsRoot, resolve, link } = await fixture();
     const validSkill = path.join(skillsRoot, "valid");
     const nestedSkill = path.join(skillsRoot, "group", "deep");
     await writeRawSkill(validSkill, "valid immediate skill\n");
@@ -352,20 +342,21 @@ describe("resolvePluginSkillRoots", () => {
       skills: ["skills"],
     });
 
-    const roots = resolvePluginSkillRoots({
-      workspaceDir,
-      pluginSkillsDir,
-      config: enabledConfig("helper"),
-    });
+    const roots = resolve();
 
     expect(roots).toEqual([{ dir: validSkill, rejectHardlinks: true }]);
-    expect(fsSync.readlinkSync(path.join(pluginSkillsDir, "valid"))).toBe(validSkill);
+    expect(link("valid")).toBe(validSkill);
     expect(fsSync.existsSync(path.join(pluginSkillsDir, "deep"))).toBe(false);
     expect(fsSync.existsSync(path.join(pluginSkillsDir, "skills"))).toBe(false);
   });
 });
 
 describe("publishPluginSkills", () => {
+  let context: Awaited<ReturnType<typeof fixture>>;
+  beforeEach(async () => {
+    context = await fixture();
+  });
+
   function publishPluginSkills(skillDirs: string[], pluginSkillsDir: string): void {
     const plugins = skillDirs.map((rootDir, index) =>
       makePlugin(rootDir, {
@@ -392,19 +383,16 @@ describe("publishPluginSkills", () => {
     }
   }
 
-  async function writeSkillDir(parentDir: string, name: string, description = name) {
+  async function writeSkillDir(name: string, parentDir = context.pluginRoot, description = name) {
     const dir = path.join(parentDir, name);
     await writeRawSkill(dir, `---\nname: ${name}\ndescription: ${description}\n---\n\n# ${name}\n`);
     return dir;
   }
 
   it("replaces owned generated symlinks when the previous target disappeared", async () => {
-    const staleParent = await tempDirs.make("plugin-skills-stale-");
-    const currentParent = await tempDirs.make("plugin-skills-current-");
-    const managedDir = await tempDirs.make("managed-skills-");
-
-    const staleDir = await writeSkillDir(staleParent, "my-skill", "old");
-    const currentDir = await writeSkillDir(currentParent, "my-skill", "new");
+    const { outsideDir: staleParent, pluginSkillsDir: managedDir } = context;
+    const staleDir = await writeSkillDir("my-skill", staleParent, "old");
+    const currentDir = await writeSkillDir("my-skill", context.pluginRoot, "new");
     const linkPath = path.join(managedDir, "my-skill");
 
     fsSync.symlinkSync(staleDir, linkPath, directorySymlinkType);
@@ -416,10 +404,8 @@ describe("publishPluginSkills", () => {
   });
 
   it("replaces generated Windows directory entries before publishing a current skill", async () => {
-    const skillParent = await tempDirs.make("plugin-skills-");
-    const managedDir = await tempDirs.make("managed-skills-");
-
-    const dir = await writeSkillDir(skillParent, "my-skill");
+    const { pluginSkillsDir: managedDir } = context;
+    const dir = await writeSkillDir("my-skill");
     const existingDir = path.join(managedDir, "my-skill");
     await fs.mkdir(existingDir, { recursive: true });
     await fs.writeFile(path.join(existingDir, "stale.txt"), "stale");
@@ -434,10 +420,7 @@ describe("publishPluginSkills", () => {
   it.runIf(process.platform !== "win32")(
     "skips child skill directories whose SKILL.md symlinks outside the declared root",
     async () => {
-      const skillParent = await tempDirs.make("plugin-skills-");
-      const managedDir = await tempDirs.make("managed-skills-");
-      const outsideDir = await tempDirs.make("outside-skill-file-");
-      const parentDir = path.join(skillParent, "skills");
+      const { pluginSkillsDir: managedDir, outsideDir, skillsRoot: parentDir } = context;
       const leakDir = path.join(parentDir, "leak");
       await fs.mkdir(leakDir, { recursive: true });
       await fs.writeFile(
@@ -445,7 +428,7 @@ describe("publishPluginSkills", () => {
         "---\nname: leak\ndescription: Outside\n---\n",
       );
       await fs.symlink(path.join(outsideDir, "SKILL.md"), path.join(leakDir, "SKILL.md"));
-      const validDir = await writeSkillDir(parentDir, "valid");
+      const validDir = await writeSkillDir("valid", parentDir);
 
       publishPluginSkills([parentDir], managedDir);
 
@@ -455,12 +438,9 @@ describe("publishPluginSkills", () => {
   );
 
   it("handles collision: same basename from different plugins uses first one", async () => {
-    const skillParent1 = await tempDirs.make("plugin-skills-1-");
-    const skillParent2 = await tempDirs.make("plugin-skills-2-");
-    const managedDir = await tempDirs.make("managed-skills-");
-
-    const dir1 = await writeSkillDir(skillParent1, "shared-name", "first");
-    const dir2 = await writeSkillDir(skillParent2, "shared-name", "second");
+    const { pluginSkillsDir: managedDir, outsideDir } = context;
+    const dir1 = await writeSkillDir("shared-name", context.pluginRoot, "first");
+    const dir2 = await writeSkillDir("shared-name", outsideDir, "second");
 
     publishPluginSkills([dir1, dir2], managedDir);
 

@@ -6,11 +6,11 @@ import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import type { OpenClawSkillMetadata, SkillEntry } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
 import * as frontmatter from "./frontmatter.js";
 import { writeSkillFixture, useLoadingFixture } from "./loading.test-support.js";
-import { createSyntheticSourceInfo } from "./skill-contract.js";
 import { loadWorkspaceSkills } from "./workspace-skill-loader.js";
 import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
@@ -42,22 +42,27 @@ function captureLogger(level: "info" | "warn" = "info", consoleStyle: "json" | "
 function createSkillEntry(name: string, metadata: OpenClawSkillMetadata): SkillEntry {
   const filePath = `/skills/${name}/SKILL.md`;
   return {
-    skill: {
+    skill: createCanonicalFixtureSkill({
       name,
       description: name,
       filePath,
-      source: "project",
       baseDir: path.dirname(filePath),
-      sourceInfo: createSyntheticSourceInfo(filePath, { source: "project" }),
-      disableModelInvocation: false,
-    },
+      source: "project",
+    }),
     frontmatter: {},
     metadata,
   };
 }
 
 const skill = (dir: string, name: string, description: string, body?: string) =>
-  writeSkillFixture(dir, name, description, { body });
+  writeSkillFixture(path.join(dir, name), name, description, { body });
+
+const sourceOptions = (root: string, bundledSkillsDir: string, executionWorkspaceDir?: string) => ({
+  bundledSkillsDir,
+  executionWorkspaceDir,
+  managedSkillsDir: path.join(root, "managed"),
+  pluginSkillsDir: path.join(root, "plugins"),
+});
 
 function refresh(workspaceDir: string, options: Parameters<typeof loadWorkspaceSkills>[1]) {
   bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
@@ -79,16 +84,14 @@ describe("buildWorkspaceSkillsPrompt", () => {
       ] as const) {
         for (let index = 0; index < 30; index++) {
           const name = `pair-${pair}-skill-${String(index).padStart(2, "0")}`;
-          await skill(path.join(workspace, ".agents", "skills", "group", name), name, name, body);
+          await skill(path.join(workspace, ".agents", "skills", "group"), name, name, body);
         }
       }
       cases.push({
         workspaceDir,
         options: {
+          ...sourceOptions(root, "", executionWorkspaceDir),
           executionWorkspaceDir,
-          bundledSkillsDir: "",
-          managedSkillsDir: path.join(root, "managed"),
-          pluginSkillsDir: path.join(root, "plugins"),
           config: { worktreeRoot: path.join(root, "worktrees") },
         },
       });
@@ -112,12 +115,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
         winnerRoot: path.join(workspaceDir, ".agents", "skills"),
         loserRoot: path.join(options.executionWorkspaceDir, ".agents", "skills"),
         skillCount: 30,
-        skills: [
-          `pair-${pair}-skill-00`,
-          `pair-${pair}-skill-01`,
-          `pair-${pair}-skill-02`,
-          "+27 more",
-        ],
+        skills: [0, 1, 2].map((n) => `pair-${pair}-skill-0${n}`).concat("+27 more"),
       });
     }
     for (const { workspaceDir, options } of cases) {
@@ -159,7 +157,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       const description = (root: string) => `${root} version`;
       const name = "demo-skill";
       for (const root of roots) {
-        await skill(path.join(locations[root], name), name, description(root));
+        await skill(locations[root], name, description(root));
       }
       const info = captureLogger("info", compact ? "compact" : "json");
       const extraDirs = roots
@@ -217,7 +215,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     const root = await fixtureSuite.createDir("identical-content");
     const bundledSkillsDir = path.join(root, "bundled");
     const name = "identical-collision";
-    await writeSkillFixture(path.join(bundledSkillsDir, name), name, "Shared facts");
+    await skill(bundledSkillsDir, name, "Shared facts");
     const raw = await fs.readFile(path.join(bundledSkillsDir, name, "SKILL.md"), "utf8");
     const warn = captureLogger("warn");
     const hash = vi.spyOn(cryptoDigest, "sha256Hex");
@@ -239,17 +237,12 @@ describe("buildWorkspaceSkillsPrompt", () => {
           path.join(executionWorkspaceDir, "skills"),
           process.platform === "win32" ? "junction" : "dir",
         );
-        const options = {
-          bundledSkillsDir,
-          executionWorkspaceDir,
-          managedSkillsDir: path.join(root, "managed"),
-          pluginSkillsDir: path.join(root, "plugins"),
-        };
+        const options = sourceOptions(root, bundledSkillsDir, executionWorkspaceDir);
         const first = loadWorkspaceSkills(workspaceDir, options);
         expect(first.filter((entry) => entry.skill.name === name)).toHaveLength(1);
-        const prompt = (await buildSkillSnapshot(workspaceDir, options)).prompt;
+        const prompt = await buildWorkspaceSkillsPrompt(workspaceDir, options);
         expect(refresh(workspaceDir, options)).toEqual(first);
-        expect((await buildSkillSnapshot(workspaceDir, options)).prompt).toBe(prompt);
+        expect(await buildWorkspaceSkillsPrompt(workspaceDir, options)).toBe(prompt);
         expect(first.find((entry) => entry.skill.name === name)?.skill).toMatchObject({
           filePath: path.join(workspaceDir, "skills", name, "SKILL.md"),
           source: "openclaw-workspace",
@@ -269,9 +262,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
     const root = await fixtureSuite.createDir("different-content");
     const bundledSkillsDir = path.join(root, "bundled");
     const name = "different-collision";
-    await writeSkillFixture(path.join(bundledSkillsDir, name), name, "Shared metadata", {
-      body: "Bundled",
-    });
+    await skill(bundledSkillsDir, name, "Shared metadata", "Bundled");
     const warn = captureLogger("warn");
     for (const id of ["first", "second"]) {
       const workspaceDir = path.join(root, id);
@@ -299,11 +290,7 @@ describe("buildWorkspaceSkillsPrompt", () => {
       [bundledSkillsDir, "Bundled"],
       [path.join(workspaceDir, "skills"), "Workspace"],
     ] as const) {
-      await writeSkillFixture(
-        path.join(base, "another-collision"),
-        "another-collision",
-        description,
-      );
+      await skill(base, "another-collision", description);
     }
     refresh(workspaceDir, options);
     expect(warn).toHaveBeenCalledTimes(6);
@@ -346,46 +333,31 @@ describe("buildWorkspaceSkillsPrompt", () => {
     ];
 
     const managedSkillsDir = path.join(workspaceDir, ".managed");
-    const render = (
-      config?: NonNullable<Parameters<typeof buildSkillSnapshot>[1]>["config"],
-      available = false,
-    ) =>
-      withEnvAsync(
-        { HOME: workspaceDir, PATH: "" },
-        async () =>
-          await buildWorkspaceSkillsPrompt(workspaceDir, {
-            entries,
-            managedSkillsDir,
-            config,
-            eligibility: {
-              remote: {
-                platforms: ["linux"],
-                hasBin: (bin: string) => available && bin === "fakebin",
-                hasAnyBin: (bins: string[]) => available && bins.includes("fakebin"),
-                note: "",
-              },
+    for (const available of [false, true]) {
+      const prompt = await withEnvAsync({ HOME: workspaceDir, PATH: "" }, () =>
+        buildWorkspaceSkillsPrompt(workspaceDir, {
+          entries,
+          managedSkillsDir,
+          config: available
+            ? {
+                browser: { enabled: false },
+                skills: { entries: { "env-skill": { apiKey: "ok" } } }, // pragma: allowlist secret
+              }
+            : undefined,
+          eligibility: {
+            remote: {
+              platforms: ["linux"],
+              hasBin: (bin: string) => available && bin === "fakebin",
+              hasAnyBin: (bins: string[]) => available && bins.includes("fakebin"),
+              note: "",
             },
-          }),
+          },
+        }),
       );
-    const defaultPrompt = await render();
-    expect(defaultPrompt).toContain("always-skill");
-    expect(defaultPrompt).toContain("config-skill");
-    expect(defaultPrompt).not.toContain("bin-skill");
-    expect(defaultPrompt).not.toContain("anybin-skill");
-    expect(defaultPrompt).not.toContain("env-skill");
-
-    const gatedPrompt = await render(
-      {
-        browser: { enabled: false },
-        skills: { entries: { "env-skill": { apiKey: "ok" } } }, // pragma: allowlist secret
-      },
-      true,
-    );
-    expect(gatedPrompt).toContain("bin-skill");
-    expect(gatedPrompt).toContain("anybin-skill");
-    expect(gatedPrompt).toContain("env-skill");
-    expect(gatedPrompt).toContain("always-skill");
-    expect(gatedPrompt).not.toContain("config-skill");
+      expect(entries.map((entry) => prompt.includes(entry.skill.name))).toEqual(
+        available ? [true, true, false, true, true] : [false, false, true, true, false],
+      );
+    }
   });
   it.each(["config", "session"] as const)(
     "uses the canonical skillKey for %s disabling",
