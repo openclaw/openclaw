@@ -203,7 +203,7 @@ describe("AppSidebar footer identity menu", () => {
       ] as const) {
         for (const target of targets) {
           await dom.key(current, key);
-          expect(document.activeElement).toBe(target);
+          await waitForSolid(() => expect(document.activeElement).toBe(target));
           current = target;
         }
       }
@@ -211,9 +211,9 @@ describe("AppSidebar footer identity menu", () => {
 
       items[0]?.focus();
       await dom.key(items[0], "ArrowUp");
-      expect(document.activeElement).toBe(theme);
+      await waitForSolid(() => expect(document.activeElement).toBe(theme));
       await dom.key(theme, "ArrowDown");
-      expect(document.activeElement).toBe(items[0]);
+      await waitForSolid(() => expect(document.activeElement).toBe(items[0]));
     },
   );
 });

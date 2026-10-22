@@ -187,6 +187,11 @@ it("retains focused session menu controls through header refresh and restores fo
       true,
     ),
   );
+  await waitForSolid(() =>
+    expect(menu.querySelector<HTMLButtonElement>('[data-value="submenu:advanced"]')?.disabled).toBe(
+      false,
+    ),
+  );
   menu.querySelector<HTMLButtonElement>('[data-value="submenu:advanced"]')!.click();
   await waitForSolid(() =>
     expect(menu.querySelector('[data-value="submenu:open-in"]')).not.toBeNull(),

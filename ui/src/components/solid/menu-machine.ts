@@ -113,9 +113,11 @@ export function useMenuMachine(
       notify();
       while (pending.length) {
         pending.shift()?.(runtime);
-        // Zag queues the transition, then publishes the resulting roving focus.
-        // Let both settle before the next key reads its target.
-        await new Promise<void>(queueMicrotask);
+        // Vanilla queues the transition; Home/End queue the highlight again,
+        // whose store notification publishes roving focus. Drain both before replay.
+        await new Promise<void>((resolve) => {
+          queueMicrotask(() => queueMicrotask(resolve));
+        });
       }
     } catch (reason) {
       if (!mounted) {
@@ -267,6 +269,8 @@ export function useMenuMachine(
         "data-scope": "menu",
         "data-part": "item",
         "data-ownedby": overlay.id,
+        "data-menu-item": overlay.id,
+        "data-disabled": disabled ? "" : undefined,
         "data-value": value,
         "data-valuetext": label,
         tabIndex: -1,
@@ -304,6 +308,7 @@ export function useMenuMachine(
       return {
         "data-scope": "menu",
         "data-part": parentBinding ? "trigger-item" : "trigger",
+        "data-menu-item": parentBinding ? overlay.parent?.id : undefined,
         "data-state": overlay.open ? "open" : "closed",
         "aria-disabled": disabled ? "true" : undefined,
         "data-disabled": disabled ? "" : undefined,

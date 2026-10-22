@@ -253,10 +253,14 @@ export function Menu(props: BranchProps): JSX.Element {
         node.matches("[data-initial-focus], [autofocus]") &&
         node.closest('[role="menu"]') === overlay.surface,
     );
-    (intent === "last"
-      ? (items.at(-1) ?? formControls().at(-1))
-      : (initial ?? items[0] ?? formControls()[0])
-    )?.focus({ preventScroll: true });
+    const target =
+      intent === "last"
+        ? (items.at(-1) ?? formControls().at(-1))
+        : (initial ?? items[0] ?? formControls()[0]);
+    if (target) {
+      target.focus({ preventScroll: true });
+      target.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }
   };
   const menuRoot = initialIdentity.root ?? overlay;
   const placement = () =>

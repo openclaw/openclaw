@@ -64,6 +64,7 @@ it("queues retained-focus input navigation outside the listbox during first load
 it.each([
   { keys: ["ArrowDown", "ArrowDown"], focused: "gamma", selected: [] },
   { keys: ["ArrowDown", "Enter"], focused: null, selected: ["beta"] },
+  { keys: ["End", "Enter"], focused: null, selected: ["gamma"] },
 ])("replays queued $keys in navigation order", async ({ keys, focused, selected }) => {
   const selections: string[] = [];
   const { handle, surface } = mountMenu({ onSelect: (entry) => selections.push(entry.id) });

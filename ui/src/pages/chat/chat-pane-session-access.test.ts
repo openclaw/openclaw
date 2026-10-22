@@ -461,6 +461,11 @@ describe("chat pane session access", () => {
       ),
     );
     expect(container.querySelector(".chat-pane__sharing-permissions")).toBeNull();
+    await waitForSolid(() =>
+      expect(container.querySelector<HTMLButtonElement>('[data-value="access"]')?.disabled).toBe(
+        false,
+      ),
+    );
     const access = container.querySelector<HTMLButtonElement>('[data-value="access"]');
     expect(access).not.toBeNull();
     access!.click();
