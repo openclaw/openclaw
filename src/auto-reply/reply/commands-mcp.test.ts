@@ -38,7 +38,8 @@ vi.mock("../../infra/outbound/deliver-runtime.js", () => ({
 }));
 
 // mock-isolation: Keep MCP configuration in the test's in-memory server map.
-vi.mock("../../config/mcp-config.js", () => ({
+vi.mock("../../config/mcp-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/mcp-config.js")>()),
   listConfiguredMcpServers: vi.fn(async () => configuredServers()),
 }));
 
