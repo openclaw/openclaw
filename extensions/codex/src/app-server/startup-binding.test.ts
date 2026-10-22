@@ -254,8 +254,8 @@ describe("Codex app-server startup binding", () => {
       binding: {
         connectionScope: "supervision" as const,
         supervisionSourceThreadId: "thread-source",
-        preserveNativeModel: true,
-        conversationSourceTransferComplete: true,
+        preserveNativeModel: true as const,
+        conversationSourceTransferComplete: true as const,
       },
     },
   ])("preserves the binding with $name", async (scenario) => {

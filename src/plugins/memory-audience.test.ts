@@ -144,6 +144,7 @@ it.each([
   ["channel", "channel", true, false, "conversation"],
   ["nested private", "direct", true, true, "owner-private"],
   ["nested non-owner", "direct", false, true, "conversation"],
+  ["nested group", "group", true, true, "conversation"],
 ] as const)("maps a %s audience", async (_name, chatType, owner, nested, expectedKind) => {
   const root = rootEntry(chatType);
   let sessionKey = ROOT_KEY;

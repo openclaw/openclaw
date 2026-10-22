@@ -37,6 +37,7 @@ import {
   sessionEntry,
   setup,
   usage,
+  useRealProviderPreparation,
   type Execution,
 } from "./inference-runtime.test-support.js";
 import { createWorkerToolCallStream } from "./inference-tool-call-stream.js";
@@ -69,7 +70,7 @@ describe("worker inference provider runtime", () => {
       },
     });
     const runtime = setup({ sessionId: SESSION_ID, updatedAt: 1 }, { pluginRegistry });
-    fixture.useRealProviderPreparation(
+    useRealProviderPreparation(
       runtime,
       (cfg) => ({
         ...logicalModel,

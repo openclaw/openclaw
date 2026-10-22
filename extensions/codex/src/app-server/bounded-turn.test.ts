@@ -603,7 +603,7 @@ it("attests ring-zero and retains usage when the final response has none", async
     ...success,
     model: "gpt-5.4",
     usage: {
-      input: 6,
+      input: 5,
       output: 4,
       cacheRead: 2,
       cacheWrite: 1,

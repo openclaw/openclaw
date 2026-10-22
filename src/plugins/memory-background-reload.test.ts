@@ -194,7 +194,11 @@ it("keeps successor sweeps and diary publication owned after another registratio
     } satisfies PluginRuntime["subagent"];
     const host = createPluginRegistry({
       logger: dreamingLogger,
-      runtime: createLazyPluginRuntime({ ...loaderOptions, runtimeOptions: { subagent } }),
+      runtime: createLazyPluginRuntime({
+        devSourceRoot: repository,
+        pluginSdkResolution: "src",
+        runtimeOptions: { subagent },
+      }),
       activateGlobalSideEffects: false,
     });
     const { instance } = loadMemory(host, config);

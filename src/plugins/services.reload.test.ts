@@ -7,6 +7,7 @@ import { resetDiagnosticStabilityRecorderForTest } from "../logging/diagnostic-s
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { registerPluginHttpRoute } from "./http-registry.js";
+import { PluginInstance } from "./plugin-instance.js";
 import { createEmptyPluginRegistry } from "./registry.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 import { listPluginServiceHealthFailures } from "./service-health.js";
@@ -15,6 +16,7 @@ import {
   type PluginServicesHandle,
 } from "./services.js";
 import { createRegistry, startPluginServices as startServices } from "./services.test-support.js";
+import { createPluginRecord } from "./status.test-helpers.js";
 import type { OpenClawPluginService, OpenClawPluginServiceContext } from "./types.js";
 
 const handles = new Set<PluginServicesHandle>();
@@ -313,33 +315,76 @@ describe("plugin service reload", () => {
     expect(broadcastPluginEvent).toHaveBeenCalledOnce();
   });
 
-  it("owns late startup cleanup", async () => {
+  it.each([false, true])("owns late startup cleanup (managed=%s)", async (managed) => {
     vi.useFakeTimers();
-    const resource = lateResource("plugin-candidate-late-start");
+    const resource = lateResource(`plugin-${managed ? "managed" : "candidate"}-late-start`);
     const { entered, release, stop } = resource;
+    const registry = createEmptyPluginRegistry();
+    const record = createPluginRecord({ id: "candidate" });
+    if (managed) {
+      registry.plugins.push(record);
+    }
+    const instance = managed ? new PluginInstance(record.id, { record, registry }) : undefined;
+    const dispatch = vi.fn();
+    const invoke = instance?.wrap(dispatch);
+    let lateFailure: unknown;
     const contexts: OpenClawPluginServiceContext[] = [];
     const definition: OpenClawPluginService = {
-      id: "held",
+      id: managed ? "late-start" : "held",
       async start(context) {
         contexts.push(context);
-        registerPluginHttpRoute({ path: "/traced-service", auth: "plugin", handler: vi.fn() });
+        if (!managed) {
+          registerPluginHttpRoute({ path: "/traced-service", auth: "plugin", handler: vi.fn() });
+        }
         await resource.wait();
+        try {
+          invoke?.();
+        } catch (error) {
+          lateFailure = error;
+        }
         resource.attach();
       },
       stop,
     };
     const queuedStart = vi.fn();
-    const registry = registryFor("candidate", definition, { id: "queued", start: queuedStart });
+    registry.services.push(
+      ...registryFor(
+        "candidate",
+        instance?.wrap(definition) ?? definition,
+        ...(!managed ? [{ id: "queued", start: queuedStart }] : []),
+      ).services,
+    );
     const broadcastPluginEvent = vi.fn();
     const candidate = starter({
       registry,
-      startupTrace: createGatewayStartupTrace(createSubsystemLogger("test/service-startup")),
-      broadcastPluginEvent,
+      ...(!managed
+        ? {
+            startupTrace: createGatewayStartupTrace(createSubsystemLogger("test/service-startup")),
+            broadcastPluginEvent,
+          }
+        : {}),
       throwOnStartError: true,
     });
     const operation = candidate.start().catch((error: unknown) => error);
     await entered.promise;
     await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+    if (instance) {
+      expect(await operation).toBeInstanceOf(AggregateError);
+      const retirement = track(instance.dispose());
+      await vi.advanceTimersByTimeAsync(PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS);
+      expect(() => instance.run(() => "retired dispatch")).toThrow("reloaded or disabled");
+      release.resolve();
+      await stopHandles();
+      expect(dispatch).not.toHaveBeenCalled();
+      expect(lateFailure).toMatchObject({
+        message: expect.stringContaining("reloaded or disabled"),
+      });
+      expect(stop).toHaveBeenCalledOnce();
+      resource.expectClean();
+      await retirement;
+      expect(instance.lifecycle.signal.aborted).toBe(true);
+      return;
+    }
     expect(await operation).toMatchObject({
       errors: [
         expect.objectContaining({

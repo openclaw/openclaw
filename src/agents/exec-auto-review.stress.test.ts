@@ -157,24 +157,22 @@ describe("exec auto-review shell stress", () => {
         ];
       },
     },
-  ])(
-    "fails closed for $count seeded wrapper chains (seed $seed)",
-    ({ seed, count, argv: makeArgv }) => {
-      const random = createSeededRandom(seed);
-      for (let index = 0; index < count; index++) {
-        const argv = makeArgv(random, index);
-        const depth = Math.floor(random() * 7);
-        for (let wrapper = 0; wrapper < depth; wrapper++) {
-          argv.unshift(...chooseSeeded(random, dispatchWrappers));
-        }
-        const plan = resolveDispatchWrapperTrustPlan(argv);
-        expect(
-          plan.policyBlocked || isBlockedShellWrapperCommand(plan.argv),
-          `seed ${seed}, case ${index}: ${JSON.stringify(argv)}`,
-        ).toBe(true);
+  ])("fails closed for $count seeded wrapper chains (seed $seed)", (scenario) => {
+    const { seed, count } = scenario;
+    const random = createSeededRandom(seed);
+    for (let index = 0; index < count; index++) {
+      const argv = scenario.argv(random, index);
+      const depth = Math.floor(random() * 7);
+      for (let wrapper = 0; wrapper < depth; wrapper++) {
+        argv.unshift(...chooseSeeded(random, dispatchWrappers));
       }
-    },
-  );
+      const plan = resolveDispatchWrapperTrustPlan(argv);
+      expect(
+        plan.policyBlocked || isBlockedShellWrapperCommand(plan.argv),
+        `seed ${seed}, case ${index}: ${JSON.stringify(argv)}`,
+      ).toBe(true);
+    }
+  });
 
   it
     .runIf(process.platform !== "win32")

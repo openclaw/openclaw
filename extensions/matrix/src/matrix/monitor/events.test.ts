@@ -721,7 +721,7 @@ describe("registerMatrixMonitorEvents verification routing", () => {
       }
       expect(logger.warn).toHaveBeenCalledTimes(1);
       expect(logger.warn).toHaveBeenCalledWith(warning, { roomId: "!room:example.org" });
-      if (options.cryptoAvailable === false) {
+      if (options.authEncryption) {
         expect(formatNativeDependencyHint).toHaveBeenCalledTimes(1);
       }
     },

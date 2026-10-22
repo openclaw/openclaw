@@ -40,6 +40,7 @@ import { listPluginServiceHealthFailures } from "./service-health.js";
 import { PLUGIN_SERVICE_REPLACEMENT_STOP_TIMEOUT_MS } from "./services.js";
 import {
   createRegistry,
+  createServiceRegistration,
   startPluginServices,
   type PluginServicesHandle,
 } from "./services.test-support.js";

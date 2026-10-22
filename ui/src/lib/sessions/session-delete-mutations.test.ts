@@ -142,7 +142,9 @@ describe("optimistic session deletion", () => {
       const h = createSessionDeletionHarness();
       const scope = { archivedFilter: "all" as const };
       h.hold(scope);
-      onTestFinished(() => vi.useRealTimers());
+      onTestFinished(() => {
+        vi.useRealTimers();
+      });
       await h.sessions.refresh({ force: true });
       await h.sessions.refreshList(scope);
       const operation = h.sessions.delete(h.alpha.key);
@@ -270,7 +272,9 @@ describe("optimistic session deletion", () => {
     const h = createSessionDeletionHarness();
     const smaller = { archivedFilter: "all" as const, limit: 1 };
     const larger = { ...smaller, limit: 2 };
-    [smaller, larger].forEach(h.hold);
+    for (const scope of [smaller, larger]) {
+      h.hold(scope);
+    }
     await h.sessions.refreshList(smaller);
     await h.sessions.refreshList(larger);
     const operation = h.sessions.delete(h.beta.key);

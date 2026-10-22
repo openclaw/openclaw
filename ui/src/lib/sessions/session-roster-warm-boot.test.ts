@@ -1,11 +1,11 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 /* @vitest-environment node */
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { clearBootRecords, type BootRecord } from "../../app/boot-record.ts";
 import * as snapshotPrewarm from "../../pages/chat/session-snapshot-prewarm.ts";
-import { createApplicationGateway } from "../../test-helpers/application-context-fixtures.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { sidebarBootSnapshot } from "../../test-helpers/sidebar-boot-snapshot.test-support.ts";
 import { createSessionCapability } from "./index.ts";
@@ -55,11 +55,10 @@ function roster(): BootRoster {
     sectionOrder: bootRecord.sectionOrder,
   };
 }
-const activeCapabilities = new Map<SessionCapability, () => void>();
+const activeCapabilities = new Set<SessionCapability>();
 afterEach(() => {
-  for (const [sessions, finish] of activeCapabilities) {
+  for (const sessions of activeCapabilities) {
     sessions.dispose();
-    finish();
   }
   activeCapabilities.clear();
   vi.restoreAllMocks();
@@ -71,15 +70,12 @@ function harness(
   options: {
     cached?: Promise<BootRoster | null>;
     withBootRecord?: boolean;
+    admittedRecord?: BootRecord;
     retainedHelloScope?: string;
   } = {},
 ) {
-  const gatewaySource = createApplicationGateway();
-  const { gateway } = gatewaySource;
-  Object.assign(gateway, { connection: { gatewayUrl: url, token: "test-token" } });
-  const publish = (patch: Partial<SessionGateway["snapshot"]>) =>
-    gatewaySource.publish({ ...gateway.snapshot, ...patch });
-  publish({
+  let connectionRevision = 0;
+  let snapshot: SessionGateway["snapshot"] = {
     client: null,
     phase: "connecting",
     hello: options.retainedHelloScope
@@ -91,7 +87,9 @@ function harness(
       : null,
     sessionKey: "agent:main:deleted",
     selfUser: null,
-  });
+  };
+  const listeners = new Set<(value: typeof snapshot) => void>();
+  const eventListeners = new Set<(event: GatewayEventFrame) => void>();
   const live = createDeferred<SessionsListResult>();
   const request = vi.fn(async (method: string) => {
     if (method === "sessions.subscribe") {
@@ -103,6 +101,23 @@ function harness(
     throw new Error(`Unexpected request: ${method}`);
   });
   const client = createTestGatewayClient(request);
+  const gateway: SessionGateway = {
+    connection: { gatewayUrl: url, token: "test-token" },
+    get connectionRevision() {
+      return connectionRevision;
+    },
+    get snapshot() {
+      return snapshot;
+    },
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    subscribeEvents(listener) {
+      eventListeners.add(listener);
+      return () => eventListeners.delete(listener);
+    },
+  };
   const read = vi.spyOn(snapshotPrewarm, "readSidebarBootSnapshot").mockImplementation(async () => {
     const cached = await (options.cached ?? Promise.resolve(roster()));
     return cached ? sidebarBootSnapshot(cached) : null;
@@ -111,11 +126,13 @@ function harness(
   const sessions = createSessionCapability(
     gateway,
     selection,
-    options.withBootRecord !== false ? { bootRecord } : {},
+    options.withBootRecord !== false ? { bootRecord: options.admittedRecord ?? bootRecord } : {},
   );
-  activeCapabilities.set(sessions, () => live.resolve(sessionsResult([], 2)));
-  const emitChanged = (payload: unknown) =>
-    gatewaySource.publishEvent({ type: "event", event: "sessions.changed", payload, seq: 1 });
+  activeCapabilities.add(sessions);
+  const publish = (patch: Partial<typeof snapshot>) => {
+    snapshot = { ...snapshot, ...patch };
+    listeners.forEach((listener) => listener(snapshot));
+  };
   return {
     sessions,
     read,
@@ -123,22 +140,26 @@ function harness(
     live,
     gateway,
     publish,
-    emitChanged,
-    admit(
-      row: GatewaySessionRow,
-      source: "read" | "event",
-      reconcile = sessions.captureReconcile(),
-    ) {
-      if (source === "read") {
-        expect(reconcile(row, undefined, { archivedFilter: "all" })).toBe(true);
-      } else {
-        emitChanged(row);
-      }
+    emitChanged(payload: unknown) {
+      eventListeners.forEach((listener) =>
+        listener({ type: "event", event: "sessions.changed", payload, seq: 1 }),
+      );
     },
     changeCredentials() {
-      gateway.connectionRevision += 1;
+      connectionRevision += 1;
     },
-    connect(profileId = "profile-one") {
+    connect(
+      profileId = "profile-one",
+      method:
+        | "token"
+        | "device-token"
+        | "trusted-proxy"
+        | "password"
+        | "tailscale"
+        | "bootstrap-token"
+        | "none"
+        | undefined = "token",
+    ) {
       publish({
         phase: "connected",
         client,
@@ -146,12 +167,7 @@ function harness(
         hello: {
           type: "hello-ok",
           protocol: 1,
-          auth: {
-            method: "token",
-            deviceToken: "test-token",
-            role: "operator",
-            scopes: ["operator.read"],
-          },
+          auth: { method, deviceToken: "test-token", role: "operator", scopes: ["operator.read"] },
         },
       });
     },
@@ -255,17 +271,22 @@ describe("session capability warm roster", () => {
         archived: false,
       };
       const reconcile = h.sessions.captureReconcile();
-      h.emitChanged({ ...history, updatedAt, label: "Event name" });
-      expect(h.sessions.state.result?.sessions.find((row) => row.key === history.key)?.label).toBe(
-        "Event name",
-      );
-      reconcile(history);
-      expect(
-        h.sessions.state.result?.sessions.find((row) => row.key === history.key),
-      ).toMatchObject({
-        label: updatedAt > history.updatedAt ? "Event name" : history.label,
-        updatedAt: Math.max(updatedAt, history.updatedAt),
-      });
+      try {
+        h.emitChanged({ ...history, updatedAt, label: "Event name" });
+        expect(
+          h.sessions.state.result?.sessions.find((row) => row.key === history.key)?.label,
+        ).toBe("Event name");
+        reconcile(history);
+        expect(
+          h.sessions.state.result?.sessions.find((row) => row.key === history.key),
+        ).toMatchObject({
+          label: updatedAt > history.updatedAt ? "Event name" : history.label,
+          updatedAt: Math.max(updatedAt, history.updatedAt),
+        });
+      } finally {
+        h.sessions.dispose();
+        h.live.resolve(sessionsResult([history], 2));
+      }
     },
   );
 
@@ -281,60 +302,65 @@ describe("session capability warm roster", () => {
       const cancelFrame = vi.fn();
       vi.stubGlobal("cancelAnimationFrame", cancelFrame);
       const cached = createDeferred<BootRoster | null>();
-      onTestFinished(() => cached.resolve(null));
       const h = harness({ cached: cached.promise });
       const settlement = h.sessions.whenCachedRosterSettled();
       const settled = vi.fn();
       void settlement.then(settled);
-      expect(h.sessions.cachedRoutingDefaults).toEqual({ mainKey: "main", scope: "per-sender" });
-      expect(h.sessions.state.groups).toEqual(["Work"]);
-      expect(h.sessions.state.result).toBeNull();
-      cached.resolve(roster());
-      const frame = await Promise.race([
-        queued.promise,
-        settlement.then(() => {
-          throw new Error("Cached route settled before yielding to a browser frame");
-        }),
-      ]);
-      expect(settled).not.toHaveBeenCalled();
-      expect(h.sessions.state).toMatchObject({
-        result: roster().result,
-        resultCached: true,
-        agentId: "main",
-      });
-      expect(h.sessions.canonicalListRevision).toBe(0);
-      expect(h.request).not.toHaveBeenCalled();
-      expect(h.sessions.captureBootRoster()).toBeNull();
-      if (release === "connect" || release === "dispose") {
-        if (release === "connect") {
-          h.connect();
-        } else {
-          h.sessions.dispose();
-        }
-        await Promise.resolve();
-        expect(settled).toHaveBeenCalledOnce();
-        expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
-      }
-      const currentResult = h.sessions.state.result;
-      if (release === "frame") {
-        frame(16);
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        // rAF callbacks precede paint; routing must wait for the following task.
+      try {
+        expect(h.sessions.cachedRoutingDefaults).toEqual({ mainKey: "main", scope: "per-sender" });
+        expect(h.sessions.state.groups).toEqual(["Work"]);
+        expect(h.sessions.state.result).toBeNull();
+        cached.resolve(roster());
+        const frame = await Promise.race([
+          queued.promise,
+          settlement.then(() => {
+            throw new Error("Cached route settled before yielding to a browser frame");
+          }),
+        ]);
         expect(settled).not.toHaveBeenCalled();
-        await vi.advanceTimersByTimeAsync(0);
-      } else {
-        await vi.advanceTimersByTimeAsync(100);
-        expect(cancelFrame).toHaveBeenCalledWith(1);
-      }
-      await settlement;
-      expect(settled).toHaveBeenCalledOnce();
-      expect(h.sessions.state.result).toBe(currentResult);
-      if (release === "frame" || release === "background") {
-        h.publish({ phase: "reconnecting" });
-        expect(h.sessions.state.result?.sessions).toHaveLength(2);
-        expect(h.sessions.state.resultCached).toBe(true);
+        expect(h.sessions.state).toMatchObject({
+          result: roster().result,
+          resultCached: true,
+          agentId: "main",
+        });
+        expect(h.sessions.canonicalListRevision).toBe(0);
+        expect(h.request).not.toHaveBeenCalled();
+        expect(h.sessions.captureBootRoster()).toBeNull();
+        if (release === "connect" || release === "dispose") {
+          if (release === "connect") {
+            h.connect();
+          } else {
+            h.sessions.dispose();
+          }
+          await Promise.resolve();
+          expect(settled).toHaveBeenCalledOnce();
+          expect(h.sessions.cachedRoutingDefaults).toBeUndefined();
+        }
+        const currentResult = h.sessions.state.result;
+        if (release === "frame") {
+          frame(16);
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          // rAF callbacks precede paint; routing must wait for the following task.
+          expect(settled).not.toHaveBeenCalled();
+          await vi.advanceTimersByTimeAsync(0);
+        } else {
+          await vi.advanceTimersByTimeAsync(100);
+          expect(cancelFrame).toHaveBeenCalledWith(1);
+        }
+        await settlement;
+        expect(settled).toHaveBeenCalledOnce();
+        expect(h.sessions.state.result).toBe(currentResult);
+        if (release === "frame" || release === "background") {
+          h.publish({ phase: "reconnecting" });
+          expect(h.sessions.state.result?.sessions).toHaveLength(2);
+          expect(h.sessions.state.resultCached).toBe(true);
+        }
+      } finally {
+        h.sessions.dispose();
+        cached.resolve(null);
+        h.live.resolve(sessionsResult([], 2));
       }
     },
   );
@@ -402,29 +428,40 @@ describe("session capability warm roster", () => {
       const h = harness();
       const canonical = directRow("live", { sessionId: "live" });
       const live = sessionsResult([canonical], 2);
-      await connectCached(h);
-      const observed = {
-        key: selected ? "agent:main:deleted" : "agent:main:kept",
-        sessionId: selected ? "deleted" : "kept",
-        kind: "direct" as const,
-        updatedAt: 3,
-        label: "Confirmed live descriptor",
-        archived: source === "read" || selected,
-        status: "done" as const,
-        hasActiveRun: false,
-      };
-      h.admit(observed, source);
-      const accepted = h.sessions.state.result?.sessions.find((row) => row.key === observed.key);
-      expect(accepted).toMatchObject(observed);
-      expect(h.sessions.state.resultCached).toBe(true);
-      expect(h.sessions.captureBootRoster()).toBeNull();
+      try {
+        await connectCached(h);
+        const observed = {
+          key: selected ? "agent:main:deleted" : "agent:main:kept",
+          sessionId: selected ? "deleted" : "kept",
+          kind: "direct" as const,
+          updatedAt: 3,
+          label: "Confirmed live descriptor",
+          archived: source === "read" || selected,
+          status: "done" as const,
+          hasActiveRun: false,
+        };
+        if (source === "read") {
+          expect(
+            h.sessions.captureReconcile()(observed, undefined, { archivedFilter: "all" }),
+          ).toBe(true);
+        } else {
+          h.emitChanged(observed);
+        }
+        const accepted = h.sessions.state.result?.sessions.find((row) => row.key === observed.key);
+        expect(accepted).toMatchObject(observed);
+        expect(h.sessions.state.resultCached).toBe(true);
+        expect(h.sessions.captureBootRoster()).toBeNull();
 
-      h.live.resolve(live);
-      await vi.waitFor(() => expect(h.sessions.state.resultCached).toBe(false));
-      const expected = selected ? [canonical, accepted] : [canonical];
-      expect(h.sessions.state.result?.sessions).toEqual(expected);
-      expect(h.sessions.state.result?.count).toBe(expected.length);
-      expect(h.sessions.canonicalListRevision).toBe(1);
+        h.live.resolve(live);
+        await vi.waitFor(() => expect(h.sessions.state.resultCached).toBe(false));
+        const expected = selected ? [canonical, accepted] : [canonical];
+        expect(h.sessions.state.result?.sessions).toEqual(expected);
+        expect(h.sessions.state.result?.count).toBe(expected.length);
+        expect(h.sessions.canonicalListRevision).toBe(1);
+      } finally {
+        h.sessions.dispose();
+        h.live.resolve(live);
+      }
     },
   );
 
@@ -462,35 +499,50 @@ describe("session capability warm roster", () => {
         hasActiveRun: false,
       };
       const canonical = sessionsResult([], 4);
-      onTestFinished(() => replacement.resolve(canonical));
-      await h.sessions.whenCachedRosterSettled();
-      h.connect();
-      await vi.waitFor(() => expect(lists).toBe(1));
-      const retiredReconcile = h.sessions.captureReconcile();
-      h.admit(previous, source, retiredReconcile);
-      expect(h.sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject(
-        previous,
-      );
-      expect(h.sessions.state.resultCached).toBe(true);
+      try {
+        await h.sessions.whenCachedRosterSettled();
+        h.connect();
+        await vi.waitFor(() => expect(lists).toBe(1));
+        const retiredReconcile = h.sessions.captureReconcile();
+        if (source === "read") {
+          expect(retiredReconcile(previous, undefined, { archivedFilter: "all" })).toBe(true);
+        } else {
+          h.emitChanged(previous);
+        }
+        expect(h.sessions.state.result?.sessions.find((row) => row.key === key)).toMatchObject(
+          previous,
+        );
+        expect(h.sessions.state.resultCached).toBe(true);
 
-      h.publish({ phase: "reconnecting" });
-      h.connect();
-      await vi.waitFor(() => expect(lists).toBe(2));
-      expect(retiredReconcile(previous, undefined, { archivedFilter: "all" })).toBe(false);
-      const current = { ...previous, label: "Current connection", status: "failed" as const };
-      if (observeAfterReconnect) {
-        h.admit(current, source);
+        h.publish({ phase: "reconnecting" });
+        h.connect();
+        await vi.waitFor(() => expect(lists).toBe(2));
+        expect(retiredReconcile(previous, undefined, { archivedFilter: "all" })).toBe(false);
+        const current = { ...previous, label: "Current connection", status: "failed" as const };
+        if (observeAfterReconnect) {
+          if (source === "read") {
+            expect(
+              h.sessions.captureReconcile()(current, undefined, { archivedFilter: "all" }),
+            ).toBe(true);
+          } else {
+            h.emitChanged(current);
+          }
+        }
+        const accepted = h.sessions.state.result?.sessions.find((row) => row.key === key);
+        expect(accepted?.label).toBe(observeAfterReconnect ? current.label : previous.label);
+        expect(h.sessions.captureBootRoster()).toBeNull();
+
+        h.live.resolve(sessionsResult([previous], 3));
+        await Promise.resolve();
+        expect(h.sessions.state.resultCached).toBe(true);
+        replacement.resolve(canonical);
+        await vi.waitFor(() => expect(h.sessions.state.resultCached).toBe(false));
+        expect(h.sessions.state.result?.sessions).toEqual(observeAfterReconnect ? [accepted] : []);
+      } finally {
+        h.sessions.dispose();
+        h.live.resolve(canonical);
+        replacement.resolve(canonical);
       }
-      const accepted = h.sessions.state.result?.sessions.find((row) => row.key === key);
-      expect(accepted?.label).toBe(observeAfterReconnect ? current.label : previous.label);
-      expect(h.sessions.captureBootRoster()).toBeNull();
-
-      h.live.resolve(sessionsResult([previous], 3));
-      await Promise.resolve();
-      expect(h.sessions.state.resultCached).toBe(true);
-      replacement.resolve(canonical);
-      await vi.waitFor(() => expect(h.sessions.state.resultCached).toBe(false));
-      expect(h.sessions.state.result?.sessions).toEqual(observeAfterReconnect ? [accepted] : []);
     },
   );
 

@@ -55,6 +55,8 @@ it.each([
   ["fast JSON", false],
   ["all", false],
   ["text", true],
+  ["fast JSON", true],
+  ["all", true],
 ] as const)(
   "preserves schema refusal (%s, service inspection unavailable=%s)",
   async (mode, unavailable) => {
