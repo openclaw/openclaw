@@ -118,141 +118,6 @@ type RunIsolatedCompletionParams = {
   streamParams?: AgentHarnessIsolatedCompletionParamsV2["streamParams"];
 };
 
-async function runCliIsolatedCompletion(
-  request: RunIsolatedCompletionParams & {
-    config: OpenClawConfig;
-    agentId: string;
-    agentDir: string;
-    workspaceDir: string;
-  },
-  provider: string,
-  modelProvider: string,
-  diagnostics: IsolatedCompletionDiagnostics,
-  remainingTimeoutMs: () => number,
-): Promise<IsolatedCompletionResult> {
-  return await withTempWorkspace(
-    { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-isolated-completion-" },
-    async ({ dir }) => {
-      const { runCliAgent } = await import("./cli-runner.runtime.js");
-      request.assertCurrent?.();
-      const { cliBackendAcceptsAuthProfileForwarding, resolveCliExecutionAuthProfileId } =
-        await import("./cli-execution-auth.js");
-      request.assertCurrent?.();
-      // Fresh completions use the same account order as new CLI sessions.
-      const authProfileId = cliBackendAcceptsAuthProfileForwarding({
-        provider,
-        config: request.config,
-        agentId: request.agentId,
-      })
-        ? await resolveCliExecutionAuthProfileId({
-            cliExecutionProvider: provider,
-            authProfileProvider: modelProvider,
-            config: request.config,
-            agentDir: request.agentDir,
-            selected: { authProfileId: request.authProfileId },
-          })
-        : request.authProfileId;
-      request.assertCurrent?.();
-      const sessionId = `isolated-completion-${randomUUID()}`;
-      const config = request.config;
-      const preparedRunAdmission = prepareSystemAgentRunAdmission(
-        config,
-        sessionId,
-        request.agentId,
-        "isolated-completion",
-        request.assertCurrent,
-        request.operatorAuthority,
-      );
-      try {
-        request.assertCurrent?.();
-        const dispatch = () =>
-          runCliAgent({
-            preparedRunAdmission,
-            sessionId,
-            sessionFile: path.join(dir, "session.json"),
-            workspaceDir: request.workspaceDir,
-            cwd: dir,
-            agentDir: request.agentDir,
-            agentId: request.agentId,
-            config,
-            prompt: request.prompt,
-            extraSystemPrompt: request.systemPrompt,
-            timeoutMs: remainingTimeoutMs(),
-            runId: sessionId,
-            provider,
-            modelProvider,
-            requesterModel: { provider: modelProvider, model: request.model },
-            model: request.model,
-            authProfileId,
-            thinkLevel: request.thinkLevel,
-            streamParams: resolveIsolatedStreamParams(request),
-            abortSignal: request.abortSignal,
-            assertCurrent: request.assertCurrent,
-            mapOperatorAuthorizationError: request.mapOperatorAuthorizationError,
-            executionMode: "side-question",
-            cliToolAvailability: { native: [], openClaw: [] },
-            disableTools: true,
-            disableCliLiveSession: true,
-            cleanupCliLiveSessionOnRunEnd: true,
-            cleanupBundleMcpOnRunEnd: true,
-            requireExplicitMessageTarget: true,
-            isolatedCompletion: true,
-            isolatedCompletionPurpose: request.purpose ?? "isolated-completion",
-            outputTextPolicy: request.outputTextPolicy,
-          });
-        const result = await (diagnostics ? diagnostics.dispatch("cli", dispatch) : dispatch());
-        if (hasCliSideEffectEvidence(result)) {
-          throw new IsolatedCompletionError(
-            "output-rejected",
-            "Isolated CLI completion returned side-effect evidence; result rejected.",
-          );
-        }
-        const payloads = result.payloads ?? [];
-        if (
-          payloads.some(
-            (payload) =>
-              payload.isError ||
-              payload.mediaUrl ||
-              payload.mediaUrls?.length ||
-              payload.audioAsVoice ||
-              payload.channelData,
-          )
-        ) {
-          throw new IsolatedCompletionError(
-            "output-rejected",
-            "Isolated CLI completion returned non-text output; result rejected.",
-          );
-        }
-        const text = payloads
-          .filter((payload) => !payload.isReasoning && payload.text !== undefined)
-          .map((payload) => payload.text ?? "")
-          .join("\n")
-          .trim();
-        const backend = resolveCliBackendConfig(provider, request.config, {
-          agentId: request.agentId,
-        });
-        if (!backend) {
-          throw new IsolatedCompletionError(
-            "runtime-unavailable",
-            `CLI backend ${provider} became unavailable after execution.`,
-          );
-        }
-        const { usage, diagnosticUsage } = result.meta?.agentMeta ?? {};
-        return {
-          text,
-          provider: modelProvider,
-          model: normalizeCliModel(request.model, backend.config),
-          owner: { kind: "cli", id: provider },
-          ...(usage ? { usage } : {}),
-          ...(diagnosticUsage ? { diagnosticUsage } : {}),
-        };
-      } finally {
-        preparedRunAdmission.close();
-      }
-    },
-  );
-}
-
 /** Run one fresh completion with the selected runtime's documented isolation boundary. */
 export async function runIsolatedCompletion(
   params: RunIsolatedCompletionParams,
@@ -435,12 +300,127 @@ async function runIsolatedCompletionOwned(
         ...context,
       });
       if (cliOwner) {
-        return await runCliIsolatedCompletion(
-          request,
-          cliOwner,
-          provider,
-          diagnostics,
-          remainingTimeoutMs,
+        return await withTempWorkspace(
+          { rootDir: resolvePreferredOpenClawTmpDir(), prefix: "openclaw-isolated-completion-" },
+          async ({ dir }) => {
+            const { runCliAgent } = await import("./cli-runner.runtime.js");
+            request.assertCurrent?.();
+            const { cliBackendAcceptsAuthProfileForwarding, resolveCliExecutionAuthProfileId } =
+              await import("./cli-execution-auth.js");
+            request.assertCurrent?.();
+            // Fresh completions use the same account order as new CLI sessions.
+            const authProfileId = cliBackendAcceptsAuthProfileForwarding({
+              provider: cliOwner,
+              config: request.config,
+              agentId: request.agentId,
+            })
+              ? await resolveCliExecutionAuthProfileId({
+                  cliExecutionProvider: cliOwner,
+                  authProfileProvider: provider,
+                  config: request.config,
+                  agentDir: request.agentDir,
+                  selected: { authProfileId: request.authProfileId },
+                })
+              : request.authProfileId;
+            request.assertCurrent?.();
+            const sessionId = `isolated-completion-${randomUUID()}`;
+            const preparedRunAdmission = prepareSystemAgentRunAdmission(
+              config,
+              sessionId,
+              request.agentId,
+              "isolated-completion",
+              request.assertCurrent,
+              request.operatorAuthority,
+            );
+            try {
+              request.assertCurrent?.();
+              const dispatch = () =>
+                runCliAgent({
+                  preparedRunAdmission,
+                  sessionId,
+                  sessionFile: path.join(dir, "session.json"),
+                  workspaceDir: request.workspaceDir,
+                  cwd: dir,
+                  agentDir: request.agentDir,
+                  agentId: request.agentId,
+                  config,
+                  prompt: request.prompt,
+                  extraSystemPrompt: request.systemPrompt,
+                  timeoutMs: remainingTimeoutMs(),
+                  runId: sessionId,
+                  provider: cliOwner,
+                  modelProvider: provider,
+                  requesterModel: { provider, model: request.model },
+                  model: request.model,
+                  authProfileId,
+                  thinkLevel: request.thinkLevel,
+                  streamParams: resolveIsolatedStreamParams(request),
+                  abortSignal: request.abortSignal,
+                  assertCurrent: request.assertCurrent,
+                  mapOperatorAuthorizationError: request.mapOperatorAuthorizationError,
+                  executionMode: "side-question",
+                  cliToolAvailability: { native: [], openClaw: [] },
+                  disableTools: true,
+                  disableCliLiveSession: true,
+                  cleanupCliLiveSessionOnRunEnd: true,
+                  cleanupBundleMcpOnRunEnd: true,
+                  requireExplicitMessageTarget: true,
+                  isolatedCompletion: true,
+                  isolatedCompletionPurpose: request.purpose ?? "isolated-completion",
+                  outputTextPolicy: request.outputTextPolicy,
+                });
+              const result = await (diagnostics
+                ? diagnostics.dispatch("cli", dispatch)
+                : dispatch());
+              if (hasCliSideEffectEvidence(result)) {
+                throw new IsolatedCompletionError(
+                  "output-rejected",
+                  "Isolated CLI completion returned side-effect evidence; result rejected.",
+                );
+              }
+              const payloads = result.payloads ?? [];
+              if (
+                payloads.some(
+                  (payload) =>
+                    payload.isError ||
+                    payload.mediaUrl ||
+                    payload.mediaUrls?.length ||
+                    payload.audioAsVoice ||
+                    payload.channelData,
+                )
+              ) {
+                throw new IsolatedCompletionError(
+                  "output-rejected",
+                  "Isolated CLI completion returned non-text output; result rejected.",
+                );
+              }
+              const text = payloads
+                .filter((payload) => !payload.isReasoning && payload.text !== undefined)
+                .map((payload) => payload.text ?? "")
+                .join("\n")
+                .trim();
+              const backend = resolveCliBackendConfig(cliOwner, request.config, {
+                agentId: request.agentId,
+              });
+              if (!backend) {
+                throw new IsolatedCompletionError(
+                  "runtime-unavailable",
+                  `CLI backend ${cliOwner} became unavailable after execution.`,
+                );
+              }
+              const { usage, diagnosticUsage } = result.meta?.agentMeta ?? {};
+              return {
+                text,
+                provider,
+                model: normalizeCliModel(request.model, backend.config),
+                owner: { kind: "cli", id: cliOwner },
+                ...(usage ? { usage } : {}),
+                ...(diagnosticUsage ? { diagnosticUsage } : {}),
+              };
+            } finally {
+              preparedRunAdmission.close();
+            }
+          },
         );
       }
 

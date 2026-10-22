@@ -6,7 +6,7 @@ import type { Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { Command } from "commander";
-import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { TEST_TLS_CERT_PEM, TEST_TLS_KEY_PEM } from "../../../test/helpers/tls-fixture.js";
@@ -49,6 +49,7 @@ import {
   findForeignLaunchdJobs,
   findStaleOpenClawUpdateLaunchdJobs,
   formatPortDiagnostics,
+  freePort,
   inspectGatewayTlsCertificate,
   inspectPortConnections,
   inspectPortUsage,
@@ -58,7 +59,10 @@ import {
   type PortUsageInspectionOptions,
   type PortUsageTestSummary,
 } from "./status.gather.probes.test-support.js";
-import { registerServiceInspectionStatusTests } from "./status.gather.service-inspection.test-support.js";
+import {
+  createStatusCommand,
+  registerServiceInspectionStatusTests,
+} from "./status.gather.service-inspection.test-support.js";
 import { registerStatusTimeoutTests } from "./status.gather.timeout.test-support.js";
 
 const readFile = fs.readFile.bind(fs);
@@ -122,6 +126,19 @@ const daemonEnvironment = {
   OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
   OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
 };
+function officialPlugin(pluginId = "whatsapp", resolvedVersion = "2026.5.4") {
+  return {
+    [pluginId]: { source: "npm", resolvedName: `@openclaw/${pluginId}`, resolvedVersion },
+  };
+}
+
+async function useRealSchemaPreflight(env: Record<string, string>) {
+  const actual = await vi.importActual<typeof import("../../state/openclaw-database-preflight.js")>(
+    "../../state/openclaw-database-preflight.js",
+  );
+  preflightOpenClawDatabaseSchemas.mockImplementation(actual.preflightOpenClawDatabaseSchemas);
+  serviceReadCommand.mockResolvedValueOnce(serviceCommand(env));
+}
 function serviceCommand(environment: Record<string, string> = daemonEnvironment) {
   return {
     programArguments: ["/bin/node", "cli", "gateway", "--port", "19001"],
@@ -471,27 +488,10 @@ describe("gatherDaemonStatus", () => {
     }));
     inspectGatewayTlsCertificate.mockClear();
     inspectGatewayRestart.mockClear();
-    inspectPortUsage.mockReset();
-    inspectPortUsage.mockImplementation(async (port: number) => ({
-      port,
-      status: "free" as const,
-      listeners: [],
-      hints: [],
-    }));
-    inspectPortUsages.mockReset();
-    inspectPortUsages.mockImplementation(async (ports: readonly number[]) => {
-      return new Map(
-        ports.map((port) => [
-          port,
-          {
-            port,
-            status: "free" as const,
-            listeners: [],
-            hints: [],
-          },
-        ]),
-      );
-    });
+    inspectPortUsage.mockReset().mockImplementation(async (port) => freePort(port));
+    inspectPortUsages
+      .mockReset()
+      .mockImplementation(async (ports) => new Map(ports.map((port) => [port, freePort(port)])));
     inspectPortConnections.mockClear();
     formatPortDiagnostics.mockReset().mockReturnValue(["port diagnostics"]);
     inspectWindowsGatewayFirewall.mockClear();
@@ -860,39 +860,36 @@ describe("gatherDaemonStatus", () => {
     registerGatewayCli(program);
     registerDaemonCli(program);
     const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    try {
-      await program.parseAsync([...argv, "--json"], { from: "user" });
+    onTestFinished(() => writeJson.mockRestore());
+    await program.parseAsync([...argv, "--json"], { from: "user" });
 
-      expect(callGatewayStatusProbe).toHaveBeenCalledWith(
-        expect.objectContaining({
-          url: "ws://127.0.0.1:19002",
-          localPortOverride: 19002,
-          config: {
-            gateway: {
-              bind: "loopback",
-              mode: "local",
-              remote: undefined,
-              auth: undefined,
-              tls: undefined,
-            },
+    expect(callGatewayStatusProbe).toHaveBeenCalledWith(
+      expect.objectContaining({
+        url: "ws://127.0.0.1:19002",
+        localPortOverride: 19002,
+        config: {
+          gateway: {
+            bind: "loopback",
+            mode: "local",
+            remote: undefined,
+            auth: undefined,
+            tls: undefined,
           },
-          configPath: "/tmp/openclaw-cli/openclaw.json",
+        },
+        configPath: "/tmp/openclaw-cli/openclaw.json",
+      }),
+    );
+    expect(writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        gateway: expect.objectContaining({
+          port: 19002,
+          portSource: "cli",
+          probeUrl: "ws://127.0.0.1:19002",
         }),
-      );
-      expect(writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          gateway: expect.objectContaining({
-            port: 19002,
-            portSource: "cli",
-            probeUrl: "ws://127.0.0.1:19002",
-          }),
-          rpc: expect.objectContaining({ url: "ws://127.0.0.1:19002" }),
-          service: expect.objectContaining({ targetRole: "diagnostic-only" }),
-        }),
-      );
-    } finally {
-      writeJson.mockRestore();
-    }
+        rpc: expect.objectContaining({ url: "ws://127.0.0.1:19002" }),
+        service: expect.objectContaining({ targetRole: "diagnostic-only" }),
+      }),
+    );
   });
 
   it("keeps an explicit local port in remote config when probing", async () => {
@@ -1035,13 +1032,7 @@ describe("gatherDaemonStatus", () => {
         url: "ws://127.0.0.1:18900",
         error: "connect ECONNREFUSED 127.0.0.1:18900",
       });
-      loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
-        whatsapp: {
-          source: "npm",
-          resolvedName: "@openclaw/whatsapp",
-          resolvedVersion: "2026.5.4",
-        },
-      } as never);
+      loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(officialPlugin());
 
       const status = await gatherStatus({
         requireRpc: true,
@@ -1163,44 +1154,30 @@ describe("gatherDaemonStatus", () => {
       database.close();
     }
     const before = await fs.readFile(databasePath);
-    const originalPreflight = await vi.importActual<
-      typeof import("../../state/openclaw-database-preflight.js")
-    >("../../state/openclaw-database-preflight.js");
-    preflightOpenClawDatabaseSchemas.mockImplementation(
-      originalPreflight.preflightOpenClawDatabaseSchemas,
-    );
-    serviceReadCommand.mockResolvedValueOnce(serviceCommand(env));
-    const program = new Command().enablePositionalOptions().exitOverride();
-    registerGatewayCli(program);
+    await useRealSchemaPreflight(env);
+    const { program, exit } = createStatusCommand();
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
     const error = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
-      throw new Error("status-exit");
-    });
-    try {
-      await expect(
-        program
-          .parseAsync(["gateway", "status", "--deep", "--no-probe"], { from: "user" })
-          .then(() => undefined),
-      ).rejects.toThrow("status-exit");
-      const output = error.mock.calls.flat().join("\n");
-      expect(output).toContain("Gateway refused startup");
-      expect(output).toContain(`schema ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
-      expect(output).toContain(`this build supports ${OPENCLAW_STATE_SCHEMA_VERSION}`);
-      expect(output).toContain("writer build 2026.9.4");
-      expect(output).toContain(`Refused by OpenClaw ${VERSION}`);
-      expect(output).toContain("pre-upgrade backup");
-      expect(exit).toHaveBeenCalledWith(1);
-      expect(createConfigIOCalls).not.toHaveBeenCalled();
-      expect(readGatewayLastShutdownAsync).not.toHaveBeenCalled();
-      expect(await fs.readFile(databasePath)).toEqual(before);
-    } finally {
+    onTestFinished(() => {
       log.mockRestore();
       error.mockRestore();
-      writeJson.mockRestore();
-      exit.mockRestore();
-    }
+    });
+    await expect(
+      program
+        .parseAsync(["gateway", "status", "--deep", "--no-probe"], { from: "user" })
+        .then(() => undefined),
+    ).rejects.toThrow("status-exit");
+    const output = error.mock.calls.flat().join("\n");
+    expect(output).toContain("Gateway refused startup");
+    expect(output).toContain(`schema ${OPENCLAW_STATE_SCHEMA_VERSION + 1}`);
+    expect(output).toContain(`this build supports ${OPENCLAW_STATE_SCHEMA_VERSION}`);
+    expect(output).toContain("writer build 2026.9.4");
+    expect(output).toContain(`Refused by OpenClaw ${VERSION}`);
+    expect(output).toContain("pre-upgrade backup");
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(createConfigIOCalls).not.toHaveBeenCalled();
+    expect(readGatewayLastShutdownAsync).not.toHaveBeenCalled();
+    expect(await fs.readFile(databasePath)).toEqual(before);
   });
 
   it("reports an unreadable state database instead of a config read failure", async () => {
@@ -1210,36 +1187,20 @@ describe("gatherDaemonStatus", () => {
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     await fs.writeFile(databasePath, "not a sqlite database ".repeat(256));
     const before = await fs.readFile(databasePath);
-    const originalPreflight = await vi.importActual<
-      typeof import("../../state/openclaw-database-preflight.js")
-    >("../../state/openclaw-database-preflight.js");
-    preflightOpenClawDatabaseSchemas.mockImplementation(
-      originalPreflight.preflightOpenClawDatabaseSchemas,
-    );
-    serviceReadCommand.mockResolvedValueOnce(serviceCommand(env));
-    const program = new Command().enablePositionalOptions().exitOverride();
-    registerGatewayCli(program);
-    const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
-      throw new Error("status-exit");
-    });
-    try {
-      await expect(
-        program
-          .parseAsync(["gateway", "status", "--deep", "--no-probe", "--json"], { from: "user" })
-          .then(() => undefined),
-      ).rejects.toThrow("status-exit");
-      const output = JSON.stringify(writeJson.mock.calls);
-      expect(output).toContain(`shared state database is unreadable at ${databasePath}`);
-      expect(output).toContain("restore this file from a verified backup");
-      expect(output).not.toContain("CONFIG_READ_FAILED");
-      expect(exit).toHaveBeenCalledWith(1);
-      expect(createConfigIOCalls).not.toHaveBeenCalled();
-      expect(await fs.readFile(databasePath)).toEqual(before);
-    } finally {
-      writeJson.mockRestore();
-      exit.mockRestore();
-    }
+    await useRealSchemaPreflight(env);
+    const { program, writeJson, exit } = createStatusCommand();
+    await expect(
+      program
+        .parseAsync(["gateway", "status", "--deep", "--no-probe", "--json"], { from: "user" })
+        .then(() => undefined),
+    ).rejects.toThrow("status-exit");
+    const output = JSON.stringify(writeJson.mock.calls);
+    expect(output).toContain(`shared state database is unreadable at ${databasePath}`);
+    expect(output).toContain("restore this file from a verified backup");
+    expect(output).not.toContain("CONFIG_READ_FAILED");
+    expect(exit).toHaveBeenCalledWith(1);
+    expect(createConfigIOCalls).not.toHaveBeenCalled();
+    expect(await fs.readFile(databasePath)).toEqual(before);
   });
 
   it("keeps readable shutdown history when a registered agent database has a newer schema", async () => {
@@ -1269,14 +1230,8 @@ describe("gatherDaemonStatus", () => {
     } finally {
       agent.close();
     }
-    const originalPreflight = await vi.importActual<
-      typeof import("../../state/openclaw-database-preflight.js")
-    >("../../state/openclaw-database-preflight.js");
-    preflightOpenClawDatabaseSchemas.mockImplementation(
-      originalPreflight.preflightOpenClawDatabaseSchemas,
-    );
+    await useRealSchemaPreflight(env);
     readGatewayLastShutdownAsync.mockImplementation(originalReadGatewayLastShutdown);
-    serviceReadCommand.mockResolvedValueOnce(serviceCommand(env));
 
     const status = await gatherStatus({ deep: true, probe: false });
 
@@ -1327,7 +1282,7 @@ describe("gatherDaemonStatus", () => {
           OPENCLAW_LAUNCHD_LABEL: "ai.openclaw.manual-update.gateway",
         },
       });
-      findStaleOpenClawUpdateLaunchdJobs.mockResolvedValueOnce([
+      const jobs = [
         {
           label: "ai.openclaw.update.2026.5.12",
           lastExitStatus: 127,
@@ -1336,7 +1291,8 @@ describe("gatherDaemonStatus", () => {
           label: "ai.openclaw.manual-update.1717168800",
           lastExitStatus: 0,
         },
-      ]);
+      ];
+      findStaleOpenClawUpdateLaunchdJobs.mockResolvedValueOnce(structuredClone(jobs));
 
       const status = await gatherStatus({ probe: false, deep: true });
 
@@ -1344,16 +1300,7 @@ describe("gatherDaemonStatus", () => {
       expect(staleScanEnv?.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-daemon");
       expect(staleScanEnv?.OPENCLAW_CONFIG_PATH).toBe("/tmp/openclaw-daemon/openclaw.json");
       expect(staleScanEnv?.OPENCLAW_LAUNCHD_LABEL).toBe("ai.openclaw.manual-update.gateway");
-      expect(status.service.staleUpdateLaunchdJobs).toEqual([
-        {
-          label: "ai.openclaw.update.2026.5.12",
-          lastExitStatus: 127,
-        },
-        {
-          label: "ai.openclaw.manual-update.1717168800",
-          lastExitStatus: 0,
-        },
-      ]);
+      expect(status.service.staleUpdateLaunchdJobs).toEqual(jobs);
     },
   );
 
@@ -1391,33 +1338,23 @@ describe("gatherDaemonStatus", () => {
   });
 
   it("surfaces established gateway connections during deep status", async () => {
+    const client = {
+      pid: 4242,
+      ppid: 1,
+      command: "node",
+      commandLine: "node /tmp/newer-openclaw/dist/index.js logs --follow",
+      address: "TCP 127.0.0.1:50123->127.0.0.1:19001 (ESTABLISHED)",
+      direction: "client" as const,
+    };
     inspectPortConnections.mockResolvedValueOnce({
       port: 19001,
-      connections: [
-        {
-          pid: 4242,
-          ppid: 1,
-          command: "node",
-          commandLine: "node /tmp/newer-openclaw/dist/index.js logs --follow",
-          address: "TCP 127.0.0.1:50123->127.0.0.1:19001 (ESTABLISHED)",
-          direction: "client",
-        },
-      ],
+      connections: [structuredClone(client)],
     });
 
     const status = await gatherStatus({ probe: false, deep: true });
 
     expect(inspectPortConnections).toHaveBeenCalledWith(19001);
-    expect(status.connections?.established).toEqual([
-      {
-        pid: 4242,
-        ppid: 1,
-        command: "node",
-        commandLine: "node /tmp/newer-openclaw/dist/index.js logs --follow",
-        address: "TCP 127.0.0.1:50123->127.0.0.1:19001 (ESTABLISHED)",
-        direction: "client",
-      },
-    ]);
+    expect(status.connections?.established).toEqual([client]);
     const output = capturePrintedDaemonStatus(status, { json: false }).logs;
     expect(output).toContain("Established clients: 1");
     expect(output).toContain("pid=4242");
@@ -1657,10 +1594,7 @@ describe("gatherDaemonStatus", () => {
         await fs.writeFile(entrypoint, "gateway");
         serviceReadCommand.mockResolvedValueOnce({
           programArguments: [process.execPath, entrypoint, "gateway", "run"],
-          environment: {
-            OPENCLAW_STATE_DIR: "/tmp/openclaw-daemon",
-            OPENCLAW_CONFIG_PATH: "/tmp/openclaw-daemon/openclaw.json",
-          },
+          environment: daemonEnvironment,
         });
         serviceReadRuntime.mockResolvedValueOnce({ status: runtime });
         callGatewayStatusProbe.mockResolvedValueOnce(
@@ -1671,13 +1605,7 @@ describe("gatherDaemonStatus", () => {
               }
             : { ok: false, error: "connect failed" },
         );
-        loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
-          whatsapp: {
-            source: "npm",
-            resolvedName: "@openclaw/whatsapp",
-            resolvedVersion: "2026.5.4",
-          },
-        } as never);
+        loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(officialPlugin());
 
         const status = await gatherStatus({ pluginVersionTarget: "restart" });
 
@@ -1697,13 +1625,7 @@ describe("gatherDaemonStatus", () => {
   );
 
   it("reports unresolved restart readiness when the service package cannot be identified", async () => {
-    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
-      whatsapp: {
-        source: "npm",
-        resolvedName: "@openclaw/whatsapp",
-        resolvedVersion: "2026.5.4",
-      },
-    } as never);
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(officialPlugin());
     const status = await gatherStatus({ pluginVersionTarget: "restart" });
 
     expect(status.pluginVersionRestartReadiness).toEqual({
@@ -1715,13 +1637,7 @@ describe("gatherDaemonStatus", () => {
 
   it("reports unresolved restart readiness when a loaded service has no command", async () => {
     serviceReadCommand.mockResolvedValueOnce(null);
-    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce({
-      whatsapp: {
-        source: "npm",
-        resolvedName: "@openclaw/whatsapp",
-        resolvedVersion: "2026.5.4",
-      },
-    } as never);
+    loadInstalledPluginIndexInstallRecords.mockResolvedValueOnce(officialPlugin());
 
     const status = await gatherStatus({ pluginVersionTarget: "restart" });
 

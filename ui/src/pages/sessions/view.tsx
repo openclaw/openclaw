@@ -6,7 +6,11 @@ import {
 import { createMemo, For, Repeat, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { ContextNewSessionAction } from "../../components/solid/new-session-link.tsx";
-import { SettingsPage, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import {
+  SettingsPage,
+  SettingsSection,
+  SettingsStatus,
+} from "../../components/solid/settings-ui.tsx";
 import { presenceViewerLabel } from "../../lib/presence-users.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -131,6 +135,11 @@ export function SessionsView(props: SessionsProps) {
         }
         actions={
           <>
+            <Show when={props.commandPending}>
+              <span role="status">
+                <SettingsStatus kind="muted" label={t("common.working")} />
+              </span>
+            </Show>
             <TranscriptSearchForm {...props} />
             <button
               class="btn btn--xs btn--icon sessions-toolbar__icon sessions-toolbar__refresh"
@@ -266,7 +275,9 @@ function SessionsTable(props: SessionsProps) {
             class="btn btn--sm danger"
             disabled={props.loading || Boolean(props.deleteSelectedDisabledReason)}
             title={props.deleteSelectedDisabledReason ?? undefined}
-            onClick={() => props.onDeleteSelected()}
+            onClick={() => {
+              void props.onDeleteSelected();
+            }}
           >
             <Icon name="trash" /> {t("sessionsView.deleteSelected")}
           </button>

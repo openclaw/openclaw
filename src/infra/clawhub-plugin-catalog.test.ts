@@ -2,7 +2,7 @@ import { Value } from "typebox/value";
 import { afterEach, expect, it, vi } from "vitest";
 import { PluginDiscoveryDetailSchema } from "../../packages/gateway-protocol/src/schema/plugins.js";
 import { joinClawHubPluginDetail } from "../plugins/catalog-discovery.js";
-import { jsonResponse, requestUrl } from "../test-helpers/http.js";
+import { jsonResponse } from "../test-helpers/http.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import {
   fetchClawHubPluginCatalog,
@@ -11,6 +11,7 @@ import {
   fetchClawHubPluginVersionCategories,
   fetchClawHubPluginDetail,
 } from "./clawhub-plugin-catalog.js";
+import { captureClawHubJson as mockResponse } from "./clawhub.test-support.js";
 
 const listingMetadata = {
   displayName: "Memory Plus",
@@ -38,14 +39,6 @@ const remoteCategory = {
   order: 1,
 };
 
-function mockResponse(value: unknown) {
-  return vi.spyOn(globalThis, "fetch").mockImplementation(async () => jsonResponse(value));
-}
-
-function requestedUrl(fetchImpl: ReturnType<typeof mockResponse>) {
-  return new URL(requestUrl(fetchImpl.mock.calls[0]![0]));
-}
-
 async function catalog(
   options: Parameters<typeof fetchClawHubPluginCatalog>[0],
   response: unknown = { items: [remotePlugin] },
@@ -55,7 +48,7 @@ async function catalog(
     baseUrl: "https://example.com",
     ...options,
   });
-  return { result, url: requestedUrl(fetchImpl), fetchImpl };
+  return { result, url: fetchImpl.url(), fetchImpl: fetchImpl.fetch };
 }
 
 function readCategories(categories: unknown[]) {
@@ -176,7 +169,7 @@ it("reads the bounded plugin overview in one request", async () => {
     baseUrl: "https://example.com",
   });
 
-  expect(requestedUrl(fetchImpl).pathname).toBe("/api/v1/plugins/overview");
+  expect(fetchImpl.url().pathname).toBe("/api/v1/plugins/overview");
   expect(result.categories).toEqual([remoteCategory]);
   expect(result.items).toEqual([
     expect.objectContaining({
@@ -185,7 +178,7 @@ it("reads the bounded plugin overview in one request", async () => {
       ...ranking,
     }),
   ]);
-  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(fetchImpl.fetch).toHaveBeenCalledOnce();
 });
 
 it("retains category priority identities from curated page metadata", async () => {
@@ -195,12 +188,6 @@ it("retains category priority identities from curated page metadata", async () =
     { items: [], categories: [category] },
   );
   expect(result).toEqual({ items: [], categories: [category] });
-});
-
-it("rejects ambiguous registry category priorities", async () => {
-  await expect(
-    readCategories([{ ...remoteCategory, pinnedPackages: ["@vendor/model", "@vendor/model"] }]),
-  ).rejects.toThrow("duplicate or invalid pinned package");
 });
 
 it("browses the combined plugin endpoint with an opaque cursor", async () => {
@@ -268,10 +255,11 @@ it("validates and restores canonical category ordering", async () => {
   expect(categories.map((category) => category.slug)).toEqual(["channels", "models"]);
 });
 
-it("rejects arbitrary category icon values", async () => {
-  await expect(readCategories([{ ...remoteCategory, icon: "lucide:wrench" }])).rejects.toThrow(
-    "invalid icon key",
-  );
+it.each([
+  [{ pinnedPackages: ["@vendor/model", "@vendor/model"] }, "duplicate or invalid pinned package"],
+  [{ icon: "lucide:wrench" }, "invalid icon key"],
+])("rejects invalid category %j", async (fields, error) => {
+  await expect(readCategories([{ ...remoteCategory, ...fields }])).rejects.toThrow(error);
 });
 
 it.each([
@@ -414,9 +402,9 @@ it.each([
     version: "1.2.2",
   });
 
-  const url = requestedUrl(fetchImpl);
+  const url = fetchImpl.url();
   expect(`${url.pathname}${url.search}`).toBe("/api/v1/packages/memory-plus/detail?version=1.2.2");
-  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(fetchImpl.fetch).toHaveBeenCalledOnce();
   expect(detail).toMatchObject({
     packageName: "memory-plus",
     iconUrl: `https://example.com${remotePlugin.icon}`,
@@ -544,7 +532,7 @@ it.each([undefined, {}])("keeps unreleased detail with optional security: %s", a
   );
   expect(detail.readme).toBeUndefined();
   expect(detail.security).toBeUndefined();
-  expect(fetchImpl).toHaveBeenCalledOnce();
+  expect(fetchImpl.fetch).toHaveBeenCalledOnce();
 });
 it.each([
   { blocked: true, securityVersion: "1.0.0", expected: "unavailable" },

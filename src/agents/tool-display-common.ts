@@ -276,45 +276,6 @@ function resolveWebFetchDetail(record: Record<string, unknown>): string | undefi
   return suffix ? `from ${url} (${suffix})` : `from ${url}`;
 }
 
-function resolveDetailFromKeys(
-  args: unknown,
-  keys: string[],
-  opts: {
-    mode: "first" | "summary";
-    coerce?: CoerceDisplayValueOptions;
-    formatKey?: (raw: string) => string;
-  },
-): string | undefined {
-  const entries: Array<{ label: string; value: string }> = [];
-  for (const key of keys) {
-    const value = lookupValueByPath(args, key);
-    const display = coerceDisplayValue(value, opts.coerce);
-    if (!display) {
-      continue;
-    }
-    if (opts.mode === "first") {
-      return display;
-    }
-    entries.push({ label: opts.formatKey ? opts.formatKey(key) : key, value: display });
-  }
-  if (entries.length === 0) {
-    return undefined;
-  }
-  if (entries.length === 1) {
-    return entries.at(0)?.value;
-  }
-
-  const unique = dedupeByKey(entries, (entry) => `${entry.label}:${entry.value}`);
-  const parts: string[] = [];
-  for (let index = 0; index < unique.length && index < 8; index += 1) {
-    const entry = unique[index];
-    if (entry) {
-      parts.push(`${entry.label} ${entry.value}`);
-    }
-  }
-  return parts.join(", ");
-}
-
 export function resolveToolDetailForArgs(params: {
   toolKey: string;
   args?: unknown;
@@ -354,11 +315,32 @@ export function resolveToolDetailForArgs(params: {
 
   const detailKeys = actionSpec?.detailKeys ?? spec?.detailKeys ?? fallbackDetailKeys ?? [];
   if (!detail && detailKeys.length > 0) {
-    detail = resolveDetailFromKeys(args, detailKeys, {
-      mode: detailMode,
-      coerce: detailCoerce,
-      formatKey: detailFormatKey,
-    });
+    const entries: Array<{ label: string; value: string }> = [];
+    for (const key of detailKeys) {
+      const value = lookupValueByPath(args, key);
+      const display = coerceDisplayValue(value, detailCoerce);
+      if (!display) {
+        continue;
+      }
+      if (detailMode === "first") {
+        detail = display;
+        break;
+      }
+      entries.push({ label: detailFormatKey ? detailFormatKey(key) : key, value: display });
+    }
+    if (entries.length === 1) {
+      detail = entries.at(0)?.value;
+    } else if (entries.length > 1) {
+      const unique = dedupeByKey(entries, (entry) => `${entry.label}:${entry.value}`);
+      const parts: string[] = [];
+      for (let index = 0; index < unique.length && index < 8; index += 1) {
+        const entry = unique[index];
+        if (entry) {
+          parts.push(`${entry.label} ${entry.value}`);
+        }
+      }
+      detail = parts.join(", ");
+    }
   }
   if (!detail && meta) {
     detail = meta;

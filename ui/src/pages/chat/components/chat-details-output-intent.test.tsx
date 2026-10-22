@@ -1,6 +1,8 @@
 /* @vitest-environment jsdom */
 import { expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { ChatDetailsSession } from "./chat-details-session.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
 
@@ -24,7 +26,6 @@ async function mountOutputs() {
         type: "document",
         download: { mode: "bytes" as const },
       })),
-      artifactsLoading: false,
       artifactsError: null,
       dashboard: null,
       dashboardError: null,
@@ -37,8 +38,8 @@ async function mountOutputs() {
   const view = mountSolid(() => <ChatDetailsSession props={value} presented desktop />);
   const element = view.container.querySelector("openclaw-chat-details-session")!;
   await element.updateComplete;
+  await waitForSolid(() => expect(element.querySelector(".chat-outputs__view-all")).not.toBeNull());
   const button = element.querySelector<HTMLButtonElement>(".chat-outputs__view-all")!;
-  expect(button).not.toBeNull();
   return { element, button, value, navigate };
 }
 
@@ -48,14 +49,30 @@ it("opens Files through the current callback when Outputs refreshes before the v
   expect(navigate).toHaveBeenCalledOnce();
   navigate.mockClear();
   const refreshed = vi.fn();
-  element.props = {
-    ...value,
-    outputs: { ...value.outputs!, artifactsLoading: true, onViewAll: refreshed },
-  };
-  expect(element.querySelector(".chat-outputs__view-all")).toBe(button);
-  button.click();
-  expect(refreshed).toHaveBeenCalledOnce();
-  expect(navigate).not.toHaveBeenCalled();
+  const refresh = createDeferred<void>();
+  try {
+    element.props = {
+      ...value,
+      outputs: {
+        ...value.outputs!,
+        artifactRead: {
+          readResult: refresh.promise,
+          items: value.outputs!.artifacts!,
+          resolved: true,
+          loaded: false,
+          loading: true,
+          error: null,
+        },
+        onViewAll: refreshed,
+      },
+    };
+    expect(element.querySelector(".chat-outputs__view-all")).toBe(button);
+    button.click();
+    expect(refreshed).toHaveBeenCalledOnce();
+    expect(navigate).not.toHaveBeenCalled();
+  } finally {
+    refresh.resolve();
+  }
 });
 
 it.each(["session", "agent", "incarnation", "visibility"] as const)(

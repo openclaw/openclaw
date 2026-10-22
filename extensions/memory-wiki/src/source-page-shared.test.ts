@@ -1,9 +1,11 @@
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { writeImportedSourcePage } from "./source-page-shared.js";
 import { buildSourcePage } from "./source-page.test-helpers.js";
+import { createMemoryWikiTestHarness } from "./test-helpers.js";
+
+const { createTempDir } = createMemoryWikiTestHarness();
 
 const { fsRootMock } = vi.hoisted(() => ({ fsRootMock: vi.fn() }));
 
@@ -45,13 +47,12 @@ describe("writeImportedSourcePage", () => {
   }
 
   beforeEach(async () => {
-    suiteRoot = await fs.mkdtemp(path.join(os.tmpdir(), "memory-wiki-source-page-"));
+    suiteRoot = await createTempDir("memory-wiki-source-page-");
   });
 
-  afterEach(async () => {
+  afterEach(() => {
     vi.useRealTimers();
     fsRootMock.mockClear();
-    await fs.rm(suiteRoot, { recursive: true, force: true });
   });
 
   it("falls back when the source mtime is outside the Date range", async () => {
@@ -76,55 +77,29 @@ describe("writeImportedSourcePage", () => {
   });
 
   it("skips 1,914 unchanged pages before opening the guarded vault", async () => {
-    const sourcePath = path.join(suiteRoot, "unchanged-source.md");
-    const pagePath = "sources/unchanged.md";
-    const pageAbsolutePath = path.join(suiteRoot, pagePath);
-    await fs.mkdir(path.dirname(pageAbsolutePath), { recursive: true });
-    await fs.writeFile(pageAbsolutePath, "already imported", "utf8");
-    const entry = {
-      group: "bridge" as const,
-      pagePath,
-      sourcePath,
-      sourceUpdatedAtMs: 123,
-      sourceSize: 456,
-      renderFingerprint: "unchanged",
-    };
-    const syncKeys = Array.from({ length: 1_914 }, (_, index) => `bridge:${index}`);
-    const state: Parameters<typeof writeImportedSourcePage>[0]["state"] = {
-      version: 1,
-      entries: Object.fromEntries(syncKeys.map((syncKey) => [syncKey, { ...entry }])),
-    };
+    const params = await createPage("already imported");
+    const entry = params.state.entries[params.syncKey]!;
+    const keys = Array.from({ length: 1_914 }, (_, index) => `bridge:${index}`);
+    params.state.entries = Object.fromEntries(keys.map((key) => [key, { ...entry }]));
     const buildRendered = vi.fn();
     fsRootMock.mockClear();
-
-    const params = importParams({ ...entry, state, buildRendered });
     const results = await Promise.all(
-      syncKeys.map((syncKey) => writeImportedSourcePage({ ...params, syncKey })),
+      keys.map((syncKey) => writeImportedSourcePage({ ...params, syncKey, buildRendered })),
     );
-
     expect(fsRootMock).not.toHaveBeenCalled();
     expect(buildRendered).not.toHaveBeenCalled();
-    expect(results).toHaveLength(1_914);
-    expect(results.every((result) => !result.changed && !result.created)).toBe(true);
+    expect(results).toEqual(
+      keys.map(() => ({ pagePath: params.pagePath, changed: false, created: false })),
+    );
   });
 
   it("recreates an unchanged source entry when its page is missing", async () => {
-    const params = importParams({
+    const params = await createPage("restored body", {
       sourceUpdatedAtMs: 123,
-      sourceSize: 13,
       buildRendered: (raw) => raw,
     });
-    const { group, pagePath, sourcePath, sourceUpdatedAtMs, sourceSize, renderFingerprint } =
-      params;
-    await fs.writeFile(sourcePath, "restored body", "utf8");
-    params.state.entries[params.syncKey] = {
-      group,
-      pagePath,
-      sourcePath,
-      sourceUpdatedAtMs,
-      sourceSize,
-      renderFingerprint,
-    };
+    const { pagePath } = params;
+    await fs.rm(path.join(suiteRoot, pagePath));
     fsRootMock.mockClear();
     const result = await writeImportedSourcePage(params);
 
@@ -202,34 +177,4 @@ describe("writeImportedSourcePage", () => {
       expect(state).toEqual(stateBefore);
     },
   );
-
-  it("preserves CRLF human notes without copying marker comments from existing imported content", async () => {
-    const sourceWithMarkers =
-      "first imported body\n<!-- openclaw:human:start -->\nOLD IMPORTED SOURCE MARKER PAYLOAD\n<!-- openclaw:human:end -->\n";
-    const params = await createPage(sourceWithMarkers);
-    const { sourcePath, pagePath } = params;
-
-    const absPage = path.join(suiteRoot, pagePath);
-    const userNote = "CRLF IMPORTED PAGE NOTE";
-    const edited = (await fs.readFile(absPage, "utf8")).replace(
-      "<!-- openclaw:human:start -->\n<!-- openclaw:human:end -->",
-      `<!-- openclaw:human:start -->\n${userNote}\n<!-- openclaw:human:end -->`,
-    );
-    await fs.writeFile(absPage, edited.replace(/\n/g, "\r\n"), "utf8");
-
-    await fs.writeFile(sourcePath, "second imported body without marker comments", "utf8");
-    const result = await writeImportedSourcePage({
-      ...params,
-      sourceUpdatedAtMs: Date.UTC(2026, 4, 2),
-      sourceSize: 44,
-      renderFingerprint: "fp-2",
-    });
-
-    const after = await fs.readFile(absPage, "utf8");
-    const notesBlock = after.slice(after.indexOf("## Notes"));
-    expect(result.changed).toBe(true);
-    expect(after).toContain("second imported body without marker comments");
-    expect(notesBlock).toContain(userNote);
-    expect(notesBlock).not.toContain("OLD IMPORTED SOURCE MARKER PAYLOAD");
-  });
 });

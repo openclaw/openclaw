@@ -225,7 +225,7 @@ suite.define(() => {
                 },
               },
             });
-            expect(await input.isDisabled()).toBe(true);
+            await expect.poll(() => input.isDisabled()).toBe(true);
             await gateway.setMethodResponse("plugins.credentials.inspect", {
               baseHash: "mock-config-hash-1",
               credential: { kind: "literal" },
