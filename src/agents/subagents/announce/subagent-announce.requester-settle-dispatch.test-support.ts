@@ -35,8 +35,6 @@ import {
   publishWakeTransition,
 } from "./subagent-announce.requester-settle-wake.test-support.js";
 
-export { publishWakeTransition } from "./subagent-announce.requester-settle-wake.test-support.js";
-
 export { deliver, registryRead, startTurn, readDescendantFacts, loadRequester };
 
 const readChildCompletionFindings = announceOutput.readChildCompletionFindings;
