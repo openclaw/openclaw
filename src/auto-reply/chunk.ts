@@ -111,16 +111,7 @@ export function chunkByNewline(
   }
   const splitLongLines = opts?.splitLongLines !== false;
   const trimLines = opts?.trimLines !== false;
-  const isSafeBreak = opts?.isSafeBreak;
-  const lines: string[] = [];
-  let start = 0;
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] === "\n" && (isSafeBreak === undefined || isSafeBreak(i))) {
-      lines.push(text.slice(start, i));
-      start = i + 1;
-    }
-  }
-  lines.push(text.slice(start));
+  const lines = splitByNewline(text, opts?.isSafeBreak);
   const chunks: string[] = [];
   let pendingBlankLines = 0;
 
@@ -288,6 +279,22 @@ export function chunkMarkdownTextWithMode(text: string, limit: number, mode: Chu
   return chunkMarkdownText(text, normalizedLimit);
 }
 
+function splitByNewline(
+  text: string,
+  isSafeBreak: (index: number) => boolean = () => true,
+): string[] {
+  const lines: string[] = [];
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    if (text[i] === "\n" && isSafeBreak(i)) {
+      lines.push(text.slice(start, i));
+      start = i + 1;
+    }
+  }
+  lines.push(text.slice(start));
+  return lines;
+}
+
 export function chunkText(text: string, limit: number): string[] {
   return chunkTextByBreakResolver(text, limit, (window) => {
     // 1) Prefer a newline break inside the window (outside parentheses).
@@ -326,35 +333,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     // A reopen applies to one continuation; the split below records the next one.
     reopenFence = undefined;
     const windowEnd = Math.min(text.length, start + contentLimit);
-    // Windows may overlap after a soft break, so seek once before advancing through their fences.
-    let fenceIndex = 0;
-    let high = spans.length;
-    while (fenceIndex < high) {
-      const mid = Math.floor((fenceIndex + high) / 2);
-      const span = spans[mid];
-      if (span && span.end <= start) {
-        fenceIndex = mid + 1;
-      } else {
-        high = mid;
-      }
-    }
-    let fence = fenceIndex < spans.length ? spans[fenceIndex] : undefined;
-    const { lastNewline: newline, lastWhitespace: whitespace } = scanParenAwareBreakpoints(
-      text,
-      start,
-      windowEnd,
-      spans.length > 0
-        ? (index) => {
-            while (fence && fence.end <= index) {
-              fenceIndex += 1;
-              fence = fenceIndex < spans.length ? spans[fenceIndex] : undefined;
-            }
-            return fence && index > fence.start ? fence.end : undefined;
-          }
-        : undefined,
-    );
-
-    const softBreak = newline > start ? newline : whitespace > start ? whitespace : -1;
+    const softBreak = pickSafeBreakIndex(text, start, windowEnd, spans);
     let breakIdx = findGraphemeChunkEnd(text, start, windowEnd, softBreak);
 
     const initialFence = findFenceSpanAt(spans, breakIdx);
@@ -425,14 +404,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     } else if (!initialFence) {
       // Only prose separators are disposable; fenced whitespace can be code indentation.
       nextStart = skipWhitespaceGraphemes(text, breakIdx, 1);
-      let nextLineStart =
-        text[nextStart] === "\n" ? skipWhitespaceGraphemes(text, nextStart, 1) : nextStart;
-      if (nextLineStart !== nextStart) {
-        while (nextLineStart < text.length && text[nextLineStart] === "\n") {
-          nextLineStart++;
-        }
-      }
-      nextStart = nextLineStart;
+      nextStart = skipLeadingNewlines(text, nextStart);
     }
 
     chunks.push(rawChunk);
@@ -448,4 +420,52 @@ function resolveFenceReopenLine(fence: FenceSpan, limit: number): string {
     return fence.openLine;
   }
   return markerLine.length * 2 + 3 <= limit ? markerLine : "";
+}
+
+function skipLeadingNewlines(value: string, start = 0): number {
+  let i = value[start] === "\n" ? skipWhitespaceGraphemes(value, start, 1) : start;
+  if (i === start) {
+    return start;
+  }
+  while (i < value.length && value[i] === "\n") {
+    i++;
+  }
+  return i;
+}
+
+function pickSafeBreakIndex(
+  text: string,
+  start: number,
+  end: number,
+  spans: ReturnType<typeof parseFenceSpans>,
+): number {
+  // Windows may overlap after a soft break, so seek once before advancing through their fences.
+  let fenceIndex = 0;
+  let high = spans.length;
+  while (fenceIndex < high) {
+    const mid = Math.floor((fenceIndex + high) / 2);
+    const span = spans[mid];
+    if (span && span.end <= start) {
+      fenceIndex = mid + 1;
+    } else {
+      high = mid;
+    }
+  }
+  let fence = fenceIndex < spans.length ? spans[fenceIndex] : undefined;
+  const { lastNewline, lastWhitespace } = scanParenAwareBreakpoints(
+    text,
+    start,
+    end,
+    spans.length > 0
+      ? (index) => {
+          while (fence && fence.end <= index) {
+            fenceIndex += 1;
+            fence = fenceIndex < spans.length ? spans[fenceIndex] : undefined;
+          }
+          return fence && index > fence.start ? fence.end : undefined;
+        }
+      : undefined,
+  );
+
+  return lastNewline > start ? lastNewline : lastWhitespace > start ? lastWhitespace : -1;
 }

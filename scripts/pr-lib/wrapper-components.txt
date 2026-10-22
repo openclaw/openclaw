@@ -955,6 +955,7 @@ src/infra/child-runtime-viability.ts
 src/infra/error-diagnostics.ts
 src/infra/error-graph-internal.ts
 src/infra/errors.ts
+src/infra/exec-allowlist-pattern.ts
 src/infra/exec-approval-action.types.ts
 src/infra/exec-approvals-core.ts
 src/infra/exec-command-resolution.ts

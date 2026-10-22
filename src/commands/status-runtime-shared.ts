@@ -134,6 +134,20 @@ export async function resolveStatusGatewayDiagnosticsSafe(
     : { ok: false, error: formatStatusGatewayFailure(result.error, "diagnostics") };
 }
 
+/** Reads the most recent gateway heartbeat only when the gateway probe succeeded. */
+async function resolveStatusLastHeartbeat(
+  params: Omit<StatusGatewayQuery, "callOverrides"> & { gatewayReachable: boolean },
+) {
+  if (!params.gatewayReachable) {
+    return null;
+  }
+  const result = await queryStatusGateway<HeartbeatEventPayload | null>(params, () => ({
+    method: "last-heartbeat",
+    params: {},
+  }));
+  return result.ok ? result.value : null;
+}
+
 // Default bound for service-manager probes when status runs without an explicit
 // --timeout, so a wedged systemd/launchd socket cannot hang `openclaw status`.
 const DEFAULT_SERVICE_PROBE_TIMEOUT_MS = 5000;
@@ -317,14 +331,15 @@ export async function resolveStatusRuntimeSnapshot(params: {
           )
       : undefined;
   // Last heartbeat is a deep-only gateway call; fast status should not spend network time here.
-  let lastHeartbeat: HeartbeatEventPayload | null = null;
-  if (params.deep && !params.gatewayStartupPhase && params.gatewayReachable) {
-    const result = await queryStatusGateway<HeartbeatEventPayload | null>(params, () => ({
-      method: "last-heartbeat",
-      params: {},
-    }));
-    lastHeartbeat = result.ok ? result.value : null;
-  }
+  const lastHeartbeat =
+    params.deep && !params.gatewayStartupPhase
+      ? await resolveStatusLastHeartbeat({
+          config: params.config,
+          timeoutMs: params.timeoutMs,
+          gatewayProbeDeadlineMs: params.gatewayProbeDeadlineMs,
+          gatewayReachable: params.gatewayReachable,
+        })
+      : null;
   const [gatewayService, nodeService] = await resolveStatusServiceSummaries(params.timeoutMs);
   return {
     securityAudit,

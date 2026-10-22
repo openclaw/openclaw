@@ -8,7 +8,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
-import { runEmbeddedAgent } from "./embedded-agent.js";
+import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import {
   createContextEngineLogicalTurnLease,
   type ContextEngineLogicalTurnLease,

@@ -20,7 +20,7 @@ import {
   assertSessionControllerOperation,
   markReplyOperationExecutionStarted,
 } from "../../sessions/session-controller.state.js";
-import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
+import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import {
   withGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,

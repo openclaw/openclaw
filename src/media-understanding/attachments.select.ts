@@ -9,6 +9,26 @@ import type {
 
 const DEFAULT_MAX_ATTACHMENTS = 1;
 
+function orderAttachments(
+  attachments: MediaAttachment[],
+  prefer?: MediaUnderstandingAttachmentsConfig["prefer"],
+): MediaAttachment[] {
+  // Ordering is stable and non-mutating so downstream decisions can still cite
+  // original attachment indexes.
+  if (prefer === "last") {
+    return attachments.toReversed();
+  }
+  if (prefer === "path" || prefer === "url") {
+    const preferred: MediaAttachment[] = [];
+    const remaining: MediaAttachment[] = [];
+    for (const item of attachments) {
+      (item[prefer] ? preferred : remaining).push(item);
+    }
+    return [...preferred, ...remaining];
+  }
+  return attachments;
+}
+
 /** Selects attachments for a media-understanding capability under configured ordering limits. */
 export function selectAttachments(params: {
   capability: MediaUnderstandingCapability;
@@ -43,20 +63,7 @@ export function selectAttachments(params: {
     return { selected: [], droppedAttachmentIndexes: [] };
   }
 
-  // Ordering is stable and non-mutating so downstream decisions can still cite
-  // original attachment indexes.
-  const prefer = policy?.prefer;
-  let ordered = matches;
-  if (prefer === "last") {
-    ordered = matches.toReversed();
-  } else if (prefer === "path" || prefer === "url") {
-    const preferred: MediaAttachment[] = [];
-    const remaining: MediaAttachment[] = [];
-    for (const item of matches) {
-      (item[prefer] ? preferred : remaining).push(item);
-    }
-    ordered = [...preferred, ...remaining];
-  }
+  const ordered = orderAttachments(matches, policy?.prefer);
   const mode = policy?.mode ?? "first";
   const maxAttachments = policy?.maxAttachments ?? DEFAULT_MAX_ATTACHMENTS;
   const limit = mode === "all" ? Math.max(1, maxAttachments) : 1;

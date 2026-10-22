@@ -34,6 +34,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { bindSessionMcpRuntimeTestScheduler } from "./agent-bundle-mcp-manager.test-support.js";
 import { disposeAllSessionMcpRuntimes, peekSessionMcpRuntime } from "./agent-bundle-mcp-tools.js";
+import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import {
   cacheRunnerConfig,
   omitWireFields,
@@ -42,7 +43,6 @@ import {
 } from "./embedded-agent-runner.wire.test-support.js";
 import * as promptCacheRequestObserver from "./embedded-agent-runner/prompt-cache-request-observer.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
-import { runEmbeddedAgent } from "./embedded-agent.js";
 import type { AgentInternalEvent } from "./internal-events.js";
 import { RUNTIME_EVENT_USER_PROMPT } from "./internal-runtime-context.js";
 import { SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION } from "./subagents/completion/subagent-completion-instructions.js";

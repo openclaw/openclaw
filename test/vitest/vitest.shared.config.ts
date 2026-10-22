@@ -228,6 +228,7 @@ export const sharedVitestConfig = {
         "src/providers/**",
         "src/secrets/**",
         "src/agents/model-scan.ts",
+        "src/agents/embedded-agent-runner.ts",
         "src/agents/sandbox-paths.ts",
         "src/agents/sandbox.ts",
         "src/agents/agent-tool-definition-adapter.ts",

@@ -20,7 +20,7 @@ import {
   type DiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { resolveDiagnosticModelResponse } from "../diagnostic-model-response.js";
-import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
+import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import { isSignalTimeoutReason, isTimeoutError } from "../failover-error.js";
 import { subscribeAgentCommentaryDiagnostics } from "../harness/commentary-diagnostics.js";
 import type { RunCliAgentParams } from "./types.js";

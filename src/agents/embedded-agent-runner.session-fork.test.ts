@@ -22,6 +22,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
 import { readBtwTranscriptMessages, resolveBtwSessionTranscriptPath } from "./btw-transcript.js";
 import { runBtwSideQuestion } from "./btw.js";
+import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import {
   cacheRunnerConfig,
   providerResponse,
@@ -33,7 +34,6 @@ import {
 } from "./embedded-agent-runner/session-fork.js";
 import { createStubSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
-import { runEmbeddedAgent } from "./embedded-agent.js";
 import { Agent, type StreamFn } from "./runtime/index.js";
 import * as sessionPlacementAdmission from "./session-placement-admission.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";

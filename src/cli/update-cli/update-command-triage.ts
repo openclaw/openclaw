@@ -1,6 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { isCancel } from "@clack/prompts";
-import { confirm, select } from "../../commands/configure.shared.js";
 import { sanitizeTriageUpdateFailure } from "../../commands/triage-update.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
@@ -9,14 +7,7 @@ import { resolveInstallationTarget } from "../../infra/installation-target-conte
 import { readControlPlaneUpdateSentinelMeta } from "../../infra/update-control-plane-sentinel.js";
 import { preparePublicUpdateFailureIdentifiers } from "../../infra/update-failure-public-identifiers.js";
 import { writeTriageUpdateFailure } from "../../infra/update-failure-report-artifact.js";
-import {
-  prepareUpdateFailureReport,
-  submitUpdateFailureReport,
-  type UpdateFailureReportSubmitResult,
-  type PreparedUpdateFailureReport,
-} from "../../infra/update-failure-report.js";
 import { POST_CORE_UPDATE_ENV } from "../../infra/update-post-core-context.js";
-import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { UpdateTriageTarget as TriageTarget } from "../../infra/update-triage.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -26,6 +17,7 @@ import { formatInstallationTargetCommand } from "../installation-target-format.j
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { isTerminalInteractive } from "../terminal-interactivity.js";
 import { resolveNodeRunner, resolveUpdateRoot, type UpdateCommandOptions } from "./shared.js";
+import { runInteractiveUpdateFailureAction } from "./update-command-report.js";
 import {
   reportUpdateCommandPendingRecovery,
   UpdateCommandFailure,
@@ -38,36 +30,6 @@ export type UpdateTriageTarget = TriageTarget & { failureResult?: UpdateRunResul
 type UpdateFailureTriageOptions = Pick<UpdateCommandOptions, "json" | "yes" | "dryRun" | "run"> & {
   invocationCwd?: string;
 };
-
-type UpdateFailureAction = "triage" | "report" | "status" | "browser" | "dismiss";
-
-function renderSubmissionResult(
-  result: UpdateFailureReportSubmitResult,
-  browserRequested: boolean,
-): string[] {
-  if (result.status === "created") {
-    return [`Created GitHub issue: ${result.url}`, ...(result.message ? [result.message] : [])];
-  }
-  if (result.status === "fallback") {
-    return [
-      browserRequested
-        ? result.message
-        : `GitHub issue creation was unavailable: ${result.message}`,
-      ...(browserRequested ? [`Prefilled issue: ${result.fallbackUrl}`] : []),
-      `Saved sanitized report: ${result.savedReportPath}`,
-    ];
-  }
-  if (result.status === "retryable") {
-    return [result.message];
-  }
-  return [
-    result.message,
-    ...(result.url ? [`Existing issue: ${result.url}`] : []),
-    ...(browserRequested && result.fallbackUrl
-      ? [`Existing prefilled issue: ${result.fallbackUrl}`]
-      : []),
-  ];
-}
 
 export async function withUpdateFailureTriage(
   opts: UpdateFailureTriageOptions,
@@ -184,116 +146,14 @@ export async function prepareUpdateCommandFailureTriage(
         let nextAction: "triage" | "handled" = "triage";
         if (mode === "interactive") {
           try {
-            const reportEnv = opts.run?.env ?? target.env;
-            const reportError = failure.error || undefined;
-            const reportResult = failure.result;
-            let prepared: PreparedUpdateFailureReport | undefined;
-            let browserAvailable = false;
-            let reportPending = false;
-            const stateDir = resolveStateDir(reportEnv);
-            nextAction = "handled";
-            while (true) {
-              const action = await select<UpdateFailureAction>({
-                message: rollbackCompleted
-                  ? "Update failed, but rollback completed successfully. Choose the next action"
-                  : "Choose the next action for this failed update",
-                ...(rollbackCompleted ? { initialValue: "dismiss" as const } : {}),
-                options: [
-                  { value: "triage", label: "Diagnose update failure" },
-                  reportPending
-                    ? { value: "status", label: "Check report status" }
-                    : { value: "report", label: "Report update failure" },
-                  ...(browserAvailable
-                    ? [{ value: "browser" as const, label: "Report in browser" }]
-                    : []),
-                  { value: "dismiss", label: "Exit" },
-                ],
-              });
-              if (isCancel(action) || action === "dismiss") {
-                break;
-              }
-              if (action === "triage") {
-                nextAction = "triage";
-                break;
-              }
-              try {
-                const result: UpdateRunResult = reportResult ?? {
-                  status: "error",
-                  mode: "unknown",
-                  steps: [],
-                  durationMs: 0,
-                };
-                if (!prepared) {
-                  let recordedRun: ReturnType<typeof getUpdateRun>;
-                  try {
-                    recordedRun = getUpdateRun(updateAttemptId, { env: reportEnv });
-                  } catch {
-                    // A missing or locked ledger must not prevent reporting the direct failure.
-                  }
-                  prepared = await prepareUpdateFailureReport(
-                    {
-                      attemptId: updateAttemptId,
-                      action: "cli",
-                      ...(reportError ? { error: reportError } : {}),
-                      result,
-                      recordedRun,
-                      ...(result.after?.upstreamRef ? { target: result.after.upstreamRef } : {}),
-                    },
-                    { env: reportEnv, stateDir },
-                  );
-                }
-                defaultRuntime.log("Sanitized update failure report preview:");
-                defaultRuntime.log(prepared.body);
-                const confirmed = await confirm({
-                  message:
-                    action === "browser"
-                      ? "Prepare a browser link to review and submit this report yourself?"
-                      : action === "status"
-                        ? "Check whether this report was submitted to openclaw/openclaw?"
-                        : "Submit this sanitized report to openclaw/openclaw now?",
-                  initialValue: false,
-                });
-                if (isCancel(confirmed) || !confirmed) {
-                  defaultRuntime.log("Update failure report cancelled.");
-                  break;
-                }
-                // A lost upload response must not retain an earlier browser-retry choice.
-                browserAvailable = false;
-                const submitted = await submitUpdateFailureReport(
-                  prepared,
-                  prepared.previewDigest,
-                  {
-                    env: reportEnv,
-                    stateDir,
-                    ...(action === "browser"
-                      ? { publicationMode: "browser" as const }
-                      : action === "status"
-                        ? { publicationMode: "reconcile" as const }
-                        : { allowBrowserFallback: false }),
-                  },
-                );
-                reportPending = submitted.status === "pending";
-                browserAvailable =
-                  prepared.browserFallback.status === "available" &&
-                  (submitted.status === "retryable" ||
-                    submitted.status === "fallback" ||
-                    (submitted.status === "duplicate" && Boolean(submitted.fallbackUrl)));
-                for (const line of renderSubmissionResult(submitted, action === "browser")) {
-                  defaultRuntime.log(line);
-                }
-                if (
-                  submitted.status === "created" ||
-                  (submitted.status === "duplicate" && submitted.url) ||
-                  (action === "browser" && submitted.fallbackUrl)
-                ) {
-                  break;
-                }
-              } catch (submissionError) {
-                defaultRuntime.error(
-                  `Update failure report failed: ${formatErrorMessage(submissionError)}`,
-                );
-              }
-            }
+            nextAction = await runInteractiveUpdateFailureAction({
+              attemptId: updateAttemptId,
+              env: opts.run?.env ?? target.env,
+              ...(failure.error ? { error: failure.error } : {}),
+              ...(failure.result ? { result: failure.result } : {}),
+              ...(rollbackCompleted ? { rollbackCompleted: true } : {}),
+              runtime: defaultRuntime,
+            });
           } catch (reportError) {
             defaultRuntime.error(
               `Update failure report could not be prepared: ${formatErrorMessage(reportError)}`,

@@ -18,13 +18,13 @@ import {
   shouldClearFailedCliSessionBinding,
   shouldClearInterruptedCliSessionBinding,
 } from "../cli-session.js";
+import type { EmbeddedAgentRunResult } from "../embedded-agent-runner.js";
 import {
   hasCompletedSourceReplyDeliveryEvidence,
   resolveExplicitFinalSourceReplyDeliveryEvidence,
 } from "../embedded-agent-runner/delivery-evidence.js";
 import { resolveAuthProfileFailureReason } from "../embedded-agent-runner/run/auth-profile-failure-policy.js";
 import { mergeAttemptToolMediaPayloads } from "../embedded-agent-runner/run/tool-media-payloads.js";
-import type { EmbeddedAgentRunResult } from "../embedded-agent-runner/types.js";
 import { isFailoverError } from "../failover-error.js";
 import { resolveRetryAfterMs } from "../failover/retry-evidence.js";
 import {

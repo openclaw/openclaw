@@ -60,6 +60,23 @@ function digest(value: unknown): string {
   return crypto.createHash("sha256").update(serialized).digest("hex");
 }
 
+function summarizeMessages(messages: AgentMessage[]): {
+  messageCount: number;
+  messageRoles: Array<string | undefined>;
+  messageFingerprints: string[];
+  messagesDigest: string;
+} {
+  // Hash each message and then the ordered fingerprint list so traces can detect
+  // prompt drift without writing full messages when disabled.
+  const messageFingerprints = messages.map(digest);
+  return {
+    messageCount: messages.length,
+    messageRoles: messages.map((msg) => (msg as { role?: string }).role),
+    messageFingerprints,
+    messagesDigest: digest(messageFingerprints.join("|")),
+  };
+}
+
 export function createCacheTrace(params: CacheTraceInit) {
   const env = process.env;
   const enabled =
@@ -106,15 +123,7 @@ export function createCacheTrace(params: CacheTraceInit) {
 
     const messages = payload.messages;
     if (messages) {
-      // Hash each message and then the ordered fingerprint list so traces can detect
-      // prompt drift without writing full messages when disabled.
-      const messageFingerprints = messages.map(digest);
-      Object.assign(event, {
-        messageCount: messages.length,
-        messageRoles: messages.map((msg) => (msg as { role?: string }).role),
-        messageFingerprints,
-        messagesDigest: digest(messageFingerprints.join("|")),
-      });
+      Object.assign(event, summarizeMessages(messages));
       if (includeMessages) {
         // Full messages are optional; summaries/digests are always recorded when
         // message payloads are supplied.

@@ -19,6 +19,36 @@ function tokenizeLookupValue(input: string): Set<string> {
   return new Set(normalizeStringEntries(input.toLowerCase().split(/[^a-z0-9]+/u)));
 }
 
+function scoreUnknownToolSuggestion(
+  normalizedNeedle: string,
+  needleTokens: ReadonlySet<string>,
+  entry: ToolSearchCatalogEntry,
+): number {
+  const name = entry.name.toLowerCase();
+  const id = entry.id.toLowerCase();
+  const label = (entry.label ?? "").toLowerCase();
+  const description = entry.description.toLowerCase();
+  const entryTokens = tokenizeLookupValue(
+    `${entry.name} ${entry.id} ${entry.label ?? ""} ${entry.description}`,
+  );
+  let score = 0;
+  if ((name && normalizedNeedle.includes(name)) || id.includes(normalizedNeedle)) {
+    score += 40;
+  }
+  if (name && needleTokens.has(name)) {
+    score += 40;
+  }
+  for (const token of needleTokens) {
+    if (entryTokens.has(token)) {
+      score += 12;
+    }
+  }
+  if (label.includes(normalizedNeedle) || description.includes(normalizedNeedle)) {
+    score += 8;
+  }
+  return score;
+}
+
 export type ToolLookupErrorOptions = UnknownToolErrorOptions &
   Pick<ToolSearchToolContext, "codeModeSkills">;
 
@@ -48,33 +78,10 @@ export function formatUnknownToolIdError(
   const needleTokens = tokenizeLookupValue(needle);
   const suggestions = uniqueStrings(
     entries
-      .map((entry) => {
-        const value =
-          options.exactIdOnly || (nameCounts.get(entry.name) ?? 0) > 1 ? entry.id : entry.name;
-        const name = entry.name.toLowerCase();
-        const id = entry.id.toLowerCase();
-        const label = (entry.label ?? "").toLowerCase();
-        const description = entry.description.toLowerCase();
-        const entryTokens = tokenizeLookupValue(
-          `${entry.name} ${entry.id} ${entry.label ?? ""} ${entry.description}`,
-        );
-        let score = 0;
-        if ((name && normalizedNeedle.includes(name)) || id.includes(normalizedNeedle)) {
-          score += 40;
-        }
-        if (name && needleTokens.has(name)) {
-          score += 40;
-        }
-        for (const token of needleTokens) {
-          if (entryTokens.has(token)) {
-            score += 12;
-          }
-        }
-        if (label.includes(normalizedNeedle) || description.includes(normalizedNeedle)) {
-          score += 8;
-        }
-        return { value, score };
-      })
+      .map((entry) => ({
+        value: options.exactIdOnly || (nameCounts.get(entry.name) ?? 0) > 1 ? entry.id : entry.name,
+        score: scoreUnknownToolSuggestion(normalizedNeedle, needleTokens, entry),
+      }))
       .filter((candidate) => candidate.score > 0)
       .toSorted((a, b) => b.score - a.score || a.value.localeCompare(b.value))
       .map((candidate) => candidate.value),

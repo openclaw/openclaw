@@ -1,18 +1,18 @@
-// Public embedded-agent bindings and persisted runtime ids.
+// Compatibility coverage for embedded runner barrel exports and runtime ids.
 import { describe, expect, it } from "vitest";
 import { normalizeEmbeddedAgentRuntime } from "../agent-runtime-id.js";
+import * as embeddedAgentRunner from "../embedded-agent-runner.js";
 import * as embeddedAgent from "../embedded-agent.js";
-import { compactEmbeddedAgentSession } from "./compact.queued.js";
-import { runEmbeddedAgent } from "./run.js";
-import { abortEmbeddedAgentRun } from "./runs.js";
 
 describe("embedded runner compatibility aliases", () => {
   it("keeps the embedded-agent barrel bound to the runner implementation", () => {
     // Shipped imports still reach the runner through the embedded-agent barrel;
     // keep these aliases exact so consumers do not fork stateful implementations.
-    expect(embeddedAgent.runEmbeddedAgent).toBe(runEmbeddedAgent);
-    expect(embeddedAgent.compactEmbeddedAgentSession).toBe(compactEmbeddedAgentSession);
-    expect(embeddedAgent.abortEmbeddedAgentRun).toBe(abortEmbeddedAgentRun);
+    expect(embeddedAgent.runEmbeddedAgent).toBe(embeddedAgentRunner.runEmbeddedAgent);
+    expect(embeddedAgent.compactEmbeddedAgentSession).toBe(
+      embeddedAgentRunner.compactEmbeddedAgentSession,
+    );
+    expect(embeddedAgent.abortEmbeddedAgentRun).toBe(embeddedAgentRunner.abortEmbeddedAgentRun);
   });
 
   it("normalizes shipped runtime aliases", () => {

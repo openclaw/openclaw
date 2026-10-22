@@ -236,6 +236,7 @@ export const preservedModuleBuildSources = [
   "src/cli/update-cli/update-command-config.ts",
   "src/cli/update-cli/update-command-plugins.ts",
   "src/cli/update-cli/update-finalization-lifecycle.ts",
+  "src/cli/update-cli/update-command-report.ts",
   "src/commands/doctor-service-repair-policy.ts",
   "src/cli/update-cli/update-command-service-maintenance.ts",
   "src/daemon/service.ts",

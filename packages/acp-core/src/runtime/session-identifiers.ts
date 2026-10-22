@@ -16,6 +16,14 @@ const ACP_AGENT_RESUME_COMMAND_BY_KEY = new Map<string, "codex" | "kimi">([
   ["moonshot-kimi", "kimi"],
 ]);
 
+function normalizeAgentHintKey(value: unknown): string | undefined {
+  const normalized = normalizeText(value);
+  if (!normalized) {
+    return undefined;
+  }
+  return normalizeLowercaseStringOrEmpty(normalized).replace(/[\s_]+/g, "-");
+}
+
 /** Renders resolved ACP backend/agent ids, hiding pending ids from thread intros. */
 export function resolveAcpSessionIdentifierLinesFromIdentity(params: {
   backend: string;
@@ -69,10 +77,7 @@ export function resolveAcpThreadSessionDetailLines(meta?: SessionAcpMeta): strin
   }
   const agentId = meta?.agent;
   const agentSessionId = normalizeText(identity?.agentSessionId);
-  const normalizedAgentId = normalizeText(agentId);
-  const agentKey = normalizedAgentId
-    ? normalizeLowercaseStringOrEmpty(normalizedAgentId).replace(/[\s_]+/g, "-")
-    : undefined;
+  const agentKey = normalizeAgentHintKey(agentId);
   const command =
     agentSessionId && agentKey ? ACP_AGENT_RESUME_COMMAND_BY_KEY.get(agentKey) : undefined;
   if (command) {

@@ -11,7 +11,7 @@ import { isTruthyEnvValue } from "../../infra/env.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db.js";
 import { prepareSystemAgentRunAdmission } from "../admitted-run-context.js";
-import { runEmbeddedAgent } from "../embedded-agent.js";
+import { runEmbeddedAgent } from "../embedded-agent-runner.js";
 import { useLiveTestRuntimeConfig } from "../live-test-helpers.js";
 import { createResourceLoader } from "./agent-session-loop-resource-loader.test-support.js";
 import { AgentSession } from "./agent-session.js";

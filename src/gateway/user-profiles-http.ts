@@ -46,6 +46,29 @@ const gravatarCache = new LruCache<CachedGravatarResult>(GRAVATAR_CACHE_MAX_ENTR
 });
 const gravatarRequests = new Map<string, Promise<GravatarResult>>();
 
+function getCachedGravatar(hash: string, nowMs: number): GravatarResult | undefined {
+  const cached = gravatarCache.get(hash);
+  if (!cached) {
+    return undefined;
+  }
+  if (cached.expiresAtMs <= nowMs) {
+    gravatarCache.delete(hash);
+    return undefined;
+  }
+  return cached.kind === "hit"
+    ? { kind: "hit", bytes: cached.bytes, mime: cached.mime, etag: cached.etag }
+    : { kind: "miss" };
+}
+
+function cacheGravatar(
+  hash: string,
+  result: Exclude<GravatarResult, { kind: "error" }>,
+  nowMs: number,
+) {
+  const ttlMs = result.kind === "hit" ? GRAVATAR_HIT_TTL_MS : GRAVATAR_MISS_TTL_MS;
+  gravatarCache.set(hash, { ...result, expiresAtMs: nowMs + ttlMs });
+}
+
 async function cancelGravatarBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
   try {
     await body?.cancel();
@@ -90,16 +113,9 @@ async function fetchGravatar(hash: string): Promise<GravatarResult> {
 }
 
 async function resolveGravatar(hash: string): Promise<GravatarResult> {
-  const nowMs = Date.now();
-  const cached = gravatarCache.get(hash);
+  const cached = getCachedGravatar(hash, Date.now());
   if (cached) {
-    if (cached.expiresAtMs <= nowMs) {
-      gravatarCache.delete(hash);
-    } else {
-      return cached.kind === "hit"
-        ? { kind: "hit", bytes: cached.bytes, mime: cached.mime, etag: cached.etag }
-        : { kind: "miss" };
-    }
+    return cached;
   }
   return await getOrCreatePromise(
     gravatarRequests,
@@ -107,9 +123,7 @@ async function resolveGravatar(hash: string): Promise<GravatarResult> {
     async () => {
       const result = await fetchGravatar(hash);
       if (result.kind !== "error") {
-        const cachedAtMs = Date.now();
-        const ttlMs = result.kind === "hit" ? GRAVATAR_HIT_TTL_MS : GRAVATAR_MISS_TTL_MS;
-        gravatarCache.set(hash, { ...result, expiresAtMs: cachedAtMs + ttlMs });
+        cacheGravatar(hash, result, Date.now());
       }
       return result;
     },

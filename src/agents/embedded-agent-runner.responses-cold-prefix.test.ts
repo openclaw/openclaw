@@ -17,9 +17,9 @@ import { createUserTurnTranscriptRecorder } from "../sessions/user-turn-transcri
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
+import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import { cacheRunnerConfig, omitWireFields } from "./embedded-agent-runner.wire.test-support.js";
 import { clearEmbeddedSessionPromptStates } from "./embedded-agent-runner/session-prompt-state.js";
-import { runEmbeddedAgent } from "./embedded-agent.js";
 import { writeTempPlugin } from "./test-helpers/temp-plugin-extension-fixtures.js";
 
 function responseMessage(id: string, text: string) {

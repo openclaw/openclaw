@@ -1,4 +1,5 @@
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "../config/bundled-channel-config-metadata.generated.js";
+import type { OpenClawConfig } from "../config/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { isRecord } from "../utils.js";
 import type { StatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
@@ -15,6 +16,30 @@ const STATUS_JSON_CHANNEL_ENV_VARS = new Set(
     (entry) => entry.channelEnvVars ?? [],
   ),
 );
+
+function hasExplicitStatusJsonChannelConfig(cfg: OpenClawConfig): boolean {
+  if (!isRecord(cfg.channels)) {
+    return false;
+  }
+  // `enabled` alone can be a default scaffold; require another configured field.
+  return Object.entries(cfg.channels).some(
+    ([key, value]) =>
+      !IGNORED_CHANNEL_CONFIG_KEYS.has(key) &&
+      isRecord(value) &&
+      Object.keys(value).some((field) => field !== "enabled"),
+  );
+}
+
+function hasStatusJsonChannelEnvConfig(): boolean {
+  const env = process.env;
+  return Object.entries(env).some(
+    ([key, value]) =>
+      typeof value === "string" &&
+      value.trim().length > 0 &&
+      (STATUS_JSON_CHANNEL_ENV_VARS.has(key) ||
+        STATUS_JSON_CHANNEL_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))),
+  );
+}
 
 export async function scanStatusJsonFast(
   opts: StatusGatewayProbeBudget & {
@@ -33,28 +58,8 @@ export async function scanStatusJsonFast(
     showSecrets: false,
     runtime,
     allowMissingConfigFastPath: true,
-    resolveHasConfiguredChannels: (cfg) => {
-      // `enabled` alone can be a default scaffold; require another configured field.
-      if (
-        isRecord(cfg.channels) &&
-        Object.entries(cfg.channels).some(
-          ([key, value]) =>
-            !IGNORED_CHANNEL_CONFIG_KEYS.has(key) &&
-            isRecord(value) &&
-            Object.keys(value).some((field) => field !== "enabled"),
-        )
-      ) {
-        return true;
-      }
-      const env = process.env;
-      return Object.entries(env).some(
-        ([key, value]) =>
-          typeof value === "string" &&
-          value.trim().length > 0 &&
-          (STATUS_JSON_CHANNEL_ENV_VARS.has(key) ||
-            STATUS_JSON_CHANNEL_ENV_PREFIXES.some((prefix) => key.startsWith(prefix))),
-      );
-    },
+    resolveHasConfiguredChannels: (cfg) =>
+      hasExplicitStatusJsonChannelConfig(cfg) || hasStatusJsonChannelEnvConfig(),
     includeChannelsData: false,
     fetchGitUpdate: opts.all === true,
     includeRegistryUpdate: opts.all === true,

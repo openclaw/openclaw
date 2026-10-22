@@ -30,6 +30,43 @@ type PayloadLogEvent = AgentTraceBase & {
 const writers = new Map<string, QueuedFileWriter>();
 const log = createSubsystemLogger("agent/anthropic-payload");
 
+function formatError(error: unknown): string | undefined {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
+  if (message !== undefined) {
+    return redactAgentDiagnosticPayload(message);
+  }
+  if (typeof error === "number" || typeof error === "boolean" || typeof error === "bigint") {
+    return String(error);
+  }
+  if (error && typeof error === "object") {
+    return safeJsonStringify(redactAgentDiagnosticPayload(error)) ?? "unknown error";
+  }
+  return undefined;
+}
+
+function digest(value: unknown): string | undefined {
+  // Hash the redacted payload so repeated requests can be correlated even when
+  // payload bodies are too sensitive to inspect directly.
+  const serialized = safeJsonStringify(value);
+  if (!serialized) {
+    return undefined;
+  }
+  return crypto.createHash("sha256").update(serialized).digest("hex");
+}
+
+function findLastAssistantUsage(messages: AgentMessage[]) {
+  // Usage is attached to assistant messages after streaming; walk backwards to
+  // avoid logging stale usage from an earlier assistant turn.
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const msg = messages[i];
+    if (msg?.role === "assistant") {
+      return msg.usage;
+    }
+  }
+  return null;
+}
+
 type AnthropicPayloadLogger = {
   wrapStreamFn: (streamFn: StreamFn) => StreamFn;
   recordUsage: (messages: AgentMessage[], error?: unknown) => void;
@@ -70,19 +107,13 @@ export function createAnthropicPayloadLogger(
         // Forward the original payload to the provider hook, but persist only
         // the redacted diagnostic copy.
         const redactedPayload = redactAgentDiagnosticPayload(payload);
-        const event: PayloadLogEvent = {
+        record({
           ...base,
           ts: new Date().toISOString(),
           stage: "request",
           payload: redactedPayload,
-        };
-        // Hash the redacted payload so repeated requests can be correlated even when
-        // payload bodies are too sensitive to inspect directly.
-        const serialized = safeJsonStringify(redactedPayload);
-        event.payloadDigest = serialized
-          ? crypto.createHash("sha256").update(serialized).digest("hex")
-          : undefined;
-        record(event);
+          payloadDigest: digest(redactedPayload),
+        });
         return options?.onPayload?.(payload, model);
       };
       return streamFn(model, context, {
@@ -92,19 +123,8 @@ export function createAnthropicPayloadLogger(
     };
 
   const recordUsage: AnthropicPayloadLogger["recordUsage"] = (messages, error) => {
-    // Usage is attached to assistant messages after streaming; walk backwards to
-    // avoid logging stale usage from an earlier assistant turn.
-    const usage = messages.findLast((message) => message?.role === "assistant")?.usage ?? null;
-    const message =
-      error instanceof Error ? error.message : typeof error === "string" ? error : undefined;
-    const errorMessage =
-      message !== undefined
-        ? redactAgentDiagnosticPayload(message)
-        : typeof error === "number" || typeof error === "boolean" || typeof error === "bigint"
-          ? String(error)
-          : error && typeof error === "object"
-            ? (safeJsonStringify(redactAgentDiagnosticPayload(error)) ?? "unknown error")
-            : undefined;
+    const usage = findLastAssistantUsage(messages);
+    const errorMessage = formatError(error);
     if (!usage && !errorMessage) {
       return;
     }

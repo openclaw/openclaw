@@ -19,10 +19,10 @@ import {
   normalizeLiveUsage,
   runEmbeddedReleasePrefixScenario,
 } from "./embedded-agent-runner.cache.test-support.js";
+import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import { compactEmbeddedAgentSessionOnDemand } from "./embedded-agent-runner/compact.runtime.js";
 import type { beginPromptCacheObservation } from "./embedded-agent-runner/prompt-cache-observability.js";
 import { extractEmbeddedAssistantText } from "./embedded-agent-utils.js";
-import { runEmbeddedAgent } from "./embedded-agent.js";
 import {
   buildAssistantHistoryTurn as buildTypedAssistantHistoryTurn,
   buildStableCachePrefix,

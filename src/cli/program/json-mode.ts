@@ -22,6 +22,33 @@ type JsonModeCommand = Command & {
   [jsonModeSymbol]?: CommandJsonModeDeclaration;
 };
 
+function commandDefinesJsonOption(command: Command): boolean {
+  return command.options.some((option) => option.long === "--json");
+}
+
+function getCommandJsonMode(
+  command: Command,
+  argv: string[] = process.argv,
+): CommandJsonMode | null {
+  const rawJsonFlag =
+    hasFlag(argv, "--json") && !hasCommanderOptionToken(command, argv, JSON_FLAG, "value");
+  const literalJsonMode =
+    command.optsWithGlobals<{ json?: unknown }>().json === true || rawJsonFlag;
+  for (let current: Command | null = command; current; current = current.parent ?? null) {
+    const metadata = (current as JsonModeCommand)[jsonModeSymbol];
+    if (metadata?.resolve?.({ command, argv, stdoutIsTTY: process.stdout.isTTY || false })) {
+      return metadata.mode;
+    }
+    if (metadata && !metadata.resolve && literalJsonMode) {
+      return metadata.mode;
+    }
+    if (literalJsonMode && commandDefinesJsonOption(current)) {
+      return "output";
+    }
+  }
+  return null;
+}
+
 /** Mark a command as having a special JSON mode beyond ordinary `--json` output. */
 export function setCommandJsonMode(
   command: Command,
@@ -34,21 +61,5 @@ export function setCommandJsonMode(
 
 /** Return true when the command's active mode owns machine-readable JSON stdout. */
 export function isCommandJsonOutputMode(command: Command, argv: string[] = process.argv): boolean {
-  const rawJsonFlag =
-    hasFlag(argv, "--json") && !hasCommanderOptionToken(command, argv, JSON_FLAG, "value");
-  const literalJsonMode =
-    command.optsWithGlobals<{ json?: unknown }>().json === true || rawJsonFlag;
-  for (let current: Command | null = command; current; current = current.parent ?? null) {
-    const metadata = (current as JsonModeCommand)[jsonModeSymbol];
-    if (metadata?.resolve?.({ command, argv, stdoutIsTTY: process.stdout.isTTY || false })) {
-      return metadata.mode === "output";
-    }
-    if (metadata && !metadata.resolve && literalJsonMode) {
-      return metadata.mode === "output";
-    }
-    if (literalJsonMode && current.options.some((option) => option.long === "--json")) {
-      return true;
-    }
-  }
-  return false;
+  return getCommandJsonMode(command, argv) === "output";
 }

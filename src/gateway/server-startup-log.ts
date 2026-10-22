@@ -40,61 +40,21 @@ export async function logGatewayStartup(params: {
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel: DEFAULT_MODEL,
   });
-  const modelConfig = params.cfg;
-  const modelRef = `${agentProvider}/${agentModel}`;
-  const soleAgentId = tryResolveAmbientOwnerAgentId(modelConfig);
-  let thinking = resolveConfiguredThinkingDefaultCore({
-    cfg: modelConfig,
+  const agentModelLog = formatAgentModelStartupLogLine({
+    cfg: params.cfg,
     provider: agentProvider,
     model: agentModel,
-    agentId: soleAgentId,
   });
-  if (thinking === undefined) {
-    const configuredCatalog = buildConfiguredModelCatalog({ cfg: modelConfig });
-    // Catalog reasoning=false is authoritative; avoid loading provider policy artifacts
-    // only to discard their default below.
-    if (
-      configuredCatalog.some(
-        (entry) =>
-          entry.provider === agentProvider && entry.id === agentModel && entry.reasoning === false,
-      )
-    ) {
-      thinking = "off";
-    } else {
-      thinking = resolveThinkingDefault({
-        cfg: modelConfig,
-        agentId: soleAgentId,
-        provider: agentProvider,
-        model: agentModel,
-        catalog: configuredCatalog,
-      });
-    }
-  }
-  const fast = resolveFastModeState({
-    cfg: modelConfig,
-    provider: agentProvider,
-    model: agentModel,
-    agentId: soleAgentId,
-  });
-  const modelDetails = `thinking=${thinking}, fast=${formatFastModeValue(fast.mode)}`;
-  params.log.info(`agent model: ${modelRef} (${modelDetails})`, {
-    consoleMessage: `agent model: ${chalk.whiteBright(modelRef)} (${modelDetails})`,
+  params.log.info(agentModelLog.message, {
+    consoleMessage: agentModelLog.consoleMessage,
   });
   const startupDurationMs =
     typeof params.startupStartedAt === "number" ? Date.now() - params.startupStartedAt : null;
   const startupDurationLabel =
     startupDurationMs == null ? null : `${(startupDurationMs / 1000).toFixed(1)}s`;
-  const pluginIds = normalizeSortedUniqueStringEntries(params.loadedPluginIds);
-  const pluginSummary =
-    pluginIds.length === 0
-      ? "0 plugins"
-      : `${pluginIds.length} ${pluginIds.length === 1 ? "plugin" : "plugins"}: ${pluginIds.join(", ")}`;
-  const readyDetails = !startupDurationLabel
-    ? pluginSummary
-    : pluginIds.length === 0
-      ? `${pluginSummary}, ${startupDurationLabel}`
-      : `${pluginSummary}; ${startupDurationLabel}`;
-  params.log.info(`http server listening (${readyDetails})`);
+  params.log.info(
+    `http server listening (${formatReadyDetails(params.loadedPluginIds, startupDurationLabel)})`,
+  );
   params.log.info(`log file: ${getResolvedLoggerSettings().file}`);
   params.log.info(
     "Older local CLI/SDK versions can bypass Gateway state mutation routing. Use matching CLI/SDK and Gateway versions; direct state writes from another process while this Gateway owns state are unsupported.",
@@ -172,18 +132,10 @@ export async function logGatewayStartup(params: {
           manifestRecords,
         })
       : [];
-  const suppressionWarning: string[] = [];
-  if (suppressedAmbientChannelIds.length > 0) {
-    const safeChannelIds = normalizeSortedUniqueStringEntries(suppressedAmbientChannelIds).map(
-      (channelId) => sanitizeForLog(channelId),
-    );
-    suppressionWarning.push(
-      `gateway suppressed ambient channel auto-configuration for ${safeChannelIds.length} ` +
-        `${safeChannelIds.length === 1 ? "channel" : "channels"}: ${safeChannelIds.join(", ")}. ` +
-        "Configure channels.<id> (openclaw channels add <id>) to enable the channel, or pass " +
-        "--ambient-channels to allow ambient env credentials.",
-    );
-  }
+  const suppressionWarning =
+    suppressedAmbientChannelIds.length > 0
+      ? [formatSuppressedAmbientChannelsStartupWarning(suppressedAmbientChannelIds)]
+      : [];
   for (const warning of [...suppressionWarning, ...blockerWarnings, ...missingOwnerWarnings]) {
     params.log.warn(warning);
   }
@@ -199,4 +151,88 @@ export async function logGatewayStartup(params: {
       "Run `openclaw security audit`.";
     params.log.warn(warning);
   }
+}
+
+/** Format the startup model line from the model ref already selected by the caller. */
+function formatAgentModelStartupLogLine(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): { message: string; consoleMessage: string } {
+  const modelRef = `${params.provider}/${params.model}`;
+  const modelDetails = formatAgentModelStartupDetails(params);
+  return {
+    message: `agent model: ${modelRef} (${modelDetails})`,
+    consoleMessage: `agent model: ${chalk.whiteBright(modelRef)} (${modelDetails})`,
+  };
+}
+
+function formatAgentModelStartupDetails(params: {
+  cfg: OpenClawConfig;
+  provider: string;
+  model: string;
+}): string {
+  const soleAgentId = tryResolveAmbientOwnerAgentId(params.cfg);
+  let thinking = resolveConfiguredThinkingDefaultCore({ ...params, agentId: soleAgentId });
+  if (thinking === undefined) {
+    const configuredCatalog = buildConfiguredModelCatalog({ cfg: params.cfg });
+    // Catalog reasoning=false is authoritative; avoid loading provider policy artifacts
+    // only to discard their default below.
+    if (
+      configuredCatalog.some(
+        (entry) =>
+          entry.provider === params.provider &&
+          entry.id === params.model &&
+          entry.reasoning === false,
+      )
+    ) {
+      thinking = "off";
+    } else {
+      thinking = resolveThinkingDefault({
+        cfg: params.cfg,
+        agentId: soleAgentId,
+        provider: params.provider,
+        model: params.model,
+        catalog: configuredCatalog,
+      });
+    }
+  }
+  const fast = resolveFastModeState({
+    cfg: params.cfg,
+    provider: params.provider,
+    model: params.model,
+    agentId: soleAgentId,
+  });
+
+  return `thinking=${thinking}, fast=${formatFastModeValue(fast.mode)}`;
+}
+
+function formatSuppressedAmbientChannelsStartupWarning(channelIds: readonly string[]): string {
+  const safeChannelIds = normalizeSortedUniqueStringEntries(channelIds).map((channelId) =>
+    sanitizeForLog(channelId),
+  );
+  return (
+    `gateway suppressed ambient channel auto-configuration for ${safeChannelIds.length} ` +
+    `${safeChannelIds.length === 1 ? "channel" : "channels"}: ${safeChannelIds.join(", ")}. ` +
+    "Configure channels.<id> (openclaw channels add <id>) to enable the channel, or pass " +
+    "--ambient-channels to allow ambient env credentials."
+  );
+}
+
+function formatReadyDetails(
+  loadedPluginIds: readonly string[],
+  startupDurationLabel: string | null,
+) {
+  const pluginIds = normalizeSortedUniqueStringEntries(loadedPluginIds);
+  const pluginSummary =
+    pluginIds.length === 0
+      ? "0 plugins"
+      : `${pluginIds.length} ${pluginIds.length === 1 ? "plugin" : "plugins"}: ${pluginIds.join(", ")}`;
+
+  if (!startupDurationLabel) {
+    return pluginSummary;
+  }
+  return pluginIds.length === 0
+    ? `${pluginSummary}, ${startupDurationLabel}`
+    : `${pluginSummary}; ${startupDurationLabel}`;
 }

@@ -41,6 +41,24 @@ function sanitizeInlineMediaNoteValue(value: string | undefined): string {
     .trim();
 }
 
+function formatMediaAttachedLine(fact: MediaFact, index: number, total: number): string {
+  const prefix = total > 1 ? `[media attached ${index}/${total}: ` : "[media attached: ";
+  const pathValue = sanitizeInlineMediaNoteValue(fact.path);
+  const typeRaw = sanitizeInlineMediaNoteValue(fact.contentType ?? fact.kind);
+  const typePart = typeRaw ? ` (${typeRaw})` : "";
+  const urlRaw = sanitizeInlineMediaNoteValue(fact.url);
+  // When the channel mirrors the local path into the fact URL (Telegram album
+  // media is the canonical case), rendering ` | ${url}` adds no information
+  // and clutters the prompt with `path | path` duplication (issue #47587).
+  const urlPart = urlRaw && urlRaw !== pathValue ? ` | ${urlRaw}` : "";
+  const fileName = truncateUtf16Safe(
+    sanitizeInlineMediaNoteValue(basenameFromAnyPath(fact.fileName ?? "")),
+    256,
+  );
+  const fileNamePart = fileName ? ` ${JSON.stringify(fileName)}` : "";
+  return `${prefix}${pathValue}${typePart}${urlPart}${fileNamePart}]`;
+}
+
 // WebM is ambiguous, while WMA and ALAC do not have canonical extension mappings.
 const AUDIO_EXTENSIONS_WITHOUT_CANONICAL_MIME = [".webm", ".wma", ".alac"] as const;
 
@@ -59,6 +77,38 @@ function isValidAttachmentIndex(index: number, attachmentCount: number): boolean
   return Number.isSafeInteger(index) && index >= 0 && index < attachmentCount;
 }
 
+function collectTranscribedAudioAttachmentIndices(
+  ctx: MsgContext,
+  attachmentCount: number,
+): Set<number> {
+  // Only audio transcription should suppress the raw attachment in prompt notes.
+  // Image/video descriptions are lossy derived context, so the original attachment
+  // must stay available to multimodal models and downstream tools.
+  const transcribedAudioIndices = new Set<number>();
+  for (const output of ctx.MediaUnderstanding ?? []) {
+    if (
+      output.kind === "audio.transcription" &&
+      isValidAttachmentIndex(output.attachmentIndex, attachmentCount)
+    ) {
+      transcribedAudioIndices.add(output.attachmentIndex);
+    }
+  }
+  for (const decision of ctx.MediaUnderstandingDecisions ?? []) {
+    if (decision.capability !== "audio" || decision.outcome !== "success") {
+      continue;
+    }
+    for (const attachment of decision.attachments) {
+      if (
+        attachment.chosen?.outcome === "success" &&
+        isValidAttachmentIndex(attachment.attachmentIndex, attachmentCount)
+      ) {
+        transcribedAudioIndices.add(attachment.attachmentIndex);
+      }
+    }
+  }
+  return transcribedAudioIndices;
+}
+
 type InboundMediaNoteProjection = {
   text?: string;
   media: MediaFact[];
@@ -74,31 +124,7 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
     return { media: [], mediaIndexes: [] };
   }
 
-  // Only audio transcription should suppress the raw attachment in prompt notes.
-  // Image/video descriptions are lossy derived context, so the original attachment
-  // must stay available to multimodal models and downstream tools.
-  const transcribedAudioIndices = new Set<number>();
-  for (const output of ctx.MediaUnderstanding ?? []) {
-    if (
-      output.kind === "audio.transcription" &&
-      isValidAttachmentIndex(output.attachmentIndex, facts.length)
-    ) {
-      transcribedAudioIndices.add(output.attachmentIndex);
-    }
-  }
-  for (const decision of ctx.MediaUnderstandingDecisions ?? []) {
-    if (decision.capability !== "audio" || decision.outcome !== "success") {
-      continue;
-    }
-    for (const attachment of decision.attachments) {
-      if (
-        attachment.chosen?.outcome === "success" &&
-        isValidAttachmentIndex(attachment.attachmentIndex, facts.length)
-      ) {
-        transcribedAudioIndices.add(attachment.attachmentIndex);
-      }
-    }
-  }
+  const transcribedAudioIndices = collectTranscribedAudioAttachmentIndices(ctx, facts.length);
   // Transcript alone does not identify an attachment index; only use it as a fallback
   // when there is a single attachment to avoid stripping unrelated audio files.
   const canStripSingleAttachmentByTranscript =
@@ -137,23 +163,9 @@ export function buildInboundMediaNoteProjection(ctx: MsgContext): InboundMediaNo
   );
   const mediaIndexes = visibleEntries.map((entry) => entry.index);
   const count = visibleEntries.length;
-  const lines = visibleEntries.map(({ fact }, index) => {
-    const prefix = count > 1 ? `[media attached ${index + 1}/${count}: ` : "[media attached: ";
-    const pathValue = sanitizeInlineMediaNoteValue(fact.path);
-    const typeRaw = sanitizeInlineMediaNoteValue(fact.contentType ?? fact.kind);
-    const typePart = typeRaw ? ` (${typeRaw})` : "";
-    const urlRaw = sanitizeInlineMediaNoteValue(fact.url);
-    // When the channel mirrors the local path into the fact URL (Telegram album
-    // media is the canonical case), rendering ` | ${url}` adds no information
-    // and clutters the prompt with `path | path` duplication (issue #47587).
-    const urlPart = urlRaw && urlRaw !== pathValue ? ` | ${urlRaw}` : "";
-    const fileName = truncateUtf16Safe(
-      sanitizeInlineMediaNoteValue(basenameFromAnyPath(fact.fileName ?? "")),
-      256,
-    );
-    const fileNamePart = fileName ? ` ${JSON.stringify(fileName)}` : "";
-    return `${prefix}${pathValue}${typePart}${urlPart}${fileNamePart}]`;
-  });
+  const lines = visibleEntries.map((entry, index) =>
+    formatMediaAttachedLine(entry.fact, index + 1, count),
+  );
   if (count > 1) {
     lines.unshift(`[media attached: ${count} files]`);
   }

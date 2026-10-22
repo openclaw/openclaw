@@ -11,8 +11,8 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "./admitted-run-context.js";
+import { runEmbeddedAgent } from "./embedded-agent-runner.js";
 import type { EmbeddedAgentEvent } from "./embedded-agent-subscribe.shared-types.js";
-import { runEmbeddedAgent } from "./embedded-agent.js";
 import {
   createContextEngineLogicalTurnLease,
   type ContextEngineLogicalTurnLease,
