@@ -339,6 +339,57 @@ it("refreshes a changed session projection through the catalog owner after expli
   }
 });
 
+it("updates service-tier hints without rereading unchanged session facts", async () => {
+  const { gateway, current, client } = connectedGateway();
+  const observations = [{ requestedTier: "priority", responseTier: "default" }];
+  let fallback = false;
+  const request = current().request.mockImplementation(async (method) =>
+    method === "models.list"
+      ? {
+          models: [
+            {
+              id: "model",
+              name: "Model",
+              provider: "fixture",
+              serviceTierObservations: fallback ? observations : [],
+            },
+          ],
+          sessionModelRevision: "same-selection",
+        }
+      : { commands: [] },
+  );
+  const state = makeChatHost({ client }) as ChatPageHost;
+  state.connected = true;
+  state.sessionKey = "agent:main:current";
+  const shell = createShellOwner() as unknown as ChatMetadataShell;
+  shell.runtime = { context: { gateway } as unknown as ApplicationContext };
+  try {
+    await refreshChatMetadata(state);
+    request.mockClear();
+    for (fallback of [true, false]) {
+      shell.handleGatewayEvent({
+        event: "chat.metadata.changed",
+        payload: {
+          agentId: "main",
+          modelCatalogChanged: true,
+          authChanged: false,
+          commandsChanged: false,
+        },
+      });
+      await refreshChatMetadata(state);
+      expect(state.chatModelCatalog[0]?.serviceTierObservations).toEqual(
+        fallback ? observations : [],
+      );
+    }
+    expect(metadataCalls(request, "models.list")).toHaveLength(2);
+    expect(metadataCalls(request, "chat.metadata")).toHaveLength(0);
+    expect(metadataCalls(request, "sessions.describe")).toHaveLength(0);
+  } finally {
+    retireChatMetadataRequests(state);
+    gateway.stop();
+  }
+});
+
 it.each([
   { event: "config.changed", payload: {}, clearsChoices: false },
   { event: "chat.metadata.changed", payload: { modelSelectionChanged: true }, clearsChoices: true },

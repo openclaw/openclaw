@@ -49,7 +49,12 @@ it("shares one cold read across chat and the picker, preserving recents", async 
   const picker = projectsForGateway(h.gateway);
   onTestFinished(picker.subscribe(vi.fn()));
   expect(picker).toBe(h.store);
-  await h.store.refresh();
+  const pending = h.store.pendingRead;
+  expect(pending).not.toBeNull();
+  expect(picker.pendingRead).toBe(pending);
+  expect(h.store.refresh()).toBe(pending);
+  await pending;
+  expect(h.store.pendingRead).toBeNull();
   expect(h.request).toHaveBeenCalledExactlyOnceWith("projects.list", {});
   expect(h.store.snapshot.repositories).toEqual([
     { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] },
@@ -106,7 +111,7 @@ describe("registered project catalog", () => {
     failed.reject(new Error("catalog unavailable"));
     await refresh;
     expect(invalidated).toEqual({ result: null, repositories: [], ready: false });
-    expect(listener).toHaveBeenCalledTimes(2);
+    expect(listener).toHaveBeenCalledTimes(3);
     expect(h.store.snapshot).toEqual({ result: null, repositories: [], ready: false });
     await h.replace([{ ...project, originUrl: "https://github.com/replacement/clawsweeper.git" }]);
     expect(h.store.snapshot.repositories).toEqual([

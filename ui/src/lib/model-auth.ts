@@ -85,14 +85,15 @@ export function nextModelAuthStatusRefreshAt(result: ModelAuthStatusResult): num
 
 export async function loadModelAuthStatus(
   client: GatewayBrowserClient,
-  opts: { agentId: string; refresh?: boolean; signal?: AbortSignal },
+  opts: { agentId: string; refresh?: boolean; refreshUsage?: boolean; signal?: AbortSignal },
 ): Promise<ModelAuthStatusResult> {
   opts.signal?.throwIfAborted();
   if (!hasOperatorReadAccess(client.auth)) {
     return EMPTY_AUTH_STATUS;
   }
   const params = {
-    ...(opts?.refresh ? { refresh: true } : {}),
+    ...(opts.refresh ? { refresh: true } : {}),
+    ...(opts.refreshUsage ? { refreshUsage: true } : {}),
     agentId: opts.agentId,
   };
   const request = async (signal?: AbortSignal) => {
@@ -113,8 +114,7 @@ export async function loadModelAuthStatus(
     authReads.set(client, state);
   }
   if (opts.refresh) {
-    // Explicit refresh can change shared auth without a config event. Keep every
-    // refresh independent, and suspend ordinary sharing until all refreshes settle.
+    // Explicit auth refresh can change every agent's shared credentials.
     state.entries.clear();
     state.refreshes += 1;
     try {
@@ -126,28 +126,37 @@ export async function loadModelAuthStatus(
   if (state.refreshes > 0) {
     return await request(opts.signal);
   }
-  // Connection-owned reads survive presenter unmounts until an auth publication invalidates them.
+  // Connection-owned reads survive presenter unmounts, but usage must not live until token expiry.
   const requests = state.entries;
-  const agentId = opts.agentId;
-  let pending = requests.get(agentId);
+  // Ordinary reads must not wait behind a provider fetch. Share each read mode
+  // independently; both consume the Gateway-owned usage freshness deadline.
+  const key = JSON.stringify([opts.agentId, Boolean(opts.refreshUsage)]);
+  let pending = requests.get(key);
   if (pending?.refreshAt !== undefined && pending.refreshAt <= Date.now()) {
-    requests.delete(agentId);
+    requests.delete(key);
     pending = undefined;
   }
   if (!pending) {
+    const requestedAt = Date.now();
     const shared: ModelAuthRequest = { promise: request(), subscribers: new Set<object>() };
-    requests.set(agentId, shared);
+    requests.set(key, shared);
     const finish = () => {
       // A retired read can settle after its replacement; only remove this flight.
-      if (requests.get(agentId) === shared) {
-        requests.delete(agentId);
+      if (requests.get(key) === shared) {
+        requests.delete(key);
       }
     };
     void shared.promise.then((result) => {
       if (result === EMPTY_AUTH_STATUS || result.unavailable || !Array.isArray(result.providers)) {
         finish();
-      } else if (requests.get(agentId) === shared) {
+      } else if (requests.get(key) === shared) {
         shared.refreshAt = nextModelAuthStatusRefreshAt(result);
+        if (result.usageRefreshAt !== undefined) {
+          shared.refreshAt = Math.min(
+            shared.refreshAt ?? Infinity,
+            requestedAt + (result.usageRefreshAt - result.ts),
+          );
+        }
       }
     }, finish);
     pending = shared;

@@ -20,6 +20,7 @@ import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
+import { showConfirmDialog } from "./confirm-dialog.ts";
 import type { McpServerForm } from "./mcp-server-form.ts";
 import { McpServersForm } from "./mcp-servers-form.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -186,12 +187,22 @@ export function McpServersCard(props: McpServersCardProps) {
         name,
       }),
     });
-  const removeServer = (name: string) =>
-    mutate({
+  const removeServer = async (name: string) => {
+    const confirmed = await showConfirmDialog({
+      title: t("mcpServers.removeConfirmTitle", { name }),
+      message: t("mcpServers.removeConfirmMessage"),
+      confirmLabel: t("common.remove"),
+      danger: true,
+    });
+    if (!confirmed) {
+      return;
+    }
+    await mutate({
       buildPatch: (servers) => buildRemoveMcpServerPatch(servers, name),
       note: `mcp settings: remove server ${name}`,
       successText: t("mcpServers.removedSuccess", { name }),
     });
+  };
   const rows = createMemo(() =>
     summarizeMcpServers(resolveEditableSnapshotConfig(config.read().configSnapshot)),
   );

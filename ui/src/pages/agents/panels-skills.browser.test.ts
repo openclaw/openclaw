@@ -13,7 +13,7 @@ installBrowserHistoryIsolation();
 type Params = Parameters<typeof AgentSkills>[0] &
   Pick<
     ReturnType<Parameters<typeof AgentSkills>[0]["readData"]>,
-    "agentSkillsReport" | "agentSkillsRead" | "agentSkillsUpdateError" | "agentSkillsAgentId"
+    "agentSkillsReport" | "agentSkillsRead" | "agentSkillsAgentId"
   >;
 function skillsParams(skills: SkillStatusEntry[], overrides: Partial<Params> = {}): Params {
   return {
@@ -25,25 +25,86 @@ function skillsParams(skills: SkillStatusEntry[], overrides: Partial<Params> = {
     canUpdateConfig: true,
     agentSkillsReport: { workspaceDir: "/tmp/workspace", managedSkillsDir: "/tmp/skills", skills },
     agentSkillsRead: null,
-    agentSkillsUpdateError: null,
     agentSkillsAgentId: "main",
     configForm: { agents: { entries: { main: {} } } },
     configLoading: false,
     configSaving: false,
     configDirty: false,
+    presentationRetired: Promise.withResolvers<void>().promise,
     filter: "",
     onFilterChange: () => undefined,
     onRefresh: () => undefined,
     onToggle: () => false,
     onClear: () => undefined,
     onDisableAll: () => false,
-    onConfigReload: () => undefined,
-    onConfigSave: () => undefined,
+    onConfigReload: async () => undefined,
+    onConfigSave: async () => undefined,
     ...overrides,
   };
 }
 
 describe("agents skills panel (browser)", () => {
+  it("shows inherited skills while resetting and restores the allowlist after rejection before retry", async () => {
+    const first = deferred();
+    const retry = deferred();
+    const onClear = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
+    const container = document.createElement("div");
+    const params = skillsParams(
+      [
+        createSkill({ name: "github", source: "openclaw-managed" }),
+        createSkill({ name: "weather", source: "openclaw-managed" }),
+        createSkill({ name: "learned", source: "openclaw-workshop" }),
+      ],
+      {
+        onClear,
+        configForm: {
+          agents: { defaults: { skills: ["github"] }, entries: { main: { skills: ["weather"] } } },
+        },
+      },
+    );
+    const view = mountSolid(AgentSkills, params, container);
+    const reset = () =>
+      Array.from(container.querySelectorAll("button")).find((b) => b.textContent === "Reset")!;
+    const checked = () =>
+      Array.from(container.querySelectorAll<HTMLInputElement>(".agent-skill-row input")).map(
+        (input) => input.checked,
+      );
+    await waitForSolid(() => expect(checked()).toEqual([true, false, true]));
+    const filter = container.querySelector("input[name=agent-skills-filter]");
+
+    reset().click();
+    await waitForSolid(() => {
+      expect(checked()).toEqual([true, true, false]);
+      expect(container.textContent).toContain("Saving");
+      expect(container.textContent).toContain("inherits the default skill allowlist");
+    });
+    first.reject(new Error("Reset was rejected."));
+    await waitForSolid(() => {
+      expect(container.textContent).toContain("Reset was rejected.");
+      expect(checked()).toEqual([true, false, true]);
+    });
+    expect(container.querySelector("input[name=agent-skills-filter]")).toBe(filter);
+
+    reset().click();
+    await waitForSolid(() => {
+      expect(container.textContent).toContain("Saving");
+      expect(container.textContent).not.toContain("Reset was rejected.");
+    });
+    view.update({
+      ...params,
+      configForm: { agents: { defaults: { skills: ["github"] }, entries: { main: {} } } },
+    });
+    retry.resolve();
+    await waitForSolid(() => {
+      expect(checked()).toEqual([true, true, false]);
+      expect(container.textContent).not.toContain("Saving");
+      expect(container.textContent).not.toContain("Reset was rejected.");
+    });
+    expect(onClear).toHaveBeenNthCalledWith(1, "main");
+    expect(onClear).toHaveBeenNthCalledWith(2, "main");
+    expect(container.querySelector("input[name=agent-skills-filter]")).toBe(filter);
+  });
+
   it.each(["Refresh", "owner receipt"])(
     "shows pending reads, keeps the cached report after failure, and retries through %s",
     async (retrySource) => {
@@ -185,6 +246,34 @@ describe("agents skills panel (browser)", () => {
     expect(filteredGroup?.querySelector(".agent-skill-row")?.textContent).toContain(
       "Unique Built In Match",
     );
+  });
+
+  it("retires optimistic reset presentation when the selected agent changes", async () => {
+    const completion = deferred();
+    const container = document.createElement("div");
+    const params = skillsParams([createSkill({ name: "github", source: "openclaw-managed" })], {
+      configForm: { agents: { entries: { main: { skills: [] }, research: { skills: [] } } } },
+      onClear: () => completion.promise,
+    });
+    const view = mountSolid(AgentSkills, params, container);
+    const checked = () =>
+      container.querySelector<HTMLInputElement>(".agent-skill-row input")?.checked;
+    Array.from(container.querySelectorAll("button"))
+      .find((button) => button.textContent === "Reset")!
+      .click();
+    await waitForSolid(() => expect(checked()).toBe(true));
+
+    view.update({ ...params, agentId: "research", agentSkillsAgentId: "research" });
+    await waitForSolid(() => {
+      expect(checked()).toBe(false);
+      expect(container.textContent).not.toContain("Saving");
+    });
+    completion.reject(new Error("Retired reset failed."));
+    await completion.promise.catch(() => undefined);
+    await waitForSolid(() => {
+      expect(checked()).toBe(false);
+      expect(container.textContent).not.toContain("Retired reset failed.");
+    });
   });
 
   it("keeps learned Workshop skills on under an allowlist", async () => {

@@ -446,17 +446,12 @@ it.each([
 );
 
 it("rejects raw destruction of a session-attached worker", async () => {
-  const service = workerService({
-    destroyUnattached: rejectService(
-      "invalid_state",
-      "Attached cloud workers must be stopped through sessions.reclaim",
-    ),
-  });
-
+  const message = "Attached cloud workers must be stopped through sessions.reclaim";
+  const service = workerService({ destroyUnattached: rejectService("invalid_state", message) });
   expectFailure(
     await call("environments.destroy", workerId, { service }),
     ErrorCodes.INVALID_REQUEST,
-    "Attached cloud workers must be stopped through sessions.reclaim",
+    message,
   );
 });
 

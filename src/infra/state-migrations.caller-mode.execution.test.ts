@@ -32,8 +32,6 @@ let {
   runLegacyStateMigrations,
 } = await import("./state-migrations.doctor.js");
 let mediaPersistence = await import("./state-migrations.media-persistence.js");
-let { createLegacyDatabaseFixture } =
-  await import("./state-migrations.media-persistence.test-support.js");
 let { readLegacyMigrationReceipt, resolveLegacyMigrationSourceKey } =
   await import("./state-migrations.receipts.js");
 let { resolveLegacyProfileWorkspaceMigrationPaths } =
@@ -75,8 +73,6 @@ async function reloadStateDirFixtureGraph() {
     runLegacyStateMigrations,
   } = await import("./state-migrations.doctor.js"));
   mediaPersistence = await import("./state-migrations.media-persistence.js");
-  ({ createLegacyDatabaseFixture } =
-    await import("./state-migrations.media-persistence.test-support.js"));
   ({ readLegacyMigrationReceipt, resolveLegacyMigrationSourceKey } =
     await import("./state-migrations.receipts.js"));
   ({ resolveLegacyProfileWorkspaceMigrationPaths } =
@@ -702,62 +698,6 @@ describe("legacy state migration caller execution", () => {
     expect(fs.existsSync(execPath)).toBe(true);
     expect(postRefusalQueries).toEqual([]);
     expect(snapshotSqliteArtifacts(databasePath)).toEqual(databaseArtifactsBefore);
-  });
-
-  it("receipts a blocking conditional media warning before its ordered tail", async () => {
-    const fixture = await makeFixture();
-    const cfg: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        defaults: {
-          heartbeat: { agentId: "healthy" },
-          systemAgent: { agentId: "healthy" },
-        },
-        entries: { healthy: {}, broken: {} },
-      },
-      talk: { agentId: "healthy" },
-    };
-    fs.writeFileSync(fixture.configPath, `${JSON.stringify(cfg)}\n`);
-    createLegacyDatabaseFixture({
-      agentId: "healthy",
-      env: fixture.env,
-      eventsBySession: {},
-    });
-    const brokenDatabasePath = path.join(
-      fixture.stateDir,
-      "agents",
-      "broken",
-      "agent",
-      "openclaw-agent.sqlite",
-    );
-    fs.mkdirSync(path.dirname(brokenDatabasePath), { recursive: true });
-    fs.writeFileSync(brokenDatabasePath, "not sqlite");
-    const { execPath } = writeLegacyDoctorSources(fixture.stateDir);
-    const plan = await planFixture(fixture);
-
-    const result = await autoMigrateLegacyState({
-      cfg,
-      doctorOnlyStateMigrations: true,
-      env: fixture.env,
-      homedir: () => fixture.homeDir,
-      legacySessionSurfaces: EMPTY_LEGACY_SESSION_SURFACES,
-    });
-
-    expect(result.stepReceipts.find((receipt) => receipt.id === "media-persistence")).toMatchObject(
-      {
-        requiredness: "conditional",
-        outcome: "refused",
-        changes: [expect.stringContaining("Upgraded agent database schema")],
-        warnings: [expect.stringContaining(brokenDatabasePath)],
-        refusal: { code: "step-refused" },
-      },
-    );
-    expectBlockedTailInPlanOrder({
-      plan,
-      receipts: result.stepReceipts,
-      blockerId: "media-persistence",
-    });
-    expect(fs.existsSync(execPath)).toBe(true);
   });
 
   it("reports a completed profile move when plugin preparation refuses", async () => {

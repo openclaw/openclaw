@@ -3,28 +3,100 @@ import {
   isRecord as hasRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import {
+  listAgentEntries,
   listAgentEntriesWithSource,
   resolveAgentConfig,
 } from "../../../agents/agent-scope-config.js";
+import { resolveDefaultModelForAgent } from "../../../agents/model-selection-config.js";
 import {
   normalizeToolProviderPolicyKey,
   resolveProviderToolPolicy,
   resolveProviderToolPolicyEntry,
 } from "../../../agents/provider-tool-policy.js";
-import { isToolAllowedByPolicyName } from "../../../agents/tool-policy-match.js";
+import { pickSandboxToolPolicy } from "../../../agents/sandbox-tool-policy.js";
+import {
+  isToolAllowedByPolicies,
+  isToolAllowedByPolicyName,
+} from "../../../agents/tool-policy-match.js";
 import { mergeAlsoAllowPolicy, resolveToolProfilePolicy } from "../../../agents/tool-policy.js";
 import type { OpenClawConfigWithLegacyRoster } from "../../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import type { ToolPolicyConfig } from "../../../config/types.tools.js";
+import type {
+  AgentToolsConfig,
+  ToolPolicyConfig,
+  ToolsConfig,
+} from "../../../config/types.tools.js";
 import { VERSION_BOUND_RUNTIME_PLUGIN_POLICY_IDS_BY_SURFACE } from "../../../plugins/official-runtime-plugins.js";
 import { collectChannelRouteTargets } from "../../../routing/channel-route-targets.js";
 import type { BlockedLegacyOpenAICodexProviderPlan } from "./legacy-config-migrations.runtime.models.js";
-import {
-  collectUnavailableSourceReplyTargets,
-  resolveMessageToolAvailability,
-  SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
-} from "./preview-message-tool-policy.js";
-import { resolveDoctorPrimaryModelRef } from "./primary-model-ref.js";
+
+function resolveMessageToolAvailability(params: {
+  cfg: OpenClawConfig;
+  agentId?: string;
+  globalTools?: ToolsConfig;
+  agentTools?: AgentToolsConfig;
+  runtimeAlsoAllow?: string[];
+}): boolean {
+  const modelRef = resolveDefaultModelForAgent({
+    cfg: params.cfg,
+    agentId: params.agentId,
+    allowPluginNormalization: false,
+  });
+  const [providerPolicy, agentProviderPolicy] = [
+    params.globalTools?.byProvider,
+    params.agentTools?.byProvider,
+  ].map((byProvider) =>
+    resolveProviderToolPolicy({
+      byProvider,
+      modelProvider: modelRef.provider,
+      modelId: modelRef.model,
+    }),
+  );
+  const profilePolicy = (global?: ToolPolicyConfig, agent?: ToolPolicyConfig) => {
+    const alsoAllow = Array.isArray(agent?.alsoAllow)
+      ? agent.alsoAllow
+      : Array.isArray(global?.alsoAllow)
+        ? global.alsoAllow
+        : [];
+    return mergeAlsoAllowPolicy(resolveToolProfilePolicy(agent?.profile ?? global?.profile), [
+      ...alsoAllow,
+      ...(params.runtimeAlsoAllow ?? []),
+    ]);
+  };
+  return isToolAllowedByPolicies("message", [
+    profilePolicy(params.globalTools, params.agentTools),
+    profilePolicy(providerPolicy, agentProviderPolicy),
+    pickSandboxToolPolicy(providerPolicy),
+    pickSandboxToolPolicy(agentProviderPolicy),
+    pickSandboxToolPolicy(params.globalTools),
+    pickSandboxToolPolicy(params.agentTools),
+  ]);
+}
+
+const SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW = ["message"];
+
+function collectUnavailableSourceReplyTargets(cfg: OpenClawConfig): string[] {
+  const agents = listAgentEntries(cfg).filter(hasRecord);
+  if (agents.length === 0) {
+    const available = resolveMessageToolAvailability({
+      cfg,
+      globalTools: cfg.tools,
+      runtimeAlsoAllow: SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
+    });
+    return available ? [] : ["default tool policy"];
+  }
+  return agents.flatMap((agent) => {
+    const agentId = typeof agent.id === "string" ? agent.id : "unknown";
+    const available = resolveMessageToolAvailability({
+      cfg,
+      agentId,
+      globalTools: cfg.tools,
+      agentTools: agent.tools,
+      runtimeAlsoAllow: SOURCE_REPLY_RUNTIME_MESSAGE_ALLOW,
+    });
+    return available ? [] : [`agent "${agentId}"`];
+  });
+}
 
 function listAgentRecords(cfg: OpenClawConfig) {
   return listAgentEntriesWithSource(cfg).map(({ entry }) => entry);
@@ -346,8 +418,7 @@ export async function collectDoctorPreviewNotes(params: {
   for (const { entry: agent, source } of listAgentEntriesWithSource(cfg)) {
     const agentTools = asOptionalRecord(agent.tools);
     const agentId = typeof agent.id === "string" ? agent.id : undefined;
-    const agentConfig = agentId ? resolveAgentConfig(cfg, agentId) : undefined;
-    const modelRef = resolveDoctorPrimaryModelRef(cfg, agentConfig?.model);
+    const modelRef = resolveDefaultModelForAgent({ cfg, agentId, allowPluginNormalization: false });
     const agentPath = `agents.${source.kind === "entries" ? `entries.${source.key}` : `list[${source.index}]`}.tools`;
     const ownAgentConfiguredEntries = collectConfiguredToolSectionGrantEntries({
       tools: agentTools,

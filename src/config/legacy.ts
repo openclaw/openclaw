@@ -1,19 +1,8 @@
 // Applies legacy config rules during load-time compatibility checks.
 import { LEGACY_CONFIG_MIGRATION_RULES as LEGACY_CONFIG_RULES } from "../commands/doctor/shared/legacy-config-migrations.js";
+import { readObjectPath } from "../shared/dot-path.js";
 import type { LegacyConfigRule } from "./legacy.shared.js";
 import type { LegacyConfigIssue } from "./types.js";
-
-// Legacy checks use raw dotted paths so doctor can report exact config keys.
-function getPathValue(root: Record<string, unknown>, path: string[]): unknown {
-  let cursor: unknown = root;
-  for (const key of path) {
-    if (!cursor || typeof cursor !== "object") {
-      return undefined;
-    }
-    cursor = (cursor as Record<string, unknown>)[key];
-  }
-  return cursor;
-}
 
 /** Finds legacy config issues using built-in rules plus optional caller rules. */
 export function findLegacyConfigIssues(
@@ -38,10 +27,10 @@ export function findLegacyConfigRuleIssues(
     sourceRaw && typeof sourceRaw === "object" ? (sourceRaw as Record<string, unknown>) : root;
   const issues: LegacyConfigIssue[] = [];
   for (const rule of rules) {
-    const cursor = getPathValue(root, rule.path);
+    const cursor = readObjectPath(root, rule.path);
     if (cursor !== undefined && (!rule.match || rule.match(cursor, root))) {
       if (rule.requireSourceLiteral) {
-        const sourceCursor = getPathValue(sourceRoot, rule.path);
+        const sourceCursor = readObjectPath(sourceRoot, rule.path);
         if (sourceCursor === undefined) {
           continue;
         }

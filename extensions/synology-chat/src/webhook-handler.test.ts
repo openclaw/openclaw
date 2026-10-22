@@ -1,8 +1,7 @@
 // Synology Chat tests cover webhook handler plugin behavior.
-import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import { postRawWebhook } from "openclaw/plugin-sdk/test-env";
+import { postRawWebhook, withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { setSynologyRuntime } from "./runtime.js";
 import { makeFormBody, makeReq, makeRes, makeStalledReq } from "./test-http-utils.js";
@@ -44,19 +43,9 @@ function createWebhookHandler(deps: TestWebhookHandlerDeps) {
   });
 }
 
-type TestLog = {
-  info: (...args: unknown[]) => void;
-  warn: (...args: unknown[]) => void;
-  error: (...args: unknown[]) => void;
-};
-
 function deliveredMessage(deliver: TestDeliver) {
   expect(deliver).toHaveBeenCalledTimes(1);
-  const message = vi.mocked(deliver).mock.calls[0]?.[0];
-  if (!message) {
-    throw new Error("expected delivered Synology Chat message");
-  }
-  return message;
+  return expectDefined(vi.mocked(deliver).mock.calls[0]?.[0], "delivered Synology message");
 }
 
 let accountSequence = 0;
@@ -111,36 +100,17 @@ async function postToWebhook(
 }
 
 describe("createWebhookHandler", () => {
-  let log: TestLog;
+  let log: NonNullable<WebhookHandlerDeps["log"]>;
 
   beforeEach(() => {
     setSynologyRuntime(createPluginRuntimeMock());
     resolveLegacyWebhookNameToChatUserId.mockClear();
     resolveLegacyWebhookNameToChatUserId.mockResolvedValue(undefined);
-    log = {
-      info: vi.fn(),
-      warn: vi.fn(),
-      error: vi.fn(),
-    };
+    log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   });
 
   function admissionHandler(receive: WebhookHandlerDeps["receive"]) {
     return createWebhookHandlerWithIngress({ account: makeAccount(), receive, log });
-  }
-
-  async function expectForbiddenByPolicy(params: {
-    account: Partial<ResolvedSynologyChatAccount>;
-    bodyContains: string;
-    deliver?: TestDeliver;
-  }) {
-    const deliver = params.deliver ?? vi.fn();
-    const { handler } = makeTestHandler({ account: params.account, deliver });
-
-    const res = await postToWebhook(handler);
-
-    expect(res.status).toBe(403);
-    expect(res.body).toContain(params.bodyContains);
-    expect(deliver).not.toHaveBeenCalled();
   }
 
   function makeTestHandler(
@@ -160,47 +130,24 @@ describe("createWebhookHandler", () => {
     };
   }
 
-  async function runDangerousNameMatchReply(resolvedChatUserId?: number) {
-    resolveLegacyWebhookNameToChatUserId.mockResolvedValueOnce(resolvedChatUserId);
-    const { deliver, handler } = makeTestHandler({
-      account: { dangerouslyAllowNameMatching: true },
-      deliver: vi.fn().mockResolvedValue(undefined),
-    });
-    expect((await postToWebhook(handler)).status).toBe(204);
-    expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith({
-      incomingUrl: "https://nas.example.com/incoming",
-      mutableWebhookUsername: "testuser",
-      allowInsecureSsl: true,
-      log,
-    });
-    return deliver;
-  }
-
   it("rejects non-POST methods with 405", async () => {
     const { handler } = makeTestHandler();
-
     const req = makeReq("GET", "");
     const res = makeRes();
     await handler(req, res);
-
     expect(res.status).toBe(405);
   });
 
   it("does not acknowledge until durable admission completes", async () => {
-    let resolveAdmission: ((value: { kind: "durable" }) => void) | undefined;
-    const admission = new Promise<{ kind: "durable" }>((resolve) => {
-      resolveAdmission = resolve;
-    });
+    const { promise: admission, resolve } = Promise.withResolvers<{ kind: "durable" }>();
     const receive = vi.fn(() => admission);
     const handler = admissionHandler(receive);
-
     const res = makeRes();
     const pending = handler(makeReq("POST", validBody), res);
     await vi.waitFor(() => expect(receive).toHaveBeenCalledTimes(1));
     expect(res.status).toBe(0);
     expect(res.headers["x-openclaw-delivery-accepted"]).toBeUndefined();
-
-    resolveAdmission?.({ kind: "durable" });
+    resolve({ kind: "durable" });
     await pending;
     expect(res.status).toBe(204);
     expect(res.headers["x-openclaw-delivery-accepted"]).toBe("durable");
@@ -209,9 +156,7 @@ describe("createWebhookHandler", () => {
   it("returns 503 without acknowledging when durable admission fails", async () => {
     const receive = vi.fn().mockRejectedValue(new Error("sqlite unavailable"));
     const handler = admissionHandler(receive);
-
     const res = await postToWebhook(handler);
-
     expect(res.status).toBe(503);
     expect(res.headers["x-openclaw-delivery-accepted"]).toBeUndefined();
     expect(res.body).toContain("Webhook admission failed");
@@ -220,14 +165,12 @@ describe("createWebhookHandler", () => {
   it("returns 400 without admission when the request stream fails", async () => {
     const receive = vi.fn();
     const handler = admissionHandler(receive);
-
     const req = makeStalledReq("POST");
     const res = makeRes();
     const pending = handler(req, res);
     req.emit("data", Buffer.from(validBody));
     req.emit("error", new Error("request stream failed"));
     await pending;
-
     expect(res.status).toBe(400);
     expect(res.body).toBe(JSON.stringify({ error: "Invalid request body" }));
     expect(res.headers["x-openclaw-delivery-accepted"]).toBeUndefined();
@@ -261,44 +204,27 @@ describe("createWebhookHandler", () => {
       log,
       bodyTimeoutMs: scenario.bodyTimeoutMs,
     });
-    const server = createServer((req, res) => {
-      void handler(req, res);
-    });
-    try {
-      await new Promise<void>((resolve, reject) => {
-        server.once("error", reject);
-        server.listen(0, "127.0.0.1", () => {
-          server.removeListener("error", reject);
-          resolve();
+    await withServer(
+      (req, res) => {
+        void handler(req, res);
+      },
+      async (baseUrl) => {
+        const result = await postRawWebhook({
+          url: baseUrl + "/webhook/synology",
+          body: scenario.body,
+          contentLength: scenario.contentLength,
+          headers: { "content-type": "application/x-www-form-urlencoded" },
         });
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected the Synology webhook test server to have a TCP address");
-      }
-
-      const result = await postRawWebhook({
-        url: `http://127.0.0.1:${address.port}/webhook/synology`,
-        body: scenario.body,
-        contentLength: scenario.contentLength,
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-      });
-
-      expect(result.statusLine).toBe(scenario.statusLine);
-      expect(result.body).toBe(scenario.responseBody);
-      expect(result.closedByServer).toBe(true);
-      expect(deliver).not.toHaveBeenCalled();
-    } finally {
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
-    }
+        expect(result.statusLine).toBe(scenario.statusLine);
+        expect(result.body).toBe(scenario.responseBody);
+        expect(result.closedByServer).toBe(true);
+        expect(deliver).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it("rejects excess concurrent pre-auth body reads from the same remote IP", async () => {
     const { handler } = makeTestHandler({ deliver: vi.fn() });
-
     const requests = Array.from({ length: 12 }, () => {
       const req = makeStalledReq("POST");
       (req.socket as { remoteAddress?: string }).remoteAddress = "203.0.113.10";
@@ -308,11 +234,9 @@ describe("createWebhookHandler", () => {
     const runs = requests.map((req, index) =>
       handler(req, expectDefined(responses[index], `Synology response ${index}`)),
     );
-
     // Default maxInFlightPerKey is 8; 12 total requests leaves 4 rejected with 429.
     expect(responses.filter((res) => res.status === 0)).toHaveLength(8);
     expect(responses.filter((res) => res.status === 429)).toHaveLength(4);
-
     for (const req of requests) {
       req.emit("end");
     }
@@ -324,35 +248,28 @@ describe("createWebhookHandler", () => {
     const { deliver, handler } = makeTestHandler({
       account: { token: weakToken, rateLimitPerMinute: 5 },
     });
-
     let guessedToken: string | null = null;
     let saw429 = false;
-
     for (let i = 0; i < 130; i += 1) {
       const candidate = String(i).padStart(8, "0");
       const res = await postToWebhook(handler, formBody({ token: candidate }), {
         remoteAddress: "203.0.113.10",
       });
-
       if (res.status === 429) {
         saw429 = true;
         break;
       }
-
       if (res.status === 204) {
         guessedToken = candidate;
         break;
       }
-
       expect(res.status).toBe(401);
     }
-
     expect(saw429).toBe(true);
     expect(guessedToken).toBeNull();
     const lockedRes = await postToWebhook(handler, formBody({ token: weakToken }), {
       remoteAddress: "203.0.113.10",
     });
-
     expect(lockedRes.status).toBe(429);
     expect(deliver).not.toHaveBeenCalled();
   });
@@ -361,20 +278,17 @@ describe("createWebhookHandler", () => {
     const { deliver, handler } = makeTestHandler({
       account: { rateLimitPerMinute: 30 },
     });
-
     for (let i = 0; i < 11; i += 1) {
       const res = await postToWebhook(handler, validBody, {
         remoteAddress: "203.0.113.20",
       });
       expect(res.status).toBe(204);
     }
-
     expect(deliver).toHaveBeenCalledTimes(11);
   });
 
   it("accepts application/json with alias fields", async () => {
     const { deliver, handler } = makeTestHandler();
-
     const res = await postToWebhook(
       handler,
       JSON.stringify({
@@ -386,7 +300,6 @@ describe("createWebhookHandler", () => {
       }),
       { headers: { "content-type": "application/json" } },
     );
-
     expect(res.status).toBe(204);
     expect(deliveredMessage(deliver)).toMatchObject({
       body: "Hello from json",
@@ -403,11 +316,9 @@ describe("createWebhookHandler", () => {
 
   it("rejects malformed application/json with a stable parser error", async () => {
     const { deliver, handler } = makeTestHandler();
-
     const res = await postToWebhook(handler, "{not json", {
       headers: { "content-type": "application/json" },
     });
-
     expect(res.status).toBe(400);
     expect(res.body).toContain("Invalid request body");
     expect(deliver).not.toHaveBeenCalled();
@@ -436,18 +347,15 @@ describe("createWebhookHandler", () => {
     expect(deliver).toHaveBeenCalled();
   });
 
-  it("returns 403 when allowlist policy is set with empty allowedUserIds", async () => {
-    await expectForbiddenByPolicy({
-      account: { dmPolicy: "allowlist", allowedUserIds: [] },
-      bodyContains: "Allowlist is empty",
-    });
-  });
-
-  it("returns 403 when DMs are disabled", async () => {
-    await expectForbiddenByPolicy({
-      account: { dmPolicy: "disabled" },
-      bodyContains: "disabled",
-    });
+  it.each([
+    { dmPolicy: "allowlist", bodyContains: "Allowlist is empty" },
+    { dmPolicy: "disabled", bodyContains: "disabled" },
+  ] as const)("returns 403 for $dmPolicy DMs", async ({ dmPolicy, bodyContains }) => {
+    const { handler, deliver } = makeTestHandler({ account: { dmPolicy, allowedUserIds: [] } });
+    const res = await postToWebhook(handler);
+    expect(res.status).toBe(403);
+    expect(res.body).toContain(bodyContains);
+    expect(deliver).not.toHaveBeenCalled();
   });
 
   it("returns 429 when rate limited", async () => {
@@ -460,30 +368,38 @@ describe("createWebhookHandler", () => {
 
   it("strips trigger word from message", async () => {
     const { deliver, handler } = makeTestHandler();
-
     const body = formBody({
       text: "!bot Hello there",
       trigger_word: "!bot",
       post_id: "post-trigger",
     });
-
     const res = await postToWebhook(handler, body);
-
     expect(res.status).toBe(204);
     expect(deliveredMessage(deliver).body).toBe("Hello there");
   });
 
-  it("only resolves reply recipient by username when break-glass mode is enabled", async () => {
-    const deliver = await runDangerousNameMatchReply(456);
-    expect(deliveredMessage(deliver)).toMatchObject({ from: "123", chatUserId: "456" });
-  });
-
-  it("falls back to payload.user_id when break-glass resolution does not find a match", async () => {
-    const deliver = await runDangerousNameMatchReply();
-    expect(log.warn).toHaveBeenCalledWith(
-      'Could not resolve Chat API user_id for "testuser" — falling back to webhook user_id 123. Reply delivery may fail.',
-    );
-    expect(deliveredMessage(deliver)).toMatchObject({ from: "123", chatUserId: "123" });
+  it.each([456, undefined])("resolves break-glass reply identity (%s)", async (resolved) => {
+    resolveLegacyWebhookNameToChatUserId.mockResolvedValueOnce(resolved);
+    const { deliver, handler } = makeTestHandler({
+      account: { dangerouslyAllowNameMatching: true },
+      deliver: vi.fn().mockResolvedValue(undefined),
+    });
+    expect((await postToWebhook(handler)).status).toBe(204);
+    expect(resolveLegacyWebhookNameToChatUserId).toHaveBeenCalledWith({
+      incomingUrl: "https://nas.example.com/incoming",
+      mutableWebhookUsername: "testuser",
+      allowInsecureSsl: true,
+      log,
+    });
+    if (resolved === undefined) {
+      expect(log.warn).toHaveBeenCalledWith(
+        'Could not resolve Chat API user_id for "testuser" — falling back to webhook user_id 123. Reply delivery may fail.',
+      );
+    }
+    expect(deliveredMessage(deliver)).toMatchObject({
+      from: "123",
+      chatUserId: String(resolved ?? 123),
+    });
   });
 
   it("awaits deliver directly with no local hardcoded timeout wrapper", async () => {
@@ -494,11 +410,8 @@ describe("createWebhookHandler", () => {
       const { handler } = makeTestHandler({
         deliver,
       });
-
       const res = await postToWebhook(handler);
-
       expect(res.status).toBe(204);
-
       const delays = setTimeoutSpy.mock.calls.map((call) => call[1]);
       const longDelays = delays.filter((d) => typeof d === "number" && d >= 120_000);
       expect(longDelays).toEqual([]);

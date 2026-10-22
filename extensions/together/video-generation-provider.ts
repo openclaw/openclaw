@@ -18,10 +18,7 @@ import {
   asSafeIntegerInRange,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type {
-  VideoGenerationProvider,
-  VideoGenerationRequest,
-} from "openclaw/plugin-sdk/video-generation";
+import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import { TOGETHER_BASE_URL } from "./models.js";
 
 const DEFAULT_TOGETHER_VIDEO_MODEL = "Wan-AI/wan2.7-t2v";
@@ -73,17 +70,6 @@ type TogetherVideoResponse = {
       }>;
 };
 
-function resolveTogetherVideoBaseUrl(req: VideoGenerationRequest): string {
-  const configuredBaseUrl = normalizeOptionalString(req.cfg?.models?.providers?.together?.baseUrl);
-  if (
-    !configuredBaseUrl ||
-    normalizeBaseUrl(configuredBaseUrl) === normalizeBaseUrl(TOGETHER_BASE_URL)
-  ) {
-    return TOGETHER_VIDEO_BASE_URL;
-  }
-  return configuredBaseUrl;
-}
-
 function extractTogetherVideoUrl(payload: TogetherVideoResponse): string | undefined {
   const outputs = Array.isArray(payload.outputs)
     ? payload.outputs
@@ -103,17 +89,6 @@ function readTogetherVideoFailureMessage(payload: TogetherVideoResponse): string
   return payload.status === "failed"
     ? (normalizeOptionalString(payload.error?.message) ?? "Together video generation failed")
     : undefined;
-}
-
-function resolveTogetherDurationSeconds(value: unknown, min: number): string | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return undefined;
-  }
-  const duration = asSafeIntegerInRange(Math.round(value), {
-    min,
-    max: TOGETHER_MAX_DURATION_SECONDS,
-  });
-  return duration === undefined ? undefined : String(duration);
 }
 
 export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider {
@@ -148,11 +123,19 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         throw new Error("Together video generation does not support video reference inputs.");
       }
       const fetchFn = fetch;
+      const configuredBaseUrl = normalizeOptionalString(
+        req.cfg?.models?.providers?.together?.baseUrl,
+      );
+      const videoBaseUrl =
+        !configuredBaseUrl ||
+        normalizeBaseUrl(configuredBaseUrl) === normalizeBaseUrl(TOGETHER_BASE_URL)
+          ? TOGETHER_VIDEO_BASE_URL
+          : configuredBaseUrl;
       const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
         await resolveProviderApiKeyHttpRequestConfig({
           req,
           missingApiKeyMessage: "Together API key missing",
-          baseUrl: resolveTogetherVideoBaseUrl(req),
+          baseUrl: videoBaseUrl,
           defaultBaseUrl: TOGETHER_VIDEO_BASE_URL,
           request: sanitizeConfiguredModelProviderRequest(
             req.cfg?.models?.providers?.together?.request,
@@ -172,12 +155,15 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
         model,
         prompt: req.prompt,
       };
-      const duration = resolveTogetherDurationSeconds(
-        req.durationSeconds,
-        isWanModel ? TOGETHER_WAN_DURATIONS[0] : TOGETHER_MIN_DURATION_SECONDS,
-      );
-      if (duration !== undefined) {
-        body.seconds = duration;
+      const requestedDuration = req.durationSeconds;
+      if (typeof requestedDuration === "number" && Number.isFinite(requestedDuration)) {
+        const duration = asSafeIntegerInRange(Math.round(requestedDuration), {
+          min: isWanModel ? TOGETHER_WAN_DURATIONS[0] : TOGETHER_MIN_DURATION_SECONDS,
+          max: TOGETHER_MAX_DURATION_SECONDS,
+        });
+        if (duration !== undefined) {
+          body.seconds = String(duration);
+        }
       }
       const size = normalizeOptionalString(req.size);
       if (size && isWanModel) {

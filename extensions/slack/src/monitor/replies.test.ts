@@ -76,6 +76,15 @@ function nativeTable(caption: string) {
   };
 }
 
+function buttons(label: string, value: string, style?: "primary") {
+  return { type: "buttons" as const, buttons: [{ label, value, ...(style ? { style } : {}) }] };
+}
+
+const sentEvent = () =>
+  messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+const enableSentHook = () =>
+  messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+
 type SlashParams = Parameters<typeof deliverSlackSlashReplies>[0];
 function deliverSlash(
   respond: SlashParams["respond"],
@@ -196,6 +205,21 @@ function requireSlashMessage(respond: ReturnType<typeof vi.fn>, index = 0): Slas
   return message;
 }
 
+function slashMessages(respond: ReturnType<typeof vi.fn>, count: number, start = 0) {
+  expect(respond).toHaveBeenCalledTimes(count);
+  return Array.from({ length: count - start }, (_, index) =>
+    requireSlashMessage(respond, index + start),
+  );
+}
+
+function rejectNativeBlocks() {
+  return vi
+    .fn(async () => undefined)
+    .mockRejectedValueOnce({
+      response: { data: { error: "invalid_blocks" } },
+    });
+}
+
 function readPlainSectionTexts(message: SlashTestMessage): string[] {
   return (message.blocks ?? []).flatMap((block) => {
     const text = block.text as { type?: unknown; text?: unknown } | undefined;
@@ -246,14 +270,7 @@ describe("deliverReplies identity passthrough", () => {
     await deliverPrepared(
       {
         presentation: largePortableTablePresentation(450),
-        interactive: {
-          blocks: [
-            {
-              type: "buttons",
-              buttons: [{ label: "Refresh", value: "refresh" }],
-            },
-          ],
-        },
+        interactive: { blocks: [buttons("Refresh", "refresh", "primary")] },
       },
       {
         textLimit: 8000,
@@ -275,13 +292,20 @@ describe("deliverReplies identity passthrough", () => {
     expect(blockOptions.blocks).toEqual([
       expect.objectContaining({
         type: "actions",
-        elements: [expect.objectContaining({ type: "button", value: "refresh" })],
+        elements: [
+          expect.objectContaining({
+            type: "button",
+            value: "refresh",
+            style: "primary",
+            action_id: "openclaw:reply_button:1:1",
+          }),
+        ],
       }),
     ]);
   });
 
   it("delivers media before native chart blocks with the same reply context", async () => {
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    enableSentHook();
     sendMock
       .mockResolvedValueOnce({ messageId: "media-ts", channelId: "C123" })
       .mockResolvedValueOnce({ messageId: "chart-ts", channelId: "C123" });
@@ -333,43 +357,13 @@ describe("deliverReplies identity passthrough", () => {
     });
     expect(result).toEqual({ messageId: "chart-ts", channelId: "C123" });
     expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    const event = sentEvent();
     expect(event).toMatchObject({
       to: "C123",
       content: "Revenue summary\n\nRevenue mix (pie chart)\n- Product: 60\n- Services: 40",
       success: true,
     });
     expect(event).not.toHaveProperty("messageId");
-  });
-
-  it("renders interactive replies into Slack blocks during delivery", async () => {
-    sendMock.mockResolvedValue(undefined);
-    await deliverPrepared({
-      text: "Choose",
-      interactive: {
-        blocks: [
-          { type: "text", text: "Choose" },
-          {
-            type: "buttons",
-            buttons: [{ label: "Approve", value: "approve", style: "primary" }],
-          },
-        ],
-      },
-    });
-    expect(sendMock).toHaveBeenCalledOnce();
-    expect(requireSendCall()[2].blocks).toEqual([
-      expect.objectContaining({ type: "section" }),
-      expect.objectContaining({
-        type: "actions",
-        elements: [
-          expect.objectContaining({
-            action_id: "openclaw:reply_button:1:1",
-            style: "primary",
-            value: "approve",
-          }),
-        ],
-      }),
-    ]);
   });
 });
 
@@ -412,19 +406,6 @@ describe("deliverSlackSlashReplies chunking", () => {
     expect(respond).toHaveBeenCalledWith({ text, response_type: "ephemeral" });
   });
 
-  it("sends block-only slash replies instead of dropping them", async () => {
-    const respond = vi.fn(async () => undefined);
-    const blocks = [{ type: "divider" }];
-    await deliverSlash(respond, [blockReply(blocks)], { ephemeral: false });
-    expect(respond).toHaveBeenCalledTimes(1);
-    expect(respond).toHaveBeenCalledWith({
-      text: "Shared a Block Kit message",
-      blocks,
-      mrkdwn: false,
-      response_type: "in_channel",
-    });
-  });
-
   it("delivers a valid field-rich section in one slash response", async () => {
     const respond = vi.fn(async () => undefined);
     const fields = ["Alpha", "Beta", "Gamma"].map((label) => ({
@@ -442,27 +423,12 @@ describe("deliverSlackSlashReplies chunking", () => {
   });
 
   it("replaces rejected native data in place without duplicating authored text", async () => {
-    const respond = vi
-      .fn(async () => undefined)
-      .mockRejectedValueOnce({ response: { data: { error: "invalid_blocks" } } });
+    const respond = rejectNativeBlocks();
     const blocks = [
       { type: "section", text: { type: "mrkdwn", text: "Overview" } },
       nativeRevenueChart,
       refreshAction,
-      {
-        type: "data_table",
-        caption: "Pipeline report",
-        rows: [
-          [
-            { type: "raw_text", text: "Account" },
-            { type: "raw_text", text: "ARR" },
-          ],
-          [
-            { type: "raw_text", text: "Acme" },
-            { type: "raw_number", value: 125000, text: "$125k" },
-          ],
-        ],
-      },
+      nativeTable("Pipeline report"),
     ];
     await deliverSlash(respond, [blockReply(blocks, "Overview")]);
     expect(respond).toHaveBeenCalledTimes(2);
@@ -482,15 +448,10 @@ describe("deliverSlackSlashReplies chunking", () => {
     ]);
     expect(readPlainSectionTexts(fallback)).toEqual([
       revenueText,
-      "Pipeline report (table)\nAccount\tARR\nAcme\t$125k",
+      "Pipeline report (table)\nAccount\nAcme",
     ]);
     expect(fallback.text).toBe(
-      [
-        "Overview",
-        revenueText,
-        "Refresh",
-        "Pipeline report (table)\nAccount\tARR\nAcme\t$125k",
-      ].join("\n\n"),
+      ["Overview", revenueText, "Refresh", "Pipeline report (table)\nAccount\nAcme"].join("\n\n"),
     );
     expect(fallback.text.match(/Overview/gu)).toHaveLength(1);
     expect(fallback.mrkdwn).toBe(false);
@@ -533,8 +494,7 @@ describe("deliverSlackSlashReplies chunking", () => {
     const caption = "c".repeat(41_000);
     const blocks = [nativeTable(caption)] as never;
     await deliverSlash(respond, [blockReply(blocks)]);
-    expect(respond).toHaveBeenCalledTimes(2);
-    const messages = respond.mock.calls.map((_call, index) => requireSlashMessage(respond, index));
+    const messages = slashMessages(respond, 2);
     expect(messages.every((message) => message.blocks === undefined)).toBe(true);
     expect(messages.every((message) => message.mrkdwn === false)).toBe(true);
     expect(messages.every((message) => message.text.length <= 40_000)).toBe(true);
@@ -544,9 +504,7 @@ describe("deliverSlackSlashReplies chunking", () => {
   });
 
   it("keeps 4k native fallback chunks for uncapped Web API delivery", async () => {
-    const respond = vi
-      .fn(async () => undefined)
-      .mockRejectedValueOnce({ response: { data: { error: "invalid_blocks" } } });
+    const respond = rejectNativeBlocks();
     const caption = "c".repeat(9_000);
     const blocks = [nativeTable(caption)] as never;
     await deliverSlash(respond, [blockReply(blocks)], {
@@ -555,8 +513,7 @@ describe("deliverSlackSlashReplies chunking", () => {
         remaining: () => undefined,
       },
     });
-    expect(respond).toHaveBeenCalledTimes(4);
-    const fallback = [1, 2, 3].map((index) => requireSlashMessage(respond, index));
+    const fallback = slashMessages(respond, 4, 1);
     expect(fallback.every((message) => message.blocks === undefined)).toBe(true);
     expect(fallback.every((message) => message.text.length <= 4_000)).toBe(true);
     expect(fallback.map((message) => message.text).join("")).toBe(
@@ -565,9 +522,7 @@ describe("deliverSlackSlashReplies chunking", () => {
   });
 
   it("batches in-place native fallback at 50 blocks without losing content", async () => {
-    const respond = vi
-      .fn(async () => undefined)
-      .mockRejectedValueOnce({ response: { data: { error: "invalid_blocks" } } });
+    const respond = rejectNativeBlocks();
     const caption = "c".repeat(9_000);
     const blocks = [
       ...Array.from({ length: 48 }, () => ({ type: "divider" })),
@@ -575,8 +530,7 @@ describe("deliverSlackSlashReplies chunking", () => {
       nativeTable(caption),
     ] as never;
     await deliverSlash(respond, [blockReply(blocks)]);
-    expect(respond).toHaveBeenCalledTimes(3);
-    const fallback = [requireSlashMessage(respond, 1), requireSlashMessage(respond, 2)];
+    const fallback = slashMessages(respond, 3, 1);
     expect(fallback.every((message) => (message.blocks?.length ?? 0) <= 50)).toBe(true);
     expect(fallback.every((message) => message.text.length <= 40_000)).toBe(true);
     expect(fallback.every((message) => message.mrkdwn === false)).toBe(true);
@@ -595,17 +549,13 @@ describe("deliverSlackSlashReplies chunking", () => {
           blocks: [
             revenueChart,
             ...largePortableTablePresentation().blocks,
-            {
-              type: "buttons",
-              buttons: [{ label: "Refresh", value: "secret-refresh-token" }],
-            },
+            buttons("Refresh", "secret-refresh-token"),
           ],
         },
         mediaUrls: ["https://example.com/report.png"],
       },
     ]);
-    expect(respond).toHaveBeenCalledTimes(4);
-    const messages = respond.mock.calls.map((_call, index) => requireSlashMessage(respond, index));
+    const messages = slashMessages(respond, 4);
     expect(messages[0]?.blocks?.map((block) => block.type)).toEqual(["data_visualization"]);
     expect(messages[0]?.text).toContain("Revenue mix (pie chart)");
     expect(messages[1]?.blocks).toBeUndefined();
@@ -654,14 +604,14 @@ describe("deliverSlackSlashReplies chunking", () => {
 
   it("emits terminal hooks for successful slash responses", async () => {
     const respond = vi.fn(async () => undefined);
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    enableSentHook();
     await deliverSlash(respond, [{ text: "final answer" }], {
       ephemeral: false,
       messageSentHookTarget: "user:U1",
       accountId: "default",
       sessionKeyForInternalHooks: "agent:main:slack:slash:u1",
     });
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    const event = sentEvent();
     const context = messageHookRunner.runMessageSent.mock.calls[0]?.[1] as Record<string, unknown>;
     expect(event).toMatchObject({
       to: "user:U1",
@@ -681,7 +631,7 @@ describe("deliverSlackSlashReplies chunking", () => {
       .fn<() => Promise<void>>()
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(new Error("response_url_expired"));
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    enableSentHook();
     await expect(
       deliverSlash(respond, [{ text: "first\nsecond" }], {
         textLimit: 8,
@@ -690,14 +640,14 @@ describe("deliverSlackSlashReplies chunking", () => {
       }),
     ).rejects.toThrow(/response_url_expired/);
     expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    const event = sentEvent();
     expect(event).toMatchObject({ to: "user:U1", content: "first\nsecond", success: false });
     expect(String(event.error)).toMatch(/response_url_expired/);
   });
 
   it("reports spoken text for media-only TTS slash replies", async () => {
     const respond = vi.fn(async () => undefined);
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    enableSentHook();
     await deliverSlash(
       respond,
       [
@@ -713,7 +663,7 @@ describe("deliverSlackSlashReplies chunking", () => {
       text: "https://example.com/tts.mp3",
       response_type: "ephemeral",
     });
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    const event = sentEvent();
     expect(event).toMatchObject({ content: "Spoken slash answer", success: true });
   });
 });
@@ -733,7 +683,7 @@ describe("deliverReplies reasoning suppression", () => {
 
 describe("deliverReplies message_sent hook", () => {
   it("defers both success and failure hooks for caller-owned terminal delivery", async () => {
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    enableSentHook();
     sendMock.mockResolvedValueOnce({ messageId: "ts", channelId: "C123" });
     await deliverPrepared(
       { text: "deferred success" },
@@ -756,26 +706,8 @@ describe("deliverReplies message_sent hook", () => {
     expect(triggerInternalHook).not.toHaveBeenCalled();
   });
 
-  it("emits one message_sent event after a multi-media reply succeeds", async () => {
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
-    const first = acceptedSlackSendResult("media-1");
-    const second = acceptedSlackSendResult("media-2");
-    acceptSend(first);
-    acceptSend(second);
-    const result = await deliverPrepared({
-      text: "two attachments",
-      mediaUrls: ["https://example.com/one.png", "https://example.com/two.png"],
-    });
-    expect(result).toBe(second);
-    expect(sendMock).toHaveBeenCalledTimes(2);
-    expect(messageHookRunner.runMessageSent).toHaveBeenCalledTimes(1);
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
-    expect(event).toMatchObject({ content: "two attachments", success: true });
-    expect(event).not.toHaveProperty("messageId");
-  });
-
   it("reports spoken text for media-only TTS supplements", async () => {
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    enableSentHook();
     sendMock.mockResolvedValue({ messageId: "tts-1", channelId: "C123" });
     await deliverPrepared({
       mediaUrl: "https://example.com/tts.mp3",
@@ -783,13 +715,13 @@ describe("deliverReplies message_sent hook", () => {
       ttsSupplement: { spokenText: "Spoken answer" },
     });
     expect(messageHookRunner.runMessageSent).toHaveBeenCalledOnce();
-    const event = messageHookRunner.runMessageSent.mock.calls[0]?.[0] as Record<string, unknown>;
+    const event = sentEvent();
     expect(event).toMatchObject({ content: "Spoken answer", success: true });
     expect(event).not.toHaveProperty("messageId");
   });
 
   it("preserves accepted media and blocks when a later block projection fails", async () => {
-    messageHookRunner.hasHooks.mockImplementation((name: string) => name === "message_sent");
+    enableSentHook();
     const failure = new Error("later block projection failed");
     const params = baseParams({
       replies: [

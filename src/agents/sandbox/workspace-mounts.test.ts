@@ -1,7 +1,11 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createSandbox } from "./fs-bridge.test-helpers.js";
+import { buildSandboxFsMounts, resolveSandboxFsPathWithMounts } from "./fs-paths.js";
+import { createRemoteShellSandboxFsBridge } from "./remote-fs-bridge.js";
+import { createLocalRemoteShellScriptRunner } from "./remote-fs-bridge.test-helpers.js";
 import {
   resolveWorkspaceMounts,
   resolveSandboxMountSelection,
@@ -24,22 +28,63 @@ function workspaceMounts(
 function addSkill(workspaceDir: string, root = "skills") {
   const dir = path.join(workspaceDir, root, "demo");
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "SKILL.md"), "# Demo\n");
 }
 
-const tmpDirs: string[] = [];
+const dirs = useAutoCleanupTempDirTracker(afterEach);
+const makeTempWorkspace = () => dirs.make("openclaw-sandbox-mounts-");
 
-function makeTempWorkspace(): string {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-sandbox-mounts-"));
-  tmpDirs.push(dir);
-  return dir;
+function resolveSkillPath(workspaceDir: string, filePath: string, skillsWorkspaceDir?: string) {
+  const sandbox = createSandbox({
+    workspaceDir,
+    agentWorkspaceDir: workspaceDir,
+    skillsWorkspaceDir,
+  });
+  return resolveSandboxFsPathWithMounts({
+    filePath,
+    cwd: workspaceDir,
+    defaultWorkspaceRoot: workspaceDir,
+    defaultContainerRoot: sandbox.containerWorkdir,
+    mounts: buildSandboxFsMounts(sandbox),
+  });
 }
 
-afterEach(() => {
-  for (const dir of tmpDirs.splice(0)) {
-    fs.rmSync(dir, { recursive: true, force: true });
-  }
-});
+const runRemoteShellScript = createLocalRemoteShellScriptRunner({ shellArg0: "openclaw-test" });
+function remoteBridge(
+  workspaceDir: string,
+  remoteWorkspaceDir = workspaceDir,
+  skillsWorkspaceDir?: string,
+) {
+  const localRoot = fs.realpathSync(workspaceDir);
+  const remoteRoot = fs.realpathSync(remoteWorkspaceDir);
+  return {
+    remoteRoot,
+    bridge: createRemoteShellSandboxFsBridge({
+      sandbox: createSandbox({
+        workspaceDir: localRoot,
+        agentWorkspaceDir: localRoot,
+        skillsWorkspaceDir: skillsWorkspaceDir && fs.realpathSync(skillsWorkspaceDir),
+      }),
+      runtime: {
+        remoteWorkspaceDir: remoteRoot,
+        remoteAgentWorkspaceDir: remoteRoot,
+        runRemoteShellScript,
+      },
+    }),
+  };
+}
+
+async function expectWriteRejected(
+  { bridge, remoteRoot }: ReturnType<typeof remoteBridge>,
+  filePath: string,
+  targetPath = filePath,
+) {
+  await expect(bridge.writeFile({ filePath, cwd: remoteRoot, data: "# Demo\n" })).rejects.toThrow(
+    /read-only/,
+  );
+  await expect(fs.promises.stat(path.join(remoteRoot, targetPath))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+}
 
 describe("resolveWorkspaceMounts", () => {
   it.each([
@@ -55,20 +100,12 @@ describe("resolveWorkspaceMounts", () => {
     expect(mounts).toContain(expected);
   });
 
-  it("omits agent workspace mount when workspaceAccess is none", () => {
+  it.each(["none", "identical"] as const)("omits agent workspace mount for %s", (kind) => {
     const workspaceDir = makeTempWorkspace();
-    const agentWorkspaceDir = makeTempWorkspace();
     const mounts = workspaceMounts(workspaceDir, {
-      agentWorkspaceDir,
-      workspaceAccess: "none",
+      agentWorkspaceDir: kind === "none" ? makeTempWorkspace() : workspaceDir,
+      workspaceAccess: kind === "none" ? "none" : "rw",
     });
-
-    expect(mounts).toEqual([`${workspaceDir}:/workspace:z`]);
-  });
-
-  it("omits agent workspace mount when paths are identical", () => {
-    const workspaceDir = makeTempWorkspace();
-    const mounts = workspaceMounts(workspaceDir);
     expect(mounts).toEqual([`${workspaceDir}:/workspace:z`]);
   });
 
@@ -81,51 +118,28 @@ describe("resolveWorkspaceMounts", () => {
     expect(mounts).toEqual(["/tmp/workspace:/workspace:ro,z", "/tmp/agent-workspace:/agent:ro,z"]);
   });
 
-  it("overlays workspace skills read-only when workspaceAccess is rw", () => {
-    // The writable workspace mount is followed by a narrower read-only skills
-    // overlay so sandboxed agents cannot mutate checked-in skill instructions.
+  it.each(["skills", ".agents/skills"])("overlays %s read-only in a writable workspace", (root) => {
     const agentWorkspaceDir = makeTempWorkspace();
-    addSkill(agentWorkspaceDir);
+    addSkill(agentWorkspaceDir, root);
     const mounts = workspaceMounts(agentWorkspaceDir);
     expect(mounts).toEqual([
       `${agentWorkspaceDir}:/workspace:z`,
-      `${path.join(agentWorkspaceDir, "skills")}:/workspace/skills:ro,z`,
+      `${path.join(agentWorkspaceDir, root)}:/workspace/${root}:ro,z`,
     ]);
+    expect(resolveSkillPath(agentWorkspaceDir, "normal.txt").writable).toBe(true);
+    for (const filePath of [`${root}/demo/SKILL.md`, `/workspace/${root}/demo/SKILL.md`]) {
+      expect(resolveSkillPath(agentWorkspaceDir, filePath).writable).toBe(false);
+    }
   });
 
-  it.runIf(process.platform !== "win32")("does not overlay symlinked workspace skill roots", () => {
-    // Skill overlays must be real workspace directories; symlinks could expose
-    // arbitrary host paths read-only inside the sandbox.
-    const agentWorkspaceDir = makeTempWorkspace();
-    const outsideDir = makeTempWorkspace();
-    fs.mkdirSync(path.join(outsideDir, "demo"), { recursive: true });
-    fs.symlinkSync(outsideDir, path.join(agentWorkspaceDir, "skills"), "dir");
-
-    const mounts = workspaceMounts(agentWorkspaceDir);
-    expect(mounts).toEqual([`${agentWorkspaceDir}:/workspace:z`]);
-  });
-
-  it.runIf(process.platform !== "win32")(
-    "does not overlay skill roots through a symlinked parent",
-    () => {
+  describe.runIf(process.platform !== "win32")("symlink containment", () => {
+    it.each(["skills", ".agents"])("does not overlay through symlinked %s", (root) => {
       const agentWorkspaceDir = makeTempWorkspace();
       const outsideDir = makeTempWorkspace();
       fs.mkdirSync(path.join(outsideDir, "skills", "demo"), { recursive: true });
-      fs.symlinkSync(outsideDir, path.join(agentWorkspaceDir, ".agents"), "dir");
-
-      const mounts = workspaceMounts(agentWorkspaceDir);
-      expect(mounts).toEqual([`${agentWorkspaceDir}:/workspace:z`]);
-    },
-  );
-
-  it("overlays project .agents skills read-only when workspaceAccess is rw", () => {
-    const agentWorkspaceDir = makeTempWorkspace();
-    addSkill(agentWorkspaceDir, ".agents/skills");
-    const mounts = workspaceMounts(agentWorkspaceDir);
-    expect(mounts).toEqual([
-      `${agentWorkspaceDir}:/workspace:z`,
-      `${path.join(agentWorkspaceDir, ".agents", "skills")}:/workspace/.agents/skills:ro,z`,
-    ]);
+      fs.symlinkSync(outsideDir, path.join(agentWorkspaceDir, root), "dir");
+      expect(workspaceMounts(agentWorkspaceDir)).toEqual([`${agentWorkspaceDir}:/workspace:z`]);
+    });
   });
 
   it("overlays materialized sandbox skills read-only when workspaceAccess is rw", () => {
@@ -138,6 +152,18 @@ describe("resolveWorkspaceMounts", () => {
       `${agentWorkspaceDir}:/workspace:z`,
       `${materializedSkillsDir}:/workspace/.openclaw/sandbox-skills/skills:ro,z`,
     ]);
+    for (const prefix of ["", "/workspace/"]) {
+      expect(
+        resolveSkillPath(
+          agentWorkspaceDir,
+          `${prefix}.openclaw/sandbox-skills/skills/demo/SKILL.md`,
+          skillsWorkspaceDir,
+        ),
+      ).toMatchObject({
+        writable: false,
+        hostPath: path.join(materializedSkillsDir, "demo/SKILL.md"),
+      });
+    }
   });
 
   it("does not add a separate synced skill overlay when workspaceAccess is ro", () => {
@@ -154,9 +180,6 @@ describe("resolveWorkspaceMounts", () => {
       `${sandboxWorkspaceDir}:/workspace:ro,z`,
       `${agentWorkspaceDir}:/agent:ro,z`,
     ]);
-    expect(mounts).not.toContain(
-      `${path.join(sandboxWorkspaceDir, "skills")}:/workspace/skills:ro,z`,
-    );
   });
 
   it("keeps private workspace skills read-only without exposing the agent workspace", () => {
@@ -176,6 +199,63 @@ describe("resolveWorkspaceMounts", () => {
       `${path.join(sandboxWorkspaceDir, "skills")}:/workspace/skills:ro,z`,
       `${path.join(sandboxWorkspaceDir, ".agents", "skills")}:/workspace/.agents/skills:ro,z`,
     ]);
+  });
+});
+
+describe.runIf(process.platform !== "win32")("remote skill mount enforcement", () => {
+  it("rejects writes under remote-only skill roots", async () => {
+    const remoteWorkspaceDir = makeTempWorkspace();
+    const skillsWorkspaceDir = makeTempWorkspace();
+    addSkill(remoteWorkspaceDir);
+    addSkill(skillsWorkspaceDir);
+    const remote = remoteBridge(makeTempWorkspace(), remoteWorkspaceDir, skillsWorkspaceDir);
+    await expectWriteRejected(remote, "skills/demo/SKILL.md");
+    await expectWriteRejected(remote, ".openclaw/sandbox-skills/skills/demo/SKILL.md");
+  });
+
+  it("rejects materialized skill writes with a separate remote workspace", async () => {
+    const workspaceDir = makeTempWorkspace();
+    const skillsWorkspaceDir = makeTempWorkspace();
+    addSkill(skillsWorkspaceDir);
+    await expectWriteRejected(
+      remoteBridge(workspaceDir, makeTempWorkspace(), skillsWorkspaceDir),
+      ".openclaw/sandbox-skills/skills/demo/SKILL.md",
+    );
+  });
+
+  it("rejects mkdirp under skill roots from container cwd", async () => {
+    const workspaceDir = makeTempWorkspace();
+    const remoteWorkspaceDir = makeTempWorkspace();
+    addSkill(workspaceDir);
+    addSkill(remoteWorkspaceDir);
+    const { bridge, remoteRoot } = remoteBridge(workspaceDir, remoteWorkspaceDir);
+    const filePath = "skills/demo/generated";
+    await expect(bridge.mkdirp({ filePath, cwd: remoteRoot })).rejects.toThrow(/read-only/);
+    await expect(fs.promises.stat(path.join(remoteRoot, filePath))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+  });
+});
+
+// Canonical path checks execute the real GNU readlink/stat scripts.
+describe.runIf(process.platform === "linux")("remote skill canonical paths", () => {
+  it("allows writes under absent skill roots", async () => {
+    const { bridge, remoteRoot } = remoteBridge(makeTempWorkspace());
+    await bridge.writeFile({ filePath: "skills/new.txt", data: "created" });
+    expect(await fs.promises.readFile(path.join(remoteRoot, "skills/new.txt"), "utf8")).toBe(
+      "created",
+    );
+  });
+
+  it("rejects writes through symlinks into skill roots", async () => {
+    const remoteWorkspaceDir = makeTempWorkspace();
+    addSkill(remoteWorkspaceDir);
+    fs.symlinkSync("skills", path.join(remoteWorkspaceDir, "link"), "dir");
+    await expectWriteRejected(
+      remoteBridge(makeTempWorkspace(), remoteWorkspaceDir),
+      "link/demo/SKILL.md",
+      "skills/demo/SKILL.md",
+    );
   });
 });
 
@@ -247,22 +327,21 @@ describe("resolveSandboxMountSelection", () => {
     "keeps protected mounts authoritative with %s",
     (_name, binds, custom, skipped) => {
       const selection = select(binds);
-      expect(selection.custom).toEqual(custom);
-      expect(selection.skippedBinds).toEqual(skipped);
-      expect(selection.mounts.filter((mount) => mount.source === "protectedSkill")).toEqual([
-        {
-          hostPath: "/host/skills",
-          containerPath: "/workspace/skills",
+      expect({ custom: selection.custom, skipped: selection.skippedBinds }).toEqual({
+        custom,
+        skipped,
+      });
+      expect(selection.mounts.filter((mount) => mount.source === "protectedSkill")).toEqual(
+        [
+          ["/host/skills", "/workspace/skills"],
+          ["/host/.agents/skills", "/workspace/.agents/skills"],
+        ].map(([hostPath, containerPath]) => ({
+          hostPath,
+          containerPath,
           readOnly: true,
           source: "protectedSkill",
-        },
-        {
-          hostPath: "/host/.agents/skills",
-          containerPath: "/workspace/.agents/skills",
-          readOnly: true,
-          source: "protectedSkill",
-        },
-      ]);
+        })),
+      );
     },
   );
 });

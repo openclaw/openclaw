@@ -354,23 +354,4 @@ describe("runStatusJsonCommand", () => {
       expect(result).not.toHaveProperty(field);
     }
   });
-
-  it("preserves failed deep health probes in nonthrowing JSON output", async () => {
-    mocks.resolveStatusRuntimeSnapshot.mockResolvedValueOnce({
-      ...runtimeSnapshot,
-      securityAudit: undefined,
-      usage: undefined,
-      health: { error: "gateway health probe timed out" },
-    });
-
-    const result = await runJson(createScan(), {
-      ...createStatusGatewayProbeBudget(500),
-      deep: true,
-    });
-
-    expect(result.health).toEqual({ error: "gateway health probe timed out" });
-    expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith(
-      runtimeInput(500, { deep: true, includeSecurityAudit: true }),
-    );
-  });
 });

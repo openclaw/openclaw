@@ -239,6 +239,7 @@ export class PaletteSessionDraft {
           },
           onInvalidate: () => {
             this.retireSubmissionPresentation();
+            this.preferences.retirePresentation();
             this.connectMachine.close();
           },
           onRecoveryReady: (url, scope) => this.bindOwner(url, scope),
@@ -260,6 +261,7 @@ export class PaletteSessionDraft {
 
   close() {
     this.retireSubmissionPresentation();
+    this.preferences.retirePresentation();
     this.coldSubmit = undefined;
     const submission = this.draft?.submission;
     // A failed create or rejected turn retains the same retry/recovery draft.

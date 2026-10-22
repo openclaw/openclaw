@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { restoreDoctorMigrationBackup } from "../../src/commands/doctor-migration-backup-restore.js";
 import { CLIENT_CREDENTIAL_LEGACY_TABLES_SQL } from "../../src/infra/client-credential-schema.js";
 import { generateStoredDeviceIdentity } from "../../src/infra/device-identity-material.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../src/state/openclaw-state-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -69,7 +70,9 @@ describePosix("repository-owned PR provisioning state", () => {
     expect(backups).toHaveLength(version === 28 ? 1 : 0);
     {
       using database = new DatabaseSync(databasePath, { readOnly: true });
-      expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 30 });
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
       expect(
         database
           .prepare(

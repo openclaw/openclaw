@@ -69,7 +69,7 @@ export async function resolveDiscordProviderCommandSpecs(params: {
   // Defer first-pass diagnostics until the skill-limit decision. A collision can disappear
   // when fallback removes skills, so only the final retained command set should report it.
   const provisionalCollisions: string[] = [];
-  let skillCommands =
+  const skillCommands =
     params.nativeEnabled && params.nativeSkillsEnabled
       ? await prepareSkillCommandsForAgents({ cfg: params.cfg })
       : [];
@@ -84,7 +84,6 @@ export async function resolveDiscordProviderCommandSpecs(params: {
     params.nativeSkillsEnabled &&
     commandSpecs.length > maxDiscordCommands
   ) {
-    skillCommands = [];
     commandSpecs = mergePluginCommandSpecs(listPrimaryCommandSpecs([]), onCollision);
     params.runtime.log?.(
       warn(
@@ -103,5 +102,5 @@ export async function resolveDiscordProviderCommandSpecs(params: {
       ),
     );
   }
-  return { skillCommands, commandSpecs };
+  return { commandSpecs };
 }

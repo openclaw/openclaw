@@ -9,6 +9,7 @@ import type { RunEmbeddedAgentInternalParams } from "../../agents/embedded-agent
 import { finalizeCronPromptForResolvedTools } from "../../cron/isolated-agent/run-delivery-trace.js";
 import { resolveCronSourceDeliveryPlan } from "../../cron/isolated-agent/source-delivery-plan.js";
 import * as cronInference from "../../cron/run-inference.js";
+import { TEST_SCHEDULED_OCCURRENCE } from "../../cron/scheduled-occurrence.test-support.js";
 import type { CronAgentExecutionPhaseUpdate } from "../../cron/types.js";
 import { onAgentEvent, type AgentEventPayload } from "../../infra/agent-events.js";
 import {
@@ -37,6 +38,7 @@ const executeAgentTurn = await getRawExecuteAgentTurnForTest();
 
 function createScheduledAutomation(): ScheduledSessionAutomation {
   return {
+    occurrence: TEST_SCHEDULED_OCCURRENCE,
     admissionSource: "operator-schedule",
     job: {
       id: "scheduled-target-test",

@@ -24,13 +24,14 @@ export function createMemoryCliHarness(
     close.mockRejectedValue(params.closeError);
   }
   const search = vi.fn(async () => []);
+  const list = vi.fn(async () => []);
   const query = vi.fn(async () => params.queryRows ?? []);
   const count = () => {
     throw new Error("in-process native count must not run");
   };
   registerMemoryCli(
     { registerCli } as unknown as OpenClawPluginApi,
-    (params.statsSource ? { count } : { search, query }) as unknown as MemoryDB,
+    (params.statsSource ? { count } : { search, query, list }) as unknown as MemoryDB,
     { embed, close },
     (agent) => (typeof agent === "string" ? agent : "main"),
     () => ({
@@ -41,5 +42,5 @@ export function createMemoryCliHarness(
     params.statsSource ?? { dbPath: "/fixture/memory" },
   );
   const run = (...args: string[]) => program.parseAsync(["node", "openclaw", "ltm", ...args]);
-  return { close, embed, run, query, search };
+  return { close, embed, run, query, search, list };
 }

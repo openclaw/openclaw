@@ -49,7 +49,6 @@ extensions/discord/src/monitor/message-handler.preflight.ts
 extensions/discord/src/monitor/model-picker.test.ts
 extensions/discord/src/monitor/native-command.model-picker.test.ts
 extensions/discord/src/monitor/native-command.plugin-dispatch.test.ts
-extensions/fal/image-generation-provider.ts
 extensions/feishu/src/bot.test.ts
 extensions/feishu/src/bot.ts
 extensions/feishu/src/channel.test.ts
@@ -281,7 +280,6 @@ src/channels/plugins/setup-wizard-helpers.ts
 src/channels/streaming.ts
 src/cli/capability-cli.test.ts
 src/cli/command-secret-gateway.test.ts
-src/cli/command-secret-gateway.ts
 src/cli/config-cli.test.ts
 src/cli/daemon-cli/status.gather.test.ts
 src/cli/devices-cli.runtime.ts

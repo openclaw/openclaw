@@ -1,5 +1,4 @@
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
 import { usePreparedPoolFixture, type PoolOptions } from "./prepared-pool.test-support.js";
 
 const fixture = usePreparedPoolFixture();
@@ -216,9 +215,7 @@ it("starts expired reserve cleanup before awaiting unrelated source admission", 
   const projectKey = "1".repeat(64);
   await fixture.attachSeed("source", { projectKey });
   fixture.nowMs = 2_000;
-  const entered = createDeferred();
-  const release = createDeferred();
-  fixture.releases.push(() => release.resolve());
+  const { entered, release } = fixture.gate();
   const reconcile = vi.fn<PoolOptions["reconcile"]>(async () => {});
   const owner = fixture.pool({
     reconcile,
@@ -232,13 +229,11 @@ it("starts expired reserve cleanup before awaiting unrelated source admission", 
   try {
     await Promise.race([entered.promise, running]);
     expect(fixture.store.get(expired.environmentId)?.destroyRequestedAtMs).toBe(2_000);
-    expect(reconcile.mock.calls.map(([record]) => record)).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          environmentId: expired.environmentId,
-          destroyRequestedAtMs: 2_000,
-        }),
-      ]),
+    expect(reconcile.mock.calls.map(([record]) => record)).toContainEqual(
+      expect.objectContaining({
+        environmentId: expired.environmentId,
+        destroyRequestedAtMs: 2_000,
+      }),
     );
   } finally {
     release.resolve();

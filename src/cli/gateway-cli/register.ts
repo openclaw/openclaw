@@ -5,7 +5,6 @@ import { colorize, isRich, theme } from "../../../packages/terminal-core/src/the
 import type { HealthSummary } from "../../commands/health.js";
 import type { CostUsageSummary } from "../../infra/session-cost-usage.js";
 import type { DiagnosticStabilitySnapshot } from "../../logging/diagnostic-stability.js";
-import type { WriteDiagnosticSupportExportResult } from "../../logging/diagnostic-support-export.js";
 import { defaultRuntime } from "../../runtime.js";
 import { createLazyPromise } from "../../shared/lazy-promise.js";
 import { inheritOptionFromParent } from "../command-options.js";
@@ -145,19 +144,6 @@ function renderStabilitySummary(snapshot: DiagnosticStabilitySnapshot, rich: boo
   return lines;
 }
 
-function renderSupportExportResult(
-  result: WriteDiagnosticSupportExportResult,
-  rich: boolean,
-): string[] {
-  return [
-    colorize(rich, theme.heading, "Diagnostics export"),
-    `${colorize(rich, theme.muted, "Path:")} ${result.path}`,
-    `${colorize(rich, theme.muted, "Size:")} ${formatStabilityBytes(result.bytes)}`,
-    `${colorize(rich, theme.muted, "Files:")} ${result.manifest.contents.length}`,
-    `${colorize(rich, theme.muted, "Privacy:")} payload-free stability, sanitized logs/status/health/config`,
-  ];
-}
-
 function parseOptionalPositiveIntegerOption(raw: unknown, label: string): number | undefined {
   if (raw === undefined) {
     return undefined;
@@ -202,7 +188,13 @@ async function writeSupportExportFromCli(opts: {
     },
     readHealthSnapshot: async () => await callGatewayReadOnlyCli("health", rpc),
   });
-  await printGatewayResult(opts.json, result, (rich) => renderSupportExportResult(result, rich));
+  await printGatewayResult(opts.json, result, (rich) => [
+    colorize(rich, theme.heading, "Diagnostics export"),
+    `${colorize(rich, theme.muted, "Path:")} ${result.path}`,
+    `${colorize(rich, theme.muted, "Size:")} ${formatStabilityBytes(result.bytes)}`,
+    `${colorize(rich, theme.muted, "Files:")} ${result.manifest.contents.length}`,
+    `${colorize(rich, theme.muted, "Privacy:")} payload-free stability, sanitized logs/status/health/config`,
+  ]);
 }
 
 export function registerGatewayCli(program: Command) {

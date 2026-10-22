@@ -34,11 +34,10 @@ const isSourceCheckoutLauncher = () =>
   existsSync(new URL("./.git", import.meta.url)) ||
   existsSync(new URL("./src/entry.ts", import.meta.url));
 
-const { detectCurrentSqliteCapabilities, nodeRuntimeFailure, nodeRuntimeNote } =
-  await import("./node-sqlite.mjs");
+const { detectCurrentSqliteCapabilities, nodeRuntimeFailure } = await import("./node-sqlite.mjs");
 
 const RECOMMENDED_NODE_MAJOR = 26;
-const SUPPORTED_NODE_RANGE = ">=24.16.0 <25, or >=26.1.0";
+const SUPPORTED_NODE_RANGE = ">=24.22.1 <25, or >=26.12.1";
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
 const ensureSupportedRuntimeVersion = async () => {
@@ -64,10 +63,6 @@ const ensureSupportedRuntimeVersion = async () => {
   const probe = await detectCurrentSqliteCapabilities();
   const failure = nodeRuntimeFailure(process.versions.node, probe);
   if (!failure) {
-    const note = nodeRuntimeNote(process.versions.node, probe);
-    if (note) {
-      process.stderr.write(`${note}\n`);
-    }
     return false;
   }
   const unsupportedCommand = classifyUnsupportedNodeCommand(process.argv);

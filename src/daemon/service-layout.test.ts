@@ -9,6 +9,26 @@ const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
 describe("summarizeGatewayServiceLayout", () => {
+  it("preserves optional physical fields and lexical source paths on probe failure", async () => {
+    vi.spyOn(fs, "realpath").mockRejectedValue(
+      Object.assign(new Error("denied"), { code: "EACCES" }),
+    );
+    await expect(summarizeGatewayServiceLayout({ programArguments: [] })).resolves.toEqual({
+      execStart: "",
+    });
+    await expect(
+      summarizeGatewayServiceLayout({
+        programArguments: [],
+        sourcePath: "blocked/../gateway.service",
+      }),
+    ).resolves.toEqual({
+      execStart: "",
+      sourcePath: "blocked/../gateway.service",
+      sourcePathReal: path.resolve("gateway.service"),
+      sourceScope: "user",
+    });
+  });
+
   it.each<[string[], string]>([
     [["node", "dist/index.js", "gateway", "run"], "dist/index.js"],
     [

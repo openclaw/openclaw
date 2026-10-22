@@ -1,7 +1,6 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { expect, it } from "vitest";
 import { createNoisyPngBuffer } from "../../test/helpers/image-fixtures.js";
-import { sanitizeGoogleAssistantFirstOrdering as sanitizeGoogleTurnOrdering } from "../shared/google-turn-ordering.js";
 import { sanitizeSessionMessagesImages } from "./embedded-agent-helpers/images.js";
 import {
   castAgentMessages,
@@ -131,12 +130,5 @@ it("keeps corrupt history images omitted after error and a recovered reply", asy
   expect(await sanitizeSessionMessagesImages([...stored, recovered], "session:history")).toEqual([
     ...expected,
     recovered,
-  ]);
-});
-it("prepends a user turn before assistant-first history", () => {
-  const message = assistant([call("call_1")]);
-  expect(sanitizeGoogleTurnOrdering([message])).toEqual([
-    expect.objectContaining({ role: "user" }),
-    message,
   ]);
 });

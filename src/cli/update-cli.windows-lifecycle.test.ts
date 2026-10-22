@@ -709,7 +709,7 @@ describe("update-cli", () => {
         async (
           _env,
           options: Parameters<
-            typeof import("../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate
+            typeof import("../daemon/schtasks-control.js").resumeScheduledTaskAutoStartAfterUpdate
           >[1],
         ) => {
           await options?.beforeMutation?.();

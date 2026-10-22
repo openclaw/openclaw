@@ -2470,7 +2470,7 @@ describe("frozen admission workflow barriers", () => {
       const steps = job.steps ?? [];
       const setup = workflowStep(job, "Setup admission Node.js");
       expect(setup.if).toBeUndefined();
-      expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+      expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.22.1" });
       expect(setup.run).toContain(
         `source ${toolingRoot}/.github/actions/setup-pnpm-store-cache/ensure-node.sh`,
       );
@@ -8014,7 +8014,7 @@ test "$package_manager" = "pnpm@12.1.0"
     expect(hydrateNode.run).toContain(
       "source .github/actions/setup-pnpm-store-cache/ensure-node.sh",
     );
-    expect(hydrateNode.run).toContain('openclaw_ensure_node "24.x"');
+    expect(hydrateNode.run).toContain('openclaw_ensure_node "24.22.1"');
     const hydratePnpm = workflowStep(hydrate, "Setup pnpm and dependencies");
     expect(hydratePnpm.if).toBeUndefined();
     expect(hydratePnpm.run).toContain('corepack enable --install-directory "$PNPM_HOME"');
@@ -10184,6 +10184,24 @@ describe("package artifact reuse", () => {
     expect(result.stderr).toContain(
       `live_suite_filter '${suiteId}' does not match any runnable suite`,
     );
+  });
+
+  it("uploads native live reports and sanitized owned evidence after failures", () => {
+    const job = workflowJob(LIVE_E2E_WORKFLOW, "validate_live_provider_suites");
+    const run = workflowStep(job, "Run ${{ matrix.label }}");
+    expect(run.run).toContain('tee ".artifacts/live-shards/${{ matrix.suite_id }}.log"');
+    const upload = workflowStep(job, "Upload native live diagnostics");
+    expect(upload).toMatchObject({
+      if: "always() && steps.selection.outputs.run == 'true'",
+      uses: "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
+      with: {
+        name: "native-live-${{ matrix.suite_id }}-${{ needs.validate_selected_ref.outputs.selected_sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
+        "retention-days": 14,
+        "if-no-files-found": "warn",
+      },
+    });
+    expect(upload.with?.path).toContain(".artifacts/live-shards/");
+    expect(upload.with?.path).toContain(".artifacts/qa-e2e/");
   });
 
   it("shards broad native live tests instead of one serial live-all job", () => {

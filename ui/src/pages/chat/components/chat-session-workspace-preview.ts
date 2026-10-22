@@ -193,6 +193,7 @@ export function openWorkspaceItem<T>(
               // Even unchanged bytes settle newer intent and retire older alias reads.
               read.published = capturePreview(canonical);
               previewReads.set(canonical, read);
+              canonical.readResult = read.settled;
             }
             if (preview.pinned === true) {
               canonical.pinned = true;
@@ -220,6 +221,8 @@ export function openWorkspaceItem<T>(
       }
       return undefined;
     })();
+    preview.readResult = read.settled;
+    sessionWorkspaceForHost(state).publish();
     return read.settled;
   };
   if (options.disposition && !known) {

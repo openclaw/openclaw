@@ -10,7 +10,7 @@ import type * as Push from "../../../../packages/gateway-protocol/src/schema/pus
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
+import { pathForRoute, sameRouteLocation } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { resetServerUiPref, selectThemeSettings } from "../../app/server-prefs-controls.ts";
@@ -39,7 +39,7 @@ import { i18n, isSupportedLocale, type Locale } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { resolveControlUiServerQueueMode } from "../../lib/chat/follow-up-mode.ts";
-import { formatUiError } from "../../lib/format-error.ts";
+import { currentConfigRead } from "../../lib/config/config-state-model.ts";
 import { isMissingOperatorReadScopeError } from "../../lib/gateway-errors.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { modelSettingPrimary, readModelSetting } from "../../lib/model-setting.ts";
@@ -54,7 +54,6 @@ import {
   SYSTEM_INFO_POLL_INTERVAL_MS,
 } from "../../lib/system-info.ts";
 import { observeRealtimeTalkDevices } from "../chat/talk/input.ts";
-import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
 import { createConfigPageModels } from "./config-page-models.ts";
 import {
   configSectionKeysForPage,
@@ -67,7 +66,7 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
-import { refreshMediaDevice } from "./media-device-discovery.ts";
+import { createMediaDevicePreferences, refreshMediaDevice } from "./media-device-discovery.ts";
 import { admitMemoryRoute } from "./memory-route-admission.ts";
 import {
   configTargetIdFromHash,
@@ -80,7 +79,7 @@ import {
   type SessionObserverModelSelection,
 } from "./session-observer-settings.ts";
 import { createConfigUpdatesPresentation } from "./updates-page-presentation.ts";
-import { createConfigViewState, createMediaDeviceState } from "./view-state.ts";
+import { createConfigViewState } from "./view-state.ts";
 import type * as View from "./view-state.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
@@ -157,13 +156,19 @@ export function createConfigPage(
   const customThemeImportOwner = new themeImport.CustomThemeImportOwner(invalidate);
   let configViewState: View.ConfigViewState = createConfigViewState();
   let runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  // Release command presentation before a reactive scope change can park its cleanup.
+  let commandLifetime = Promise.withResolvers<void>();
+  function retireCommands() {
+    commandLifetime.resolve();
+    commandLifetime = Promise.withResolvers<void>();
+  }
   const updates = createConfigUpdatesPresentation(context);
   let mediaDeviceWatch: (() => void) | null = null;
-  const mediaDevices = {
-    microphone: createMediaDeviceState(),
-    camera: createMediaDeviceState(),
-  };
-  let cameraSelectionRequest = 0;
+  const mediaDeviceOwner = createMediaDevicePreferences(
+    (videoDeviceId) => applySettings({ realtimeTalkVideoDeviceId: videoDeviceId }),
+    invalidate,
+  );
+  const mediaDevices = mediaDeviceOwner.devices;
   let previousGateway: ApplicationContext["gateway"] | null = null;
   let previousClient: GatewayBrowserClient | null = null;
   let previousHello: unknown;
@@ -190,11 +195,21 @@ export function createConfigPage(
 
   function mutationDisabled() {
     revision();
-    return isCuratedConfigMutationDisabled();
+    const state = context.runtimeConfig.state;
+    return (
+      !state.connected ||
+      state.configLoading ||
+      state.configSaving ||
+      state.configApplying ||
+      updates.busy() ||
+      context.overlays.snapshot.updateStatusRefreshing ||
+      !context.runtimeConfig.canSet ||
+      !hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null)
+    );
   }
   function updateBusy() {
     revision();
-    return isUpdateBusy();
+    return updates.busy();
   }
 
   function updateRoute(nextPageId: ConfigPageId, nextRouteData: ConfigRouteData | null) {
@@ -202,9 +217,10 @@ export function createConfigPage(
       return;
     }
     routeInitialized = true;
+    retireCommands();
     if (pageId === "appearance" && nextPageId !== "appearance") {
       customThemeImportOwner.retireImport();
-      retireMediaPermissionRequests();
+      mediaDeviceOwner.retire();
     }
     abortRequests();
     pageId = nextPageId;
@@ -234,11 +250,6 @@ export function createConfigPage(
     synchronize();
     invalidate();
   };
-  function retireMediaPermissionRequests() {
-    for (const device of Object.values(mediaDevices)) {
-      device.requestsPermission = false;
-    }
-  }
 
   function abortRequests() {
     systemInfoTask.cancel();
@@ -262,6 +273,7 @@ export function createConfigPage(
       snapshot.hello !== previousHello ||
       snapshot.phase !== previousPhase;
     if (connectionChanged) {
+      retireCommands();
       abortRequests();
       systemInfo = null;
       systemInfoUnavailable = false;
@@ -455,6 +467,7 @@ export function createConfigPage(
 
   function synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
     if (runtimeConfig !== runtimeConfigSource) {
+      retireCommands();
       if (runtimeConfigSource) {
         customThemeImportOwner.retireImport();
       }
@@ -462,18 +475,16 @@ export function createConfigPage(
       resetConfigViewState();
     }
     const config = runtimeConfig.state;
-    if (!config.configSnapshot && !config.configLoading) {
+    if (!config.configSnapshot && !config.configLoading && !currentConfigRead(config)) {
       void runtimeConfig
         .ensureLoaded()
         .then(() =>
-          runtimeConfigSource === runtimeConfig && pageId !== "updates"
+          runtimeConfigSource === runtimeConfig && pageId !== "updates" && !runtimeConfig.schemaRead
             ? runtimeConfig.ensureSchemaLoaded()
             : undefined,
         )
         .catch(() => undefined);
-      return;
-    }
-    if (pageId !== "updates" && !config.configSchema && !config.configSchemaLoading) {
+    } else if (pageId !== "updates" && !config.configSchema && !runtimeConfig.schemaRead) {
       void runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
     }
   }
@@ -534,67 +545,19 @@ export function createConfigPage(
     }
   }
 
-  async function selectCamera(deviceId: string) {
-    const request = ++cameraSelectionRequest;
-    const videoDeviceId = deviceId.trim() || undefined;
-    mediaDevices.camera.error = null;
-    mediaDevices.camera.discovery = null;
-    invalidate();
-    try {
-      await switchActiveRealtimeTalkCameras(videoDeviceId);
-      if (request !== cameraSelectionRequest) {
-        return;
-      }
-      // Persist only a camera the active Talk session accepted. A superseded
-      // request must not overwrite the newer confirmed selection.
-      applySettings({
-        realtimeTalkVideoDeviceId: videoDeviceId,
-      });
-    } catch (error) {
-      if (request === cameraSelectionRequest) {
-        mediaDevices.camera.error = formatUiError(error);
-        invalidate();
-      }
-    }
-  }
-
-  function isUpdateBusy(): boolean {
-    const update = context.overlays.snapshot;
-    return update.updateRunning || update.updateReconciliationPending;
-  }
-
-  function isCuratedConfigMutationDisabled(): boolean {
-    const runtimeState = context.runtimeConfig.state;
-    return (
-      !runtimeState.connected ||
-      runtimeState.configLoading ||
-      runtimeState.configSaving ||
-      runtimeState.configApplying ||
-      isUpdateBusy() ||
-      context.overlays.snapshot.updateStatusRefreshing ||
-      !context.runtimeConfig.canSet ||
-      !hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null)
-    );
-  }
-
   function configProps() {
     revision();
     const configObject = readConfigObject();
     const runtimeConfig = context.runtimeConfig;
     const configState = runtimeConfig.state;
     const includeSections = configSectionKeysForPage(pageId);
-    // Advanced shows everything without a curated home elsewhere.
-    const excludeSections = pageId === "advanced" ? ADVANCED_EXCLUDED_SECTIONS : undefined;
     const currentSelection = presentation.selections[pageId] ?? defaultConfigSelection(pageId);
     const selection = normalizeConfigSelection(
       pageId,
       currentSelection.activeSection,
       currentSelection.activeSubsection,
     );
-    const activeSection = pageId === "mcp" ? "mcp" : selection.activeSection;
-    const activeSubsection = pageId === "mcp" ? null : selection.activeSubsection;
-    const gatewayConfig = asConfigRecord(configObject.gateway);
-    const controlUiConfig = asConfigRecord(gatewayConfig?.controlUi);
+    const controlUiConfig = asConfigRecord(asConfigRecord(configObject.gateway)?.controlUi);
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
     const utilityModel = readModelSetting(agentsDefaults?.utilityModel);
     const id = context.agentSelection.state.selectedId;
@@ -610,9 +573,16 @@ export function createConfigPage(
       !configState.connected ||
       configState.configSaving ||
       configState.configApplying ||
-      isUpdateBusy() ||
+      updates.busy() ||
       context.overlays.snapshot.updateStatusRefreshing ||
       !hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null);
+    const observerLifetime = commandLifetime.promise;
+    const observerResult = (saved: boolean) => {
+      if (!saved && observerLifetime === commandLifetime.promise && configState.lastError) {
+        throw new Error(configState.lastError);
+      }
+      return saved;
+    };
     const withConfigMutation =
       <Args extends unknown[]>(mutate: (...args: Args) => void) =>
       (...args: Args) => {
@@ -626,14 +596,20 @@ export function createConfigPage(
       valid: configState.configValid,
       issues: configState.configIssues,
       loading: configState.configLoading,
+      configLoaded: configState.configSnapshot !== null,
+      configRecoveryError: configState.configRecoveryError,
+      configRead: currentConfigRead(configState)?.completion.promise ?? null,
+      onRetryConfig: () => void runtimeConfig.refresh(),
       saving: configState.configSaving,
       applying: configState.configApplying,
-      updating: isUpdateBusy() || context.overlays.snapshot.updateStatusRefreshing,
+      updating: updates.busy() || context.overlays.snapshot.updateStatusRefreshing,
       connected: configState.connected,
       mutationAllowed: runtimeConfig.canSet,
       openFileAllowed: runtimeConfig.canOpenFile,
       schema: configState.configSchema,
       schemaLoading: configState.configSchemaLoading,
+      schemaRead: runtimeConfig.schemaRead,
+      onRetrySchema: () => void runtimeConfig.refreshSchema(),
       uiHints: configState.configUiHints,
       formMode: presentation.formModes[pageId] ?? "form",
       rawDraftPending: configState.configFormMode === "raw" && configState.configFormDirty,
@@ -643,10 +619,17 @@ export function createConfigPage(
       ),
       showModeToggle: pageId === "advanced",
       formValue: configState.configForm,
-      activeSection,
-      activeSubsection,
+      activeSection: pageId === "mcp" ? "mcp" : selection.activeSection,
+      activeSubsection: pageId === "mcp" ? null : selection.activeSubsection,
       onRawChange: withConfigMutation((next: string) => runtimeConfig.setRaw(next)),
       onFormModeChange: (mode: View.ConfigFormMode) => {
+        const currentMode =
+          configState.configFormMode === "raw" && configState.configFormDirty
+            ? "raw"
+            : (presentation.formModes[pageId] ?? "form");
+        if (mode !== currentMode) {
+          retireCommands();
+        }
         setPresentation((draft) => {
           draft.formModes[pageId] = mode;
         });
@@ -660,12 +643,14 @@ export function createConfigPage(
         runtimeConfig.removeFormValue(path),
       ),
       onSectionChange: (section: string | null) => {
+        retireCommands();
         setPresentation((draft) => {
           draft.selections[pageId] = { activeSection: section, activeSubsection: null };
         });
         invalidate();
       },
       onSubsectionChange: (section: string | null) => {
+        retireCommands();
         setPresentation((draft) => {
           draft.selections[pageId] = {
             ...(draft.selections[pageId] ?? defaultConfigSelection(pageId)),
@@ -674,9 +659,10 @@ export function createConfigPage(
         });
         invalidate();
       },
-      onSave: () => void runtimeConfig.save(),
-      onRawDiscard: () => void runtimeConfig.discardDraft(),
-      onOpenFile: () => void runtimeConfig.openFile(),
+      onSave: () => runtimeConfig.save(),
+      presentationRetired: () => commandLifetime.promise,
+      onRawDiscard: () => runtimeConfig.discardDraft(),
+      onOpenFile: () => runtimeConfig.openFile(),
       theme: settings.theme,
       themeOverridden: themePref.overridden,
       themeProvenance: themePref.provenance,
@@ -812,22 +798,28 @@ export function createConfigPage(
       sessionObserverModelsUnavailable: observerModels.unavailable,
       sessionObserverDisabled: sessionObserverBusy,
       setSessionObserverEnabled: (enabled: boolean) =>
-        void runtimeConfig.patch({
-          raw: buildSessionObserverTogglePatch(enabled),
-          note: t("configView.sessionObserver.toggleNote"),
-        }),
-      setSessionObserverUtilityModel: (modelSelection: SessionObserverModelSelection) =>
-        void runtimeConfig
+        runtimeConfig
+          .patch({
+            raw: buildSessionObserverTogglePatch(enabled),
+            note: t("configView.sessionObserver.toggleNote"),
+          })
+          .then(observerResult),
+      setSessionObserverUtilityModel: (modelSelection: SessionObserverModelSelection) => {
+        const retired = commandLifetime.promise;
+        return runtimeConfig
           .patch({
             raw: buildSessionObserverUtilityModelPatch(modelSelection, utilityModel),
             note: t("configView.sessionObserver.modelNote"),
             replacePaths: ["agents.defaults.utilityModel.fallbacks"],
           })
-          .then((saved) => {
-            if (saved) {
-              void refreshSystemInfo();
+          .then(async (saved) => {
+            observerResult(saved);
+            if (saved && retired === commandLifetime.promise) {
+              await refreshSystemInfo();
             }
-          }),
+            return saved;
+          });
+      },
       lobsterPetVisits: settings.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
       sessionDeleteConfirm:
         settings.sessionDeleteConfirm ?? UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
@@ -866,7 +858,7 @@ export function createConfigPage(
       },
       onCameraRefresh: () =>
         void refreshMediaDevice(mediaDevices.camera, "camera", true, invalidate),
-      onCameraSelect: (deviceId: string) => void selectCamera(deviceId),
+      onCameraSelect: mediaDeviceOwner.selectCamera,
       gatewayUrl: context.gateway.connection.gatewayUrl,
       assistantName: applicationConfig.read().assistantIdentity.name,
       configPath: configState.configSnapshot?.path ?? null,
@@ -874,7 +866,8 @@ export function createConfigPage(
       showSectionDocs: pageId !== "communications",
       showRootTab: !includeSections?.length,
       includeSections,
-      excludeSections,
+      // Advanced shows everything without a curated home elsewhere.
+      excludeSections: pageId === "advanced" ? ADVANCED_EXCLUDED_SECTIONS : undefined,
       includeVirtualSections: pageId === "appearance" || pageId === "notifications",
       settingsLayout: pageId === "advanced" ? ("accordion" as const) : undefined,
       nativeNotifications: notifications?.read(),
@@ -907,8 +900,19 @@ export function createConfigPage(
       context.agentSelection,
       context.overlays,
     ].map((source) => source.subscribe(refresh));
+    subscriptions.push(mediaDeviceOwner.observeNavigation(context.router));
     // Server selection intent can change while the stored preferences stay equal.
     subscriptions.push(context.theme.subscribe(refresh));
+    let location = context.router.getState().location;
+    subscriptions.push(
+      context.router.subscribe(() => {
+        const next = context.router.getState().location;
+        if (!sameRouteLocation(next, location)) {
+          location = next;
+          retireCommands();
+        }
+      }),
+    );
     connected = true;
     settings = loadSettings();
     hiddenSessionCatalogsChanged();
@@ -924,10 +928,11 @@ export function createConfigPage(
     });
     synchronize();
     return () => {
+      commandLifetime.resolve();
       subscriptions.forEach((stop) => stop());
       connected = false;
       customThemeImportOwner.retireImport();
-      retireMediaPermissionRequests();
+      mediaDeviceOwner.retire();
       mediaDeviceWatch?.();
       mediaDeviceWatch = null;
       clearInterval(poll);

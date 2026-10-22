@@ -10,6 +10,7 @@ import { loadModelProvidersData, type ModelProvidersData } from "./load.ts";
 export type ModelProviderRefreshReason = "publication" | "replacement" | "forced";
 
 export type ModelProviderCoreReceipt = { promise: Promise<void> };
+export type ModelProviderCatalogReceipt = { promise: Promise<string | null> };
 
 type CoreLoadOptions = {
   onStart: (reason: ModelProviderRefreshReason) => void;
@@ -54,6 +55,8 @@ export class ModelProviderCoreLoader {
   receipt: ModelProviderCoreReceipt | null = null;
   private completion: ReturnType<typeof Promise.withResolvers<void>> | null = null;
   private catalogRequest: AbortController | null = null;
+  catalogReceipt: ModelProviderCatalogReceipt | null = null;
+  private catalogCompletion: ReturnType<typeof Promise.withResolvers<string | null>> | null = null;
   catalogError: string | null = null;
   retryProvider: string | undefined;
   private request: AbortController | null = null;
@@ -86,6 +89,10 @@ export class ModelProviderCoreLoader {
     const retired = this.catalogRequest;
     this.catalogRequest = null;
     this.catalogError = null;
+    // Release the retired presentation even if its transport ignores abort.
+    this.catalogCompletion?.resolve(null);
+    this.catalogCompletion = null;
+    this.catalogReceipt = null;
     retired?.abort();
     this.notify();
   }
@@ -101,6 +108,8 @@ export class ModelProviderCoreLoader {
     const request = new AbortController();
     const ownsResult = () => this.catalogRequest === request && isCurrent();
     this.catalogRequest = request;
+    this.catalogCompletion = Promise.withResolvers<string | null>();
+    this.catalogReceipt = { promise: this.catalogCompletion.promise };
     this.catalogError = null;
     this.notify();
     try {
@@ -123,6 +132,8 @@ export class ModelProviderCoreLoader {
     } finally {
       if (this.catalogRequest === request) {
         this.catalogRequest = null;
+        this.catalogCompletion?.resolve(this.catalogError);
+        this.catalogCompletion = null;
         this.refreshPendingPublication(client, agentId);
         this.notify();
       }

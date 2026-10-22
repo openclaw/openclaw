@@ -76,17 +76,15 @@ export async function expectLegacyWorkerCatalogRetention(params: {
       )
       .map(({ id }) => id)
       .toSorted();
+  const entry = (catalog: ModelCatalogSnapshot, id: string) =>
+    catalog.entries.find((row) => row.provider === PROVIDER_ID && row.id === id);
   const expectConfiguredRow = (catalog: ModelCatalogSnapshot, revision: number) => {
     expect(catalog.entries.filter(({ id }) => id.startsWith("proof-refresh-"))).toEqual([
       expect.objectContaining({
         id: expect.stringMatching(new RegExp(`^proof-refresh-${revision}-`)),
       }),
     ]);
-    expect(
-      catalog.entries.find(
-        ({ provider, id }) => provider === PROVIDER_ID && id === "configured-row",
-      )?.statusReason,
-    ).toBe(`refresh-${revision}`);
+    expect(entry(catalog, "configured-row")?.statusReason).toBe(`refresh-${revision}`);
   };
   const initial = await refresh();
   expect(learnedIds(initial)).toEqual(params.catalogReturnsRows ? ["Learned", "learned"] : []);
@@ -100,9 +98,7 @@ export async function expectLegacyWorkerCatalogRetention(params: {
     expect(learnedIds(repeated)).toEqual(["Learned", "learned"]);
     expectConfiguredRow(repeated, 1);
     const seeded = await refresh("seed");
-    expect(
-      seeded.entries.find(({ provider, id }) => provider === PROVIDER_ID && id === "Learned")?.name,
-    ).toBe("Uppercase legacy model");
+    expect(entry(seeded, "Learned")?.name).toBe("Uppercase legacy model");
     expectConfiguredRow(seeded, 1);
     const empty = await refresh("empty");
     expect(learnedIds(empty)).toEqual([]);

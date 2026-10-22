@@ -17,6 +17,7 @@ import {
 import type { UpdateScheduleState } from "../../api/types.ts";
 import {
   formatUpdateCampaignLabel,
+  formatUpdateTargetLabel,
   getUpdateGitComparison,
   isUpdateActionable,
 } from "../../app/update-schedule-projection.ts";
@@ -255,12 +256,10 @@ function GatewayUpdates(props: UpdatesViewProps) {
       ? [{ value: "extended-stable" as const, label: t("updates.channel.extendedStable") }]
       : []),
   ];
-  const automaticUpdatesSupported = () => settings().channel !== "extended-stable";
   const checksDisabled = () => asConfigRecord(props.configObject.update)?.checkOnStart === false;
   const devPackageInstall = () =>
     settings().channel === "dev" && props.update.updateSchedule?.install?.kind === "package";
   const campaign = () => props.update.updateSchedule?.campaign;
-  const separateCampaign = () => run() && campaign() && run()!.origin.campaignId !== campaign()!.id;
   const campaignLabel = () => {
     getLocale();
     return formatUpdateCampaignLabel(props.update.updateSchedule, props.nowMs);
@@ -339,7 +338,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
         <SettingsToggleRow
           title={t("updates.page.automaticUpdates")}
           description={
-            !automaticUpdatesSupported()
+            settings().extendedStable
               ? t("updates.page.extendedStableAutomaticHint")
               : devPackageInstall()
                 ? t("updates.page.devPackageAutomaticHint")
@@ -347,12 +346,9 @@ function GatewayUpdates(props: UpdatesViewProps) {
                   ? t("updates.page.checksDisabledAutomaticHint")
                   : t("updates.page.automaticUpdatesDescription")
           }
-          checked={automaticUpdatesSupported() && settings().autoEnabled}
+          checked={!settings().extendedStable && settings().autoEnabled}
           disabled={
-            props.configBusy ||
-            checksDisabled() ||
-            !automaticUpdatesSupported() ||
-            devPackageInstall()
+            props.configBusy || checksDisabled() || settings().extendedStable || devPackageInstall()
           }
           onChange={props.onAutomaticUpdatesChange}
         />
@@ -472,7 +468,7 @@ function GatewayUpdates(props: UpdatesViewProps) {
             />
           )}
         </Show>
-        <Show when={separateCampaign()}>
+        <Show when={run() && campaign() && run()!.origin.campaignId !== campaign()!.id}>
           <SettingsRow
             title={t("updates.page.scheduledUpdate")}
             control={
@@ -493,11 +489,15 @@ function GatewayUpdates(props: UpdatesViewProps) {
         </Show>
         <SettingsRow
           title={t("updates.page.updateNow")}
-          description={t("updates.page.updateNowDescription")}
+          description={t(
+            formatUpdateTargetLabel(props.update.updateSchedule, props.update.updateAvailable)
+              ? "updates.page.updateNowDescription"
+              : "updates.page.noKnownUpdateDescription",
+          )}
           control={
             <button
               type="button"
-              class="btn primary"
+              class="btn"
               title={updateButtonTitle()}
               disabled={
                 confirming() ||

@@ -507,8 +507,6 @@ const enChatSession = {
       askImageQuestion: "What does this image show?",
       selectionTooLong:
         "These comments are too long for Side chat. Use a shorter selection or comment.",
-      selectionQuoteOnly:
-        "The selection is too long to attach. A short quote is ready in Side chat.",
       askSubmit: "Ask",
       askBusy: "Side chat is already answering a question.",
       askHistoryUnavailable: "Couldn't load this session's history.",
@@ -519,7 +517,6 @@ const enChatSession = {
       askRateLimited: "Side chat reached its question limit. Try again shortly.",
       askUnavailable: "Side chat cannot answer right now.",
       askRetry: "Retry",
-      asOf: "as of {time}",
       health: {
         "on-track": "On track",
         grinding: "Working",

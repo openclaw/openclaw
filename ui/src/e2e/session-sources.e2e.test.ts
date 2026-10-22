@@ -89,11 +89,70 @@ suite.define(() => {
       const item = page.getByRole("link", { name: "Session sources", exact: true });
       await trigger.click();
       const originalUrl = page.url();
+      const gesture = await item.evaluateHandle((link) => {
+        const panel = link.closest("[popover]");
+        const snapshot = (event?: Event) => ({
+          type: event?.type ?? "snapshot",
+          pathname: location.pathname,
+          hrefPath: new URL(link.getAttribute("href") ?? "", location.href).pathname,
+          connected: link.isConnected,
+          targetInLink: event?.target instanceof Node && link.contains(event.target),
+          activeInLink: link.contains(document.activeElement),
+          activeInPanel: panel?.contains(document.activeElement) ?? false,
+          popoverOpen: panel?.matches(":popover-open") ?? false,
+          closing: panel?.getAttribute("data-phase") === "closing",
+          ctrl: event instanceof MouseEvent && event.ctrlKey,
+          meta: event instanceof MouseEvent && event.metaKey,
+          defaultPrevented: event?.defaultPrevented ?? false,
+        });
+        const history: ReturnType<typeof snapshot>[] = [];
+        const record = (event: Event) => {
+          const entry = snapshot(event);
+          history.push(entry);
+          if (history.length > 16) {
+            history.shift();
+          }
+          // Sample after dispatch, including handlers later in the propagation path.
+          setTimeout(() => {
+            entry.defaultPrevented = event.defaultPrevented;
+            entry.connected = link.isConnected;
+          }, 0);
+        };
+        const types = [
+          "pointerdown",
+          "pointerup",
+          "click",
+          "focusin",
+          "overlay-hide",
+          "beforetoggle",
+        ];
+        for (const type of types) {
+          document.addEventListener(type, record, true);
+        }
+        return {
+          stop: () => {
+            for (const type of types) {
+              document.removeEventListener(type, record, true);
+            }
+            return { history, current: snapshot() };
+          },
+        };
+      });
       // Native tab gestures do not retain an opener.
-      const [popup] = await Promise.all([
-        context.waitForEvent("page"),
-        item.click({ modifiers: ["ControlOrMeta"] }),
-      ]);
+      let popup: Page;
+      try {
+        [popup] = await Promise.all([
+          context.waitForEvent("page"),
+          item.click({ modifiers: ["ControlOrMeta"] }),
+        ]);
+      } catch (error: unknown) {
+        const evidence = await gesture.evaluate((probe) => probe.stop()).catch(() => null);
+        console.warn("[session-sources] native gesture failure", JSON.stringify(evidence));
+        throw error;
+      } finally {
+        await gesture.evaluate((probe) => probe.stop()).catch(() => {});
+        await gesture.dispose();
+      }
       try {
         await popup.waitForLoadState("domcontentloaded");
         expect(new URL(popup.url())).toMatchObject({

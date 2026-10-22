@@ -355,9 +355,7 @@ describe("plugin runtime inspection", () => {
       writePackage(
         pluginDir,
         pluginId,
-        {
-          kind: testCase.kind,
-        },
+        { kind: testCase.kind },
         {
           "index.cjs": `module.exports = { id: ${JSON.stringify(pluginId)}, kind: ${JSON.stringify(testCase.kind ?? "context-engine")}, register() { require("node:fs").writeFileSync(${JSON.stringify(path.join(pluginDir, "registered"))}, "registered"); } };\n`,
         },
@@ -511,12 +509,7 @@ if (api.registrationMode === "tool-discovery") {
 }`,
     });
     const stateDir = makePluginLoaderTempDir();
-    const config = {
-      plugins: {
-        load: { paths: [plugin.file] },
-        allow: [plugin.id],
-      },
-    };
+    const config = { plugins: { load: { paths: [plugin.file] }, allow: [plugin.id] } };
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
       useNoBundledPlugins();

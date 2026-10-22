@@ -25,6 +25,7 @@ const doctorIds = (names: string) => new Set(names.split(" ").map((name) => `doc
 const repairIds = doctorIds(
   "auth-profiles structured-health-repairs session-transcripts write-config final-config-validation",
 );
+const repairAnd = (names: string) => new Set([...repairIds, ...doctorIds(names)]);
 const deferredChecks = [
   "core/doctor/hooks-model",
   "core/doctor/provider-catalog-projection",
@@ -92,10 +93,7 @@ it.each(["rehearsal", "partial-markers"])(
       ...(mode === "partial-markers" ? { HOME: "/synthetic/operator" } : {}),
     };
     const advisoryIds = doctorIds("security runtime-tool-schemas provider-catalog-projection");
-    const retainedIds = new Set([
-      ...repairIds,
-      ...doctorIds("skills memory-search auth-profile-migration"),
-    ]);
+    const retainedIds = repairAnd("skills memory-search auth-profile-migration");
     const priorWarnings = Array.from({ length: 31 }, (_, index) => `Repair warning ${index}`);
     const { contributions, executed } = recordContributions(
       [advisoryIds, retainedIds],
@@ -126,10 +124,9 @@ it.each(["rehearsal", "partial-markers"])(
 it.each([true, false])("defers post-restart lint inspections (budget=%s)", async (hasBudget) => {
   const deferredIds = doctorIds("runtime-tool-schemas provider-catalog-projection hooks-model");
   // Security gates readiness; ingress dead letters has no equivalent post-restart lint.
-  const retainedIds = new Set([
-    ...repairIds,
-    ...doctorIds("session-snapshots workspace-status security channel-ingress-dead-letters"),
-  ]);
+  const retainedIds = repairAnd(
+    "session-snapshots workspace-status security channel-ingress-dead-letters",
+  );
   const { contributions, executed } = recordContributions([deferredIds, retainedIds]);
   const ctx = createDoctorHealthFlowContext({
     env: {

@@ -1,16 +1,10 @@
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { expect, it, vi } from "vitest";
-import { registerPiSessionCatalog } from "./pi-session-catalog-plugin.js";
-import {
-  bindTestCatalogOwner,
-  type TestSessionCatalogProvider,
-} from "./pi-session-catalog.test-support.js";
+import { capturePiCatalog } from "./pi-session-catalog.test-support.js";
 
 const PI_SESSIONS_LIST_COMMAND = "acpx.pi.sessions.list.v1";
 const PI_SESSION_READ_COMMAND = "acpx.pi.sessions.read.v1";
 
 it("bridges list and read requests without undefined transport fields", async () => {
-  let provider: TestSessionCatalogProvider | undefined;
   const invoke = vi.fn();
   const respond = (payload: unknown) =>
     invoke.mockResolvedValueOnce({ payloadJSON: JSON.stringify(payload) });
@@ -29,32 +23,21 @@ it("bridges list and read requests without undefined transport fields", async ()
   ];
   respond({ sessions: [session("pi-remote", "pi-cli")] });
   respond({ threadId: "pi-remote", items: [{ type: "agentMessage", text: "remote answer" }] });
-  const api = {
-    pluginConfig: {},
-    runtime: {
-      nodes: {
-        list: vi.fn().mockResolvedValue({
-          nodes: [
-            {
-              nodeId: "node-1",
-              displayName: "Remote",
-              connected: true,
-              commands: [PI_SESSIONS_LIST_COMMAND, PI_SESSION_READ_COMMAND],
-            },
-          ],
-        }),
-        invoke,
-      },
+  const { provider: catalog } = capturePiCatalog({
+    nodes: {
+      list: vi.fn().mockResolvedValue({
+        nodes: [
+          {
+            nodeId: "node-1",
+            displayName: "Remote",
+            connected: true,
+            commands: [PI_SESSIONS_LIST_COMMAND, PI_SESSION_READ_COMMAND],
+          },
+        ],
+      }),
+      invoke,
     },
-    registerSessionCatalog: (value: Parameters<OpenClawPluginApi["registerSessionCatalog"]>[0]) => {
-      provider = bindTestCatalogOwner(value);
-    },
-    registerNodeHostCommand: vi.fn(),
-    registerNodeInvokePolicy: vi.fn(),
-  } as unknown as OpenClawPluginApi;
-
-  registerPiSessionCatalog(api);
-  const catalog = provider;
+  });
   expect(catalog).toBeDefined();
   const list = (cursor?: string) =>
     catalog!.list({

@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { createStorageMock } from "../test-helpers/storage.ts";
 import { resolveServerUiPrefWriteStatus } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
 import {
@@ -12,8 +11,9 @@ import { applyServerUiPrefs, refreshProfileAppearancePrefs } from "./server-pref
 import {
   createServerPrefsWriter,
   createProfilePrefsServer as server,
+  installServerPrefsStorage,
 } from "./server-prefs.test-support.ts";
-import { flushServerUiPrefs, pushServerUiPrefs, resetServerUiPrefsSync } from "./server-prefs.ts";
+import { flushServerUiPrefs, pushServerUiPrefs } from "./server-prefs.ts";
 import { loadSettings, patchSettings, settingsKeyForGateway } from "./settings.ts";
 
 const scope = "ws://navigation";
@@ -49,16 +49,7 @@ function holdFirstWrite(a: ReturnType<ReturnType<typeof server>["connect"]>, com
 function storedPins(value: ReturnType<typeof pins>) {
   return { railShortcuts: value.sidebarEntries, railShortcutsBase: value.sidebarEntriesBase };
 }
-beforeEach(() => {
-  vi.stubGlobal("localStorage", createStorageMock());
-  resetServerUiPrefsSync();
-  patchSettings({ gatewayUrl: scope });
-});
-afterEach(() => {
-  resetServerUiPrefsSync();
-  vi.useRealTimers();
-  vi.unstubAllGlobals();
-});
+installServerPrefsStorage(scope);
 
 it.each(
   [

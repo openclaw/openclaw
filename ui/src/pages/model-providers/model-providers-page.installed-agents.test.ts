@@ -171,6 +171,11 @@ it("enables for the selected agent through the shared consent wizard", async () 
   );
   const page = await openConsent(context, "Allow this runtime to execute code?");
   try {
+    await waitForSolid(() =>
+      expect(page.querySelector<HTMLDialogElement>("dialog.oc-modal-dialog")?.open).toBe(true),
+    );
+    expect(toggle(page)).toMatchObject({ checked: true, disabled: true });
+    expect(agentText(page)).toContain("Saving");
     expect(request).toHaveBeenCalledWith(
       "openclaw.setup.runtime.start",
       {
@@ -396,7 +401,10 @@ it("disables at the config acknowledgement without erasing remembered consent", 
   try {
     holdReads = true;
     clickAgent(page);
-    await waitForSolid(() => expect(agentText(page)).toContain("Saving"));
+    await waitForSolid(() => {
+      expect(agentText(page)).toContain("Saving");
+      expect(toggle(page)).toMatchObject({ checked: false, disabled: true });
+    });
     acknowledgement.resolve({ config: config(false), hash: "saved" });
 
     await waitForSolid(() => {
@@ -423,27 +431,39 @@ it("disables at the config acknowledgement without erasing remembered consent", 
   }
 });
 
-it("reads a concurrent edit after a rejected save and keeps the error visible", async () => {
-  let enabled = true;
-  const { context, runtimeConfig, publishEvent } = opencodeHarness(() => enabled);
-  const page = await mountAgents(context);
-  vi.mocked(runtimeConfig.patch).mockImplementation(async () => {
-    enabled = false;
-    publishEvent({ type: "event", event: "config.changed", payload: {} });
-    runtimeConfig.state.lastError = "Config changed on disk.";
-    return false;
-  });
+it.each([true, false])(
+  "reconciles rejected save with enabled=%s and keeps the error visible",
+  async (enabledAfter) => {
+    let enabled = true;
+    const patch = deferred<boolean>();
+    const { context, runtimeConfig, publishEvent } = opencodeHarness(() => enabled);
+    const page = await mountAgents(context);
+    vi.mocked(runtimeConfig.patch).mockImplementation(async () => {
+      const accepted = await patch.promise;
+      enabled = enabledAfter;
+      publishEvent({ type: "event", event: "config.changed", payload: {} });
+      runtimeConfig.state.lastError = "Config changed on disk.";
+      return accepted;
+    });
 
-  clickAgent(page);
+    const row = agentRow(page, "opencode");
+    clickAgent(page);
+    await waitForSolid(() =>
+      expect(toggle(page)).toMatchObject({ checked: false, disabled: true }),
+    );
+    expect(agentRow(page, "opencode")).toBe(row);
+    patch.resolve(false);
 
-  await waitForSolid(() =>
-    expect(agentRow(page, "opencode")?.querySelector('[role="alert"]')?.textContent).toContain(
-      "Config changed on disk.",
-    ),
-  );
-  const switchInput = toggle(page);
-  await waitForSolid(() => expect(switchInput.checked).toBe(false));
-});
+    await waitForSolid(() =>
+      expect(agentRow(page, "opencode")?.querySelector('[role="alert"]')?.textContent).toContain(
+        "Config changed on disk.",
+      ),
+    );
+    const switchInput = toggle(page);
+    await waitForSolid(() => expect(switchInput.checked).toBe(enabledAfter));
+    expect(agentRow(page, "opencode")).toBe(row);
+  },
+);
 
 it("does not publish a disable failure into another selected agent", async () => {
   const patch = deferred<boolean>();
@@ -455,6 +475,10 @@ it("does not publish a disable failure into another selected agent", async () =>
   settingsAgentSelection.state.selectedId = "writer";
   settingsAgentSelection.intentRevision += 1;
   notifySelection();
+  await waitForSolid(() => {
+    expect(agentText(page)).not.toContain("Saving");
+    expect(toggle(page).checked).toBe(true);
+  });
   runtimeConfig.state.lastError = "Original agent save failed.";
   patch.resolve(false);
   await drainPageUpdates(page);

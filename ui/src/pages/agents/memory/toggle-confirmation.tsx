@@ -1,6 +1,6 @@
 import { action, createMemo, createOptimistic, Errored, Loading, onSettled, Show } from "solid-js";
 import { registerDreamingEnglish } from "../../../i18n/locales/en-dreaming.ts";
-import "../../../components/modal-dialog.ts";
+import "../../../components/modal-dialog.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 
 registerDreamingEnglish();
@@ -78,15 +78,15 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
             <Loading>{result()}</Loading>
           </Errored>
           <openclaw-modal-actions class="exec-approval-actions">
+            <button class="btn" disabled={saving()} onClick={handleCancel}>
+              {t("common.cancel")}
+            </button>
             <button
               class={["btn", { primary: props.enabling, danger: !props.enabling }]}
               disabled={props.disabled || saving()}
               onClick={confirm}
             >
               {saving() ? t("dreaming.toggleConfirmation.saving") : confirmLabel()}
-            </button>
-            <button class="btn" disabled={saving()} onClick={handleCancel}>
-              {t("common.cancel")}
             </button>
           </openclaw-modal-actions>
         </div>

@@ -7,7 +7,6 @@ import {
 import {
   createEmptyPluginRegistry,
   createPluginRegistryOwner,
-  createRuntimeEnv,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { createReplyDispatcher } from "openclaw/plugin-sdk/reply-runtime";
@@ -17,9 +16,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import type { ZaloFetch } from "./api.js";
 import { setZaloRuntime } from "./runtime.js";
 import {
-  createLifecycleMonitorSetup,
   createTextUpdate,
   settleAsyncWork,
+  queueLifecycleUpdate,
+  startPollingLifecycleMonitor,
 } from "./test-support/lifecycle-test-support.js";
 import {
   getUpdatesMock,
@@ -76,49 +76,25 @@ async function startPollingMediaMonitor({
   fetcher?: ZaloFetch;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
 } = {}) {
-  const { monitorZaloProvider } = await loadCachedLifecycleMonitorModule(
+  const monitor = await startPollingLifecycleMonitor(
     "zalo-polling-media-reply",
+    { accountId, webhookUrl },
+    { token, ...options },
   );
-  const abort = new AbortController();
-  const runtime = createRuntimeEnv();
-  const setup = createLifecycleMonitorSetup({ accountId, dmPolicy: "open", webhookUrl });
-  const run = monitorZaloProvider({
-    ...setup,
-    token,
-    runtime,
-    abortSignal: abort.signal,
-    ...options,
-  });
-  const monitor = {
-    runtime,
-    stop: async () => {
-      abort.abort();
-      await run;
-    },
-  };
   monitors.push(monitor);
   return monitor;
 }
 
-function queueTextUpdate(messageId: string, text?: string) {
-  const processed = Promise.withResolvers<void>();
-  getUpdatesMock
-    .mockResolvedValueOnce({
-      ok: true,
-      result: createTextUpdate({
-        messageId,
-        userId: "user-1",
-        userName: "User One",
-        chatId: "dm-chat-1",
-        text,
-      }),
-    })
-    .mockImplementation(() => {
-      processed.resolve();
-      return new Promise(() => {});
-    });
-  return processed.promise;
-}
+const queueTextUpdate = (messageId: string, text?: string) =>
+  queueLifecycleUpdate(
+    createTextUpdate({
+      messageId,
+      userId: "user-1",
+      userName: "User One",
+      chatId: "dm-chat-1",
+      text,
+    }),
+  );
 
 type MediaDelivery = {
   dispatcherOptions: { deliver: (payload: { text: string; mediaUrl: string }) => Promise<void> };
@@ -327,20 +303,20 @@ describe("Zalo polling media replies", () => {
       const isMedia = Boolean(payload.mediaUrl || payload.mediaUrls?.length);
       if (flags.blocked) {
         prepareHostedZaloMediaUrlMock.mockRejectedValueOnce(failure);
-      } else if (flags.partial === "media") {
-        sendPhotoMock.mockResolvedValueOnce(acceptedResponse).mockRejectedValueOnce(failure);
-      } else if (flags.partial === "text") {
-        const core = getZaloRuntimeMock() as PluginRuntime;
-        vi.mocked(core.channel.text.chunkMarkdownTextWithMode).mockReturnValueOnce([
-          "first chunk",
-          "second chunk",
-          "third chunk",
-        ]);
-        sendMessageMock.mockResolvedValueOnce(acceptedResponse).mockRejectedValueOnce(failure);
-      } else if (isMedia) {
-        sendPhotoMock.mockRejectedValueOnce(failure);
       } else {
-        sendMessageMock.mockRejectedValueOnce(failure);
+        const send = isMedia ? sendPhotoMock : sendMessageMock;
+        if (flags.partial === "text") {
+          const core = getZaloRuntimeMock() as PluginRuntime;
+          vi.mocked(core.channel.text.chunkMarkdownTextWithMode).mockReturnValueOnce([
+            "first chunk",
+            "second chunk",
+            "third chunk",
+          ]);
+        }
+        if (flags.partial) {
+          send.mockResolvedValueOnce(acceptedResponse);
+        }
+        send.mockRejectedValueOnce(failure);
       }
 
       const deliveryErrors: unknown[] = [];
@@ -407,8 +383,7 @@ describe("Zalo polling media replies", () => {
       } else {
         expect(deliveryErrors[0]).toBe(failure);
       }
-      expect(runtime.error).toHaveBeenCalledTimes(1);
-      expect(runtime.error).toHaveBeenCalledWith(
+      expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
         `[acct-zalo-delivery] Zalo ${kind} reply failed: Error: ${name} rejected`,
       );
       const outboundUpdates = statusSink.mock.calls.filter(

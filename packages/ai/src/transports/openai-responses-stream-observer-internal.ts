@@ -22,7 +22,17 @@ export async function* adaptResponsesStream(
   stream: AsyncIterable<unknown>,
   signal?: AbortSignal,
 ): AsyncGenerator<OpenAIResponsesStreamEvent> {
-  for await (const event of iterateModelStream(stream, signal)) {
+  for await (const rawEvent of iterateModelStream(stream, signal)) {
+    // Guarded HTTP turns a unary JSON body into one SSE data event. Reuse the
+    // terminal consumer for Responses snapshots instead of projecting a second answer.
+    const event =
+      isRecord(rawEvent) &&
+      rawEvent.type === undefined &&
+      rawEvent.object === "response" &&
+      typeof rawEvent.status === "string" &&
+      isResponsesTerminalEventType("response." + rawEvent.status)
+        ? { type: "response." + rawEvent.status, response: rawEvent }
+        : rawEvent;
     if (!isRecord(event) || typeof event.type !== "string") {
       throw new Error("Responses stream delivered a malformed event without a string type");
     }

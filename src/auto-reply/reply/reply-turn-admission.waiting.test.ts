@@ -37,8 +37,28 @@ describe("reply turn admission", () => {
     active.setPhase("running");
     return cancel;
   }
-  function activeReply(sessionKey: string, sessionId: string) {
-    return createTestReplyOperation({ sessionKey, sessionId });
+  function activeReply() {
+    return createTestReplyOperation({
+      sessionKey: "agent:main:telegram:topic:42",
+      sessionId: "active-session",
+    });
+  }
+  function observe<T>(pending: Promise<T>) {
+    let settled = false;
+    return {
+      pending: pending.then((result) => {
+        settled = true;
+        return result;
+      }),
+      isSettled: () => settled,
+    };
+  }
+  function expectSkipped(
+    result: Awaited<ReturnType<typeof admitTestReplyTurn>>,
+    active: ReturnType<typeof activeReply>,
+    reason = "active-run",
+  ) {
+    expect(result).toMatchObject({ status: "skipped", reason, activeOperation: active });
   }
   function admitBehind(
     active: ReturnType<typeof createTestReplyOperation>,
@@ -62,55 +82,37 @@ describe("reply turn admission", () => {
 
   it.each(["visible", "queued_followup"] as const)("bounds only queued waits: %s", async (kind) => {
     vi.useFakeTimers();
-    const active = activeReply("agent:main:discord:channel:42", "active-session");
+    const active = activeReply();
     active.setPhase("running");
-    const admitted = admitBehind(
-      active,
-      kind === "visible" ? "waiting-session" : "queued-session",
-      {
-        kind,
-      },
-    );
-    let settled = false;
-    void admitted.then(() => {
-      settled = true;
-    });
+    const admitted = observe(admitBehind(active, "waiting-session", { kind }));
     await vi.advanceTimersByTimeAsync(15_000);
     if (kind === "visible") {
-      expect(settled).toBe(false);
+      expect(admitted.isSettled()).toBe(false);
       active.complete();
-      completeOwned(await admitted);
+      completeOwned(await admitted.pending);
     } else {
-      await expect(admitted).resolves.toMatchObject({
-        status: "skipped",
-        reason: "active-run",
-        activeOperation: active,
-      });
+      expectSkipped(await admitted.pending, active);
       active.complete();
     }
   });
 
   it("keeps an already-waiting follow-up behind the delivery barrier", async () => {
-    const active = activeReply("agent:main:discord:channel:42", "active-session");
+    const active = activeReply();
     const { promise: barrier, resolve: releaseBarrier } = createDeferred();
-    const admitted = admitBehind(active, "queued-session", { kind: "queued_followup" });
-    let settled = false;
-    void admitted.then(() => {
-      settled = true;
-    });
+    const admitted = observe(admitBehind(active, "queued-session", { kind: "queued_followup" }));
 
     await Promise.resolve();
     active.completeWithAfterClearBarrier(barrier);
     await Promise.resolve();
 
-    expect(settled).toBe(false);
+    expect(admitted.isSettled()).toBe(false);
 
     releaseBarrier();
-    completeOwned(await admitted);
+    completeOwned(await admitted.pending);
   });
 
   it("skips heartbeat turns while delivery settles", async () => {
-    const active = activeReply("agent:main:discord:channel:42", "active-session");
+    const active = activeReply();
     const { promise: barrier, resolve: releaseBarrier } = createDeferred();
 
     active.completeWithAfterClearBarrier(barrier);
@@ -122,7 +124,7 @@ describe("reply turn admission", () => {
   });
 
   it("passes a visible turn's rotated session to after-clear work", async () => {
-    const active = activeReply("agent:main:discord:channel:42", "active-session");
+    const active = activeReply();
     const { promise: barrier, resolve: releaseBarrier } = createDeferred();
     let admissionSessionId: string | undefined;
     runAfterReplyOperationClear(active, (sessionId) => {
@@ -143,7 +145,7 @@ describe("reply turn admission", () => {
   });
 
   it("uses the active run's final session id after waiting", async () => {
-    const active = activeReply("agent:main:telegram:topic:42", "pre-compact-session");
+    const active = activeReply();
     active.setPhase("preflight_compacting");
 
     const admitted = admitBehind(active, "new-session");
@@ -155,22 +157,18 @@ describe("reply turn admission", () => {
   });
 
   it("skips heartbeat turns while a visible turn owns the lane", async () => {
-    const active = activeReply("agent:main:telegram:topic:42", "visible-session");
+    const active = activeReply();
 
     const result = await admitBehind(active, "heartbeat-session", { kind: "heartbeat" });
 
-    expect(result).toMatchObject({
-      status: "skipped",
-      reason: "active-run",
-      activeOperation: active,
-    });
+    expectSkipped(result, active);
     active.complete();
   });
 
   it("lets visible turns reclaim a stale active operation", async () => {
     vi.useFakeTimers();
     const startedAt = Date.now();
-    const active = activeReply("agent:main:telegram:topic:stale-visible", "stale-session");
+    const active = activeReply();
     const cancel = attachCompletingBackend(active);
     vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
 
@@ -184,34 +182,28 @@ describe("reply turn admission", () => {
 
   it("keeps visible turns waiting while an active operation is still fresh", async () => {
     vi.useFakeTimers();
-    const active = activeReply("agent:main:telegram:topic:fresh-visible", "fresh-session");
+    const active = activeReply();
     active.setPhase("running");
     active.recordActivity();
     const abortController = new AbortController();
-    let settled = false;
-    const result = admitBehind(active, "waiting-session", {
-      upstreamAbortSignal: abortController.signal,
-    }).then((admission) => {
-      settled = true;
-      return admission;
-    });
+    const result = observe(
+      admitBehind(active, "waiting-session", {
+        upstreamAbortSignal: abortController.signal,
+      }),
+    );
 
     await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
-    expect(settled).toBe(false);
-    expect(getSessionControllerOperation("agent:main:telegram:topic:fresh-visible")).toBe(active);
+    expect(result.isSettled()).toBe(false);
+    expect(getSessionControllerOperation(active.key)).toBe(active);
 
     abortController.abort();
-    await expect(result).resolves.toMatchObject({
-      status: "skipped",
-      reason: "aborted",
-      activeOperation: active,
-    });
+    expectSkipped(await result.pending, active, "aborted");
   });
 
   it("defers takeover to the blocked-tool floor while a quiet tool is active", async () => {
     vi.useFakeTimers();
     const startedAt = Date.now();
-    const active = activeReply("agent:main:telegram:topic:quiet-tool", "quiet-tool-session");
+    const active = activeReply();
     const cancel = attachCompletingBackend(active);
     const attempt = active.watchdog.attachAttempt({ assertCurrent: () => {} });
     attempt.beginTool({ toolName: "exec", toolCallId: "tool-quiet-1" });
@@ -220,21 +212,19 @@ describe("reply turn admission", () => {
     // window but inside the blocked-tool floor — must NOT be reclaimed.
     vi.setSystemTime(startedAt + 12 * 60_000);
     const abortController = new AbortController();
-    let settled = false;
-    const waiting = admitBehind(active, "replacement-quiet-tool", {
-      upstreamAbortSignal: abortController.signal,
-    }).then((admission) => {
-      settled = true;
-      return admission;
-    });
+    const waiting = observe(
+      admitBehind(active, "replacement-quiet-tool", {
+        upstreamAbortSignal: abortController.signal,
+      }),
+    );
     await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
-    expect(settled).toBe(false);
+    expect(waiting.isSettled()).toBe(false);
     expect(cancel).not.toHaveBeenCalled();
 
     // Past the 15-minute floor the same waiting turn reclaims it.
     vi.setSystemTime(startedAt + 16 * 60_000);
     await vi.advanceTimersByTimeAsync(REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS);
-    const result = await waiting;
+    const result = await waiting.pending;
     expect(active.result).toEqual({ kind: "failed", code: "run_stalled" });
     completeOwned(result);
     abortController.abort();
@@ -246,17 +236,12 @@ describe("reply turn admission", () => {
       vi.useFakeTimers();
       const cancel = vi.fn();
       const startedAt = Date.now();
-      const active = activeReply(
-        `agent:main:telegram:topic:stale-${kind}`,
-        `stale-${kind}-session`,
-      );
+      const active = activeReply();
       active.attachBackend({ kind: "embedded", cancel, isStreaming: () => true });
       active.setPhase("running");
       vi.setSystemTime(startedAt + RUN_STALE_TAKEOVER_MS + 1);
 
-      const admission = admitTestReplyTurn({
-        sessionKey: `agent:main:telegram:topic:stale-${kind}`,
-        sessionId: `replacement-${kind}-session`,
+      const admission = admitBehind(active, "replacement-session", {
         kind,
         waitTimeoutMs: 1,
       });
@@ -266,49 +251,34 @@ describe("reply turn admission", () => {
       }
       const result = await admission;
 
-      expect(result).toMatchObject({
-        status: "skipped",
-        reason: "active-run",
-        activeOperation: active,
-      });
+      expectSkipped(result, active);
       expect(cancel).not.toHaveBeenCalled();
-      expect(getSessionControllerOperation(`agent:main:telegram:topic:stale-${kind}`)).toBe(active);
+      expect(getSessionControllerOperation(active.key)).toBe(active);
       active.complete();
     },
   );
 
   it("keeps terminal raw work owned after cleanup grace until its producer settles", async () => {
     vi.useFakeTimers();
-    const active = activeReply(
-      "agent:main:telegram:topic:terminal-unreleased",
-      "terminal-unreleased-session",
-    );
+    const active = activeReply();
     active.setPhase("running");
     active.abortByUser();
 
-    const admission = admitBehind(active, "replacement-terminal-session");
-    let admitted = false;
-    void admission.then(() => {
-      admitted = true;
-    });
+    const admission = observe(admitBehind(active, "replacement-terminal-session"));
     await vi.advanceTimersByTimeAsync(SESSION_WATCHDOG_CLEANUP_MS);
-    expect(admitted).toBe(false);
+    expect(admission.isSettled()).toBe(false);
     expect(active.terminalProducerBlocked).toBe(true);
-    expect(getSessionControllerOperation("agent:main:telegram:topic:terminal-unreleased")).toBe(
-      active,
-    );
+    expect(getSessionControllerOperation(active.key)).toBe(active);
     active.complete();
-    const result = await admission;
+    const result = await admission.pending;
 
     expect(active.result).toEqual({ kind: "aborted", code: "aborted_by_user" });
-    expect(getSessionControllerOperation("agent:main:telegram:topic:terminal-unreleased")).not.toBe(
-      active,
-    );
+    expect(getSessionControllerOperation(active.key)).not.toBe(active);
     completeOwned(result);
   });
 
   it("stops waiting when the caller aborts", async () => {
-    const active = activeReply("agent:main:telegram:topic:42", "active-session");
+    const active = activeReply();
     const abortController = new AbortController();
     const admitted = admitBehind(active, "waiting-session", {
       kind: "queued_followup",
@@ -317,11 +287,7 @@ describe("reply turn admission", () => {
 
     abortController.abort();
 
-    await expect(admitted).resolves.toMatchObject({
-      status: "skipped",
-      reason: "aborted",
-      activeOperation: active,
-    });
+    expectSkipped(await admitted, active, "aborted");
     active.complete();
   });
 });

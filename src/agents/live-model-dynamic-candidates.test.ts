@@ -65,10 +65,12 @@ describe("appendLiveModelCandidates", () => {
   });
 
   it("materializes prioritized refs from provider dynamic model hooks", async () => {
+    const dynamic = model(DYNAMIC_PROVIDER, "glm-5");
+    const existing = model("anthropic", "claude-sonnet-4-6");
     const resolveDynamicModel = vi.fn<NonNullable<CandidateOptions["resolveDynamicModel"]>>(
       (params) =>
         params.context.provider === DYNAMIC_PROVIDER && params.context.modelId === "glm-5"
-          ? model(DYNAMIC_PROVIDER, "glm-5")
+          ? dynamic
           : undefined,
     );
     const prepareDynamicModel = vi.fn<NonNullable<CandidateOptions["prepareDynamicModel"]>>(
@@ -76,7 +78,7 @@ describe("appendLiveModelCandidates", () => {
     );
     const normalizeModel = vi.fn<NonNullable<CandidateOptions["normalizeModel"]>>((entry) => entry);
     const result = await candidates({
-      models: [model("anthropic", "claude-sonnet-4-6")],
+      models: [existing],
       config,
       resolveDynamicModel,
       prepareDynamicModel,
@@ -84,13 +86,7 @@ describe("appendLiveModelCandidates", () => {
       refs: [{ provider: "anthropic", id: "claude-sonnet-4-6" }, ref],
     });
 
-    expect(result.added.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
-      `${DYNAMIC_PROVIDER}/glm-5`,
-    ]);
-    expect(result.models.map((entry) => `${entry.provider}/${entry.id}`)).toEqual([
-      "anthropic/claude-sonnet-4-6",
-      `${DYNAMIC_PROVIDER}/glm-5`,
-    ]);
+    expect(result).toEqual({ added: [dynamic], models: [existing, dynamic] });
     for (const hook of [prepareDynamicModel, resolveDynamicModel]) {
       expect(hook).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
@@ -105,10 +101,7 @@ describe("appendLiveModelCandidates", () => {
         }),
       );
     }
-    expect(normalizeModel).toHaveBeenCalledWith(
-      expect.objectContaining(ref),
-      "/tmp/openclaw-agent",
-    );
+    expect(normalizeModel).toHaveBeenCalledWith(expect.objectContaining(ref), agentDir);
   });
 
   it.each(["prepared", "resolved"])(

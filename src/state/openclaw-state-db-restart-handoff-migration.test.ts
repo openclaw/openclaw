@@ -104,6 +104,7 @@ describe("gateway restart handoff state migration", () => {
       { kind: "github-publication-draft-v28", path: databasePath },
       { kind: "local-client-credentials-v29", path: databasePath },
       { kind: "automation-policy-fence-v30", path: databasePath },
+      { kind: "local-workspace-manifests-v31", path: databasePath },
       { kind: "strict-tables-v3", path: databasePath },
       { kind: "session-watch-cursor-provenance-v4", path: databasePath },
     ]);

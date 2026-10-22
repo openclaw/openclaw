@@ -11,34 +11,20 @@ import {
   sliceMarkdownIR as sliceParsedMarkdownIR,
   type MarkdownIR,
 } from "./ir.js";
-import { renderMarkdownIRChunksWithinLimit } from "./render-aware-chunking.js";
+import {
+  href,
+  htmlTag,
+  link as makeLink,
+  plainIR,
+  renderChunks,
+  style as makeStyle,
+} from "./markdown.test-support.js";
 import { renderMarkdownWithMarkers } from "./render.js";
 
 const markdownToIR: (...args: Parameters<typeof parseMarkdownToIR>) => IRWithMetadata =
   parseMarkdownToIR;
 const sliceMarkdownIR: (...args: Parameters<typeof sliceParsedMarkdownIR>) => IRWithMetadata =
   sliceParsedMarkdownIR;
-
-const href = "https://example.com";
-const makeStyle = (start: number, end: number, style: MarkdownIR["styles"][number]["style"]) => ({
-  start,
-  end,
-  style,
-});
-const makeLink = (start: number, end: number, url = href) => ({ start, end, href: url });
-const plainIR = (
-  text: string,
-  styles: MarkdownIR["styles"] = [],
-  links: MarkdownIR["links"] = [],
-): MarkdownIR => ({ text, styles, links });
-const htmlTag = (start: number, end: number, raw: string, name: string, closing = false) => ({
-  start,
-  end,
-  raw,
-  name,
-  closing,
-  selfClosing: false,
-});
 
 function expectWellFormedUtf16(text: string): void {
   expect(new TextDecoder().decode(new TextEncoder().encode(text))).toBe(text);
@@ -358,12 +344,7 @@ it.each(["plain", "rendered"] as const)("partitions metadata without rescanning:
   const chunks =
     mode === "plain"
       ? chunkMarkdownIR(input, limit)
-      : renderMarkdownIRChunksWithinLimit({
-          ir: input,
-          limit,
-          renderChunk: (chunk) => chunk.text,
-          measureRendered: (rendered) => rendered.length,
-        }).map((chunk) => chunk.source);
+      : renderChunks(input, limit, (chunk) => chunk.text).map((chunk) => chunk.source);
   const metadataReads = count.reads();
 
   expect(chunks.length).toBeGreaterThan(128);
@@ -483,12 +464,7 @@ it("transfers only whole tags with the text's complete code points", () => {
 });
 
 it("does not turn chunked tag fragments into authored tags", () => {
-  const chunks = renderMarkdownIRChunksWithinLimit({
-    ir: markdownToIR("a<b>x</b>"),
-    limit: 4,
-    measureRendered: (text: string) => text.length,
-    renderChunk: (ir) => ir.text,
-  });
+  const chunks = renderChunks(markdownToIR("a<b>x</b>"), 4, (ir) => ir.text);
 
   expect(chunks.map(({ rendered, source }) => ({ rendered, tags: source.htmlTags }))).toEqual([
     {

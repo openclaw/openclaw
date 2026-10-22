@@ -52,7 +52,6 @@ import {
 import {
   canManageChatSessionSharing,
   useChatSessionSharingMenu,
-  selectChatSessionSharingItem,
   type ChatSessionSharingProps,
 } from "./chat-session-sharing.solid.tsx";
 
@@ -524,7 +523,7 @@ function ChatHeaderSessionMenuContent(
       value.startsWith("public:")
     ) {
       if (props.sharing) {
-        void selectChatSessionSharingItem(props.sharing, value);
+        void sharing.select(value);
       }
       return;
     }

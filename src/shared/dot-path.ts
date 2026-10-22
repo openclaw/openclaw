@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { parseConfigPathArrayIndex } from "./path-array-index.js";
 
@@ -256,6 +257,29 @@ export function formatConcreteConfigPath(
         : undefined;
     return appendConfigPathSegment(path, concreteSegment);
   }, "");
+}
+
+/** Reads object paths, optionally restricting array keys to canonical config indexes. */
+export function readObjectPath(
+  root: unknown,
+  path: readonly string[],
+  arrayMode: "raw" | "canonical" | "bounded" = "raw",
+): unknown {
+  let current: unknown = root;
+  for (const key of path) {
+    const parent = asOptionalObjectRecord(current);
+    if (!parent) {
+      return undefined;
+    }
+    if (arrayMode !== "raw" && Array.isArray(parent)) {
+      const index = parseConfigPathArrayIndex(key);
+      if (index === undefined || (arrayMode === "bounded" && index >= parent.length)) {
+        return undefined;
+      }
+    }
+    current = parent[key];
+  }
+  return current;
 }
 
 /** Joins path segments into their dotted-path representation. */

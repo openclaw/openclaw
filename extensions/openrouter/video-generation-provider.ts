@@ -115,105 +115,6 @@ function toImagePart(asset: VideoGenerationSourceAsset): OpenRouterImagePart {
   };
 }
 
-function buildImageInputs(inputImages: VideoGenerationSourceAsset[] | undefined): {
-  frameImages: OpenRouterFrameImagePart[];
-  inputReferences: OpenRouterImagePart[];
-} {
-  const frameImages: OpenRouterFrameImagePart[] = [];
-  const inputReferences: OpenRouterImagePart[] = [];
-  const frameTypes = new Set<OpenRouterFrameImagePart["frame_type"]>();
-
-  for (const image of inputImages ?? []) {
-    const role = normalizeOptionalString(image.role);
-    if (role === "reference_image") {
-      inputReferences.push(toImagePart(image));
-      continue;
-    }
-
-    const frameType =
-      role === "first_frame" || role === "last_frame"
-        ? role
-        : frameTypes.has("first_frame")
-          ? "last_frame"
-          : "first_frame";
-
-    if (!frameTypes.has(frameType)) {
-      frameImages.push({ ...toImagePart(image), frame_type: frameType });
-      frameTypes.add(frameType);
-      continue;
-    }
-    inputReferences.push(toImagePart(image));
-  }
-
-  return { frameImages, inputReferences };
-}
-
-function resolveSeed(seed: unknown): number | undefined {
-  if (typeof seed !== "number") {
-    return undefined;
-  }
-  if (!Number.isSafeInteger(seed)) {
-    throw new Error("OpenRouter video seed must be an integer");
-  }
-  return seed;
-}
-
-function buildRequestBody(req: VideoGenerationRequest, model: string): Record<string, unknown> {
-  const { frameImages, inputReferences } = buildImageInputs(req.inputImages);
-  const supportedDurations =
-    (req as VideoGenerationRequest & { [SUPPORTED_DURATIONS_HINT]?: readonly number[] })[
-      SUPPORTED_DURATIONS_HINT
-    ] ?? SUPPORTED_DURATION_SECONDS;
-  const body: Record<string, unknown> = {
-    model,
-    prompt: req.prompt,
-  };
-
-  const duration = normalizeVideoGenerationDuration({
-    durationSeconds: req.durationSeconds,
-    supportedDurationSeconds:
-      supportedDurations.length > 0 ? supportedDurations : SUPPORTED_DURATION_SECONDS,
-  });
-  if (duration != null) {
-    body.duration = duration;
-  }
-  const resolution = normalizeOptionalString(req.resolution)?.toLowerCase();
-  if (resolution) {
-    body.resolution = resolution;
-  }
-  const aspectRatio = normalizeOptionalString(req.aspectRatio);
-  if (aspectRatio) {
-    body.aspect_ratio = aspectRatio;
-  }
-  const size = normalizeOptionalString(req.size);
-  if (size) {
-    body.size = size;
-  }
-  if (typeof req.audio === "boolean") {
-    body.generate_audio = req.audio;
-  }
-  if (frameImages.length > 0) {
-    body.frame_images = frameImages;
-  }
-  if (inputReferences.length > 0) {
-    body.input_references = inputReferences;
-  }
-
-  const seed = resolveSeed(req.providerOptions?.seed);
-  if (seed !== undefined) {
-    body.seed = seed;
-  }
-  const callbackUrl =
-    typeof req.providerOptions?.callback_url === "string"
-      ? normalizeOptionalString(req.providerOptions.callback_url)
-      : undefined;
-  if (callbackUrl) {
-    body.callback_url = callbackUrl;
-  }
-
-  return body;
-}
-
 function resolveVideoJobState(status: string | undefined): "active" | "completed" | "failure" {
   if (status === "completed") {
     return "completed";
@@ -293,10 +194,90 @@ export function buildOpenRouterVideoGenerationProvider(): VideoGenerationProvide
         timeoutMs: req.timeoutMs,
         label: "OpenRouter video generation",
       });
+      const frameImages: OpenRouterFrameImagePart[] = [];
+      const inputReferences: OpenRouterImagePart[] = [];
+      const frameTypes = new Set<OpenRouterFrameImagePart["frame_type"]>();
+
+      for (const image of req.inputImages ?? []) {
+        const role = normalizeOptionalString(image.role);
+        if (role === "reference_image") {
+          inputReferences.push(toImagePart(image));
+          continue;
+        }
+
+        const frameType =
+          role === "first_frame" || role === "last_frame"
+            ? role
+            : frameTypes.has("first_frame")
+              ? "last_frame"
+              : "first_frame";
+
+        if (!frameTypes.has(frameType)) {
+          frameImages.push({ ...toImagePart(image), frame_type: frameType });
+          frameTypes.add(frameType);
+          continue;
+        }
+        inputReferences.push(toImagePart(image));
+      }
+
+      const supportedDurations =
+        (req as VideoGenerationRequest & { [SUPPORTED_DURATIONS_HINT]?: readonly number[] })[
+          SUPPORTED_DURATIONS_HINT
+        ] ?? SUPPORTED_DURATION_SECONDS;
+      const body: Record<string, unknown> = {
+        model,
+        prompt: req.prompt,
+      };
+
+      const duration = normalizeVideoGenerationDuration({
+        durationSeconds: req.durationSeconds,
+        supportedDurationSeconds:
+          supportedDurations.length > 0 ? supportedDurations : SUPPORTED_DURATION_SECONDS,
+      });
+      if (duration != null) {
+        body.duration = duration;
+      }
+      const resolution = normalizeOptionalString(req.resolution)?.toLowerCase();
+      if (resolution) {
+        body.resolution = resolution;
+      }
+      const aspectRatio = normalizeOptionalString(req.aspectRatio);
+      if (aspectRatio) {
+        body.aspect_ratio = aspectRatio;
+      }
+      const size = normalizeOptionalString(req.size);
+      if (size) {
+        body.size = size;
+      }
+      if (typeof req.audio === "boolean") {
+        body.generate_audio = req.audio;
+      }
+      if (frameImages.length > 0) {
+        body.frame_images = frameImages;
+      }
+      if (inputReferences.length > 0) {
+        body.input_references = inputReferences;
+      }
+
+      const seed = req.providerOptions?.seed;
+      if (typeof seed === "number") {
+        if (!Number.isSafeInteger(seed)) {
+          throw new Error("OpenRouter video seed must be an integer");
+        }
+        body.seed = seed;
+      }
+      const callbackUrl =
+        typeof req.providerOptions?.callback_url === "string"
+          ? normalizeOptionalString(req.providerOptions.callback_url)
+          : undefined;
+      if (callbackUrl) {
+        body.callback_url = callbackUrl;
+      }
+
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/videos`,
         headers,
-        body: buildRequestBody(req, model),
+        body,
         timeoutMs: resolveProviderOperationTimeoutMs({
           deadline,
           defaultTimeoutMs: DEFAULT_HTTP_TIMEOUT_MS,

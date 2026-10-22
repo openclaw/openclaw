@@ -1,32 +1,17 @@
 import { expect, it, vi } from "vitest";
-import * as authProfileStore from "../../agents/auth-profiles/store-runtime.js";
-import * as authProfileUsage from "../../agents/auth-profiles/usage.js";
 import * as extraParamsRuntime from "../../agents/embedded-agent-runner/extra-params.js";
-import * as modelAuth from "../../agents/model-auth.js";
 import { createOpenAIResponsesTransportStreamFn } from "../../agents/openai-transport-stream.js";
 import { createPreparedAccountCatalogAccess } from "../../agents/prepared-model-runtime.catalog-auth.js";
-import * as providerStreamRuntime from "../../agents/provider-stream.js";
-import { AuthStorage } from "../../agents/sessions/auth-storage.js";
-import { ModelRegistry } from "../../agents/sessions/model-registry.js";
-import * as simpleCompletionRuntime from "../../agents/simple-completion-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   createOpenAIFastModeWrapper,
   resolveOpenAIFastMode,
 } from "../../llm/providers/stream-wrappers/openai.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
-import {
-  AUTH_MARKER,
-  MODEL,
-  PROVIDER,
-  SESSION_ID,
-  config,
-  logicalModel,
-  params,
-  request,
-  setup,
-} from "./inference-runtime.test-support.js";
+import * as fixture from "./inference-runtime.test-support.js";
 
+const { AUTH_MARKER, MODEL, PROVIDER, SESSION_ID, config, logicalModel, params, request, setup } =
+  fixture;
 const transport = vi.hoisted(() => ({
   requests: [] as Record<string, unknown>[],
   echo: "ultrafast",
@@ -63,9 +48,7 @@ async function complete(runtime: ReturnType<typeof setup>, input = request()) {
 }
 
 it("uses session speed and publishes a downgrade for a direct credential", async () => {
-  const prepareModel = simpleCompletionRuntime.prepareSimpleCompletionModel;
   const applyStreamPolicy = extraParamsRuntime.applyExtraParamsToAgent;
-  const registerProviderStream = providerStreamRuntime.registerProviderStreamForModel;
   const endpoint = { api: "openai-responses" as const, baseUrl: "https://api.openai.com/v1" };
   const model = { ...logicalModel, ...endpoint };
   const openai = { ...endpoint, auth: "api-key" as const, apiKey: AUTH_MARKER, models: [] };
@@ -89,25 +72,8 @@ it("uses session speed and publishes a downgrade for a direct credential", async
   });
   const entry = { sessionId: SESSION_ID, updatedAt: 1, fastMode: "ultrafast" as const };
   const runtime = setup(entry, { pluginRegistry, accountCatalog, config: runtimeConfig });
-  const authStorage = AuthStorage.inMemory({});
-  const resolvedModel = { model, authStorage, modelRegistry: ModelRegistry.inMemory(authStorage) };
-  vi.spyOn(authProfileStore, "ensureAuthProfileStoreAsync").mockResolvedValue({
-    version: 1,
-    profiles: {},
-  });
-  vi.spyOn(authProfileUsage, "reconcileAuthProfileQuotaBlocks").mockResolvedValue(undefined);
-  vi.spyOn(modelAuth, "getApiKeyForModelCore").mockResolvedValue({
-    apiKey: AUTH_MARKER,
-    mode: "api-key",
-    source: "worker provider fixture",
-  });
-  runtime.prepareModel.mockImplementation((modelParams, assertCurrent) =>
-    prepareModel({ ...modelParams, modelResolver: async () => resolvedModel }, assertCurrent),
-  );
+  fixture.useRealProviderPreparation(runtime, () => model);
   runtime.applyStreamPolicy.mockImplementation(applyStreamPolicy);
-  vi.mocked(providerStreamRuntime.registerProviderStreamForModel).mockImplementation(
-    registerProviderStream,
-  );
   const route = {
     identityKey: "direct:openai",
     modelId: MODEL,

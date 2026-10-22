@@ -112,6 +112,16 @@ function preparedCatalog(entries: ModelCatalogSnapshot["entries"]): ModelCatalog
   return { entries, routeVariants: [] };
 }
 
+function configuredProvider(letter: string) {
+  return {
+    api: "openai-responses" as const,
+    baseUrl: `https://provider-${letter}.example/v1`,
+    models: [
+      makeConfiguredModel({ id: `model-${letter}1`, name: `Provider ${letter.toUpperCase()}` }),
+    ],
+  };
+}
+
 function expectUnset<T>(value: T, ...keys: (keyof T)[]) {
   for (const key of keys) {
     expect(value[key], String(key)).toBeUndefined();
@@ -552,24 +562,10 @@ describe("refused pins use the primary instead of catalog order", () => {
       model: "provider-b/model-b1",
       modelPolicy: { allow: ["provider-a/model-a1", "provider-b/model-b1"] },
     },
-    Object.fromEntries(
-      ["a", "b"].map(
-        (letter) =>
-          [
-            `provider-${letter}`,
-            {
-              api: "openai-responses" as const,
-              baseUrl: `https://provider-${letter}.example/v1`,
-              models: [
-                makeConfiguredModel({
-                  id: `model-${letter}1`,
-                  name: `Provider ${letter.toUpperCase()}`,
-                }),
-              ],
-            },
-          ] as const,
-      ),
-    ),
+    {
+      "provider-a": configuredProvider("a"),
+      "provider-b": configuredProvider("b"),
+    },
   );
 
   it.each(["direct", "parent", "degraded", "concurrent"] as const)(

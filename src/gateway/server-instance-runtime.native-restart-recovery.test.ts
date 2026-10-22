@@ -26,6 +26,12 @@ import {
   rotateAgentEventLifecycleGeneration,
 } from "../infra/agent-events.js";
 import {
+  initializeGlobalHookRunner,
+  resetGlobalHookRunner,
+} from "../plugins/hook-runner-global.js";
+import { createOwnershipRecord } from "../plugins/registry-ownership.test-support.js";
+import { createTestPluginRegistry } from "../plugins/registry-runtime.test-helpers.js";
+import {
   bindGatewayContextResolver,
   clearGatewayContextResolver,
   withPluginRuntimeGatewayRequestScope,
@@ -55,6 +61,7 @@ import {
   createCreatorTransportTools,
 } from "./server-methods/requester-cron-authority.test-support.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
+import { resetTestPluginRegistry, setTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 
 const startTurn = vi.hoisted(() => vi.fn<ReturnType<typeof createAgentTurnService>["startTurn"]>());
 
@@ -71,6 +78,8 @@ afterEach(() => {
   startTurn.mockReset();
   vi.restoreAllMocks();
   resetAgentEventsForTest();
+  resetGlobalHookRunner();
+  resetTestPluginRegistry();
 });
 
 describe("cold restart recovery of native operator input", () => {
@@ -195,6 +204,7 @@ describe("cold restart recovery of native operator input", () => {
 
   it.each([
     "native source",
+    "declaring plugin loaded",
     "native steering",
     "peer follow-up",
     "requester continuation after cohort settlement",
@@ -257,6 +267,25 @@ describe("cold restart recovery of native operator input", () => {
         ],
       });
       setRuntimeConfigSnapshot(config);
+      if (scenario === "declaring plugin loaded") {
+        // An additional plain-text recovery case proves compatibility with a
+        // declaring command present, not recovery/replay of a command handler.
+        const builder = createTestPluginRegistry();
+        const record = createOwnershipRecord("recovery-native-command", {
+          contracts: { commandRuntimeCapabilities: ["subagents"] },
+        });
+        builder.createApi(record, { config }).registerCommand({
+          name: "pstack-recovery-probe",
+          description: "Probe command presence during plain-text restart recovery",
+          requireAuth: true,
+          runtimeCapabilities: ["subagents"],
+          handler: () => ({ text: "Command handler is separate from agent recovery" }),
+        });
+        builder.registry.plugins.push(record);
+        expect(builder.registry.commands).toHaveLength(1);
+        setTestPluginRegistry(builder.registry);
+        initializeGlobalHookRunner(builder.registry);
+      }
       const cronStorePath = path.join(state.stateDir, "cron", "jobs.json");
       const cron = new CronService({
         scheduler: createTestGatewayScheduler(),
@@ -266,7 +295,6 @@ describe("cold restart recovery of native operator input", () => {
         defaultAgentId: "main",
         log: createNoopLogger(),
         enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         listConfiguredChannels: async () => [],
       });

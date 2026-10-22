@@ -294,15 +294,16 @@ export function captureUpdateFinalizationDoctorOutput(phase) {
   );
 }
 if (scenario === "human-recovery-plugin-error") {
-  stub(
-    "./update-cli/update-command-report.ts",
+  override(
+    "../commands/configure.shared.ts",
     `
 import { mock } from 'node:test';
-export async function runInteractiveUpdateFailureAction({ runtime }) {
+import { defaultRuntime } from ${JSON.stringify(sourceUrl("../runtime.ts"))};
+export async function select() {
   mock.timers.tick(11_000);
   console.error('Fixture advanced watchdog clock.');
-  runtime.log('Interactive recovery completed.');
-  return 'handled';
+  defaultRuntime.log('Interactive recovery completed.');
+  return 'dismiss';
 }`,
   );
 }

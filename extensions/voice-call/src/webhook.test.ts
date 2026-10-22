@@ -164,7 +164,7 @@ function createServer(...args: WebhookServerArgs) {
 function createFixture(
   config: VoiceCallConfigInput = {},
   testProvider = provider,
-  logger?: WebhookServerArgs[6],
+  logger?: WebhookServerArgs[5],
   state = createManager([]),
 ) {
   return {
@@ -175,9 +175,16 @@ function createFixture(
       testProvider,
       undefined,
       undefined,
-      undefined,
       logger,
     ),
+  };
+}
+
+function createVerifyingFixture(verifyWebhook: VoiceCallProvider["verifyWebhook"]) {
+  const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
+  return {
+    ...createFixture({}, { ...provider, verifyWebhook, parseWebhookEvent }),
+    parseWebhookEvent,
   };
 }
 
@@ -227,15 +234,18 @@ function mediaCallbacks(server: VoiceCallWebhookServer) {
   return (server.getMediaStreamHandler() as unknown as { config: MediaStreamConfig }).config;
 }
 
-function webhookPipeline(server: VoiceCallWebhookServer) {
-  return (
-    server as unknown as {
-      runWebhookPipeline: (
-        req: IncomingMessage,
-        path: string,
-      ) => Promise<{ statusCode: number; body: string }>;
-    }
-  ).runWebhookPipeline.bind(server);
+function serverInternals(server: VoiceCallWebhookServer) {
+  return server as unknown as {
+    runWebhookPipeline: (
+      req: IncomingMessage,
+      path: string,
+    ) => Promise<{ statusCode: number; body: string }>;
+    handleInboundResponse: (callId: string, message: string) => Promise<void>;
+    resolveMediaStreamClientIp: (request: {
+      headers: Record<string, string>;
+      socket: { remoteAddress?: string };
+    }) => string | undefined;
+  };
 }
 
 function createStreamResponse(token = "token") {
@@ -418,16 +428,8 @@ describe("VoiceCallWebhookServer media stream client IP resolution", () => {
       },
       createTwilioStreamingProvider(),
     );
-    const resolve = (
-      server as unknown as {
-        resolveMediaStreamClientIp: (request: {
-          headers: Record<string, string>;
-          socket: { remoteAddress?: string };
-        }) => string | undefined;
-      }
-    ).resolveMediaStreamClientIp.bind(server);
     expect(
-      resolve({
+      serverInternals(server).resolveMediaStreamClientIp({
         headers: {
           "x-forwarded-for": "192.0.2.99, 198.51.100.10, 203.0.113.10",
           "x-real-ip": "198.51.100.11",
@@ -517,16 +519,8 @@ describe("VoiceCallWebhookServer stale call reaper", () => {
 describe("VoiceCallWebhookServer path matching", () => {
   it("rejects lookalike webhook paths that only match by prefix", async () => {
     const verifyWebhook = vi.fn(() => ({ ok: true, verifiedRequestKey: "verified:req:prefix" }));
-    const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
-    const strictProvider: VoiceCallProvider = {
-      ...provider,
-      verifyWebhook,
-      parseWebhookEvent,
-    };
-    const { server } = createFixture({}, strictProvider);
-
-    const baseUrl = await server.start();
-    const requestUrl = new URL(baseUrl);
+    const { server, parseWebhookEvent } = createVerifyingFixture(verifyWebhook);
+    const requestUrl = new URL(await server.start());
     requestUrl.pathname = "/voice/webhook-evil";
 
     const response = await postWebhookForm(requestUrl, "CallSid=CA123&SpeechResult=hello");
@@ -541,18 +535,12 @@ describe("VoiceCallWebhookServer path matching", () => {
       expect(ctx.query).toEqual({ type: "status" });
       return { ok: true, verifiedRequestKey: "verified:req:host" };
     });
-    const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
-    const strictProvider: VoiceCallProvider = {
-      ...provider,
-      verifyWebhook,
-      parseWebhookEvent,
-    };
-    const { server } = createFixture({}, strictProvider);
-    const readBodySpy = vi.spyOn(webhookRequestGuards, "readRequestBodyWithLimit");
-    readBodySpy.mockResolvedValue("CallSid=CA123&SpeechResult=hello");
-    const runWebhookPipeline = webhookPipeline(server);
+    const { server, parseWebhookEvent } = createVerifyingFixture(verifyWebhook);
+    vi.spyOn(webhookRequestGuards, "readRequestBodyWithLimit").mockResolvedValue(
+      "CallSid=CA123&SpeechResult=hello",
+    );
 
-    const result = await runWebhookPipeline(
+    const result = await serverInternals(server).runWebhookPipeline(
       {
         method: "POST",
         url: "/voice/webhook?type=status",
@@ -867,16 +855,11 @@ describe("VoiceCallWebhookServer replay handling", () => {
   });
 
   it("rejects requests when verification succeeds without a request key", async () => {
-    const parseWebhookEvent = vi.fn(() => ({ events: [], statusCode: 200 }));
-    const badProvider: VoiceCallProvider = {
-      ...provider,
-      verifyWebhook: () => ({ ok: true }),
-      parseWebhookEvent,
-    };
-    const { server } = createFixture({}, badProvider);
-
-    const baseUrl = await server.start();
-    const response = await postWebhookForm(baseUrl, "CallSid=CA123&SpeechResult=hello");
+    const { server, parseWebhookEvent } = createVerifyingFixture(() => ({ ok: true }));
+    const response = await postWebhookForm(
+      await server.start(),
+      "CallSid=CA123&SpeechResult=hello",
+    );
 
     expect(response.status).toBe(401);
     expect(parseWebhookEvent).not.toHaveBeenCalled();
@@ -902,7 +885,6 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
     "limits pre-auth requests (missing remote address: %s)",
     async (missingRemote) => {
       const { server } = createFixture({ provider: "twilio" }, createTwilioVerificationProvider());
-      const runWebhookPipeline = webhookPipeline(server);
       const reads = blockedBodyReads(missingRemote);
       const baseUrl = missingRemote ? undefined : await server.start();
       const send = async (body: string) => {
@@ -910,7 +892,7 @@ describe("VoiceCallWebhookServer pre-auth webhook guards", () => {
           const response = await postWebhookForm(baseUrl, body, { "x-twilio-signature": "sig" });
           return { statusCode: response.status, body: await response.text() };
         }
-        return runWebhookPipeline(
+        return serverInternals(server).runWebhookPipeline(
           {
             method: "POST",
             url: "/voice/webhook",
@@ -941,7 +923,7 @@ describe("VoiceCallWebhookServer classic response routing", () => {
   function responseFixture(
     call: CallRecord,
     config = createConfig({ agentId: "main" }),
-    logger?: WebhookServerArgs[6],
+    logger?: WebhookServerArgs[5],
   ) {
     const speak = vi.fn(async () => ({ success: true }));
     const manager = {
@@ -949,13 +931,11 @@ describe("VoiceCallWebhookServer classic response routing", () => {
       getCall: (callId: string) => (callId === call.callId ? call : undefined),
       speak,
     } as unknown as CallManager;
-    const server = createServer(config, manager, provider, {}, undefined, {} as never, logger);
-    const handler = server as unknown as {
-      handleInboundResponse: (callId: string, message: string) => Promise<void>;
-    };
+    const server = createServer(config, manager, provider, {}, {} as never, logger);
     return {
       speak,
-      respond: (message: string) => handler.handleInboundResponse(call.callId, message),
+      respond: (message: string) =>
+        serverInternals(server).handleInboundResponse(call.callId, message),
     };
   }
 
@@ -1176,11 +1156,7 @@ describe("VoiceCallWebhookServer barge-in suppression during initial message", (
     );
     await server.start();
     const handleInboundResponse = vi.fn(async () => {});
-    (
-      server as unknown as {
-        handleInboundResponse: (callId: string, transcript: string) => Promise<void>;
-      }
-    ).handleInboundResponse = handleInboundResponse;
+    serverInternals(server).handleInboundResponse = handleInboundResponse;
     const media = mediaCallbacks(server);
     const transcript = "hello after greeting";
     media.onSpeechStart?.("provider-call-1", "stream");

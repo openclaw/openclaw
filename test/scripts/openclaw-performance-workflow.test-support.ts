@@ -12,7 +12,7 @@ import { afterAll } from "vitest";
 import { parse } from "yaml";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
 
-export type PerformanceWorkflowStep = {
+type PerformanceWorkflowStep = {
   name?: string;
   id?: string;
   if?: string;
@@ -38,7 +38,7 @@ type PerformanceWorkflow = {
     }
   >;
 };
-export const PERFORMANCE_WORKFLOW = ".github/workflows/openclaw-performance.yml";
+const PERFORMANCE_WORKFLOW = ".github/workflows/openclaw-performance.yml";
 export function readPerformanceWorkflow(source = readFileSync(PERFORMANCE_WORKFLOW, "utf8")) {
   return parse(source) as PerformanceWorkflow;
 }

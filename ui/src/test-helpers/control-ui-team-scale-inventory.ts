@@ -15,8 +15,10 @@ export function createTeamScaleSessionInventory({
   now,
   people,
   counts,
+  offRosterSession = false,
 }: {
   now: number;
+  offRosterSession?: boolean;
   people: ControlUiMockPresenceUser[];
   counts: Record<
     "sessions" | "owners" | "pinned" | "childSessions" | "cronSessions" | "systemSessions",
@@ -69,8 +71,12 @@ export function createTeamScaleSessionInventory({
   });
   prepareTeamScaleSessionOwnership(sessions, people.slice(0, counts.owners));
   const pinnedRows = sessions.slice(-counts.pinned);
-  const pinnedKeys = pinnedRows.map((row) => row.key);
-  const selectedSessionKey = pinnedKeys[0]!;
+  const selectedSessionKey = pinnedRows[0]!.key;
+  if (offRosterSession) {
+    pinnedRows[0]!.pinned = false;
+    delete pinnedRows[0]!.pinnedAt;
+  }
+  const pinnedKeys = pinnedRows.filter((row) => row.pinned).map((row) => row.key);
   for (const row of pinnedRows.slice(1, -1)) {
     if (!row.participants?.some((participant) => participant.identity.id === people[0]!.id)) {
       row.participants?.push({

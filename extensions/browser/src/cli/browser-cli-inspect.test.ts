@@ -57,7 +57,7 @@ describe("browser cli snapshot defaults", () => {
     return sharedMocks.callBrowserRequest.mock.calls.at(-1)?.[1];
   };
 
-  const runSnapshot = async (args: string[]) => await runBrowserInspect(["snapshot", ...args]);
+  const runSnapshot = (args: string[]) => runBrowserInspect(["snapshot", ...args]);
 
   beforeAll(async () => {
     installInspectSpies();
@@ -129,17 +129,13 @@ describe("browser cli snapshot defaults", () => {
   );
 
   it.each([
-    {
-      args: [],
-      browser: { snapshotDefaults: { mode: "efficient" } },
-      query: { format: "ai", mode: "efficient" },
-    },
-    { args: ["--efficient"], browser: {}, query: { format: "ai", mode: "efficient" } },
-    { args: ["--urls"], browser: {}, query: { format: "ai", urls: true } },
-    { args: ["--limit", "+10", "--depth", "+0"], browser: {}, query: { limit: 10, depth: 0 } },
-  ])("builds snapshot query $query for $args", async ({ args, browser, query }) => {
+    [[], { snapshotDefaults: { mode: "efficient" } }, { format: "ai", mode: "efficient" }],
+    [["--efficient"], {}, { format: "ai", mode: "efficient" }],
+    [["--urls"], {}, { format: "ai", urls: true }],
+    [["--limit", "+10", "--depth", "+0"], {}, { limit: 10, depth: 0 }],
+  ] as const)("builds snapshot query for %j", async (args, browser, query) => {
     configMocks.getRuntimeConfig.mockReturnValue({ browser });
-    expect(await runSnapshot(args)).toMatchObject({ path: "/snapshot", query });
+    expect(await runSnapshot([...args])).toMatchObject({ path: "/snapshot", query });
   });
 
   it.each([

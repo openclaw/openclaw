@@ -8,8 +8,8 @@ import { createOpenAICompletionsTransportStreamFn } from "../../packages/ai/src/
 import { resolveOpenAIStrictToolSetting } from "../../src/agents/openai-strict-tool-setting.js";
 import { resolveProviderRequestCapabilities } from "../../src/agents/provider-attribution.js";
 import { normalizeModelCompat } from "../../src/plugins/provider-model-compat.js";
-import { loadBundledPluginFacade } from "../../src/test-utils/bundled-plugin-public-surface.js";
 import { registerSingleProviderPlugin } from "../../src/test-utils/plugin-registration.js";
+import { loadBundledProviderPlugin } from "../helpers/media-generation/bundled-provider-builders.js";
 
 const publicUrl = "https://openrouter.ai/api/v1";
 const makeRoute = (
@@ -53,10 +53,7 @@ let provider: Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
 let captured: { url: string; body: CapturedRequest };
 
 beforeAll(async () => {
-  const { default: plugin } = await loadBundledPluginFacade<{
-    default: Parameters<typeof registerSingleProviderPlugin>[0];
-  }>({ pluginId: "openrouter", artifactBasename: "index.js" });
-  provider = await registerSingleProviderPlugin(plugin);
+  provider = await registerSingleProviderPlugin(await loadBundledProviderPlugin("openrouter"));
   // Plugin loading can install the runtime host; preserve that initialization on cleanup.
   originalHost = getAiTransportHost();
   configureAiTransportHost({

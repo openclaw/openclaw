@@ -52,6 +52,7 @@ export type SidebarAttentionPanelPosition = { left: number } & (
 );
 export type SidebarAttentionPanelParams = {
   entries: readonly SidebarInboxEntry[];
+  approvalPending?: boolean;
   onApprovalDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
   onClose: () => void;
   onDismiss: (dismissal: SidebarAttentionDismissal) => void;
@@ -140,6 +141,7 @@ function SidebarInboxItem(props: {
         {(entry) => (
           <SidebarApprovalItem
             approval={entry().approval}
+            pending={props.panel.approvalPending}
             context={props.readContext()}
             onNavigate={(route, options) => props.panel.onNavigate(route, options)}
             onDecision={props.panel.onApprovalDecision}

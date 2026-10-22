@@ -308,7 +308,7 @@ export async function preflightUpdateCommandSchemas(params: {
       ? (params.candidateAdmissionChecks ?? run?.candidateAdmissionChecks)
       : undefined;
   if (run) {
-    recordUpdateRunPhase(run.runId, "validating", undefined, { env: run.env });
+    recordUpdateRunPhase(run.runId, "validating", undefined, run);
   }
   let packageSchemaPreflight: OpenClawDatabaseSchemaPreflight = {
     incompatible: [],

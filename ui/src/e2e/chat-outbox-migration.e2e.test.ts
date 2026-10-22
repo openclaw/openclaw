@@ -17,10 +17,13 @@ import { seedLegacyComposerDraft } from "./chat-outbox-legacy-draft.test-support
 import {
   outboxPayloadFile as file,
   outboxPayloadHistory as history,
+  outboxPageOptions,
+  outboxAttachment,
+  outboxButton as button,
+  expectOutboxPayload,
   outboxPaneFor as paneFor,
   outboxComposerFor as composerFor,
   countOutboxPayloads as payloadCount,
-  readOutboxPayloadBytes as readPayloadBytes,
   stageOutboxAttachment as stage,
 } from "./chat-outbox-payloads.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
@@ -35,10 +38,10 @@ async function restoreInput(page: Page, gateway: Gateway, text: string, destinat
   const notice = paneFor(page).locator(".chat-outbox-recovery");
   await notice.locator(".chat-outbox-recovery-row").getByText(text, { exact: true }).waitFor();
   await expectRequestCountStable(gateway, "chat.send", 0);
-  await notice.getByRole("button", { name: "Restore", exact: true }).click();
+  await button(notice, "Restore").click();
   const dialog = page.locator("openclaw-modal-dialog");
   await dialog.getByText(destination).waitFor();
-  await dialog.getByRole("button", { name: "Restore", exact: true }).click();
+  await button(dialog, "Restore").click();
 }
 
 // Legacy metadata shares the v4 prefix but is not the current account's admitted queue.
@@ -62,136 +65,122 @@ suite.define(() => {
   it.each(["agent:main:topic", "global"])(
     "preserves landed v3 %s Blobs through migration, reload, explicit retry and retirement",
     (legacySessionKey) =>
-      suite.withPage(
-        { serviceWorkers: "block", locale: "en-US", viewport: { width: 1280, height: 900 } },
-        async ({ page }) => {
-          const pane = paneFor(page);
-          const destination = legacySessionKey === "global" ? "agent:main:main" : legacySessionKey;
-          const draftScope = `chat:v3:${destination}\u0000agent:main`;
-          const gateway = await installMockGateway(page, {
-            sessionKey: destination,
-            sessions: [
-              {
-                key: destination,
-                kind: "direct",
-                updatedAt: 1,
-                hasActiveRun: false,
-                activeRunIds: [],
-              },
-            ],
-            historyMessages: history,
-            deferredMethods: ["chat.send"],
-          });
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, destination));
-          await waitForControlUiGatewayReady(page);
-          await pane.getByText("Mock Gateway: payload lifecycle proof.", { exact: true }).waitFor();
-          await gateway.setOnline(false);
-          await waitForControlUiGatewayReconnecting(page);
-          await stage(page, retainedText);
-          await waitForCommittedComposerDraft(page, draftScope, retainedText, [file.name]);
-          await pane.getByRole("button", { name: "Send message", exact: true }).click();
-          await expect.poll(async () => (await readQueue(page)).length).toBe(1);
-          const original = (await readQueue(page))[0]!;
-          const reference = original.attachmentPayload;
-          assert(reference, "Admission must own the Blob before migration");
-          // Finish the durable clear before deleting v4's revision fence for the legacy seed.
-          await waitForCommittedComposerDraft(page, draftScope, null, 0);
-          await page.route("**/outbox-legacy-seed", (route) =>
-            route.fulfill({ contentType: "text/html", body: "Synthetic v3 metadata seed" }),
-          );
-          // Leave the app before replacing its metadata; no old writer races the legacy producer.
-          await page.goto(`${suite.server.baseUrl}outbox-legacy-seed`);
-          const legacyKey = await page.evaluate(
-            ({ item, sessionKey }) => {
-              if (!item.storageScope) {
-                throw new Error("Missing admitted account ownership");
-              }
-              const [gatewayOwner, recoveryScope] = JSON.parse(item.storageScope) as [
-                string,
-                string,
-              ];
-              const currentKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayOwner)}:account:${encodeURIComponent(recoveryScope)}`;
-              const raw = sessionStorage.getItem(currentKey);
-              if (!raw) {
-                throw new Error("Missing admitted metadata");
-              }
-              const { storageScope: _storageScope, ...legacyItem } = item;
-              const queue = [
-                {
-                  ...legacyItem,
-                  sessionKey,
-                  agentId: "main",
-                  sendAttempts: 1,
-                  sendState: "unconfirmed",
-                },
-              ];
-              const session = { updatedAt: 10, draftRevision: 42, queue };
-              const scopeKey = `${sessionKey}\u0000agent:main`;
-              const key = `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayOwner)}`;
-              sessionStorage.setItem(
-                key,
-                JSON.stringify({ version: 3, gatewayOwner, sessions: { [scopeKey]: session } }),
-              );
-              sessionStorage.removeItem(currentKey);
-              return key;
+      suite.withPage({ ...outboxPageOptions, locale: "en-US" }, async ({ page }) => {
+        const pane = paneFor(page);
+        const destination = legacySessionKey === "global" ? "agent:main:main" : legacySessionKey;
+        const draftScope = `chat:v3:${destination}\u0000agent:main`;
+        const gateway = await installMockGateway(page, {
+          sessionKey: destination,
+          sessions: [
+            {
+              key: destination,
+              kind: "direct",
+              updatedAt: 1,
+              hasActiveRun: false,
+              activeRunIds: [],
             },
-            { item: original, sessionKey: legacySessionKey },
-          );
-          await page.goto(controlUiSessionUrl(suite.server.baseUrl, destination));
-          await gateway.setOnline(true);
-          await waitForControlUiGatewayReady(page);
-          await expect
-            .poll(() => page.evaluate((key) => sessionStorage.getItem(key), legacyKey))
-            .toBeNull();
-          expect(await readPayloadBytes(page, reference.key)).toEqual([originalBytes]);
-          expect(await readQueue(page)).toEqual([]);
-          expect(await pane.locator(".chat-queue__item").count()).toBe(0);
-          expect(await pane.getByText("Delivery unconfirmed", { exact: true }).count()).toBe(0);
-          await restoreInput(
-            page,
-            gateway,
-            retainedText,
-            legacySessionKey === "global"
-              ? /Add this saved copy to “Main Session”/
-              : /Add this saved copy to “topic”/,
-          );
-          await pane.getByText("Delivery unconfirmed", { exact: true }).waitFor();
-          await page.reload();
-          await pane.getByText("Delivery unconfirmed", { exact: true }).waitFor();
-          expect((await readQueue(page))[0]).toMatchObject({
-            id: original.id,
-            sessionKey: destination,
-            agentId: "main",
-            sendRunId: original.sendRunId,
-            sendAttempts: 1,
-            attachmentPayload: reference,
-            storageScope: original.storageScope,
-          });
-          expect(await readPayloadBytes(page, reference.key)).toEqual([originalBytes]);
-          await expectRequestCountStable(gateway, "chat.send", 0);
-          await pane.locator(".chat-group.user").getByRole("button", { name: /Retry/i }).click();
-          const sent = await gateway.waitForRequest("chat.send");
-          expect(sent.params).toMatchObject({
-            sessionKey: destination,
-            idempotencyKey: original.sendRunId,
-            attachments: [
+          ],
+          historyMessages: history,
+          deferredMethods: ["chat.send"],
+        });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, destination));
+        await waitForControlUiGatewayReady(page);
+        await pane.getByText("Mock Gateway: payload lifecycle proof.", { exact: true }).waitFor();
+        await gateway.setOnline(false);
+        await waitForControlUiGatewayReconnecting(page);
+        await stage(page, retainedText);
+        await waitForCommittedComposerDraft(page, draftScope, retainedText, [file.name]);
+        await button(pane, "Send message").click();
+        await expect.poll(async () => (await readQueue(page)).length).toBe(1);
+        const original = (await readQueue(page))[0]!;
+        const reference = original.attachmentPayload;
+        assert(reference, "Admission must own the Blob before migration");
+        // Finish the durable clear before deleting v4's revision fence for the legacy seed.
+        await waitForCommittedComposerDraft(page, draftScope, null, 0);
+        await page.route("**/outbox-legacy-seed", (route) =>
+          route.fulfill({ contentType: "text/html", body: "Synthetic v3 metadata seed" }),
+        );
+        // Leave the app before replacing its metadata; no old writer races the legacy producer.
+        await page.goto(`${suite.server.baseUrl}outbox-legacy-seed`);
+        const legacyKey = await page.evaluate(
+          ({ item, sessionKey }) => {
+            if (!item.storageScope) {
+              throw new Error("Missing admitted account ownership");
+            }
+            const [gatewayOwner, recoveryScope] = JSON.parse(item.storageScope) as [string, string];
+            const currentKey = `openclaw.control.chatComposer.v4:${encodeURIComponent(gatewayOwner)}:account:${encodeURIComponent(recoveryScope)}`;
+            const raw = sessionStorage.getItem(currentKey);
+            if (!raw) {
+              throw new Error("Missing admitted metadata");
+            }
+            const { storageScope: _storageScope, ...legacyItem } = item;
+            const queue = [
               {
-                type: "file",
-                mimeType: file.mimeType,
-                fileName: file.name,
-                origin: "file",
-                content: originalBytes,
+                ...legacyItem,
+                sessionKey,
+                agentId: "main",
+                sendAttempts: 1,
+                sendState: "unconfirmed",
               },
-            ],
-          });
-          expect(requireRecord(sent.params).agentId).toBeUndefined();
-          expect(await readPayloadBytes(page, reference.key)).toEqual([originalBytes]);
-          await gateway.resolveDeferred("chat.send");
-          await expect.poll(async () => (await readQueue(page)).length).toBe(0);
-          await expect.poll(() => payloadCount(page)).toBe(0);
-          await expectRequestCountStable(gateway, "chat.send", 1);
-        },
-      ),
+            ];
+            const session = { updatedAt: 10, draftRevision: 42, queue };
+            const scopeKey = `${sessionKey}\u0000agent:main`;
+            const key = `openclaw.control.chatComposer.v3:${encodeURIComponent(gatewayOwner)}`;
+            sessionStorage.setItem(
+              key,
+              JSON.stringify({ version: 3, gatewayOwner, sessions: { [scopeKey]: session } }),
+            );
+            sessionStorage.removeItem(currentKey);
+            return key;
+          },
+          { item: original, sessionKey: legacySessionKey },
+        );
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, destination));
+        await gateway.setOnline(true);
+        await waitForControlUiGatewayReady(page);
+        await expect
+          .poll(() => page.evaluate((key) => sessionStorage.getItem(key), legacyKey))
+          .toBeNull();
+        await expectOutboxPayload(page, reference.key);
+        expect(await readQueue(page)).toEqual([]);
+        expect(await pane.locator(".chat-queue__item").count()).toBe(0);
+        expect(await pane.getByText("Delivery unconfirmed", { exact: true }).count()).toBe(0);
+        await restoreInput(
+          page,
+          gateway,
+          retainedText,
+          legacySessionKey === "global"
+            ? /Add this saved copy to “Main Session”/
+            : /Add this saved copy to “topic”/,
+        );
+        await pane.getByText("Delivery unconfirmed", { exact: true }).waitFor();
+        await page.reload();
+        await pane.getByText("Delivery unconfirmed", { exact: true }).waitFor();
+        expect((await readQueue(page))[0]).toMatchObject({
+          id: original.id,
+          sessionKey: destination,
+          agentId: "main",
+          sendRunId: original.sendRunId,
+          sendAttempts: 1,
+          attachmentPayload: reference,
+          storageScope: original.storageScope,
+        });
+        await expectOutboxPayload(page, reference.key);
+        await expectRequestCountStable(gateway, "chat.send", 0);
+        await pane.locator(".chat-group.user").getByRole("button", { name: /Retry/i }).click();
+        const sent = await gateway.waitForRequest("chat.send");
+        expect(sent.params).toMatchObject({
+          sessionKey: destination,
+          idempotencyKey: original.sendRunId,
+          attachments: [outboxAttachment],
+        });
+        expect(requireRecord(sent.params).agentId).toBeUndefined();
+        await expectOutboxPayload(page, reference.key);
+        await gateway.resolveDeferred("chat.send");
+        await expect.poll(async () => (await readQueue(page)).length).toBe(0);
+        await expect.poll(() => payloadCount(page)).toBe(0);
+        await expectRequestCountStable(gateway, "chat.send", 1);
+      }),
   );
 
   it("upgrades inline queues and the existing draft database, then edits and cancels without touching a newer composer", () =>
@@ -250,7 +239,7 @@ suite.define(() => {
       expect(await pane.locator(".chat-queue__item").count()).toBe(0);
       // Recovery cannot overwrite the independently migrated durable draft.
       await composer.fill("");
-      await pane.getByRole("button", { name: "Remove draft.txt", exact: true }).click();
+      await button(pane, "Remove draft.txt").click();
       await waitForCommittedComposerDraft(page, "chat:v3:agent:main:main\u0000agent:main", null, 0);
       await restoreInput(page, gateway, upgradeText, /Add this saved copy to “Main/);
       await expect
@@ -280,7 +269,7 @@ suite.define(() => {
       expect(await composer.inputValue()).toBe("Mock Gateway: newer independent draft");
       expect(await pane.locator(".chat-attachment-thumb").count()).toBe(1);
       await expect.poll(() => payloadCount(page)).toBe(1);
-      await row.getByRole("button", { name: "Remove queued message", exact: true }).click();
+      await button(row, "Remove queued message").click();
       await expect.poll(() => payloadCount(page)).toBe(0);
       expect(await composer.inputValue()).toBe("Mock Gateway: newer independent draft");
       await expectRequestCountStable(gateway, "chat.send", 0);

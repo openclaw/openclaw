@@ -1,4 +1,12 @@
-import { createMemo, createSignal, Errored, lazy, Loading, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  Errored,
+  lazy,
+  Loading,
+  Show,
+  type Element as SolidElement,
+} from "solid-js";
 import { findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { hasProviderBrandIcon } from "../../../components/provider-icon.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -36,6 +44,8 @@ export type ChatModelPickerParams = {
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ModelCatalogState;
+  /** Lets a lazy route wrap catalog status without adding its read to Chat boot. */
+  renderModelCatalogStatus?: (render: () => SolidElement) => SolidElement;
   modelSelectionLocked: boolean;
   selectionScopeDescription?: string;
   modelOptions: ModelPickerOption[];

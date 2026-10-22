@@ -72,20 +72,15 @@ function ConfirmDialogView(props: {
         ) : undefined}
         <openclaw-modal-actions class="exec-approval-actions">
           <button
-            type="button"
-            class={["btn", initialOptions.danger ? "danger" : "primary"]}
-            disabled={!acknowledged() || initialOptions.canConfirm?.() === false}
-            onClick={() => {
-              if (!acknowledged() || initialOptions.canConfirm?.() === false) {
-                return;
-              }
-              if (skipRequested) {
-                initialOptions.skipPreference?.remember();
-              }
-              props.finish("confirm");
+            ref={(element) => {
+              cancelButton = element;
             }}
+            type="button"
+            class="btn"
+            autofocus
+            onClick={() => props.finish(null)}
           >
-            {initialOptions.confirmLabel ?? t("common.confirm")}
+            {initialOptions.cancelLabel ?? t("common.cancel")}
           </button>
           {initialOptions.alternativeLabel ? (
             <button
@@ -102,15 +97,20 @@ function ConfirmDialogView(props: {
             </button>
           ) : undefined}
           <button
-            ref={(element) => {
-              cancelButton = element;
-            }}
             type="button"
-            class="btn"
-            autofocus
-            onClick={() => props.finish(null)}
+            class={["btn", initialOptions.danger ? "danger" : "primary"]}
+            disabled={!acknowledged() || initialOptions.canConfirm?.() === false}
+            onClick={() => {
+              if (!acknowledged() || initialOptions.canConfirm?.() === false) {
+                return;
+              }
+              if (skipRequested) {
+                initialOptions.skipPreference?.remember();
+              }
+              props.finish("confirm");
+            }}
           >
-            {initialOptions.cancelLabel ?? t("common.cancel")}
+            {initialOptions.confirmLabel ?? t("common.confirm")}
           </button>
         </openclaw-modal-actions>
       </div>

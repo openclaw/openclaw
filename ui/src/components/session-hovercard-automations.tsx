@@ -1,4 +1,5 @@
-import { createMemo, createSignal, For, Show } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createMemo, createSignal, Errored, For, isPending, latest, Loading, Show } from "solid-js";
 import type { CronJob } from "../api/types.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
 import { isCronJobRunning, resolveCronJobLastRunStatus } from "../lib/cron-status.ts";
@@ -39,6 +40,7 @@ function instructions(job: CronJob): string {
 
 export function SessionHovercardAutomations(props: { automation: SessionHovercardAutomation }) {
   const [selectedId, select] = createSignal<string>();
+  let retirePresentation = () => {};
   const scope = createMemo(
     () =>
       [props.automation.gateway, props.automation.sessionKey, props.automation.agentId] as const,
@@ -48,9 +50,16 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
     let current = createInitialCronState();
     let active = false;
     let notify = () => {};
+    let lifetime = Promise.withResolvers<void>();
+    let ready: Promise<unknown> = Promise.resolve();
     const load = async (append = false, event?: unknown) => {
       const pendingState = current;
+      const joinsRead = current.cronLoading || current.cronJobsLoadingMore;
       const pending = loadCronJobsPage(pendingState, { append, event });
+      // Overlapping refreshes return early; the admitted read includes their queued drain.
+      if (!joinsRead) {
+        ready = Promise.race([pending, lifetime.promise]);
+      }
       notify();
       await pending;
       if (active && current === pendingState) {
@@ -64,6 +73,11 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
         active = true;
         notify = publish;
         const reset = () => {
+          // Retire pending presentation before publishing the replacement connection.
+          retirePresentation();
+          lifetime = Promise.withResolvers<void>();
+          retirePresentation = lifetime.resolve;
+          ready = Promise.resolve();
           const next = createInitialCronState({
             client: gateway?.snapshot.client ?? null,
             connected: gateway?.snapshot.phase === "connected",
@@ -91,6 +105,7 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
         void load();
         return () => {
           active = false;
+          lifetime.resolve();
           notify = () => {};
           stopConnection?.();
           stopEvents?.();
@@ -98,10 +113,26 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
         };
       },
     });
-    return { read: projection.read, load };
+    return { read: projection.read, load, ready: () => ready };
   });
   const state = () => source().read();
   const load = (append = false) => source().load(append);
+  const readScope = createMemo(state);
+  // This read outlives the source it observes, so a retired request cannot hold scope replacement.
+  const jobsRead = createMemo(() => {
+    const owner = source();
+    const current = owner.read();
+    return owner.ready().then(() => {
+      if (!current.cronJobsSnapshotRevision && current.cronJobsError) {
+        throw new Error(current.cronJobsError);
+      }
+      return current.cronJobs;
+    });
+  });
+  const readJobs = () => {
+    latest(jobsRead);
+    return null;
+  };
   const selected = createMemo(
     () => state().cronJobs.find((job) => job.id === selectedId()) ?? state().cronJobs[0],
   );
@@ -120,17 +151,15 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
         : !job.enabled
           ? t("chat.sessionDetails.automationPaused")
           : t("chat.sessionDetails.automationEnabled");
-  const loading = () => state().cronLoading || state().cronJobsLoadingMore;
+  const loading = () => isPending(jobsRead);
   const message = createMemo(() =>
     !state().connected
       ? t("chat.sessionDetails.automationUnavailable")
       : state().cronJobsError
         ? t("chat.sessionDetails.automationError")
-        : !state().cronJobsSnapshotRevision
-          ? t("chat.sessionDetails.automationLoading")
-          : state().cronJobsTotal === 0
-            ? t("chat.sessionDetails.automationEmpty")
-            : undefined,
+        : state().cronJobsTotal === 0
+          ? t("chat.sessionDetails.automationEmpty")
+          : undefined,
   );
   const schedule = (job: CronJob) => {
     i18nRevision();
@@ -164,6 +193,19 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
       <Icon name="externalLink" />
     </a>
   );
+  const Panel = (panel: { pending: boolean; children?: JSX.Element }) => (
+    <div
+      slot="content"
+      class="session-hovercard__automations"
+      aria-label={t("chat.sessionDetails.automations")}
+      aria-busy={panel.pending ? "true" : "false"}
+    >
+      <div class="session-hovercard__automation-caption">
+        {t("chat.sessionDetails.automations")}
+      </div>
+      {panel.children}
+    </div>
+  );
   return (
     <openclaw-tooltip
       class="session-hovercard__automation-tooltip"
@@ -191,121 +233,150 @@ export function SessionHovercardAutomations(props: { automation: SessionHovercar
           <Icon name="chevronRight" />
         </span>
       </a>
-      <div
-        slot="content"
-        class="session-hovercard__automations"
-        aria-label={t("chat.sessionDetails.automations")}
-        aria-busy={loading() ? "true" : "false"}
+      <Errored
+        fallback={(_error, reset) => (
+          <Panel pending={false}>
+            <div class="session-hovercard__automation-message" role="status">
+              {t("chat.sessionDetails.automationError")}
+            </div>
+            <button
+              ref={createHovercardControlRef()}
+              type="button"
+              class="chip"
+              disabled={!state().connected}
+              onClick={() => {
+                void load();
+                reset();
+              }}
+            >
+              {t("common.retry")}
+            </button>
+            <OpenLink />
+          </Panel>
+        )}
       >
-        <div class="session-hovercard__automation-caption">
-          {t("chat.sessionDetails.automations")}
-        </div>
-        <Show when={state().cronJobsTotal > 1}>
-          <div
-            class="session-hovercard__automation-list"
-            aria-label={t("sessionHovercard.selectAutomation")}
-          >
-            <For each={state().cronJobs} keyed={(job) => job.id}>
-              {(job) => (
-                <button
-                  ref={createHovercardControlRef()}
-                  type="button"
-                  class="session-hovercard__automation-choice"
-                  aria-pressed={selected()?.id === job().id ? "true" : "false"}
-                  onClick={() => select(job().id)}
-                >
-                  <span>{job().name.trim() || job().id}</span>
-                  <small>{status(job())}</small>
-                </button>
-              )}
-            </For>
-          </div>
-        </Show>
-        <Show when={selected()}>
-          {(value) => (
-            <section class="session-hovercard__automation-detail">
-              <div class="session-hovercard__automation-name">
-                {value().name.trim() || value().id}
+        <Loading
+          on={readScope()}
+          fallback={
+            <Panel pending={true}>
+              <div class="session-hovercard__automation-message" role="status">
+                {t("chat.sessionDetails.automationLoading")}
               </div>
-              <div class="session-hovercard__automation-meta">{schedule(value())}</div>
+              <OpenLink />
+            </Panel>
+          }
+        >
+          <Panel pending={loading()}>
+            {readJobs()}
+            <Show when={state().cronJobsTotal > 1}>
               <div
-                class="session-hovercard__automation-meta"
-                data-running={isCronJobRunning(value()) ? "true" : "false"}
+                class="session-hovercard__automation-list"
+                aria-label={t("sessionHovercard.selectAutomation")}
               >
-                {status(value())}
-                <Show
-                  when={
-                    value().enabled &&
-                    !isCronJobRunning(value()) &&
-                    value().state.nextRunAtMs !== undefined
-                  }
-                >
-                  {" · "}
-                  {t("sessionHovercard.automationNext", {
-                    time: formatRelativeTimestamp(value().state.nextRunAtMs),
-                  })}
-                </Show>
+                <For each={state().cronJobs} keyed={(job) => job.id}>
+                  {(job) => (
+                    <button
+                      ref={createHovercardControlRef()}
+                      type="button"
+                      class="session-hovercard__automation-choice"
+                      aria-pressed={selected()?.id === job().id ? "true" : "false"}
+                      onClick={() => select(job().id)}
+                    >
+                      <span>{job().name.trim() || job().id}</span>
+                      <small>{status(job())}</small>
+                    </button>
+                  )}
+                </For>
               </div>
-              <Show when={value().state.lastRunAtMs !== undefined}>
-                <div class="session-hovercard__automation-meta">
-                  {t("sessionHovercard.automationLast", {
-                    status: t(
-                      "sessionHovercard.automationStatuses." + resolveCronJobLastRunStatus(value()),
-                    ),
-                    time: formatRelativeTimestamp(value().state.lastRunAtMs),
-                  })}
-                </div>
-              </Show>
-              <Show when={value().state.lastError}>
-                <p class="session-hovercard__automation-error">{value().state.lastError}</p>
-              </Show>
-              <div class="session-hovercard__automation-instructions">
-                <div class="session-hovercard__automation-caption">
-                  {t("sessionHovercard.automationInstructions")}
-                </div>
-                <p class="session-hovercard__automation-preview">{instructions(value())}</p>
-                <details>
-                  <summary ref={createHovercardControlRef()}>
-                    {t("sessionHovercard.automationFullInstructions")}
-                  </summary>
-                  <pre>{instructions(value())}</pre>
-                </details>
+            </Show>
+            <Show when={selected()}>
+              {(value) => (
+                <section class="session-hovercard__automation-detail">
+                  <div class="session-hovercard__automation-name">
+                    {value().name.trim() || value().id}
+                  </div>
+                  <div class="session-hovercard__automation-meta">{schedule(value())}</div>
+                  <div
+                    class="session-hovercard__automation-meta"
+                    data-running={isCronJobRunning(value()) ? "true" : "false"}
+                  >
+                    {status(value())}
+                    <Show
+                      when={
+                        value().enabled &&
+                        !isCronJobRunning(value()) &&
+                        value().state.nextRunAtMs !== undefined
+                      }
+                    >
+                      {" · "}
+                      {t("sessionHovercard.automationNext", {
+                        time: formatRelativeTimestamp(value().state.nextRunAtMs),
+                      })}
+                    </Show>
+                  </div>
+                  <Show when={value().state.lastRunAtMs !== undefined}>
+                    <div class="session-hovercard__automation-meta">
+                      {t("sessionHovercard.automationLast", {
+                        status: t(
+                          "sessionHovercard.automationStatuses." +
+                            resolveCronJobLastRunStatus(value()),
+                        ),
+                        time: formatRelativeTimestamp(value().state.lastRunAtMs),
+                      })}
+                    </div>
+                  </Show>
+                  <Show when={value().state.lastError}>
+                    <p class="session-hovercard__automation-error">{value().state.lastError}</p>
+                  </Show>
+                  <div class="session-hovercard__automation-instructions">
+                    <div class="session-hovercard__automation-caption">
+                      {t("sessionHovercard.automationInstructions")}
+                    </div>
+                    <p class="session-hovercard__automation-preview">{instructions(value())}</p>
+                    <details>
+                      <summary ref={createHovercardControlRef()}>
+                        {t("sessionHovercard.automationFullInstructions")}
+                      </summary>
+                      <pre>{instructions(value())}</pre>
+                    </details>
+                  </div>
+                  <OpenLink job={value()} />
+                </section>
+              )}
+            </Show>
+            <Show when={message() !== undefined}>
+              <div class="session-hovercard__automation-message" role="status">
+                {message()}
               </div>
-              <OpenLink job={value()} />
-            </section>
-          )}
-        </Show>
-        <Show when={message() !== undefined}>
-          <div class="session-hovercard__automation-message" role="status">
-            {message()}
-          </div>
-        </Show>
-        <Show when={state().cronJobsError}>
-          <button
-            ref={createHovercardControlRef()}
-            type="button"
-            class="chip"
-            disabled={loading() || !state().connected}
-            onClick={() => void load()}
-          >
-            {t("common.retry")}
-          </button>
-        </Show>
-        <Show when={state().cronJobsHasMore}>
-          <button
-            ref={createHovercardControlRef()}
-            type="button"
-            class="chip"
-            disabled={loading()}
-            onClick={() => void load(true)}
-          >
-            {t("chat.sessionDetails.automationMore")}
-          </button>
-        </Show>
-        <Show when={!selected()}>
-          <OpenLink />
-        </Show>
-      </div>
+            </Show>
+            <Show when={state().cronJobsError}>
+              <button
+                ref={createHovercardControlRef()}
+                type="button"
+                class="chip"
+                disabled={loading() || !state().connected}
+                onClick={() => void load()}
+              >
+                {t("common.retry")}
+              </button>
+            </Show>
+            <Show when={state().cronJobsHasMore}>
+              <button
+                ref={createHovercardControlRef()}
+                type="button"
+                class="chip"
+                disabled={loading()}
+                onClick={() => void load(true)}
+              >
+                {t("chat.sessionDetails.automationMore")}
+              </button>
+            </Show>
+            <Show when={!selected()}>
+              <OpenLink />
+            </Show>
+          </Panel>
+        </Loading>
+      </Errored>
     </openclaw-tooltip>
   );
 }

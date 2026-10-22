@@ -14,6 +14,7 @@ type ProjectCatalogSnapshot = {
 export type ProjectCatalog = {
   readonly snapshot: ProjectCatalogSnapshot;
   readonly loading: boolean;
+  readonly pendingRead: Promise<void> | null;
   subscribe: (listener: () => void) => () => void;
   refresh: (invalidate?: boolean) => Promise<void>;
 };
@@ -166,6 +167,7 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
         }
       });
     pending = request;
+    notify();
     return request;
   };
   const catalog: ProjectCatalog = {
@@ -177,6 +179,9 @@ export function projectsForGateway(gateway: ApplicationGateway): ProjectCatalog 
     },
     get loading() {
       return pending !== null;
+    },
+    get pendingRead() {
+      return pending;
     },
     refresh,
     subscribe(listener) {

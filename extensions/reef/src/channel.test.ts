@@ -2,8 +2,6 @@ import http from "node:http";
 import type { AddressInfo } from "node:net";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { defaultRuntime } from "openclaw/plugin-sdk/runtime";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
@@ -27,7 +25,7 @@ import {
   createStateTestDirectory,
   cleanupStateTestDirectory,
 } from "./state.test-support.js";
-import { ReefInboxConnection, ReefTransportClient } from "./transport.js";
+import { ReefInboxConnection, ReefRelayError, ReefTransportClient } from "./transport.js";
 import { openReefTrustStore } from "./trust-store.js";
 import type { InboxEntry } from "./types.js";
 
@@ -49,14 +47,6 @@ const ingress = (id: string, text: string, replyTo?: string) =>
     provenance,
     autonomy: "bounded",
   });
-
-function stateRuntime(stateDir: string) {
-  const runtime = createRuntime(stateDir);
-  const env = { OPENCLAW_STATE_DIR: stateDir };
-  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>("reef", { ...options, env });
-  return runtime;
-}
 
 describe("Reef inbound dispatch content", () => {
   it("keeps provenance model-visible without storing it in the transcript body", () => {
@@ -124,11 +114,11 @@ it("keeps contextual Reef replies on the inbound message thread", () => {
 
 describe("Reef conversation directory", () => {
   let stateDir = "";
-  let runtime: ReturnType<typeof stateRuntime>;
+  let runtime: ReturnType<typeof createRuntime>;
 
   beforeEach(async () => {
     stateDir = createStateTestDirectory();
-    runtime = stateRuntime(stateDir);
+    runtime = createRuntime(stateDir);
     setReefRuntime(runtime);
     await openReefTrustStore(runtime, resolveReefConfig(directoryConfig)).set(
       "molty",
@@ -228,7 +218,7 @@ describe("Reef gateway account ownership", () => {
     activeReefSlot.clearRuntime();
     stateDir = createStateTestDirectory();
     vi.stubEnv("REEF_TEST_GUARD_KEY", "test-only-credential");
-    const runtime = stateRuntime(stateDir);
+    const runtime = createRuntime(stateDir);
     runtime.state.resolveStateDir = () => stateDir;
     await generateAndStoreKeys(runtime);
     await finalizeReefIdentityBinding(
@@ -626,23 +616,24 @@ describe("Reef channel lifecycle", () => {
       const lifecycle = run({
         reconcile: async () => {
           reconciles += 1;
-          if (phase === "startup" || reconciles > 1) {
+          if (phase === "startup") {
+            throw new ReefRelayError(429, "rate_limited");
+          }
+          if (reconciles > 1) {
             throw new Error("rate_limited");
           }
         },
-        shouldContinueAfterStartupReconcileError: phase === "startup" ? () => true : undefined,
         onReady: async () => {
           reconcilesAtActivation = reconciles;
           errorsAtActivation = errors.length;
         },
-        reconcileIntervalMs: 5,
       });
       await inbox.started;
       if (phase === "startup") {
         // Retrying startup must not amplify relay rate limiting via account restarts.
         expect([reconcilesAtActivation, errorsAtActivation]).toEqual([1, 1]);
       } else {
-        await vi.advanceTimersByTimeAsync(10);
+        await vi.advanceTimersByTimeAsync(60_000);
         expect([reconciles, errors.length]).toEqual([3, 2]);
       }
       expect(inbox.seen).toHaveLength(1);
@@ -666,7 +657,6 @@ describe("Reef channel lifecycle", () => {
       onReady: async () => {
         order.push("ready");
       },
-      reconcileIntervalMs: 5_000,
     });
     await inbox.started;
     expect(order).toEqual(["reconcile", "ready", "inbox"]);
@@ -771,7 +761,6 @@ describe("Reef channel lifecycle", () => {
       startInbox: failedInbox.run,
       reconcile,
       onReconcileError: vi.fn(),
-      reconcileIntervalMs: 5,
     });
     let settled = false;
     const outcome = lifecycle.then(
@@ -785,7 +774,7 @@ describe("Reef channel lifecycle", () => {
     );
     try {
       await failedInbox.started;
-      await vi.advanceTimersByTimeAsync(5);
+      await vi.advanceTimersByTimeAsync(30_000);
       expect(reconcile).toHaveBeenCalledTimes(2);
       failedInbox.finish.reject(error);
       await vi.advanceTimersByTimeAsync(0);
@@ -805,7 +794,7 @@ describe("Reef channel lifecycle", () => {
   });
   it("settles immediately when the parent signal is already aborted", async () => {
     parent.beginClose();
-    await run({ reconcileIntervalMs: 5 });
+    await run({});
     expect(inbox.seen).toHaveLength(0);
   });
 });

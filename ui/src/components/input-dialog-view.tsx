@@ -1,4 +1,4 @@
-import { createSignal, untrack } from "solid-js";
+import { createSignal, createStore, untrack } from "solid-js";
 import { formatUiError } from "../lib/format-error.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { t } from "../lib/reactive/i18n.ts";
@@ -13,9 +13,9 @@ export function InputDialogView(props: {
   const initialOptions = untrack(() => props.options);
   const gateway = initialOptions.gateway ? projectGateway(initialOptions.gateway) : undefined;
   let input!: HTMLInputElement;
-  // Submission admission stays synchronous; signals publish the visible state.
+  // Submission admission stays synchronous; the store publishes the visible state.
   let submitting = false;
-  const [state, setState] = createSignal<{ submitting: boolean; failure: string | null }>({
+  const [state, setState] = createStore<{ submitting: boolean; failure: string | null }>({
     submitting: false,
     failure: null,
   });
@@ -38,15 +38,19 @@ export function InputDialogView(props: {
       return;
     }
     const value = entryValue(input.value);
-    if (!initialOptions.submit) {
+    const submitValue = initialOptions.submit;
+    if (!submitValue) {
       props.finish(value);
       return;
     }
     submitting = true;
-    setState({ submitting: true, failure: null });
+    setState((draft) => {
+      draft.submitting = true;
+      draft.failure = null;
+    });
     let message: string | null;
     try {
-      message = await initialOptions.submit(value);
+      message = await submitValue(value);
     } catch (error) {
       message = formatUiError(error);
     }
@@ -58,7 +62,10 @@ export function InputDialogView(props: {
       props.finish(value);
       return;
     }
-    setState({ submitting: false, failure: message });
+    setState((draft) => {
+      draft.submitting = false;
+      draft.failure = message;
+    });
     // The view update re-enables the input before restoring its editing focus.
     queueMicrotask(() => {
       if (!props.settled()) {
@@ -99,32 +106,32 @@ export function InputDialogView(props: {
             autocomplete="off"
             spellcheck="false"
             value={rawValue()}
-            disabled={state().submitting}
-            aria-invalid={state().failure ? "true" : undefined}
+            disabled={state.submitting}
+            aria-invalid={state.failure ? "true" : undefined}
             onInput={(event) => setRawValue(event.currentTarget.value)}
             autofocus
           />
         </label>
-        {state().failure ? (
+        {state.failure ? (
           <div class="exec-approval-error" role="alert">
-            {state().failure}
+            {state.failure}
           </div>
         ) : undefined}
         <openclaw-modal-actions class="exec-approval-actions">
           <button
-            type="submit"
-            class="btn primary"
-            disabled={state().submitting || submitBlocked(rawValue())}
-          >
-            {initialOptions.submitLabel ?? t("common.save")}
-          </button>
-          <button
             type="button"
             class="btn"
-            disabled={state().submitting}
+            disabled={state.submitting}
             onClick={() => props.finish(null)}
           >
             {initialOptions.cancelLabel ?? t("common.cancel")}
+          </button>
+          <button
+            type="submit"
+            class="btn primary"
+            disabled={state.submitting || submitBlocked(rawValue())}
+          >
+            {initialOptions.submitLabel ?? t("common.save")}
           </button>
         </openclaw-modal-actions>
       </form>

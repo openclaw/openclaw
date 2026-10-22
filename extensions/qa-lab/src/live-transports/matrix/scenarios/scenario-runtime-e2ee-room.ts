@@ -267,9 +267,8 @@ export async function withMatrixQaE2eeDriver<T>(
   context: MatrixQaScenarioContext,
   scenarioId: MatrixQaE2eeScenarioId,
   run: (client: MatrixQaE2eeScenarioClient) => Promise<T>,
-  opts: { actorId?: "driver" | `driver-${string}` } = {},
 ) {
-  const client = await createMatrixQaE2eeActorClient(context, scenarioId, "driver", opts);
+  const client = await createMatrixQaE2eeActorClient(context, scenarioId, "driver");
   try {
     return await run(client);
   } finally {

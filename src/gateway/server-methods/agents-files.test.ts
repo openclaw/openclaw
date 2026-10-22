@@ -8,20 +8,19 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { GatewayRequestError } from "../../../ui/src/api/gateway.ts";
 import {
+  createAgentFileActions,
   loadAgentFileContent,
-  overwriteAgentFile,
-  reloadAgentFile,
   retainAgentFileDrafts,
-  saveAgentFile,
-  type AgentFilesState,
 } from "../../../ui/src/pages/agents/files.ts";
 import { createTestGatewayClient } from "../../../ui/src/test-helpers/gateway-client.ts";
 import { createSandbox } from "../../agents/sandbox/fs-bridge.test-helpers.js";
 import { createRemoteShellSandboxFsBridge } from "../../agents/sandbox/remote-fs-bridge.js";
 import { createLocalRemoteShellScriptRunner } from "../../agents/sandbox/remote-fs-bridge.test-helpers.js";
 import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
+import { callAgentHandler } from "./agents-mutate.test-support.js";
 import { agentsHandlers } from "./agents.js";
-import type { RespondFn } from "./types.js";
+
+type EditorState = Parameters<typeof createAgentFileActions>[0];
 
 function hashContent(content: string): string {
   return createHash("sha256").update(content, "utf8").digest("hex");
@@ -72,13 +71,7 @@ function registerFileTests(storage: "local" | "remote") {
     method: "agents.files.list" | "agents.files.get" | "agents.files.set",
     params: Record<string, unknown>,
   ) {
-    const respond = vi.fn<RespondFn>();
-    await agentsHandlers[method]?.({
-      req: { type: "req", id: method, method, params: {} },
-      params,
-      client: null,
-      isWebchatConnect: () => false,
-      respond,
+    const respond = await callAgentHandler(agentsHandlers[method]!, method, params, {
       context: {
         getRuntimeConfig: () => ({ agents: { defaults: { workspace } } }),
         broadcast,
@@ -96,9 +89,9 @@ function registerFileTests(storage: "local" | "remote") {
   ) {
     return invokeFiles("agents.files.set", { agentId: "main", name, content, ...preconditions });
   }
-  function saveDraft(editor: AgentFilesState) {
-    const draft = expectDefined(editor.agentFileEditors[memory]?.draft, "editor draft");
-    return saveAgentFile(editor, "main", memory, draft);
+  function saveDraft(editor: EditorState) {
+    expectDefined(editor.agentFileEditors[memory]?.draft, "editor draft");
+    return createAgentFileActions(editor, "main", () => true).onFileSave(memory);
   }
   function readFile(name = memory): string {
     return fs.readFileSync(path.join(storageDir, name), "utf8");
@@ -144,7 +137,9 @@ function registerFileTests(storage: "local" | "remote") {
   });
 
   async function loadEditor(draft: string) {
-    const editor: AgentFilesState = {
+    const editor: EditorState = {
+      agentsSelectedId: "main",
+      agentFileActive: memory,
       client: createTestGatewayClient(async (method, params) => {
         if ((method !== "agents.files.get" && method !== "agents.files.set") || !isRecord(params)) {
           throw new Error(`Unexpected editor request: ${method}`);
@@ -160,14 +155,15 @@ function registerFileTests(storage: "local" | "remote") {
       requestGeneration: 0,
       agents: { recordFile: () => null },
       agentFilesLoading: false,
-      agentFilesError: null,
+      agentFileRead: null,
+      agentFileOutcome: null,
       agentFileEditors: {},
       agentFileConflict: null,
       agentFileSaving: false,
       agentFileWriteRevisions: new Map(),
     };
     expect(await loadAgentFileContent(editor, "main", memory)).toBe(true);
-    editor.agentFileEditors[memory] = { ...editor.agentFileEditors[memory], draft };
+    createAgentFileActions(editor, "main", () => true).onFileDraftChange(memory, draft);
     return editor;
   }
 
@@ -206,7 +202,7 @@ function registerFileTests(storage: "local" | "remote") {
 
       expect(await saveDraft(editor)).toBe(false);
       expect(editor.agentFileConflict).toBe(memory);
-      expect(editor.agentFilesError).toContain("workspace changed");
+      expect((await editor.agentFileOutcome)?.error).toContain("workspace changed");
       expect(editor.agentFileEditors[memory]?.draft).toBe(edited);
       expect(retainAgentFileDrafts({ ...editor, agentFileActive: memory })).not.toBeNull();
       expect(
@@ -214,15 +210,19 @@ function registerFileTests(storage: "local" | "remote") {
       ).toBe(variant === "missing" ? false : replacement);
 
       if (variant === "missing") {
-        expect(await reloadAgentFile(editor, "main", memory)).toBe(true);
+        expect(await createAgentFileActions(editor, "main", () => true).onFileReload(memory)).toBe(
+          true,
+        );
         expect(editor.agentFileEditors[memory]?.draft).toBe("");
         expect(fs.existsSync(path.join(storageDir, memory))).toBe(false);
       } else {
-        expect(await overwriteAgentFile(editor, "main", memory, edited)).toBe(true);
+        expect(
+          await createAgentFileActions(editor, "main", () => true).onFileOverwrite(memory),
+        ).toBe(true);
         expect(readFile()).toBe(edited);
       }
       expect(editor.agentFileConflict).toBeNull();
-      expect(editor.agentFilesError).toBeNull();
+      expect((await editor.agentFileOutcome)?.error).toBeUndefined();
       expect(
         variant === "missing"
           ? fs.existsSync(path.join(originalStorage, memory))
@@ -243,7 +243,7 @@ function registerFileTests(storage: "local" | "remote") {
     });
     const editor = await loadEditor("unsaved new memory");
     expect(await saveDraft(editor)).toBe(false);
-    expect(editor.agentFilesError).toContain("Update its workspace provider");
+    expect((await editor.agentFileOutcome)?.error).toContain("Update its workspace provider");
     expect(editor.agentFileEditors[memory]?.draft).toBe("unsaved new memory");
     expect(fs.existsSync(path.join(storageDir, memory))).toBe(false);
 

@@ -46,31 +46,24 @@ describe("media reference intake product proof", () => {
       expect(stored.contentType).toBe("image/png");
       expect(stored.id).toMatch(/\.txt$/);
 
-      const plainPath = await loadWebMediaRaw(localPath, {
-        localRoots: [root],
-        maxBytes: 1024 * 1024,
-      });
-      const fileUrl = await loadWebMediaRaw(pathToFileURL(localPath).toString(), {
-        localRoots: [root],
-        maxBytes: 1024 * 1024,
-      });
-      const remote = await loadWebMediaRaw(remoteUrl, {
-        maxBytes: 1024 * 1024,
-        ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
-      });
-      const mediaStore = await loadWebMediaRaw(`media://inbound/${stored.id}`, {
-        maxBytes: 1024 * 1024,
-      });
-
-      for (const result of [plainPath, fileUrl, remote, mediaStore]) {
+      const localOptions = { localRoots: [root] };
+      const remoteOptions = { ssrfPolicy: { allowedHostnames: ["127.0.0.1"] } };
+      for (const [reference, options, fileName] of [
+        [localPath, localOptions, "misleading.txt"],
+        [pathToFileURL(localPath).toString(), localOptions, "misleading.txt"],
+        [remoteUrl, remoteOptions, "remote.txt"],
+        [`media://inbound/${stored.id}`, {}, undefined],
+      ] as const) {
+        const result = await loadWebMediaRaw(reference, {
+          maxBytes: 1024 * 1024,
+          ...options,
+        });
         expect(result.buffer).toEqual(png);
-        expect(result.contentType).toBe("image/png");
-        expect(result.kind).toBe("image");
+        expect([result.contentType, result.kind]).toEqual(["image/png", "image"]);
+        if (fileName) {
+          expect(result.fileName).toBe(fileName);
+        }
       }
-
-      expect(plainPath.fileName).toBe("misleading.txt");
-      expect(fileUrl.fileName).toBe("misleading.txt");
-      expect(remote.fileName).toBe("remote.txt");
       expect(requestedPaths).toEqual(["/misleading.txt"]);
     });
   });
