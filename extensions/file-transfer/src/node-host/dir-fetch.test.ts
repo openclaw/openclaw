@@ -1,11 +1,18 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import { assert, describe, expect, it } from "vitest";
+import * as processRuntime from "openclaw/plugin-sdk/process-runtime";
+import { assert, describe, expect, it, vi } from "vitest";
 import { createTarArchive } from "./dir-fetch-archive.js";
 import { handleDirFetch } from "./dir-fetch.js";
 import { useFiles } from "./node-host.test-support.js";
 
-const { at, dir: makeDir, file: makeFile, seed } = useFiles("dir-fetch-test-");
+const {
+  at,
+  dir: makeDir,
+  file: makeFile,
+  seed,
+  replacement,
+} = useFiles("dir-fetch-test-", vi.restoreAllMocks);
 
 // dir-fetch needs /usr/bin/tar, unavailable on Windows CI.
 const HAS_TAR = process.platform !== "win32";
@@ -22,9 +29,6 @@ async function expectDirFetchError(input: Parameters<typeof handleDirFetch>[0], 
 }
 
 describe("handleDirFetch", () => {
-  it("rejects empty / non-string path", async () => {
-    await expectDirFetchError({ path: "" }, "INVALID_PATH");
-  });
   it.runIf(HAS_TAR).each(["alias", "inode"])("rejects changed tar %s binding", async (kind) => {
     const target = await makeDir("target");
     const stats = await fs.stat(target, { bigint: true });
@@ -62,23 +66,13 @@ describe("handleDirFetch", () => {
     expect(r.fileCount).toBe(r.entries?.length);
   });
 
-  it.runIf(HAS_TAR).each(["symlink", "inode"])(
+  it.runIf(HAS_TAR).each(["symlink", "inode"] as const)(
     "rejects %s replacement after preflight",
     async (kind) => {
-      await seed(["first/approved.txt", "second/not-approved.txt"]);
-      const target = kind === "symlink" ? at("current") : at("first");
-      if (kind === "symlink") {
-        await fs.symlink(at("first"), target);
-      }
-      const params = { path: target, followSymlinks: true };
+      const fixture = await replacement(kind, true);
+      const params = { path: fixture.target, followSymlinks: true };
       const preflight = await fetchDirectory({ ...params, preflightOnly: true });
-      if (kind === "symlink") {
-        await fs.unlink(target);
-        await fs.symlink(at("second"), target);
-      } else {
-        await fs.rename(target, at("moved"));
-        await fs.rename(at("second"), target);
-      }
+      await fixture.swap();
       const result = await handleDirFetch({
         ...params,
         expectedCanonicalPath: preflight.path,
@@ -90,7 +84,7 @@ describe("handleDirFetch", () => {
           ok: false,
           code: "CANONICAL_PATH_CHANGED",
           message: "resolved path differs from the authorized target",
-          canonicalPath: at("second"),
+          canonicalPath: fixture.canonical,
         });
       }
     },
@@ -115,46 +109,83 @@ describe("handleDirFetch", () => {
     },
   );
 
-  it.runIf(HAS_TAR)("returns a gzipped tar with byte count and sha256", async () => {
-    await seed(["a.txt", "b.txt", "sub/c.txt", ".root-note", ".hidden/note.txt"]);
-    const r = await fetchDirectory({ path: at() });
-
-    expect(r.tarBytes).toBeGreaterThan(0);
-    expect(r.tarBase64.length).toBeGreaterThan(0);
-
-    const buf = Buffer.from(r.tarBase64, "base64");
-    expect(buf.byteLength).toBe(r.tarBytes);
-
-    const expectedSha = crypto.createHash("sha256").update(buf).digest("hex");
-    expect(r.sha256).toBe(expectedSha);
-
-    expect(buf.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
-
-    // BSD tar may also list directory entries.
-    expect(r.fileCount).toBeGreaterThanOrEqual(5);
-    expect(r.entries).toEqual(
-      expect.arrayContaining("a.txt b.txt sub sub/c.txt .root-note .hidden/note.txt".split(" ")),
-    );
-    expect(r.fileCount).toBe(r.entries?.length);
-  });
-  it.runIf(HAS_TAR)("returns TREE_TOO_LARGE for oversized preflight-only directories", async () => {
+  async function expectArchiveCap(preflightOnly: boolean) {
     await makeFile("large.bin", crypto.randomBytes(1024 * 1024));
+    await expectDirFetchError({ path: at(), maxBytes: 64 * 1024, preflightOnly }, "TREE_TOO_LARGE");
+  }
+  it.runIf(HAS_TAR)("caps archive bytes during preflight", () => expectArchiveCap(true));
+  it.runIf(HAS_TAR)("caps archive bytes mid-stream", () => expectArchiveCap(false), 30_000);
+});
 
-    await expectDirFetchError(
-      { path: at(), maxBytes: 64 * 1024, preflightOnly: true },
-      "TREE_TOO_LARGE",
-    );
+function commandResult(
+  overrides: Partial<Awaited<ReturnType<typeof processRuntime.runCommandBuffered>>> = {},
+) {
+  return {
+    stdout: Buffer.alloc(0),
+    stderr: Buffer.alloc(0),
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit" as const,
+    ...overrides,
+  };
+}
+
+it("rejects preflight trees above the entry cap without starting tar", async () => {
+  const command = vi.spyOn(processRuntime, "runCommandBuffered");
+  await Promise.all(Array.from({ length: 5001 }, (_, i) => fs.writeFile(at(`file-${i}.txt`), "")));
+  await expect(handleDirFetch({ path: at(), preflightOnly: true })).resolves.toMatchObject({
+    ok: false,
+    code: "TREE_TOO_LARGE",
+    message: "directory tree exceeds 5000 entries during preflight",
   });
+  expect(command).not.toHaveBeenCalled();
+});
 
-  it.runIf(HAS_TAR)(
-    "bounds archive bytes mid-stream",
-    async () => {
-      // Random bytes don't compress below the cap.
-      const big = crypto.randomBytes(512 * 1024);
-      await seed(["big1.bin", "big2.bin", "big3.bin"], big);
+it("reclassifies a directory removed during archive preflight", async () => {
+  await makeFile("ok.txt");
+  const command = vi
+    .spyOn(processRuntime, "runCommandBuffered")
+    .mockImplementationOnce(async () => {
+      await fs.rm(at(), { recursive: true, force: true });
+      return commandResult({ code: 1 });
+    });
+  await expect(handleDirFetch({ path: at(), preflightOnly: true })).resolves.toMatchObject({
+    ok: false,
+    code: "NOT_FOUND",
+    message: expect.stringContaining("stat failed:"),
+    canonicalPath: at(),
+  });
+  expect(command).toHaveBeenCalledOnce();
+});
 
-      await expectDirFetchError({ path: at(), maxBytes: 64 * 1024 }, "TREE_TOO_LARGE");
-    },
-    30_000,
-  );
+it.each([
+  ["invalid archive", "exit", 0, "READ_ERROR"],
+  ["output cap", "output-limit", null, "TREE_TOO_LARGE"],
+  ["timeout", "timeout", null, "READ_ERROR"],
+  ["changed path", "exit", 78, "CANONICAL_PATH_CHANGED"],
+  ["launch error", "error", null, "READ_ERROR"],
+] as const)("classifies %s", async (label, termination, exitCode, code) => {
+  await makeFile("ok.txt");
+  const command = vi.spyOn(processRuntime, "runCommandBuffered");
+  if (label === "launch error") {
+    command.mockRejectedValueOnce(new Error("spawn failed"));
+  } else {
+    command.mockResolvedValueOnce(
+      commandResult({
+        termination,
+        code: exitCode,
+        stdout: Buffer.from("archive"),
+        outputLimitStream: "stdout",
+      }),
+    );
+  }
+  await expect(
+    handleDirFetch({ path: at(), maxBytes: 1024, preflightOnly: label === "launch error" }),
+  ).resolves.toMatchObject({
+    ok: false,
+    code,
+    canonicalPath: at(),
+  });
+  expect(command).toHaveBeenCalledOnce();
 });

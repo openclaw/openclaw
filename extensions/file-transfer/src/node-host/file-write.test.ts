@@ -1,11 +1,11 @@
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { assert, describe, expect, it, vi } from "vitest";
 import { handleFileWrite } from "./file-write.js";
-import { useFiles } from "./node-host.test-support.js";
+import { observeFileOpen, useFiles } from "./node-host.test-support.js";
 
-const { at, dir: makeDir, file: makeFile } = useFiles("file-write-test-");
+const { at, dir: makeDir, file: makeFile, replacement } = useFiles("file-write-test-");
 
 type WriteOptions = Parameters<typeof handleFileWrite>[0];
 function write(target: string, content: string | Buffer, options: WriteOptions = {}) {
@@ -18,9 +18,7 @@ const writeParams = (target: string, content: string | Buffer, options: WriteOpt
 });
 async function authorize(target: string, content: string | Buffer, options: WriteOptions = {}) {
   const preflight = await write(target, content, { ...options, preflightOnly: true });
-  if (!preflight.ok) {
-    throw new Error(`expected ok, got ${preflight.code}: ${preflight.message}`);
-  }
+  assert(preflight.ok);
   return {
     ...writeParams(target, content, options),
     expectedCanonicalPath: preflight.path,
@@ -55,8 +53,8 @@ describe("handleFileWrite", () => {
   it("requires contentBase64 but allows an empty encoded payload", async () => {
     await expectFailure(handleFileWrite({ path: at("missing.bin") }), "INVALID_BASE64");
 
-    const target = at("empty.bin");
-    expectSuccessFields(await write(target, ""), {
+    const target = at("deep", "nested", "empty.bin");
+    expectSuccessFields(await write(target, "", { createParents: true }), {
       size: 0,
       sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     });
@@ -64,10 +62,8 @@ describe("handleFileWrite", () => {
   });
   it("closes the published handle after a failed identity stat", async () => {
     const target = at("stat-failure.txt");
-    const realOpen = fs.open.bind(fs);
     let observed: Awaited<ReturnType<typeof fs.open>> | undefined;
-    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-      const handle = await realOpen(file, flags, mode);
+    const openSpy = observeFileOpen((handle, file, flags) => {
       const readOnly =
         flags === "r" ||
         (typeof flags === "number" && (flags & (fsConstants.O_WRONLY | fsConstants.O_RDWR)) === 0);
@@ -77,7 +73,6 @@ describe("handleFileWrite", () => {
           Object.assign(new Error("identity observation failed"), { code: "EIO" }),
         );
       }
-      return handle;
     });
     try {
       expectSuccessFields(await write(target, "published"), { path: target, size: 9 });
@@ -101,15 +96,8 @@ describe("handleFileWrite", () => {
     }
     expect(await fs.readFile(target, "utf-8")).toBe(overwrite ? "after" : "before");
   });
-  it.each([false, true])("honors createParents=%s", async (createParents) => {
-    const target = at("deep", "nested", "child.txt");
-    const result = write(target, "x", { createParents });
-    if (createParents) {
-      expect((await result).ok).toBe(true);
-      expect(await fs.readFile(target, "utf-8")).toBe("x");
-    } else {
-      await expectFailure(result, "PARENT_NOT_FOUND");
-    }
+  it("requires createParents for a missing parent", async () => {
+    await expectFailure(write(at("deep", "child.txt"), "x"), "PARENT_NOT_FOUND");
   });
   it.each([false, true])("rejects final symlinks: follow=%s", async (followSymlinks) => {
     const real = await makeFile("real.txt", "untouched");
@@ -137,45 +125,32 @@ describe("handleFileWrite", () => {
     expect(await fs.readFile(sentinel, "utf-8")).toBe("DO_NOT_TOUCH");
   });
 
-  it.each([undefined, "0".repeat(64)])(
-    "preflights without mutation: hash=%s",
-    async (expectedSha256) => {
-      const realDir = await makeDir("real-dir");
-      const allowed = at("allowed");
-      await fs.symlink(realDir, allowed);
+  it("preflights a canonical write without creating parents", async () => {
+    const realDir = await makeDir("real-dir");
+    const allowed = at("allowed");
+    await fs.symlink(realDir, allowed);
 
-      const result = write(path.join(allowed, "new", "child.txt"), "payload", {
-        createParents: true,
-        followSymlinks: true,
-        preflightOnly: true,
-        expectedSha256,
-      });
+    const result = write(path.join(allowed, "new", "child.txt"), "payload", {
+      createParents: true,
+      followSymlinks: true,
+      preflightOnly: true,
+    });
 
-      if (expectedSha256) {
-        await expectFailure(result, "INTEGRITY_FAILURE");
-      } else {
-        expectSuccessFields(await result, {
-          path: path.join(realDir, "new", "child.txt"),
-          size: "payload".length,
-        });
-      }
-      await expectAccessMissing(path.join(realDir, "new"));
-    },
-  );
+    expectSuccessFields(await result, { path: path.join(realDir, "new", "child.txt"), size: 7 });
+    await expectAccessMissing(path.join(realDir, "new"));
+  });
 
   it.runIf(process.platform !== "win32")("rejects a retargeted parent before writing", async () => {
     const first = await makeDir("first");
     const second = await makeDir("second");
     const link = at("current");
     await fs.symlink(first, link);
-    const requestedPath = path.join(link, "out.txt");
-
-    const authorized = await authorize(requestedPath, "approved", { followSymlinks: true });
+    const target = path.join(link, "out.txt");
+    const authorized = await authorize(target, "approved", { followSymlinks: true });
     await fs.unlink(link);
     await fs.symlink(second, link);
-
     await expectFailure(
-      write(requestedPath, "not approved", {
+      write(target, "not approved", {
         followSymlinks: true,
         expectedCanonicalPath: authorized.expectedCanonicalPath,
       }),
@@ -186,28 +161,22 @@ describe("handleFileWrite", () => {
   });
 
   it("rejects an existing-file replacement at the same canonical pathname", async () => {
-    const target = await makeFile("target.txt", "approved");
-    const moved = at("moved.txt");
+    const { target, original, swap } = await replacement("inode");
     const authorized = await authorize(target, "next", { overwrite: true });
-    await fs.rename(target, moved);
-    await fs.writeFile(target, "replacement");
-
+    await swap();
     await expectFailure(handleFileWrite(authorized), "CANONICAL_PATH_CHANGED");
-    await expect(fs.readFile(target, "utf8")).resolves.toBe("replacement");
-    await expect(fs.readFile(moved, "utf8")).resolves.toBe("approved");
+    await expect(fs.readFile(target, "utf8")).resolves.toBe("not approved");
+    await expect(fs.readFile(original, "utf8")).resolves.toBe("approved");
   });
 
   it("checks hard links on the bound write handle after path validation", async () => {
     const target = await makeFile("target.txt", "before");
     const alias = at("outside-alias.txt");
     const authorized = await authorize(target, "after", { overwrite: true, rejectHardlinks: true });
-    const originalOpen = fs.open.bind(fs);
-    const openSpy = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await originalOpen(...args);
-      if (args[0] === target && args[1] === "r+") {
+    const openSpy = observeFileOpen(async (_handle, file, flags) => {
+      if (file === target && flags === "r+") {
         await fs.link(target, alias);
       }
-      return handle;
     });
     try {
       await expectFailure(handleFileWrite(authorized), "HARDLINK_TARGET_DENIED");
@@ -263,88 +232,61 @@ describe("handleFileWrite", () => {
   it("refuses to overwrite a directory", async () => {
     await expectFailure(write(await makeDir("is-a-dir"), "x", { overwrite: true }), "IS_DIRECTORY");
   });
-  it("preserves existing content on hash mismatch", async () => {
-    const target = await makeFile("victim.txt", "ORIGINAL_CONTENT_DO_NOT_TOUCH");
+  it.each([false, true])(
+    "preserves content on hash mismatch: preflight=%s",
+    async (preflightOnly) => {
+      const target = await makeFile("victim.txt", "ORIGINAL_CONTENT_DO_NOT_TOUCH");
 
-    await expectFailure(
-      write(target, "attacker-content", {
-        overwrite: true,
-        expectedSha256: "0".repeat(64),
-      }),
-      "INTEGRITY_FAILURE",
-    );
-    expect(await fs.readFile(target, "utf-8")).toBe("ORIGINAL_CONTENT_DO_NOT_TOUCH");
-  });
-  it("rejects malformed base64 that silently drops characters", async () => {
-    const target = at("bad.bin");
-    await expectFailure(
-      handleFileWrite({ path: target, contentBase64: "AAA@@@" }),
-      "INVALID_BASE64",
-    );
-    await expectAccessMissing(target);
-  });
-
-  it("rejects whitespace and control characters before decoding", async () => {
+      await expectFailure(
+        write(target, "attacker-content", {
+          overwrite: true,
+          preflightOnly,
+          expectedSha256: "0".repeat(64),
+        }),
+        "INTEGRITY_FAILURE",
+      );
+      expect(await fs.readFile(target, "utf-8")).toBe("ORIGINAL_CONTENT_DO_NOT_TOUCH");
+    },
+  );
+  it.each([
+    ["malformed", "AAA@@@"],
+    ["whitespace", " \n\t".repeat(1024 * 1024)],
+  ])("rejects %s base64 before decoding", async (_label, contentBase64) => {
     const bufferFrom = vi.spyOn(Buffer, "from");
-    const target = at("whitespace.bin");
-    await expectFailure(
-      handleFileWrite({
-        path: target,
-        contentBase64: " \n\t".repeat(1024 * 1024),
-      }),
-      "INVALID_BASE64",
-    );
+    const target = at("bad.bin");
+    await expectFailure(handleFileWrite({ path: target, contentBase64 }), "INVALID_BASE64");
     expect(bufferFrom).not.toHaveBeenCalled();
     await expectAccessMissing(target);
   });
   it("rejects content larger than the 16MB cap", async () => {
     await expectFailure(write(at("big.bin"), Buffer.alloc(17 * 1024 * 1024)), "FILE_TOO_LARGE");
   });
-  function failBoundWrites(
-    filePath: string,
-    shouldFail: (position: number) => { fail: boolean; partial?: boolean },
-  ) {
-    const realOpen = fs.open.bind(fs);
-    return vi.spyOn(fs, "open").mockImplementation(async (target, flags, mode) => {
-      const handle = await realOpen(target, flags as never, mode as never);
-      if (String(target) === filePath && flags === "r+") {
-        const realWrite = handle.write.bind(handle);
-        handle.write = (async (
-          buffer: Buffer,
-          offset: number,
-          length: number,
-          position: number,
-        ) => {
-          const decision = shouldFail(position);
-          if (decision.fail) {
-            if (decision.partial) {
-              await realWrite(buffer, offset, Math.max(1, Math.floor(length / 2)), position);
-            }
-            throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
-          }
-          return realWrite(buffer, offset, length, position);
-        }) as typeof handle.write;
-      }
-      return handle;
-    });
-  }
-
   it.each(["extension", "prefix"])("rolls back a failed %s write", async (stage) => {
     const original = Buffer.alloc(stage === "extension" ? 4096 : 8192, 0x61);
     const target = await makeFile("victim.bin", original);
     const payload = Buffer.alloc(stage === "extension" ? 8192 : 4096, 0x62);
     const authorized = await authorize(target, payload, { overwrite: true });
     let failed = false;
-    const spy = failBoundWrites(target, (position) => {
-      if (stage === "extension") {
-        return { fail: position >= original.length };
+    const spy = observeFileOpen((handle, file, flags) => {
+      if (String(file) !== target || flags !== "r+") {
+        return;
       }
-      // Fail once after a partial prefix write; allow the rollback to write.
-      if (failed || position >= payload.length) {
-        return { fail: false };
-      }
-      failed = true;
-      return { fail: true, partial: true };
+      const writeChunk = handle.write.bind(handle);
+      handle.write = (async (buffer: Buffer, offset: number, length: number, position: number) => {
+        // The prefix failure is one-shot so rollback can restore the original.
+        const fail =
+          stage === "extension"
+            ? position >= original.length
+            : !failed && position < payload.length;
+        if (fail) {
+          failed = true;
+          if (stage === "prefix") {
+            await writeChunk(buffer, offset, Math.max(1, Math.floor(length / 2)), position);
+          }
+          throw Object.assign(new Error("disk full"), { code: "ENOSPC" });
+        }
+        return writeChunk(buffer, offset, length, position);
+      }) as typeof handle.write;
     });
     await expect(handleFileWrite(authorized)).rejects.toMatchObject({ code: "ENOSPC" });
     spy.mockRestore();

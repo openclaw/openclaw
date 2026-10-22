@@ -39,53 +39,44 @@ async function authorized(filePath: string, data: Buffer) {
   return { ...params, expectedCanonicalPath: preflight.path, expectedBinding: preflight.binding };
 }
 
-async function upload(params: Record<string, unknown>, data: Buffer) {
-  const peer = receiver();
-  const outcome = handleFileCreate(params, peer.io);
-  await Promise.race([
-    peer.ready,
-    outcome.then((result) => {
-      throw new Error(`closed before ready: ${JSON.stringify(result)}`);
-    }),
-  ]);
-  let offset = 0;
-  const sendNext = async () => {
-    const chunk = data.subarray(offset, offset + FILE_CREATE_CHUNK_BYTES);
-    offset += chunk.length;
-    await peer.receive(chunk);
-  };
-  // The next chunk may arrive before the previous ACK send settles.
-  peer.send.mockImplementationOnce(async (message) => {
-    expect(Buffer.from(message).toString()).toBe("ack");
-    await sendNext();
-  });
-  while (offset < data.length) {
-    await sendNext();
-  }
-  await peer.receive(Buffer.alloc(0));
-  return { result: await outcome, peer };
-}
-
 describe("file.create duplex command", () => {
-  it("creates 50 MiB with bounded chunks and preserves replay edits", async () => {
-    const data = Buffer.alloc(50 * 1024 * 1024, 0x6a);
+  it("accepts the next chunk before the previous ACK settles", async () => {
+    const data = Buffer.alloc(2 * FILE_CREATE_CHUNK_BYTES, 0x6a);
     const target = at("inputs", "large.bin");
     const params = await authorized(target, data);
     expect(await fs.readdir(at())).toEqual([]);
-    const created = await upload(params, data);
-    expect(created.result).toMatchObject({
+    const peer = receiver();
+    const outcome = handleFileCreate(params, peer.io);
+    await Promise.race([peer.ready, outcome]);
+    peer.send.mockImplementationOnce(async (message) => {
+      expect(Buffer.from(message).toString()).toBe("ack");
+      await peer.receive(data.subarray(FILE_CREATE_CHUNK_BYTES));
+    });
+    await peer.receive(data.subarray(0, FILE_CREATE_CHUNK_BYTES));
+    await peer.receive(Buffer.alloc(0));
+    expect(await outcome).toMatchObject({
       ok: true,
       status: "created",
       path: target,
       size: data.length,
       sha256: digest(data),
     });
-    expect(created.peer.send).toHaveBeenCalledTimes(50);
+    expect(peer.send).toHaveBeenCalledTimes(2);
     expect(digest(await fs.readFile(target))).toBe(digest(data));
+  });
+
+  it("does not attribute an upload digest to an existing file", async () => {
+    const target = at("edited");
+    const data = Buffer.from("upload");
     await fs.writeFile(target, "user edit");
-    const replay = await upload(await authorized(target, data), data);
-    expect(replay.result).toMatchObject({ ok: true, status: "exists", path: target });
-    expect(replay.result).not.toHaveProperty("sha256");
+    const peer = receiver();
+    const outcome = handleFileCreate(await authorized(target, data), peer.io);
+    await Promise.race([peer.ready, outcome]);
+    await peer.receive(data);
+    await peer.receive(Buffer.alloc(0));
+    const result = await outcome;
+    expect(result).toMatchObject({ ok: true, status: "exists", path: target });
+    expect(result).not.toHaveProperty("sha256");
     expect(await fs.readFile(target, "utf8")).toBe("user edit");
   });
 

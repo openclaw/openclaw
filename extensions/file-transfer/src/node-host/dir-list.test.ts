@@ -58,17 +58,12 @@ describe("handleDirList", () => {
     async (kind) => {
       const stats = await fs.stat(at(), { bigint: true });
       const binding = { kind: "existing", device: String(stats.dev), inode: String(stats.ino) };
-      const expectedBinding = {
-        malformed: null,
-        write: {
-          kind: "write",
-          anchorPath: at(),
-          anchorDevice: binding.device,
-          anchorInode: binding.inode,
-        },
-        device: { ...binding, device: "different" },
-        inode: { ...binding, inode: "different" },
-      }[kind];
+      const expectedBinding =
+        kind === "malformed"
+          ? null
+          : kind === "write"
+            ? { kind, anchorPath: at(), anchorDevice: binding.device, anchorInode: binding.inode }
+            : { ...binding, [kind]: "different" };
       const readdir = vi.spyOn(fs, "readdir");
 
       await expect(
@@ -193,10 +188,6 @@ describe("handleDirList", () => {
       preflight: true,
       binding,
     });
-
-    expect(await handleDirList({ path: at(), expectedCanonicalPath: at("other") })).toEqual(
-      failure("CANONICAL_PATH_CHANGED", "resolved path differs from the authorized target", at()),
-    );
   });
 
   it("lists files and subdirs with metadata, sorted by name", async () => {

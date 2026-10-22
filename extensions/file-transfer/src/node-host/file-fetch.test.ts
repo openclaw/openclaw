@@ -3,9 +3,9 @@ import fs from "node:fs/promises";
 import { assert, describe, expect, it, vi } from "vitest";
 import { FILE_FETCH_CHUNK_BYTES } from "../shared/file-fetch-protocol.js";
 import { handleFileFetch } from "./file-fetch.js";
-import { duplexPeer, useFiles } from "./node-host.test-support.js";
+import { duplexPeer, observeFileOpen, useFiles } from "./node-host.test-support.js";
 
-const { at, file: makeFile } = useFiles("file-fetch-test-", vi.restoreAllMocks);
+const { at, file: makeFile, replacement } = useFiles("file-fetch-test-", vi.restoreAllMocks);
 type FetchResult = Awaited<ReturnType<typeof handleFileFetch>>;
 function expectFailureCode(
   result: FetchResult,
@@ -17,8 +17,12 @@ function expectSuccess(result: FetchResult): asserts result is Extract<FetchResu
   expect(result.ok).toBe(true);
 }
 async function fetchFile(name: string, content: string | Buffer) {
-  const result = await handleFileFetch({ path: await makeFile(name, content) });
+  const peer = duplexPeer();
+  const result = await handleFileFetch({ path: await makeFile(name, content) }, peer.io);
   expectSuccess(result);
+  expect(result).not.toHaveProperty("transport");
+  expect(peer.send).not.toHaveBeenCalled();
+  expect(peer.onMessage).not.toHaveBeenCalled();
   return result;
 }
 describe("handleFileFetch", () => {
@@ -55,40 +59,28 @@ describe("handleFileFetch", () => {
   it.runIf(process.platform !== "win32")(
     "rejects a retargeted path before reading file bytes",
     async () => {
-      const first = await makeFile("first.txt", "approved");
-      const second = await makeFile("second.txt", "not approved");
-      const link = at("current.txt");
-      await fs.symlink(first, link);
-
-      const preflight = await handleFileFetch({
-        path: link,
-        followSymlinks: true,
-        preflightOnly: true,
-      });
+      const fixture = await replacement("symlink");
+      const params = { path: fixture.target, followSymlinks: true };
+      const preflight = await handleFileFetch({ ...params, preflightOnly: true });
       expectSuccess(preflight);
-      await fs.unlink(link);
-      await fs.symlink(second, link);
-
+      await fixture.swap();
       const result = await handleFileFetch({
-        path: link,
-        followSymlinks: true,
+        ...params,
         expectedCanonicalPath: preflight.path,
       });
-
       expectFailureCode(result, "CANONICAL_PATH_CHANGED");
-      expect(result.canonicalPath).toBe(second);
+      expect(result.canonicalPath).toBe(fixture.canonical);
     },
   );
 
   it("rejects a replacement at the same canonical pathname before reading bytes", async () => {
-    const target = await makeFile("target.txt", "approved");
+    const { target, swap } = await replacement("inode");
     const readFileSpy = vi.spyOn(fs, "readFile");
     const preflight = await handleFileFetch({ path: target, preflightOnly: true });
     expectSuccess(preflight);
     expect(preflight).toMatchObject({ base64: "", sha256: "", preflightOnly: true });
     expect(readFileSpy).not.toHaveBeenCalled();
-    await fs.rename(target, at("moved.txt"));
-    await fs.writeFile(target, "not approved");
+    await swap();
 
     const result = await handleFileFetch({
       path: target,
@@ -102,11 +94,9 @@ describe("handleFileFetch", () => {
 
   it("bounds bytes consumed when a file grows after the size check", async () => {
     const target = await makeFile("growing.txt", "small");
-    const realOpen = fs.open.bind(fs);
     let bytesRead = 0;
     let grown = false;
-    vi.spyOn(fs, "open").mockImplementation(async (file, flags, mode) => {
-      const handle = await realOpen(file, flags, mode);
+    observeFileOpen((handle, file) => {
       if (String(file) === target) {
         const read = handle.read.bind(handle);
         // Keep real filesystem reads; append only after the handler has checked size.
@@ -125,7 +115,6 @@ describe("handleFileFetch", () => {
           return result;
         }) as typeof handle.read;
       }
-      return handle;
     });
 
     expectFailureCode(await handleFileFetch({ path: target, maxBytes: 8 }), "FILE_TOO_LARGE");
@@ -205,26 +194,14 @@ it("preflights without a stream and sends bounded chunks from the authorized han
   await expect(value.send("ack")).rejects.toThrow("No receiver");
 });
 
-it("preserves unary result shape even when optional duplex IO is supplied", async () => {
-  const value = await binaryFixture();
-  const result = await handleFileFetch({ path: value.target }, value.io);
-  expect(result).toMatchObject({ ok: true, base64: value.bytes.toString("base64") });
-  expect(result).not.toHaveProperty("transport");
-  expect(value.chunks).toHaveLength(0);
-  await expect(value.send("start")).rejects.toThrow("No receiver");
-});
-
 it.each([
   ["growth", "FILE_TOO_LARGE", FILE_FETCH_CHUNK_BYTES],
   ["cancellation", "READ_ERROR", 0],
 ] as const)("bounds output and releases the stream after %s", async (mode, code, size) => {
   const value = await binaryFixture(Buffer.alloc(FILE_FETCH_CHUNK_BYTES));
-  const realOpen = fs.open.bind(fs);
   const closes: ReturnType<typeof vi.spyOn>[] = [];
-  vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-    const handle = await realOpen(...args);
+  observeFileOpen((handle) => {
     closes.push(vi.spyOn(handle, "close"));
-    return handle;
   });
   value.onChunk.mockImplementationOnce(() => fs.appendFile(value.target, "x"));
   const pending = value.start();
