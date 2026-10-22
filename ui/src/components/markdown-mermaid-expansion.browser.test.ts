@@ -12,16 +12,15 @@ it("opens the shared viewer from the preview and returns keyboard focus", async 
     window.dispatchEvent(new PageTransitionEvent("pagehide"));
   });
   await diagram.updateComplete;
-  await expect.poll(() => diagram.querySelector(".preview img")).not.toBeNull();
+  const preview = page.getByRole("button", { name: "Expand diagram", exact: true });
+  // Native actionability waits for the cold renderer, rather than polling its startup time.
+  await preview.click();
   const image = diagram.querySelector<HTMLImageElement>(".preview img")!;
   await image.decode();
-  const preview = page.getByRole("button", { name: "Expand diagram", exact: true });
   const button = diagram.querySelector<HTMLButtonElement>("button.preview")!;
 
   for (const activation of ["click", "{Enter}", " "]) {
-    if (activation === "click") {
-      await preview.click();
-    } else {
+    if (activation !== "click") {
       button.focus();
       await userEvent.keyboard(activation);
     }
