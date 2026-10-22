@@ -105,13 +105,14 @@ describe("whatsapp directory", () => {
     },
   } as unknown as OpenClawConfig;
 
-  const makeParams = (overrides: { query?: string; limit?: number } = {}) =>
+  const makeParams = (
+    overrides: Partial<Parameters<typeof listWhatsAppDirectoryGroupsLive>[0]> = {},
+  ) =>
     ({
       cfg,
       accountId: undefined,
-      query: overrides.query,
-      limit: overrides.limit,
       runtime: runtimeEnv,
+      ...overrides,
     }) as never;
 
   const expectUnavailable = (reason: string) =>
@@ -212,16 +213,6 @@ describe("whatsapp directory", () => {
     expect(createSocketMock).not.toHaveBeenCalled();
   });
 
-  it("reports unlinked auth and releases standalone ownership", async () => {
-    readAuthMock.mockResolvedValueOnce({ outcome: "stable", exists: false });
-
-    await expect(listWhatsAppDirectoryGroupsLive(makeParams())).rejects.toMatchObject({
-      code: "whatsapp_directory_unavailable",
-      reason: "not_linked",
-    });
-    expect(mocks.releaseOwner).toHaveBeenCalledOnce();
-  });
-
   it("resolves standalone credentials for the selected account", async () => {
     readAuthMock.mockResolvedValueOnce({ outcome: "stable", exists: false });
     const namedCfg = {
@@ -229,20 +220,15 @@ describe("whatsapp directory", () => {
     } as unknown as OpenClawConfig;
 
     await expect(
-      listWhatsAppDirectoryGroupsLive({
-        cfg: namedCfg,
-        accountId: "secondary",
-        query: undefined,
-        limit: undefined,
-        runtime: runtimeEnv,
-      } as never),
-    ).rejects.toMatchObject({ reason: "not_linked" });
+      listWhatsAppDirectoryGroupsLive(makeParams({ cfg: namedCfg, accountId: "secondary" })),
+    ).rejects.toMatchObject({ code: "whatsapp_directory_unavailable", reason: "not_linked" });
 
     expect(mocks.resolveAuthDir).toHaveBeenCalledWith({
       cfg: namedCfg,
       accountId: "secondary",
     });
     expect(acquireOwnerMock).toHaveBeenCalledWith("/tmp/secondary-wa-auth");
+    expect(mocks.releaseOwner).toHaveBeenCalledOnce();
   });
 
   it("closes a created socket when standalone connection setup fails", async () => {

@@ -66,8 +66,7 @@ describe("auth-store", () => {
   });
 
   it("does not restore creds from backup on ordinary reads", async () => {
-    const backupPath = path.join(authDir, "creds.json.bak");
-    fsSync.writeFileSync(backupPath, JSON.stringify({ me: { id: "123@s.whatsapp.net" } }), "utf-8");
+    writeAuthFiles({ "creds.json.bak": backupCreds });
 
     await expect(webAuthExists(authDir)).resolves.toBe(false);
     expect(fsSync.existsSync(credsPath)).toBe(false);
@@ -77,9 +76,7 @@ describe("auth-store", () => {
     writeAuthFiles({ "creds.json": "{x", "creds.json.bak": backupCreds });
 
     await expect(restoreCredsFromBackupIfNeeded(authDir)).resolves.toBe(true);
-    expect(JSON.parse(fsSync.readFileSync(credsPath, "utf-8"))).toEqual({
-      me: { id: "123@s.whatsapp.net" },
-    });
+    expect(fsSync.readFileSync(credsPath, "utf-8")).toBe(backupCreds);
   });
 
   it.each([
@@ -106,8 +103,7 @@ describe("auth-store", () => {
   );
 
   it("leaves malformed creds unchanged when the backup is malformed", async () => {
-    fsSync.writeFileSync(credsPath, "{x", "utf-8");
-    fsSync.writeFileSync(path.join(authDir, "creds.json.bak"), "{y", "utf-8");
+    writeAuthFiles({ "creds.json": "{x", "creds.json.bak": "{y" });
 
     await expect(restoreCredsFromBackupIfNeeded(authDir)).resolves.toBe(false);
     expect(fsSync.readFileSync(credsPath, "utf-8")).toBe("{x");
@@ -161,58 +157,43 @@ describe("auth-store", () => {
     expect(snapshot).toEqual({
       state: "linked",
       authAgeMs: expect.any(Number),
-      selfId: {
-        e164: "+15551234567",
-        jid: "15551234567@s.whatsapp.net",
-        lid: null,
-      },
+      selfId: { e164: "+15551234567", jid: "15551234567@s.whatsapp.net", lid: null },
     });
   });
 
-  it.runIf(supportsSymlinks)("treats symlinked creds as missing across readers", async () => {
-    writeAuthFiles({ "target-creds.json": selfCreds });
-    const targetPath = path.join(authDir, "target-creds.json");
-    fsSync.symlinkSync(targetPath, credsPath);
-
-    expect(fsSync.lstatSync(credsPath).isSymbolicLink()).toBe(true);
-    expect(fsSync.statSync(credsPath).isFile()).toBe(true);
-    expect(hasWebCredsSync(authDir)).toBe(false);
-    expect(readCredsJsonRaw(credsPath)).toBeNull();
-    expect(getWebAuthAgeMs(authDir)).toBeNull();
-    expect(readWebSelfId(authDir)).toEqual(emptyIdentity);
-    await expect(readWebSelfIdentity(authDir)).resolves.toEqual(emptyIdentity);
-    await expect(webAuthExists(authDir)).resolves.toBe(false);
-    await expect(readWebAuthState(authDir)).resolves.toBe("not-linked");
-    await expect(readWebAuthSnapshot(authDir)).resolves.toEqual({
-      state: "not-linked",
-      authAgeMs: null,
-      selfId: emptyIdentity,
-    });
-  });
-
-  it.runIf(supportsSymlinks)("treats symlinked auth directories as missing", async () => {
-    const rootDir = tempDirs.make("openclaw-wa-auth-symlink-parent-");
-    const targetAuthDir = path.join(rootDir, "target-auth");
-    authDir = path.join(rootDir, "linked-auth");
-    fsSync.mkdirSync(targetAuthDir);
-    fsSync.writeFileSync(path.join(targetAuthDir, "creds.json"), selfCreds, "utf-8");
-    fsSync.symlinkSync(targetAuthDir, authDir, "dir");
-    credsPath = path.join(authDir, "creds.json");
-
-    expect(fsSync.lstatSync(authDir).isSymbolicLink()).toBe(true);
-    expect(fsSync.lstatSync(credsPath).isFile()).toBe(true);
-    expect(hasWebCredsSync(authDir)).toBe(false);
-    expect(readCredsJsonRaw(credsPath)).toBeNull();
-    await expect(webAuthExists(authDir)).resolves.toBe(false);
-    await expect(readWebAuthState(authDir)).resolves.toBe("not-linked");
-  });
+  it.runIf(supportsSymlinks).each(["file", "directory"])(
+    "treats symlinked %s credentials as missing",
+    async (kind) => {
+      if (kind === "file") {
+        writeAuthFiles({ "target-creds.json": selfCreds });
+        fsSync.symlinkSync(path.join(authDir, "target-creds.json"), credsPath);
+      } else {
+        const targetAuthDir = authDir;
+        writeAuthFiles({ "creds.json": selfCreds });
+        authDir = path.join(path.dirname(authDir), "linked-auth");
+        fsSync.symlinkSync(targetAuthDir, authDir, "dir");
+        credsPath = path.join(authDir, "creds.json");
+        expect(fsSync.lstatSync(credsPath).isFile()).toBe(true);
+      }
+      expect(fsSync.lstatSync(kind === "file" ? credsPath : authDir).isSymbolicLink()).toBe(true);
+      expect(fsSync.statSync(credsPath).isFile()).toBe(true);
+      expect(hasWebCredsSync(authDir)).toBe(false);
+      expect(readCredsJsonRaw(credsPath)).toBeNull();
+      expect(getWebAuthAgeMs(authDir)).toBeNull();
+      expect(readWebSelfId(authDir)).toEqual(emptyIdentity);
+      await expect(readWebSelfIdentity(authDir)).resolves.toEqual(emptyIdentity);
+      await expect(webAuthExists(authDir)).resolves.toBe(false);
+      await expect(readWebAuthState(authDir)).resolves.toBe("not-linked");
+      await expect(readWebAuthSnapshot(authDir)).resolves.toEqual({
+        state: "not-linked",
+        authAgeMs: null,
+        selfId: emptyIdentity,
+      });
+    },
+  );
 
   it("reports unstable auth state when the shared barrier read times out", async () => {
-    fsSync.writeFileSync(
-      path.join(authDir, "creds.json"),
-      JSON.stringify({ me: { id: "15551234567@s.whatsapp.net" } }),
-      "utf-8",
-    );
+    writeAuthFiles({ "creds.json": selfCreds });
     hoisted.waitForCredsSaveQueueWithTimeout
       .mockResolvedValueOnce("timed_out")
       .mockResolvedValueOnce("timed_out");
@@ -221,7 +202,7 @@ describe("auth-store", () => {
     await expect(readWebAuthSnapshot(authDir)).resolves.toEqual({
       state: "unstable",
       authAgeMs: null,
-      selfId: { e164: null, jid: null, lid: null },
+      selfId: emptyIdentity,
     });
   });
 

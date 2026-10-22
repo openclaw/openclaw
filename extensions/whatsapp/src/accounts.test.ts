@@ -39,14 +39,10 @@ describe("resolveWhatsAppAuthDir", () => {
   });
 
   it("preserves top-level default account when named accounts are configured", () => {
-    const cfg = {
-      channels: {
-        whatsapp: {
-          authDir: "~/.openclaw/whatsapp-default",
-          accounts: { work: { enabled: false } },
-        },
-      },
-    };
+    const cfg = config({
+      authDir: "~/.openclaw/whatsapp-default",
+      accounts: { work: { enabled: false } },
+    });
 
     expect(listWhatsAppAccountIds(cfg)).toEqual(["default", "work"]);
     expect(resolveDefaultWhatsAppAccountId(cfg)).toBe("default");
