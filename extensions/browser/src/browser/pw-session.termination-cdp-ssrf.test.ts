@@ -3,7 +3,6 @@ import { chromium } from "playwright-core";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import * as chromeModule from "./chrome.js";
 import { pwAi } from "./pw-ai.js";
-import { makeTargetBrowser } from "./pw-session.browser.test-support.js";
 import { forceDisconnectPlaywrightForTarget } from "./pw-session.js";
 
 const { closePlaywrightBrowserConnection, listPagesViaPlaywright } = pwAi;
@@ -56,12 +55,31 @@ const connectOverCdpSpy = vi.spyOn(chromium, "connectOverCDP");
 const getChromeWebSocketEndpointSpy = vi.spyOn(chromeModule, "getChromeWebSocketEndpoint");
 
 function installBrowserMock() {
-  const { browser, browserClose, context, page } = makeTargetBrowser(
-    "TARGET_1",
-    "https://example.com",
-    "target",
-  );
-  Object.assign(context, { browser: () => browser });
+  const page = {
+    on: vi.fn(),
+    context: () => context,
+    title: vi.fn(async () => "target"),
+    url: vi.fn(() => "https://example.com"),
+  } as unknown as import("playwright-core").Page;
+  const context = {
+    browser: () => browser,
+    pages: () => [page],
+    on: vi.fn(),
+    newCDPSession: vi.fn(async () => ({
+      send: vi.fn(async (method: string) =>
+        method === "Target.getTargetInfo" ? { targetInfo: { targetId: "TARGET_1" } } : {},
+      ),
+      detach: vi.fn(async () => {}),
+    })),
+  } as unknown as import("playwright-core").BrowserContext;
+  const browserClose = vi.fn(async () => {});
+  const browser = {
+    contexts: () => [context],
+    on: vi.fn(),
+    off: vi.fn(),
+    close: browserClose,
+  } as unknown as import("playwright-core").Browser;
+
   connectOverCdpSpy.mockResolvedValue(browser);
   getChromeWebSocketEndpointSpy.mockResolvedValue({
     url: "ws://127.0.0.1:18792/devtools/browser/ROOT",

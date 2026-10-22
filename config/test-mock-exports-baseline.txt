@@ -106,6 +106,7 @@
 ["extensions/browser/src/browser/pw-session.connection.test-support.ts","./pw-session-cdp-transport.js","6dc3d61c11cfbf0264bf531a2fe7f5e54d406a3577f197ae021909487caed52d",1]
 ["extensions/browser/src/browser/pw-session.connection.test-support.ts","openclaw/plugin-sdk/ssrf-runtime-internal","e2a2bb4512fb967443ff3649db851789405446877760cec7381a1470f61902d0",1]
 ["extensions/browser/src/browser/pw-session.create-page.navigation-guard.test.ts","./pw-session-cdp-transport.js","6dc3d61c11cfbf0264bf531a2fe7f5e54d406a3577f197ae021909487caed52d",1]
+["extensions/browser/src/browser/pw-session.get-page-for-targetid.test.ts","./pw-session-cdp-transport.js","6dc3d61c11cfbf0264bf531a2fe7f5e54d406a3577f197ae021909487caed52d",1]
 ["extensions/browser/src/browser/pw-session.pinned-transport.test.ts","openclaw/plugin-sdk/ssrf-runtime-internal","e2a2bb4512fb967443ff3649db851789405446877760cec7381a1470f61902d0",1]
 ["extensions/browser/src/browser/pw-session.termination-cdp-ssrf.test.ts","./pw-session-cdp-transport.js","6dc3d61c11cfbf0264bf531a2fe7f5e54d406a3577f197ae021909487caed52d",1]
 ["extensions/browser/src/browser/pw-session.termination-cdp-ssrf.test.ts","openclaw/plugin-sdk/websocket-runtime","3d63c63ae9808607f7838ae25a33a4d75286a07ffd61f69079884831e6c79a23",1]

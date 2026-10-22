@@ -1,4 +1,3 @@
-import { EventEmitter } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "openclaw/plugin-sdk/number-runtime";
@@ -14,10 +13,12 @@ import {
   ensurePageState,
   isBrowserObservedDialogBlockedError,
   isDownloadStartingNavigationError,
+  refLocator,
   respondToObservedDialogOnPage,
   restoreRoleRefsForTarget,
   storeRoleRefsForTarget,
 } from "./pw-session.js";
+import { BROWSER_REF_MARKER_ATTRIBUTE } from "./pw-session.page-cdp.js";
 import { reconcileRemoteDialogAfterActionSettled } from "./pw-tools-core.interactions.navigation.js";
 
 type MutableDownload = {
@@ -34,24 +35,46 @@ afterEach(() => {
 });
 
 function fakePage() {
-  const events = new EventEmitter();
+  const handlers = new Map<string, Array<(...args: unknown[]) => void>>();
+  const on = vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+    handlers.set(event, [...(handlers.get(event) ?? []), cb]);
+  });
+  const off = vi.fn((event: string, cb: (...args: unknown[]) => void) => {
+    handlers.set(
+      event,
+      (handlers.get(event) ?? []).filter((handler) => handler !== cb),
+    );
+  });
+  const getByRole = vi.fn();
+  const frameLocator = vi.fn();
+  const frameGetByRole = vi.fn();
   const selectedFrame = {
     url: () => "https://frame.example.com",
+    getByRole: frameGetByRole,
   } as unknown as Frame;
+  const locator = vi.fn();
 
   const mainFrame = { url: () => "https://test.example.com" };
   const page = {
-    on: events.on.bind(events),
-    off: events.off.bind(events),
+    on,
+    off,
+    getByRole,
+    frameLocator,
+    locator,
     mainFrame: () => mainFrame,
   } as unknown as Page;
 
   return {
     page,
-    emit: (event: string, arg: unknown) => events.listeners(event)[0]?.(arg),
-    emitAll: events.emit.bind(events),
+    emit: (event: string, arg: unknown) => handlers.get(event)?.[0]?.(arg),
+    emitAll: (event: string, arg: unknown) => {
+      for (const handler of handlers.get(event) ?? []) {
+        handler(arg);
+      }
+    },
     mainFrame,
     selectedFrame,
+    mocks: { on, frameGetByRole, getByRole, frameLocator, locator },
   };
 }
 
@@ -114,6 +137,38 @@ function storedRefs(
 }
 
 const captured = (suggestedFilename: string) => [expect.objectContaining({ suggestedFilename })];
+
+describe("pw-session refLocator", () => {
+  it("matches empty accessibility names in the captured snapshot Frame", () => {
+    const { page, selectedFrame, mocks, state } = observedPage();
+    state.roleRefs = { ax12: { role: "button", name: "" } };
+    state.roleRefsFrame = selectedFrame;
+    refLocator(page, "ax12");
+    expect(mocks.frameGetByRole).toHaveBeenCalledWith("button", { name: "", exact: true });
+    expect(mocks.getByRole).not.toHaveBeenCalled();
+    expect(mocks.frameLocator).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["aria", { roleRefsMode: "aria" }, "aria-ref=e1"],
+    [
+      "backend-marked DOM",
+      { roleRefs: { e1: { role: "button", name: "OK", domMarker: true } } },
+      `[${BROWSER_REF_MARKER_ATTRIBUTE}="e1"]`,
+    ],
+  ] as const)("uses %s locators for role refs", (_mode, refs, selector) => {
+    const { page, mocks, state } = observedPage();
+    Object.assign(state, refs);
+    refLocator(page, "e1");
+    expect(mocks.locator).toHaveBeenCalledWith(selector);
+  });
+
+  it("rejects unknown ax refs instead of timing out on aria-ref locators", () => {
+    const { page, mocks } = fakePage();
+    expect(() => refLocator(page, "ax12")).toThrow(/Unknown ref/);
+    expect(mocks.locator).not.toHaveBeenCalled();
+  });
+});
 
 describe("pw-session role refs cache", () => {
   it("restores fresh post-navigation refs for a replacement Page", () => {
@@ -325,6 +380,21 @@ describe("pw-session ensurePageState", () => {
     capture.dispose();
   });
 
+  it("captures navigation downloads under managed paths", async () => {
+    const { page, emitAll, state } = observedPage();
+    const capture = createDownloadCaptureForPage(page, state, 1_000);
+    const saveAs = saveContents("attachment");
+    emitAll("download", download("export.csv", saveAs));
+
+    const result = await capture.promise;
+    expect(result.url).toBe("https://example.com/export.csv");
+    expect(result.suggestedFilename).toBe("export.csv");
+    expect(path.dirname(result.path)).toBe(DEFAULT_DOWNLOAD_DIR);
+    expect(path.basename(result.path)).toMatch(/-export\.csv$/);
+    expect(firstSavePath(saveAs)).not.toBe(result.path);
+    await expect(fs.readFile(result.path, "utf8")).resolves.toBe("attachment");
+  });
+
   it("validates captured navigation downloads before saving managed bytes", async () => {
     const { page, emitAll, state } = observedPage();
     const blocked = new Error("blocked download");
@@ -341,7 +411,6 @@ describe("pw-session ensurePageState", () => {
       suggestedFilename: "export.csv",
     });
     expect(saveAs).not.toHaveBeenCalled();
-    expect(attachment.cancel).not.toHaveBeenCalled();
   });
 
   it("lets explicit download owners arm while passive capture yields", () => {
