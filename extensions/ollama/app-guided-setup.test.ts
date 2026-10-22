@@ -1,3 +1,4 @@
+import { text } from "node:stream/consumers";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
@@ -41,32 +42,26 @@ async function withOllamaServer(
   const inspected: string[] = [];
   const unexpected: string[] = [];
   await withServer(
-    (request, response) => {
-      let body = "";
-      request.setEncoding("utf8");
-      request.on("data", (chunk: string) => {
-        body += chunk;
-      });
-      request.on("end", () => {
-        response.setHeader("content-type", "application/json");
-        const send = (payload: unknown, status = 200) =>
-          response.writeHead(status).end(JSON.stringify(payload));
-        if (request.url === "/api/ps" || request.url === "/api/tags") {
-          const models = request.url === "/api/ps" ? options.loaded : options.models;
-          send({
-            models: (models ?? [selected]).map((model) =>
-              typeof model === "string" ? { name: model } : model,
-            ),
-          });
-        } else if (request.url === "/api/show") {
-          inspected.push((JSON.parse(body) as { model: string }).model);
-          options.onShow?.();
-          send(options.show ?? showInfo, options.showStatus ?? 200);
-        } else {
-          unexpected.push(request.url ?? "");
-          response.writeHead(404).end();
-        }
-      });
+    async (request, response) => {
+      const body = await text(request);
+      response.setHeader("content-type", "application/json");
+      const send = (payload: unknown, status = 200) =>
+        response.writeHead(status).end(JSON.stringify(payload));
+      if (request.url === "/api/ps" || request.url === "/api/tags") {
+        const models = request.url === "/api/ps" ? options.loaded : options.models;
+        send({
+          models: (models ?? [selected]).map((model) =>
+            typeof model === "string" ? { name: model } : model,
+          ),
+        });
+      } else if (request.url === "/api/show") {
+        inspected.push((JSON.parse(body) as { model: string }).model);
+        options.onShow?.();
+        send(options.show ?? showInfo, options.showStatus ?? 200);
+      } else {
+        unexpected.push(request.url ?? "");
+        response.writeHead(404).end();
+      }
     },
     (baseUrl) => run(baseUrl, inspected),
   );
