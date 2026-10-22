@@ -1,8 +1,8 @@
-import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
 import { text } from "node:stream/consumers";
 import { expect, it, vi } from "vitest";
+import { listenLoopback } from "../../test/helpers/gateway-integration-fixtures.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
@@ -22,16 +22,6 @@ vi.mock("../infra/net/fetch-guard.js", async () => {
       }),
   };
 });
-
-async function listen(server: ReturnType<typeof createServer>): Promise<number> {
-  server.listen(0, "127.0.0.1");
-  await once(server, "listening");
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("test server did not bind a loopback port");
-  }
-  return address.port;
-}
 
 async function close(server: ReturnType<typeof createServer> | undefined): Promise<void> {
   if (!server?.listening) {
@@ -80,7 +70,7 @@ it(
             linkRequests.push(requestPath);
             response.end(requestPath === "/citation" ? "CITATION_PAGE" : "BARE_PAGE");
           });
-          const linkPort = await listen(linkServer);
+          const linkUrl = new URL(await listenLoopback(linkServer));
 
           providerServer = createServer((request, response) => {
             void text(request)
@@ -96,8 +86,9 @@ it(
                 response.destroy(error instanceof Error ? error : new Error(String(error)));
               });
           });
-          const providerPort = await listen(providerServer);
-          const provider = buildMockOpenAiResponsesProvider(`http://127.0.0.1:${providerPort}/v1`);
+          const provider = buildMockOpenAiResponsesProvider(
+            `${await listenLoopback(providerServer)}/v1`,
+          );
           const cfg = {
             agents: {
               defaults: {
@@ -125,7 +116,7 @@ it(
             token: "link-understanding-gateway-token",
             clientDisplayName: "link-understanding-gateway",
           });
-          const linkBase = `http://loopback.test:${linkPort}`;
+          const linkBase = `http://loopback.test:${linkUrl.port}`;
           const started = await gateway.client.request<{ runId?: string; status?: string }>(
             "chat.send",
             {

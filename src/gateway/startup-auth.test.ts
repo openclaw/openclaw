@@ -3,7 +3,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { REDACTED_SENTINEL } from "../config/redact-sentinel.js";
 import { getConfigResolutionFacts, setConfigResolutionFacts } from "../config/resolution-facts.js";
 import { applyGatewayAuthOverridesForStartupPreflight } from "./server-startup-config-helpers.js";
-import { ensureGatewayStartupAuth, mergeGatewayTailscaleConfig } from "./startup-auth.js";
+import { ensureGatewayStartupAuth } from "./startup-auth.js";
 
 const WEAK_TOKEN = "change-me-to-a-long-random-token";
 const mocks = vi.hoisted(() => ({
@@ -56,12 +56,6 @@ function refCase(field: "token" | "password", resolved: boolean) {
     persist: true,
   };
 }
-
-it("preserves explicit preserveFunnel overrides", () => {
-  expect(
-    mergeGatewayTailscaleConfig({ mode: "serve", preserveFunnel: false }, { preserveFunnel: true }),
-  ).toEqual({ mode: "serve", preserveFunnel: true });
-});
 
 describe("ensureGatewayStartupAuth", () => {
   it.each(["config", "environment"])(

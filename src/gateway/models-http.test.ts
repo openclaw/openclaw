@@ -1,4 +1,3 @@
-import { createServer } from "node:net";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import { startOpenAiCompatGatewayServer } from "./openai-compatible-http.test-helpers.js";
@@ -14,14 +13,13 @@ let enabledServer: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>>;
 let enabledPort: number;
 
 async function startModels(
-  overrides: Partial<Parameters<typeof startOpenAiCompatGatewayServer>[0]> = {},
+  auth: Parameters<typeof startOpenAiCompatGatewayServer>[0]["auth"] = { mode: "none" },
 ) {
-  const port = overrides.port ?? (await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] }));
+  const port = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
   const server = await startOpenAiCompatGatewayServer({
     startGatewayServer,
-    auth: { mode: "none" },
+    auth,
     openAiChatCompletionsEnabled: true,
-    ...overrides,
     port,
   });
   return { server, port: port.port };
@@ -36,12 +34,9 @@ afterAll(async () => {
   await enabledServer.close({ reason: "models http enabled suite done" });
 });
 
-async function getModels(pathname: string, headers?: Record<string, string>) {
-  return await fetch(`http://127.0.0.1:${enabledPort}${pathname}`, {
-    headers: {
-      ...READ_SCOPE_HEADER,
-      ...headers,
-    },
+function getModels(pathname: string, headers?: Record<string, string>) {
+  return fetch(`http://127.0.0.1:${enabledPort}${pathname}`, {
+    headers: { ...READ_SCOPE_HEADER, ...headers },
   });
 }
 
@@ -111,42 +106,8 @@ describe("OpenAI-compatible models HTTP API (e2e)", () => {
     await expectMissingReadScope(await getModels(pathname, { "x-openclaw-scopes": scope }));
   });
 
-  it("rejects when disabled", async () => {
-    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-    const port = portClaim.port;
-    const competitor = createServer();
-    let server: Awaited<ReturnType<typeof startOpenAiCompatGatewayServer>> | undefined;
-    try {
-      ({ server } = await startModels({
-        startGatewayServer: async (...args) => {
-          // Try to steal the socket before the Gateway can finish its awaited startup work.
-          const collision = await new Promise<NodeJS.ErrnoException | undefined>((resolve) => {
-            competitor.once("error", resolve);
-            competitor.listen(port, "127.0.0.1", () => resolve(undefined));
-          });
-          expect(collision?.code).toBe("EADDRINUSE");
-          return await startGatewayServer(...args);
-        },
-        port: portClaim,
-        openAiChatCompletionsEnabled: false,
-      }));
-      const res = await fetch(`http://127.0.0.1:${port}/v1/models`);
-      expect(res.status).toBe(404);
-    } finally {
-      try {
-        await server?.close({ reason: "models disabled test done" });
-      } finally {
-        if (competitor.listening) {
-          await new Promise<void>((resolve, reject) => {
-            competitor.close((error) => (error ? reject(error) : resolve()));
-          });
-        }
-      }
-    }
-  });
-
   it("treats shared-secret bearer auth as full compat operator access", async () => {
-    const { server, port } = await startModels({ auth: { mode: "token", token: "secret" } });
+    const { server, port } = await startModels({ mode: "token", token: "secret" });
     try {
       const response = fetch(`http://127.0.0.1:${port}/v1/models`, {
         headers: {

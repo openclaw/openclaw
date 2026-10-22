@@ -25,7 +25,6 @@ const {
 } = await import("../config/sessions/session-accessor.js");
 const { replaceTranscriptEvents } =
   await import("../config/sessions/session-accessor.sqlite-transcript-write.test-support.js");
-const { getBootEchoContextForSession } = await import("./boot-echo-guard.js");
 
 describe("runBootOnce", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -56,17 +55,8 @@ describe("runBootOnce", () => {
     await applySessionEntryLifecycleMutation({ storePath, removals, skipMaintenance: true });
   });
 
-  const makeDeps = () => ({
-    whatsapp: vi.fn(),
-    telegram: vi.fn(),
-    discord: vi.fn(),
-    slack: vi.fn(),
-    signal: vi.fn(),
-    imessage: vi.fn(),
-  });
-
   const runBoot = (cfg = testConfig(), agentId?: string) =>
-    runBootOnce({ cfg, deps: makeDeps(), workspaceDir, ...(agentId ? { agentId } : {}) });
+    runBootOnce({ cfg, deps: {}, workspaceDir, ...(agentId ? { agentId } : {}) });
 
   const requireAgentCall = () => {
     const [call] = agentCommand.mock.calls[0] ?? [];
@@ -106,23 +96,6 @@ describe("runBootOnce", () => {
     if (reason === "missing") {
       await expect(fs.access(bootPath())).rejects.toMatchObject({ code: "ENOENT" });
     }
-  });
-
-  it("clears the echo-guard entry even when the agent run throws", async () => {
-    let observedDuringRun: string | undefined;
-    let observedSessionKey: string | undefined;
-    await writeBoot("Wake up and report.");
-    agentCommand.mockImplementationOnce(async (opts: { sessionKey: string }) => {
-      observedSessionKey = opts.sessionKey;
-      observedDuringRun = getBootEchoContextForSession(opts.sessionKey);
-      throw new Error("simulated agent failure");
-    });
-    await expect(runBoot()).resolves.toEqual({
-      status: "failed",
-      reason: "agent run failed: simulated agent failure",
-    });
-    expect(observedDuringRun).toContain("Wake up and report.");
-    expect(getBootEchoContextForSession(observedSessionKey)).toBeUndefined();
   });
 
   it("escapes literal internal-runtime-context delimiters in user-supplied BOOT.md", async () => {

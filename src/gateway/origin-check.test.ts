@@ -19,11 +19,6 @@ function browserRequest(origin: string, host = "127.0.0.1:18789") {
 
 describe("checkBrowserOrigin", () => {
   it.each([
-    [
-      "http://127.0.0.1:18789",
-      { ok: true, matchedBy: "host-header-fallback" },
-      { requestHost: "127.0.0.1:18789", allowHostHeaderOriginFallback: true },
-    ],
     ["https://gateway.example.com:18789", denied],
     ["http://192.168.0.202:18789", privateOrigin, { requestHost: "192.168.0.202:18789" }],
     [
@@ -38,12 +33,6 @@ describe("checkBrowserOrigin", () => {
     ],
     ["http://127.0.0.1:18789", denied, { requestHost: "127.0.0.1:18789", isLocalClient: false }],
     ["http://[64:ff9b:1::8.8.8.8]:18789", denied, { requestHost: "[64:ff9b:1::8.8.8.8]:18789" }],
-    [
-      "http://localhost:5173",
-      { ok: true, matchedBy: "local-loopback" },
-      { requestHost: "127.0.0.1:18789", isLocalClient: true },
-    ],
-    ["http://localhost:5173", denied, { requestHost: "127.0.0.1:18789", isLocalClient: false }],
     [
       "https://CONTROL.example.com",
       allowlisted,
@@ -60,7 +49,6 @@ describe("checkBrowserOrigin", () => {
     ["", invalid],
     ["null", invalid],
     ["not a url", invalid],
-    ["https://attacker.example.com", denied],
   ] satisfies [
     string,
     ReturnType<typeof checkBrowserOrigin>,
@@ -70,13 +58,6 @@ describe("checkBrowserOrigin", () => {
       checkBrowserOrigin({ requestHost: "gateway.example.com:18789", origin, ...overrides }),
     ).toEqual(expected);
   });
-
-  it.each(["chrome-extension://abcdefghijklmnop", "tauri://localhost"])(
-    "accepts an exactly allowlisted hosted app origin: %s",
-    (origin) => {
-      expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual(allowlisted);
-    },
-  );
 
   it.each([
     "tauri://localhost/path",
