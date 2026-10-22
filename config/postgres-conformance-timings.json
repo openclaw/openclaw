@@ -500,10 +500,6 @@
       "group": "infra",
       "seconds": 4.47
     },
-    "src/infra/database-engine/team-reports-port.postgres.test.ts": {
-      "group": "infra",
-      "seconds": 5.407
-    },
     "src/infra/database-engine/transcript-identity-insert.conformance.test.ts": {
       "group": "infra",
       "seconds": 6.156

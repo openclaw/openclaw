@@ -150,20 +150,13 @@ for (const engine of ["sqlite", "postgres"] as const) {
             ).toEqual([]);
           };
           try {
-            const args =
-              entry === "bare-root"
-                ? []
-                : entry === "crestodian"
-                  ? [entry]
-                  : [
-                      entry,
-                      ...(entry === "setup" ? ["--wizard"] : []),
-                      "--skip-ui",
-                      "--agent-name",
-                      "main",
-                      "--workspace",
-                      workspace,
-                    ];
+            const args: string[] = entry === "bare-root" ? [] : [entry];
+            if (entry === "setup") {
+              args.push("--wizard");
+            }
+            if (entry === "setup" || entry === "onboard") {
+              args.push("--skip-ui", "--agent-name", "main", "--workspace", workspace);
+            }
             const setup = await start(args);
             if (entry === "bare-root") {
               await answer(setup, "Continue?");
@@ -214,27 +207,26 @@ for (const engine of ["sqlite", "postgres"] as const) {
             let onboardingState: unknown;
             let stateSchema: string | undefined;
             for (const database of databases) {
+              const relative = path.relative(stateDir, database);
               using local = openNodeSqliteDatabase(database, { readOnly: true });
               if (engine === "postgres") {
-                const localStore = localStores.get(path.relative(stateDir, database));
+                const localStore = localStores.get(relative);
                 expect(
                   local
                     .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
                     .all(),
-                  `${entry} left application state in ${path.relative(stateDir, database)}`,
+                  `${entry} left application state in ${relative}`,
                 ).toEqual((localStore ?? ["openclaw_engine_anchor"]).map((name) => ({ name })));
                 if (!localStore) {
                   const anchor = local
                     .prepare("SELECT engine, schema FROM openclaw_engine_anchor")
                     .get();
                   expect(anchor?.engine).toBe(engine);
-                  if (path.relative(stateDir, database) === path.join("state", "openclaw.sqlite")) {
+                  if (relative === path.join("state", "openclaw.sqlite")) {
                     stateSchema = String(anchor?.schema);
                   }
                 }
-              } else if (
-                path.relative(stateDir, database) === path.join("state", "openclaw.sqlite")
-              ) {
+              } else if (relative === path.join("state", "openclaw.sqlite")) {
                 onboardingState = local
                   .prepare("SELECT value_json FROM config_machine_state WHERE state_key = ?")
                   .get(localOnboardingStateKey(configPath))?.value_json;

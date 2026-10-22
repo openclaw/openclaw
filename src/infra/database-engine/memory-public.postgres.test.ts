@@ -14,10 +14,7 @@ import {
 } from "../../config/runtime-snapshot.js";
 import { resolveDefaultSessionStorePath } from "../../config/sessions/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type {
-  OpenKeyedStoreOptions,
-  PluginStateKeyedStore,
-} from "../../plugin-sdk/plugin-state-runtime.js";
+import type { OpenKeyedStoreOptions } from "../../plugin-sdk/plugin-state-runtime.js";
 import { createPluginStateKeyedStoreForTests } from "../../plugin-sdk/plugin-state-test-runtime.js";
 import { upsertSessionEntry } from "../../plugin-sdk/session-store-runtime.js";
 import { appendSessionTranscriptMessageByIdentity } from "../../plugin-sdk/session-transcript-runtime.js";
@@ -54,11 +51,8 @@ let workspace: string;
 let client: pg.Client;
 let runtime: MemoryPluginRuntime;
 const stateAnchors: DatabaseSync[] = [];
-type MemoryCliHost = {
-  runInBackgroundContext: <T>(run: () => T) => T;
-  openKeyedStore: <T>(options: OpenKeyedStoreOptions) => PluginStateKeyedStore<T>;
-};
-let host: MemoryCliHost;
+type MemoryApi = typeof import("../../../extensions/memory-core/runtime-api.js");
+let host: Parameters<MemoryApi["createMemoryRuntime"]>[0];
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterAll(async () => {
@@ -146,9 +140,9 @@ async function managerFor(
 }
 
 async function runMemoryCommand(args: string[]) {
-  const { registerMemoryCli } = await vi.importActual<{
-    registerMemoryCli: (program: Command, host: MemoryCliHost) => void;
-  }>("../../../extensions/memory-core/runtime-api.js");
+  const { registerMemoryCli } = await vi.importActual<MemoryApi>(
+    "../../../extensions/memory-core/runtime-api.js",
+  );
   const program = new Command().exitOverride();
   registerMemoryCli(program, host);
   await program.parseAsync(["memory", ...args], { from: "user" });
@@ -249,9 +243,9 @@ describe.skipIf(!connection)("public PostgreSQL memory manager", () => {
         await capabilityClient.end();
       }
     }
-    const { createMemoryRuntime } = await vi.importActual<{
-      createMemoryRuntime: (host: MemoryCliHost) => MemoryPluginRuntime;
-    }>("../../../extensions/memory-core/runtime-api.js");
+    const { createMemoryRuntime } = await vi.importActual<MemoryApi>(
+      "../../../extensions/memory-core/runtime-api.js",
+    );
     host = {
       runInBackgroundContext: (run) => run(),
       openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
