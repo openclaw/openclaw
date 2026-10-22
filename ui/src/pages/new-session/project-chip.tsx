@@ -134,34 +134,34 @@ export function ProjectChip(props: {
     return { browser: owner, epoch, projects, saving, setSaving };
   });
   const presentRegistration = action(function* (
-    view: ReturnType<typeof registration>,
+    presentation: ReturnType<typeof registration>,
     pending: Promise<void>,
     receipt: BrowserProjectRegistration,
   ) {
     if (
-      view.browser === props.params.place.browser &&
-      view.epoch === props.params.gateway.connectionEpoch &&
+      presentation.browser === props.params.place.browser &&
+      presentation.epoch === props.params.gateway.connectionEpoch &&
       receipt.isCurrent()
     ) {
-      view.setSaving(true);
-      affects(view.projects);
+      presentation.setSaving(true);
+      affects(presentation.projects);
     }
     yield Promise.race([pending, receipt.retired]);
     if (
-      view.browser === props.params.place.browser &&
-      view.epoch === props.params.gateway.connectionEpoch &&
+      presentation.browser === props.params.place.browser &&
+      presentation.epoch === props.params.gateway.connectionEpoch &&
       props.params.gateway.connected &&
-      view.browser.projectsReady &&
-      view.browser.projectRead === null
+      presentation.browser.projectsReady &&
+      presentation.browser.projectRead === null
     ) {
       // The owner already reloaded; do not rejoin a held catalog after the browser closes.
-      yield refresh(view.projects);
+      yield refresh(presentation.projects);
     }
   });
   const registerProject = async (path: string) => {
-    const view = registration();
+    const presentation = registration();
     let receipt: BrowserProjectRegistration | undefined;
-    const pending = view.browser.registerBrowserProject(path, (started) => {
+    const pending = presentation.browser.registerBrowserProject(path, (started) => {
       receipt = started;
     });
     if (!receipt) {
@@ -170,14 +170,14 @@ export function ProjectChip(props: {
     // Publish the admitted owner operation before joining its presentation action.
     await Promise.resolve();
     try {
-      await presentRegistration(view, pending, receipt);
+      await presentRegistration(presentation, pending, receipt);
     } catch (error) {
       if (
-        view.browser === props.params.place.browser &&
-        view.epoch === props.params.gateway.connectionEpoch &&
+        presentation.browser === props.params.place.browser &&
+        presentation.epoch === props.params.gateway.connectionEpoch &&
         receipt.isCurrent()
       ) {
-        view.browser.browser.error = formatUiError(error);
+        presentation.browser.browser.error = formatUiError(error);
         props.params.onChange();
       }
     }
