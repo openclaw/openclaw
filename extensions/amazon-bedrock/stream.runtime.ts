@@ -573,13 +573,25 @@ function handleMetadata(
       promptTokens,
       totalTokens: promptTokens + output.usage.output,
     };
-    const cacheWrite1h = event.usage.cacheDetails?.reduce(
+    const cacheWrite1h = event.usage.cacheDetails?.reduce<number | undefined>(
       (total, detail) =>
-        detail.ttl === CacheTTL.ONE_HOUR ? total + (detail.inputTokens ?? 0) : total,
-      0,
+        detail.ttl === CacheTTL.ONE_HOUR && detail.inputTokens !== undefined
+          ? (total ?? 0) + detail.inputTokens
+          : total,
+      undefined,
     );
-    if (cacheWrite1h) {
+    if (cacheWrite1h !== undefined) {
       output.usage.cacheWrite1h = cacheWrite1h;
+    }
+    const cacheWrite5m = event.usage.cacheDetails?.reduce<number | undefined>(
+      (total, detail) =>
+        detail.ttl === CacheTTL.FIVE_MINUTES && detail.inputTokens !== undefined
+          ? (total ?? 0) + detail.inputTokens
+          : total,
+      undefined,
+    );
+    if (cacheWrite5m !== undefined) {
+      output.usage.cacheWrite5m = cacheWrite5m;
     }
     calculateCost(model, output.usage);
   }

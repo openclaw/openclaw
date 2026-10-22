@@ -19,6 +19,7 @@ it("preserves recorded zero cost and 1h writes through normalization", () => {
     cacheRead: 30,
     cacheWrite: 60,
     cacheWrite1h: 40,
+    cacheWrite5m: 20,
     totalTokens: 120,
     cost: { total: 0, totalOrigin: "provider-billed" as const },
   };
@@ -29,6 +30,7 @@ it("preserves recorded zero cost and 1h writes through normalization", () => {
     cacheRead: 30,
     cacheWrite: 60,
     cacheWrite1h: 40,
+    cacheWrite5m: 20,
     total: 120,
     cost: { total: 0, totalOrigin: "provider-billed" },
   });
@@ -98,3 +100,12 @@ it("does not clamp derived session total tokens to the context window", () => {
     }),
   ).toBe(2_400_027);
 });
+
+it.each(["cacheWrite1h", "cacheWrite5m"] as const)(
+  "retains %s-only usage, including reported zero",
+  (bucket) => {
+    for (const value of [0, 12]) {
+      expect(normalizeUsage({ [bucket]: value })).toMatchObject({ [bucket]: value });
+    }
+  },
+);

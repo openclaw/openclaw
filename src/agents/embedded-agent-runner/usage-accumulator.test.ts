@@ -15,6 +15,7 @@ const FIRST_USAGE: UsageInput = {
   cacheRead: 80_000,
   cacheWrite: 5_000,
   cacheWrite1h: 3_000,
+  cacheWrite5m: 2_000,
   total: 85_150,
 };
 const FINAL_USAGE: UsageInput = {
@@ -70,7 +71,7 @@ describe("usage-accumulator", () => {
       cacheWrite: 5_000,
       total: 251_490,
     });
-    expect(toNormalizedUsage(acc)).toMatchObject({ cacheWrite1h: 3_000 });
+    expect(toNormalizedUsage(acc)).toMatchObject({ cacheWrite1h: 3_000, cacheWrite5m: 2_000 });
   });
 
   it("carries complete costs across attempts without claiming provider provenance", () => {
@@ -138,5 +139,43 @@ describe("usage-accumulator", () => {
       cacheRead: undefined,
       cacheWrite: undefined,
     });
+  });
+
+  it("accumulates both TTL buckets across attempt and run totals", () => {
+    const attempt = createAccumulatorWithUsage(FIRST_USAGE, {
+      cacheWrite: 10,
+      cacheWrite1h: 4,
+      cacheWrite5m: 6,
+    });
+    const run = createUsageAccumulator();
+    mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+    mergeUsageIntoAccumulator(run, { cacheWrite: 5, cacheWrite5m: 5 });
+    expect(toNormalizedUsage(run)).toMatchObject({
+      cacheWrite: 5_015,
+      cacheWrite1h: 3_004,
+      cacheWrite5m: 2_011,
+    });
+  });
+
+  it.each(["cacheWrite1h", "cacheWrite5m"] as const)(
+    "preserves a reported zero %s across attempt and run totals without inventing its sibling",
+    (bucket) => {
+      const attempt = createAccumulatorWithUsage({ input: 100, cacheWrite: 10, [bucket]: 0 });
+      const run = createUsageAccumulator();
+      mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+      mergeUsageIntoAccumulator(run, { input: 50 });
+      const normalized = toNormalizedUsage(run);
+      expect(normalized).toMatchObject({ input: 150, cacheWrite: 10, [bucket]: 0 });
+      const sibling = bucket === "cacheWrite1h" ? "cacheWrite5m" : "cacheWrite1h";
+      expect(normalized).not.toHaveProperty(sibling);
+    },
+  );
+
+  it("keeps both TTL buckets absent when no attempt reports a breakdown", () => {
+    const attempt = createAccumulatorWithUsage({ input: 100, cacheWrite: 10 });
+    const run = createUsageAccumulator();
+    mergeUsageIntoAccumulator(run, toNormalizedUsage(attempt));
+    expect(toNormalizedUsage(run)).not.toHaveProperty("cacheWrite1h");
+    expect(toNormalizedUsage(run)).not.toHaveProperty("cacheWrite5m");
   });
 });

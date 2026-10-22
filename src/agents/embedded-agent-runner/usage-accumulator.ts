@@ -10,6 +10,9 @@ export type UsageAccumulator = {
   cacheReadReported?: true;
   cacheWriteReported?: true;
   cacheWrite1h: number;
+  cacheWrite5m: number;
+  cacheWrite1hReported?: true;
+  cacheWrite5mReported?: true;
   reasoningTokens: number;
   total: number;
   usageReport?: NormalizedUsage["usageReport"];
@@ -28,6 +31,7 @@ export const createUsageAccumulator = (): UsageAccumulator => ({
   cacheRead: 0,
   cacheWrite: 0,
   cacheWrite1h: 0,
+  cacheWrite5m: 0,
   reasoningTokens: 0,
   total: 0,
   cost: undefined,
@@ -56,7 +60,7 @@ export const mergeUsageIntoAccumulator = (
   const callTotal =
     usage.total ??
     (usage.input ?? 0) + (usage.output ?? 0) + (usage.cacheRead ?? 0) + (usage.cacheWrite ?? 0);
-  for (const key of ["cacheRead", "cacheWrite"] as const) {
+  for (const key of ["cacheRead", "cacheWrite", "cacheWrite1h", "cacheWrite5m"] as const) {
     if (usage[key] !== undefined) {
       target[`${key}Reported`] = true;
     }
@@ -65,6 +69,7 @@ export const mergeUsageIntoAccumulator = (
     target[key] += usage[key] ?? 0;
   }
   target.cacheWrite1h += usage.cacheWrite1h ?? 0;
+  target.cacheWrite5m += usage.cacheWrite5m ?? 0;
   target.reasoningTokens += usage.reasoningTokens ?? 0;
   target.total += callTotal;
   if (target.cost === "unavailable" || !usage.cost) {
@@ -130,7 +135,8 @@ export const toNormalizedUsage = (usage: UsageAccumulator): NormalizedUsage | un
     output: usage.usageReport ? usage.output : usage.output || undefined,
     cacheRead: usage.cacheReadReported ? usage.cacheRead : usage.cacheRead || undefined,
     cacheWrite: usage.cacheWriteReported ? usage.cacheWrite : usage.cacheWrite || undefined,
-    ...(usage.cacheWrite1h > 0 ? { cacheWrite1h: usage.cacheWrite1h } : {}),
+    ...(usage.cacheWrite1hReported ? { cacheWrite1h: usage.cacheWrite1h } : {}),
+    ...(usage.cacheWrite5mReported ? { cacheWrite5m: usage.cacheWrite5m } : {}),
     ...(usage.reasoningTokens > 0 ? { reasoningTokens: usage.reasoningTokens } : {}),
     total: usage.usageReport ? usage.total : usage.total || derivedTotal || undefined,
     ...(cost ? { cost: { ...cost } } : {}),

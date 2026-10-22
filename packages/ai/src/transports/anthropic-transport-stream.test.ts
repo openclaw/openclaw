@@ -344,7 +344,11 @@ describe("anthropic transport stream", () => {
       cost: { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
     });
 
-    expect(result.usage).toMatchObject({ cacheWrite: 1_000_000, cacheWrite1h: 400_000 });
+    expect(result.usage).toMatchObject({
+      cacheWrite: 1_000_000,
+      cacheWrite1h: 400_000,
+      cacheWrite5m: 600_000,
+    });
     expect(result.usage.cost.cacheWrite).toBeCloseTo(7.75, 10);
   });
 
