@@ -187,12 +187,13 @@ async function mutateSqliteSessionAtMessage(
                     ?.before?.entry;
                   if (capture && receipt.value.status === "created" && entry) {
                     companions.settlement = capture([{ sessionKey: sourceKey, entry }]);
-                    companions.settlement.beforeCommit();
+                    return companions.settlement.beforeCommit();
                   }
+                  return undefined;
                 },
+                settled: (settledOutcome) => companions.settlement?.settle(settledOutcome.kind),
               },
             );
-            companions.settlement?.settle(outcome.kind);
             if (outcome.kind === "rolled-back" && authorityError) {
               throw toErrorObject(
                 authorityError,

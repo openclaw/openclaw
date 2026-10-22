@@ -1,7 +1,7 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
 import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
-import { hasErrnoCode } from "../../infra/errno.js";
+import { ignoreMissingPath } from "../../infra/errno.js";
 
 export const MULTI_STORE_PATH_SENTINEL = "(multiple)";
 
@@ -71,9 +71,7 @@ export function listSqliteTargetCandidatePathsForSessionStorePath(
       }
     }
   } catch (error) {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
+    ignoreMissingPath(error);
   }
   return [...candidateNames].map((fileName) => path.join(directory, fileName));
 }

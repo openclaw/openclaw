@@ -40,6 +40,13 @@ vi.mock("../../scripts/lib/ci-extension-lint-plan.mts", () => ({
 const stripeMatrix = (count: number) => ({
   include: Array.from({ length: count }, (_, i) => ({ stripe: i + 1 })),
 });
+const coreGraphNames = [
+  "agents-root",
+  "agents-other",
+  "agents-tools",
+  "gateway-root",
+  "gateway-server",
+];
 const checks = (...tasks: string[]) => ({
   include: tasks.map((task) => ({ check_name: `check-${task}`, task, runner: "unused" })),
 });
@@ -289,27 +296,41 @@ it.each(["check-plan", "additional-checks"] as const)(
 );
 
 it.each([
-  ["hybrid", [1, 2, 4, 5]],
-  ["hybrid", [1, 2, 5]],
-  ["blacksmith", [1, 2, 3, 4, 5]],
+  ["hybrid", [1, 2, 4, 5], ["test-root-e2e"]],
+  ["hybrid", [1, 2, 4, 5], ["test-root-tooling", "test-root-other"]],
+  ["hybrid", [1, 2, 5], ["test-root-e2e"]],
+  ["blacksmith", [1, 2, 3, 4, 5], ["test-root-e2e"]],
+  ["hybrid", [1, 2, 4, 5], ["test-root"]],
+  ["hybrid", [1, 2, 5], ["test-root"]],
+  ["blacksmith", [1, 2, 3, 4, 5], ["test-root"]],
 ] as const)(
-  "assigns root partitions without adding %s rows (%j)",
-  async (runnerProfile, stripes) => {
-    const core = ["agents-root", "agents-other", "agents-tools", "gateway-root", "gateway-server"];
+  "preserves selected root partition identity on %s (%j, %j)",
+  async (runnerProfile, stripes, roots) => {
     typeSelection.graphs = resolveCiTsgoGraphs([
-      ...stripes.map((stripe) => `core-test-${core[stripe - 1]}`),
+      ...stripes.map((stripe) => `core-test-${coreGraphNames[stripe - 1]}`),
       "scripts",
-      "test-root",
+      ...roots,
     ]);
     const plan = await createPlan({ runnerProfile });
-    const hosted = runnerProfile !== "blacksmith";
-    const moved = hosted && stripes.length >= 4;
-    expect(plan.core_type_matrix.include.map((row) => row.stripe)).toEqual(hosted ? stripes : []);
+    const moved = runnerProfile === "hybrid" && stripes.length >= 4;
+    expect(plan.core_type_matrix.include.map((row) => row.stripe)).toEqual(
+      runnerProfile === "hybrid" ? stripes : [],
+    );
     expect(plan.core_type_matrix.include.flatMap((row) => row.root_type_stripe ?? [])).toEqual(
-      moved ? ["1/4", "2/4", "3/4", "4/4"] : [],
+      !moved
+        ? []
+        : roots[0] === "test-root"
+          ? ["1/4", "2/4", "3/4", "4/4"]
+          : roots[0] === "test-root-e2e"
+            ? ["3/4"]
+            : ["1/4", "4/4"],
     );
     expect(JSON.parse(plan.check_matrix.include[0]!.type_graph_names_json!)).toEqual(
-      moved ? ["scripts"] : hosted ? ["scripts", "test-root"] : ["test-root", "scripts"],
+      moved
+        ? ["scripts"]
+        : runnerProfile === "hybrid"
+          ? ["scripts", ...roots]
+          : [...roots, "scripts"],
     );
   },
 );

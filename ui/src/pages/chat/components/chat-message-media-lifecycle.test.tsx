@@ -15,7 +15,7 @@ import {
   isChatMediaResourceCurrent,
   observeChatMediaResource,
   projectMessageMedia,
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   schedulePairingQrExpiryRefresh,
   type ImageBlock,
   type ImageRenderOptions,
@@ -79,7 +79,7 @@ afterEach(() => {
   cleanupImages();
   cleanupSolid();
   for (const subscriber of subscribers) {
-    releaseChatMediaResourceSubscriber(subscriber);
+    releaseChatMediaResourceOwner(subscriber);
   }
   subscribers.clear();
   vi.clearAllTimers();
@@ -167,14 +167,14 @@ function observeSubscriber(subscriber: () => void): () => void {
 
 function createImagePane(
   images: ImageBlock[] | (() => ImageBlock[]),
-  options: Omit<ImageRenderOptions, "onRequestUpdate"> = {},
+  options: Omit<ImageRenderOptions, "onMediaChange"> = {},
 ) {
   const container = document.createElement("div");
   let root: ReturnType<typeof renderImages>;
   const rerender = observeSubscriber(() => {
     root = renderImages(container, typeof images === "function" ? images() : images, {
       ...options,
-      onRequestUpdate: rerender,
+      mediaOwner: rerender,
     });
   });
   return {
@@ -186,7 +186,7 @@ function createImagePane(
 
 function createManagedImagePane(
   source: string,
-  options: Omit<ImageRenderOptions, "onRequestUpdate"> = {},
+  options: Omit<ImageRenderOptions, "onMediaChange"> = {},
   artifactId?: string,
   mimeType?: string,
 ) {
@@ -236,7 +236,7 @@ function createAvailabilityPane(
       resourceBasePath: "/openclaw",
       authToken: typeof authToken === "function" ? authToken() : authToken,
       policyKey,
-      onRequestUpdate: rerender,
+      onMediaChange: rerender,
     });
   });
   return {
@@ -309,7 +309,7 @@ describe("chat media resource lifecycle", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
     unmountImages(container);
-    releaseChatMediaResourceSubscriber(rerender);
+    releaseChatMediaResourceOwner(rerender);
     registerEnglishCatalog(() => undefined);
     await vi.advanceTimersByTimeAsync(0);
 
@@ -340,6 +340,7 @@ describe("chat media resource lifecycle", () => {
       const options = { sessionKey: "first-session", connectionEpoch: 1, resolveArtifactDownload };
       const { container, rerender } = createImagePane(() => [{ artifactId }], options);
       rerender();
+      await vi.advanceTimersByTimeAsync(0);
       options.sessionKey = "second-session";
       rerender();
       await vi.advanceTimersByTimeAsync(0);
@@ -473,7 +474,7 @@ describe("chat media resource lifecycle", () => {
       container.remove();
     });
     renderManagedImage(container, source, {
-      onRequestUpdate: observeSubscriber(vi.fn()),
+      onMediaChange: observeSubscriber(vi.fn()),
       onOpenImage: previousOpen,
     });
     await vi.advanceTimersByTimeAsync(0);
@@ -481,7 +482,7 @@ describe("chat media resource lifecycle", () => {
     expect(displayed).not.toBeNull();
 
     renderManagedImage(container, source, {
-      onRequestUpdate: observeSubscriber(vi.fn()),
+      onMediaChange: observeSubscriber(vi.fn()),
       onOpenImage: currentOpen,
     });
     // A settled cache hit must not blank the native image for a promise turn.
@@ -556,7 +557,7 @@ describe("chat media resource lifecycle", () => {
     const image = { url: source, alt: "Managed image" };
     const [presented, setPresented] = createSignal(true);
     const renderImageRow = vi.fn(() => (
-      <MessageImages images={[image]} options={{ onRequestUpdate: rerender }} />
+      <MessageImages images={[image]} options={{ mediaOwner: rerender }} />
     ));
     let root: ReturnType<typeof mountSolid> | undefined;
     const rerender = observeSubscriber(() => {
@@ -630,7 +631,7 @@ describe("chat media resource lifecycle", () => {
     expect(vi.getTimerCount()).toBe(0);
     const resource = managedImageResource(source);
 
-    releaseChatMediaResourceSubscriber(first.rerender);
+    releaseChatMediaResourceOwner(first.rerender);
     notifyBrowserAuthRestored();
     await vi.advanceTimersByTimeAsync(0);
 
@@ -638,7 +639,7 @@ describe("chat media resource lifecycle", () => {
     expect(first.container.querySelector(".chat-message-image")).toBeNull();
     expect(imageSrc(second.container)).toBe(blobUrl);
     expect(resource.subscribers.size).toBe(1);
-    releaseChatMediaResourceSubscriber(second.rerender);
+    releaseChatMediaResourceOwner(second.rerender);
     expect(resource.subscribers.size).toBe(0);
     expect(resource.releaseAuthRecovery).toBeUndefined();
     expect(isChatMediaResourceCurrent(resource)).toBe(false);
@@ -696,7 +697,7 @@ describe("chat media resource lifecycle", () => {
     await vi.advanceTimersByTimeAsync(0);
     expectTicket(first, "first-pane-ticket");
     expectTicket(second, "second-pane-ticket");
-    releaseChatMediaResourceSubscriber(first.rerender);
+    releaseChatMediaResourceOwner(first.rerender);
     const remounted = createAvailabilityPane(source, "shared-token", "full");
     remounted.rerender();
     await vi.advanceTimersByTimeAsync(0);
@@ -710,7 +711,7 @@ describe("chat media resource lifecycle", () => {
     first.rerender();
     await vi.advanceTimersByTimeAsync(0);
     expect(first.latest?.status).toBe("available");
-    releaseChatMediaResourceSubscriber(first.rerender);
+    releaseChatMediaResourceOwner(first.rerender);
     await vi.advanceTimersByTimeAsync(90_001);
 
     const remounted = createAvailabilityPane(source, "idle-ticket-token");
@@ -729,7 +730,7 @@ describe("chat media resource lifecycle", () => {
       const pane = createAvailabilityPane(index === 0 ? source : `${source}-${index}`, "original");
       pane.rerender();
       await vi.advanceTimersByTimeAsync(0);
-      releaseChatMediaResourceSubscriber(pane.rerender);
+      releaseChatMediaResourceOwner(pane.rerender);
     }
     let authToken = "replacement";
     const pane = createAvailabilityPane(source, () => authToken);
@@ -805,8 +806,8 @@ describe("chat media resource lifecycle", () => {
     vi.stubGlobal("fetch", fetchMock);
     const first = vi.fn();
     const second = vi.fn();
-    const firstOptions = { onRequestUpdate: observeSubscriber(first) };
-    const secondOptions = { onRequestUpdate: observeSubscriber(second) };
+    const firstOptions = { onMediaChange: observeSubscriber(first) };
+    const secondOptions = { onMediaChange: observeSubscriber(second) };
 
     resolveAssistantAttachmentAvailability(source, firstOptions);
     resolveAssistantAttachmentAvailability(source, secondOptions);
@@ -815,7 +816,7 @@ describe("chat media resource lifecycle", () => {
     first.mockClear();
     second.mockClear();
 
-    releaseChatMediaResourceSubscriber(first);
+    releaseChatMediaResourceOwner(first);
     notifyBrowserAuthRestored();
 
     expect.soft(first).not.toHaveBeenCalled();
@@ -824,7 +825,7 @@ describe("chat media resource lifecycle", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(pending.signal?.aborted).toBe(false);
 
-    releaseChatMediaResourceSubscriber(second);
+    releaseChatMediaResourceOwner(second);
     expect.soft(pending.signal?.aborted).toBe(true);
     await vi.advanceTimersByTimeAsync(0);
     first.mockClear();
@@ -851,11 +852,11 @@ describe("chat media resource lifecycle", () => {
     rerenderSecond();
     await vi.advanceTimersByTimeAsync(0);
 
-    releaseChatMediaResourceSubscriber(rerenderFirst);
+    releaseChatMediaResourceOwner(rerenderFirst);
     expect(pending.signal?.aborted).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(1);
 
-    releaseChatMediaResourceSubscriber(rerenderSecond);
+    releaseChatMediaResourceOwner(rerenderSecond);
     await vi.advanceTimersByTimeAsync(0);
 
     expect(pending.signal?.aborted).toBe(true);

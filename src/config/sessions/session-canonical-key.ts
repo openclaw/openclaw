@@ -30,7 +30,7 @@ import {
   getSqliteReadScopeRevision,
   type SqliteReadScopeRevision,
 } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../../infra/sqlite-user-version.js";
 import {
   normalizeAgentId,
@@ -159,7 +159,7 @@ export function readWithCanonicalSessionAdmission<T>(
   // The actual guard requested admission before validation or publication. Retry
   // the materialized read under one snapshot, including policy/receipt changes.
   return withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-    runSqliteDeferredTransactionSync(database.db, read),
+    runSqliteReadSnapshotSync(database.db, read),
   );
 }
 
@@ -335,7 +335,7 @@ export function readWithCanonicalSessionReaderContinuation<T>(
     }
   };
   const value = withSqlitePostCommitPublications(sqlPublicationAnchor(database.db), () =>
-    runSqliteDeferredTransactionSync(database.db, () => {
+    runSqliteReadSnapshotSync(database.db, () => {
       const previous = canonicalReadScope.current;
       canonicalReadScope.current = scope;
       try {

@@ -1,13 +1,17 @@
 import { MAX_PAYLOAD_BYTES } from "../../gateway/payload-limits.js";
 import { jsonPathValue } from "../../infra/database-engine/json-values.js";
+import { getPostgresPhysicalFacts } from "../../infra/database-engine/physical-facts.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import { hasPendingInputConsumptionColumn } from "../../state/openclaw-agent-pending-inputs-schema.js";
+import {
+  hasPendingInputConsumptionColumn,
+  hasSessionPendingInputsSchema,
+} from "../../state/openclaw-agent-pending-inputs-schema.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import type {
   PendingInputHistoryQuery,
@@ -20,18 +24,18 @@ export function readPendingInputHistoryInDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   query: PendingInputHistoryQuery,
 ): PendingInputHistorySnapshot {
-  const schema = getAdmittedSqliteSchemaFacts(database.db);
+  const schema = getPostgresPhysicalFacts(database.db) ?? getAdmittedSqliteSchemaFacts(database.db);
   if (!schema) {
     throw new Error("Pending input history requires admitted schema facts");
   }
-  if (!schema.tableSql.get("session_pending_inputs")) {
+  if (!hasSessionPendingInputsSchema(database.db)) {
     return { rows: [], total: 0 };
   }
   const hasConsumption = hasPendingInputConsumptionColumn(database.db);
   if (query.includeTotal === false) {
     return readPendingInputPageInDatabase(database, query, hasConsumption);
   }
-  return runSqliteDeferredTransactionSync(database.db, () => {
+  return runSqliteReadSnapshotSync(database.db, () => {
     const db = getSessionKysely(database.db);
     let base = db
       .selectFrom("session_pending_inputs")
@@ -74,19 +78,23 @@ function readPendingInputPageInDatabase(
           .where("session_id", "=", query.sessionId)
           .$if(hasConsumption, (selection) => selection.where("consumed_event_id", "is", null))
           .$if(query.sessionSendRecovery === true, (selection) =>
-            selection
-              .where("state", "in", ["queued", "interrupted"])
-              .where((eb) =>
-                eb(
-                  jsonPathValue(
-                    database.db,
-                    eb.ref("message_json"),
-                    eb.val("$.__openclaw.sessionSendDelivery"),
+            selection.where("state", "in", ["queued", "interrupted"]).where((eb) =>
+              eb.or([
+                // Crash-left rows need reconciliation even without replayable custody.
+                eb("state", "=", "queued"),
+                ...["sessionSendDelivery", "chatInputRecovery"].map((field) =>
+                  eb(
+                    jsonPathValue(
+                      database.db,
+                      eb.ref("message_json"),
+                      eb.val(`$.__openclaw.${field}`),
+                    ),
+                    "is not",
+                    null,
                   ),
-                  "is not",
-                  null,
                 ),
-              ),
+              ]),
+            ),
           )
           .$if(query.before !== undefined, (selection) =>
             selection.where("seq", "<", query.before!),

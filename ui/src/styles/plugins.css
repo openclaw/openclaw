@@ -9,42 +9,8 @@
   font-size: 26px;
 }
 
-.content-header.hub-page-header.plugins-hub-header {
-  grid-template-columns: minmax(0, 1fr) auto;
-  grid-template-areas:
-    "title actions"
-    "tabs tabs";
-  align-items: end;
-  row-gap: var(--space-2);
-  width: 100%;
-  max-width: 1120px;
-  max-height: none;
-  margin-inline: auto;
-  padding-inline: var(--settings-header-inline-padding, var(--space-4));
-}
-
-.content-header.plugins-hub-header .hub-page-header__tabs {
-  grid-area: tabs;
-  justify-self: start;
-  padding-block: var(--space-2);
-}
-
 .plugins-hub-header .hub-tabs--sub .hub-tab {
   padding-block: var(--space-2);
-}
-
-.content-header.plugins-hub-header .hub-page-header__title {
-  grid-area: title;
-  justify-self: start;
-}
-
-.content-header.plugins-hub-header .hub-page-header__actions {
-  grid-area: actions;
-}
-
-.plugins-hub-header + .settings-workspace {
-  /* The settings page already contributes the lower half of the tab rhythm. */
-  margin-top: 0;
 }
 
 .plugins-hub-header__secondary {
@@ -581,24 +547,6 @@
   background: var(--bg-hover);
 }
 
-/* Keyboard-accessible detail opener: the row text is a real button so the
-   row's primary action is focusable instead of a div click handler. */
-.plugins-item__detail-button {
-  border: 0;
-  border-radius: var(--radius-sm);
-  padding: 0;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: var(--cursor-action);
-}
-
-.plugins-item__detail-button:focus-visible {
-  outline: none;
-  box-shadow: var(--focus-ring);
-}
-
 .clawhub-skill-icon {
   width: 40px;
   height: 40px;
@@ -682,11 +630,7 @@
 .plugins-tile--fallback svg {
   width: 21px;
   height: 21px;
-  fill: none;
-  stroke: currentColor;
   stroke-width: 1.6px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
 }
 
 .plugins-row-message {
@@ -1173,11 +1117,16 @@ openclaw-plugins-page
   height: 1em;
 }
 .plugin-catalog-detail__security-score {
+  /* The hover fill bleeds past the label and bars so neither sits flush with its edge. */
+  --plugin-security-score-bleed: 8px;
+
   display: grid;
   grid-template-columns: 1fr repeat(3, 26px);
   align-items: center;
   gap: 6px;
-  padding: 8px 0;
+  margin-inline: calc(-1 * var(--plugin-security-score-bleed));
+  padding: 8px var(--plugin-security-score-bleed);
+  border-radius: var(--radius-md);
 }
 .plugin-catalog-detail__security-score strong {
   font-size: var(--control-ui-text-sm);
@@ -1320,9 +1269,6 @@ openclaw-plugins-page
   font-size: var(--control-ui-text-sm);
 }
 .plugin-capability__copy > span {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
   overflow: hidden;
   line-height: 1.5;
 }

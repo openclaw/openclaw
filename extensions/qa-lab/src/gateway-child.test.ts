@@ -15,12 +15,8 @@ import {
   readJsonLines,
   registerSourceGatewayHostLifelineTest,
   writePackagedGatewayFixture,
+  writeRepoCliSourceRootCaptureFixture,
 } from "./gateway-child-command.test-support.js";
-import {
-  buildQaForcedRuntimeEnvPatch,
-  buildQaRuntimeEnv,
-  stageQaCodexMockModelCatalog,
-} from "./gateway-child-env.js";
 import { QaGatewayChildLifecycle } from "./gateway-child-lifecycle.js";
 import {
   closeQaGatewayLogStream,
@@ -34,6 +30,8 @@ import {
   waitForGatewayReady,
   waitForQaGatewayRestartBoundary,
 } from "./gateway-child-readiness.js";
+import type { QaGatewayChildParams } from "./gateway-child-setup.js";
+import { createQaGatewaySetupHarness } from "./gateway-child-setup.test-support.js";
 import { createQaGatewayChild } from "./gateway-child.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
@@ -57,6 +55,7 @@ vi.mock("openclaw/plugin-sdk/temp-path", async (importOriginal) => ({
 }));
 
 const tempDirs = createTempDirHarness();
+const setup = createQaGatewaySetupHarness();
 const owners: ReturnType<typeof createQaGatewayChild>[] = [];
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_QA_LIVE_ANTHROPIC_SETUP_TOKEN", undefined);
@@ -69,6 +68,7 @@ function ownGateway() {
 }
 
 afterEach(async () => {
+  await setup.cleanup();
   fetchWithSsrFGuardMock.mockReset();
   qaTempPathState.preferredTmpDir = process.env.TMPDIR || "/tmp";
   for (const owner of owners.splice(0)) {
@@ -108,22 +108,11 @@ async function createPackagedFixture(
   };
 }
 
-function createParams(baseEnv?: NodeJS.ProcessEnv) {
-  return {
-    configPath: "/tmp/openclaw-qa/openclaw.json",
-    gatewayToken: "qa-token",
-    homeDir: "/tmp/openclaw-qa/home",
-    stateDir: "/tmp/openclaw-qa/state",
-    tempRoot: "/tmp/openclaw-qa",
-    xdgConfigHome: "/tmp/openclaw-qa/xdg-config",
-    xdgDataHome: "/tmp/openclaw-qa/xdg-data",
-    xdgCacheHome: "/tmp/openclaw-qa/xdg-cache",
-    bundledPluginsDir: "/tmp/openclaw-qa/bundled-plugins",
-    stagedBundledPluginsRoot: "/repo/.artifacts/qa-runtime/openclaw-qa-suite-test",
-    compatibilityHostVersion: "2026.4.8",
-    developmentSourceRoot: "/repo/openclaw",
-    baseEnv,
-  };
+async function prepareRuntimeEnv(
+  params: Partial<QaGatewayChildParams> = {},
+  parentEnv: NodeJS.ProcessEnv = {},
+) {
+  return (await setup.prepare(params, parentEnv)).env;
 }
 
 type SsrFetchCall = {
@@ -323,17 +312,16 @@ describe("waitForGatewayReady", () => {
 
 describe("Gateway child fixture helpers", () => {
   it("stages native Codex model metadata before starting the private mock runtime", async () => {
-    const tempRoot = await tempDirs.makeTempDir("qa-codex-model-catalog-");
-    const modelCatalogPath = await stageQaCodexMockModelCatalog({
-      tempRoot,
+    const { tempRoot, env } = await setup.prepare({
       forcedRuntime: "codex",
       providerMode: "mock-openai",
       primaryModel: "mock-openai/gpt-5.6-luna",
       alternateModel: "mock-openai/gpt-5.6-luna-alt",
-      autoCompactTokenLimit: 1,
+      providerBaseUrl: "http://127.0.0.1:44080/v1",
+      codexMockAutoCompactTokenLimit: 1,
     });
 
-    expect(modelCatalogPath).toBe(path.join(tempRoot, "codex-model-catalog.json"));
+    const modelCatalogPath = path.join(tempRoot, "codex-model-catalog.json");
     const catalog = JSON.parse(await readFile(modelCatalogPath!, "utf8")) as {
       models: Array<Record<string, unknown>>;
     };
@@ -354,44 +342,33 @@ describe("Gateway child fixture helpers", () => {
       }),
     ]);
     expect(catalog.models[0]).not.toHaveProperty("supports_reasoning_summaries");
-    const runtimeEnvPatch = buildQaForcedRuntimeEnvPatch({
-      forcedRuntime: "codex",
-      providerMode: "mock-openai",
-      providerBaseUrl: "http://127.0.0.1:44080/v1",
-      codexModelCatalogPath: modelCatalogPath,
-    });
-    expect(runtimeEnvPatch).toEqual(
-      expect.objectContaining({
-        OPENCLAW_CODEX_APP_SERVER_ARGS: `app-server -c openai_base_url=http://127.0.0.1:44080/v1 -c ${JSON.stringify(`model_catalog_json=${modelCatalogPath}`)} -c sandbox_workspace_write.exclude_tmpdir_env_var=true -c sandbox_workspace_write.exclude_slash_tmp=true --listen stdio://`,
-      }),
+    expect(env.OPENCLAW_CODEX_APP_SERVER_ARGS).toBe(
+      `app-server -c openai_base_url=http://127.0.0.1:44080/v1 -c ${JSON.stringify(`model_catalog_json=${modelCatalogPath}`)} -c sandbox_workspace_write.exclude_tmpdir_env_var=true -c sandbox_workspace_write.exclude_slash_tmp=true --listen stdio://`,
     );
-    expect(runtimeEnvPatch).not.toHaveProperty("OPENAI_API_KEY");
-    expect(runtimeEnvPatch).not.toHaveProperty("CODEX_API_KEY");
+    expect("OPENAI_API_KEY" in env).toBe(false);
+    expect("CODEX_API_KEY" in env).toBe(false);
   });
 
   it("does not stage a Codex catalog for other runtimes or live providers", async () => {
-    const tempRoot = await tempDirs.makeTempDir("qa-codex-model-catalog-unused-");
-    await expect(
-      stageQaCodexMockModelCatalog({
-        tempRoot,
+    for (const params of [
+      {
         forcedRuntime: "openclaw",
         providerMode: "mock-openai",
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      stageQaCodexMockModelCatalog({
-        tempRoot,
+      },
+      {
         forcedRuntime: "codex",
         providerMode: "live-frontier",
-      }),
-    ).resolves.toBeUndefined();
-    await expect(
-      readFile(path.join(tempRoot, "codex-model-catalog.json"), "utf8"),
-    ).rejects.toThrow();
+      },
+    ] as const) {
+      const { tempRoot } = await setup.prepare(params);
+      await expect(
+        readFile(path.join(tempRoot, "codex-model-catalog.json"), "utf8"),
+      ).rejects.toThrow();
+    }
   });
 });
 
-describe("buildQaRuntimeEnv", () => {
+describe("QA Gateway child preparation", () => {
   it("cleans up temp QA gateway roots when repo CLI discovery fails before startup", async () => {
     const tempParent = await tempDirs.makeTempDir("qa-gateway-cli-discovery-fail-");
     const emptyRepo = await tempDirs.makeTempDir("qa-gateway-empty-repo-");
@@ -476,20 +453,22 @@ describe("buildQaRuntimeEnv", () => {
     await expect(readdir(commandTempParent)).resolves.toStrictEqual([]);
   });
 
-  it("isolates gateway children from Vitest without removing QA controls or non-test NODE_ENV", () => {
-    const testEnv = buildQaRuntimeEnv({
-      ...createParams({
+  it("isolates gateway children from Vitest without removing QA controls or non-test NODE_ENV", async () => {
+    const testEnv = await prepareRuntimeEnv(
+      {
+        runtimeEnvPatch: {
+          VITEST: "patched",
+          VITEST_POOL_ID: "patched-pool",
+          VITEST_WORKER_ID: "patched-worker",
+        },
+      },
+      {
         NODE_ENV: "test",
         VITEST: "true",
         VITEST_POOL_ID: "base-pool",
         VITEST_WORKER_ID: "base-worker",
-      }),
-      runtimeEnvPatch: {
-        VITEST: "patched",
-        VITEST_POOL_ID: "patched-pool",
-        VITEST_WORKER_ID: "patched-worker",
       },
-    });
+    );
 
     expect(testEnv.NODE_ENV).toBeUndefined();
     expect(testEnv.VITEST).toBeUndefined();
@@ -498,48 +477,51 @@ describe("buildQaRuntimeEnv", () => {
     expect(testEnv.OPENCLAW_TEST_FAST).toBe("1");
     expect(testEnv.OPENCLAW_ALLOW_SLOW_REPLY_TESTS).toBe("1");
 
-    const developmentEnv = buildQaRuntimeEnv({ ...createParams({ NODE_ENV: "development" }) });
+    const developmentEnv = await prepareRuntimeEnv({}, { NODE_ENV: "development" });
     expect(developmentEnv.NODE_ENV).toBe("development");
   });
 
-  it("does not inherit parent channel or provider skip controls", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
+  it("does not inherit parent channel or provider skip controls", async () => {
+    const env = await prepareRuntimeEnv(
+      {},
+      {
         OPENCLAW_SKIP_CHANNELS: "1",
         OPENCLAW_SKIP_PROVIDERS: "1",
-      }),
-    });
+      },
+    );
 
     expect(env.OPENCLAW_SKIP_CHANNELS).toBeUndefined();
     expect(env.OPENCLAW_SKIP_PROVIDERS).toBeUndefined();
   });
 
-  it("honors explicit channel and provider skip controls", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
+  it("honors explicit channel and provider skip controls", async () => {
+    const env = await prepareRuntimeEnv(
+      {
+        runtimeEnvPatch: {
+          OPENCLAW_SKIP_CHANNELS: "patched-channels",
+          OPENCLAW_SKIP_PROVIDERS: "patched-providers",
+        },
+      },
+      {
         OPENCLAW_SKIP_CHANNELS: "inherited",
         OPENCLAW_SKIP_PROVIDERS: "inherited",
-      }),
-      runtimeEnvPatch: {
-        OPENCLAW_SKIP_CHANNELS: "patched-channels",
-        OPENCLAW_SKIP_PROVIDERS: "patched-providers",
       },
-    });
+    );
 
     expect(env.OPENCLAW_SKIP_CHANNELS).toBe("patched-channels");
     expect(env.OPENCLAW_SKIP_PROVIDERS).toBe("patched-providers");
   });
 
-  it("maps live key aliases without replacing explicit provider keys", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
+  it("maps live key aliases without replacing explicit provider keys", async () => {
+    const env = await prepareRuntimeEnv(
+      { providerMode: "live-frontier" },
+      {
         OPENCLAW_LIVE_OPENAI_KEY: "openai-live",
         OPENAI_API_KEY: "openai-explicit",
         OPENCLAW_LIVE_ANTHROPIC_KEY: "anthropic-live",
         OPENCLAW_LIVE_GEMINI_KEY: "gemini-live",
-      }),
-      providerMode: "live-frontier",
-    });
+      },
+    );
 
     expect(env.OPENAI_API_KEY).toBe("openai-explicit");
     expect(env.ANTHROPIC_API_KEY).toBe("anthropic-live");
@@ -584,21 +566,23 @@ describe("buildQaRuntimeEnv", () => {
         await mkdir(codexHome);
       }
 
-      const env = buildQaRuntimeEnv({
-        ...createParams({
+      const env = await prepareRuntimeEnv(
+        {
+          providerMode,
+          forwardHostHome,
+          primaryModel: forwardHostHomeForClaudeCli ? "claude-cli/claude-test" : undefined,
+        },
+        {
           HOME: hostHome,
           ...(explicitCodexHome ? { CODEX_HOME: codexHome } : {}),
-        }),
-        providerMode,
-        forwardHostHome,
-        forwardHostHomeForClaudeCli,
-      });
+        },
+      );
 
       expect(env.HOME).toBe(
-        forwardHostHome || forwardHostHomeForClaudeCli ? hostHome : "/tmp/openclaw-qa/home",
+        forwardHostHome || forwardHostHomeForClaudeCli ? hostHome : env.OPENCLAW_HOME,
       );
-      expect(env.OPENCLAW_HOME).toBe("/tmp/openclaw-qa/home");
-      expect(env.OPENCLAW_STATE_DIR).toBe("/tmp/openclaw-qa/state");
+      expect(env.OPENCLAW_HOME).not.toBe(hostHome);
+      expect(env.OPENCLAW_STATE_DIR).toBe(path.join(path.dirname(env.OPENCLAW_HOME!), "state"));
       expect(env.CODEX_HOME).toBe(providerMode === "live-frontier" ? codexHome : undefined);
     },
   );
@@ -621,16 +605,18 @@ describe("buildQaRuntimeEnv", () => {
     async ({ claudeCliAuthMode, key, preserved, expected }) => {
       const hostHome = await tempDirs.makeTempDir("qa-host-home-");
 
-      const env = buildQaRuntimeEnv({
-        ...createParams({
+      const env = await prepareRuntimeEnv(
+        {
+          providerMode: "live-frontier",
+          primaryModel: "claude-cli/claude-test",
+          claudeCliAuthMode,
+        },
+        {
           HOME: hostHome,
           [key]: "anthropic-live",
           OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV: preserved,
-        }),
-        providerMode: "live-frontier",
-        forwardHostHomeForClaudeCli: true,
-        claudeCliAuthMode,
-      });
+        },
+      );
 
       expect(env.ANTHROPIC_API_KEY).toBe("anthropic-live");
       expect(env.OPENCLAW_LIVE_CLI_BACKEND_PRESERVE_ENV).toBe(expected);
@@ -664,17 +650,19 @@ describe("buildQaRuntimeEnv", () => {
         `,
         "utf8",
       );
-      const env = buildQaRuntimeEnv({
-        ...createParams({ SAFE_VALUE: "base" }),
-        runtimeEnvPatch: {
-          SAFE_VALUE: "allowlist-survived",
-          BASH_ENV: bashEnvPath,
-          BASHOPTS: "checkwinsize",
-          ENV: bashEnvPath,
-          SHELLOPTS: "braceexpand",
-          "BASH_FUNC_compgen%%": `() { printf 'ran' > ${JSON.stringify(functionMarkerPath)}; builtin compgen "$@"; }`,
+      const env = await prepareRuntimeEnv(
+        {
+          runtimeEnvPatch: {
+            SAFE_VALUE: "allowlist-survived",
+            BASH_ENV: bashEnvPath,
+            BASHOPTS: "checkwinsize",
+            ENV: bashEnvPath,
+            SHELLOPTS: "braceexpand",
+            "BASH_FUNC_compgen%%": `() { printf 'ran' > ${JSON.stringify(functionMarkerPath)}; builtin compgen "$@"; }`,
+          },
         },
-      });
+        { SAFE_VALUE: "base" },
+      );
 
       for (const key of ["BASH_ENV", "BASHOPTS", "ENV", "SHELLOPTS"]) {
         expect(env[key]).toBeUndefined();
@@ -740,16 +728,7 @@ describe("buildQaRuntimeEnv", () => {
     const repoRoot = await tempDirs.makeTempDir("qa-gateway-repo-cli-");
     qaTempPathState.preferredTmpDir = tempParent;
     const observedEnvPath = path.join(tempParent, "observed-source-root");
-    const runnerPath = path.join(repoRoot, "scripts", "run-node.mjs");
-    await mkdir(path.dirname(runnerPath), { recursive: true });
-    await writeFile(
-      runnerPath,
-      [
-        'import fs from "node:fs";',
-        `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, process.env.OPENCLAW_DEV_SOURCE_ROOT ?? "");`,
-      ].join("\n"),
-      "utf8",
-    );
+    await writeRepoCliSourceRootCaptureFixture(repoRoot, observedEnvPath);
     vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", "/repo/current-harness");
 
     const owner = ownGateway();
@@ -774,21 +753,24 @@ describe("buildQaRuntimeEnv", () => {
   it("requires an Anthropic key for live Claude CLI API-key mode", async () => {
     const hostHome = await tempDirs.makeTempDir("qa-host-home-");
 
-    expect(() =>
-      buildQaRuntimeEnv({
-        ...createParams({
+    await expect(
+      prepareRuntimeEnv(
+        {
+          providerMode: "live-frontier",
+          primaryModel: "claude-cli/claude-test",
+          claudeCliAuthMode: "api-key",
+        },
+        {
           HOME: hostHome,
-        }),
-        providerMode: "live-frontier",
-        forwardHostHomeForClaudeCli: true,
-        claudeCliAuthMode: "api-key",
-      }),
-    ).toThrow("Claude CLI API-key QA mode requires ANTHROPIC_API_KEY");
+        },
+      ),
+    ).rejects.toThrow("Claude CLI API-key QA mode requires ANTHROPIC_API_KEY");
   });
 
-  it("scrubs direct and live provider keys in mock mode", () => {
-    const env = buildQaRuntimeEnv({
-      ...createParams({
+  it("scrubs direct and live provider keys in mock mode", async () => {
+    const env = await prepareRuntimeEnv(
+      { providerMode: "mock-openai" },
+      {
         ANTHROPIC_API_KEY: "anthropic-live",
         ANTHROPIC_OAUTH_TOKEN: "anthropic-oauth",
         CODEX_API_KEY: "codex-live",
@@ -803,9 +785,8 @@ describe("buildQaRuntimeEnv", () => {
         OPENCLAW_LIVE_CODEX_API_KEY: "codex-live",
         OPENCLAW_LIVE_GEMINI_KEY: "gemini-live",
         OPENCLAW_LIVE_OPENAI_KEY: "openai-live",
-      }),
-      providerMode: "mock-openai",
-    });
+      },
+    );
 
     expect(env.OPENAI_API_KEY).toBeUndefined();
     expect(env.OPENAI_API_KEYS).toBeUndefined();

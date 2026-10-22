@@ -5,12 +5,12 @@ import {
 } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { LobsterSvg } from "../../components/lobster-pet-artwork.tsx";
 import { previewLobsterChirp } from "../../components/lobster-pet-audio.ts";
-import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-look.ts";
+import { canonicalLobsterLook, lobsterLookStyle } from "../../components/lobster-pet-identity.ts";
 import { LOBSTER_PALETTE_LORE, lobsterPaletteName } from "../../components/lobster-pet-lore.ts";
 import { LOBSTER_PET_PALETTES } from "../../components/lobster-pet-palettes.ts";
 import "../../components/tooltip.ts";
 import { SettingsRow } from "../../components/solid/settings-ui.tsx";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import { projectLobsterdex } from "../../lib/reactive/events-browser.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { LocalToggleRow } from "./local-toggle-row.tsx";
@@ -87,16 +87,14 @@ export function LobsterPetSection(props: ConfigProps) {
                     {(palette) => {
                       const look = canonicalLobsterLook(palette);
                       const entry = createMemo(() => dexEntries().get(palette.id));
-                      const seen = createMemo(() => entry() !== undefined);
-                      const shinySeen = createMemo(() => entry()?.shinySeenAt != null);
+                      const seen = () => entry() !== undefined;
+                      const shinySeen = () => entry()?.shinySeenAt != null;
                       const baseName = createMemo(() =>
                         entry() ? (entry()?.name ?? lobsterPaletteName(palette.id)) : "?",
                       );
-                      const displayName = createMemo(() =>
-                        shinySeen() ? `${baseName()} ✦` : baseName(),
-                      );
+                      const displayName = () => (shinySeen() ? `${baseName()} ✦` : baseName());
                       const lore = LOBSTER_PALETTE_LORE[palette.id];
-                      const loreLine = createMemo(() => (seen() ? lore.flavor : lore.hint));
+                      const loreLine = () => (seen() ? lore.flavor : lore.hint);
                       const visitedLine = createMemo(() => {
                         const firstSeenAt = entry()?.firstSeenAt;
                         return firstSeenAt != null
@@ -145,13 +143,9 @@ export function LobsterPetSection(props: ConfigProps) {
                   <a
                     class="btn btn--sm lobsterdex__open"
                     href={props.lobsterdexHref}
-                    onClick={(event: MouseEvent) => {
-                      if (!shouldHandleNavigationClick(event)) {
-                        return;
-                      }
-                      event.preventDefault();
-                      props.onOpenLobsterdex?.();
-                    }}
+                    onClick={(event: MouseEvent) =>
+                      handleNavigationClick(event, () => props.onOpenLobsterdex?.())
+                    }
                   >
                     {t("quickSettings.appearance.lobsterdexOpen")}
                   </a>

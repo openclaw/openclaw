@@ -1,3 +1,4 @@
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact } from "../infra/update-failure-facts.js";
@@ -15,7 +16,7 @@ function createDoctorAgentLeaseRefusal(
   cause?: unknown,
   detail = "An agent database is in use.",
 ): DoctorMaintenanceRefusalError {
-  const message = `Doctor could not enter maintenance. ${detail} Stop other OpenClaw processes using this state, then retry the update.`;
+  const message = `Doctor could not enter maintenance. ${detail} Stop the Gateway and other OpenClaw processes or reboot, then rerun openclaw doctor --fix.`;
   return new DoctorMaintenanceRefusalError(
     message,
     { kind: "deferred", reason: "agent-database-in-use" },
@@ -43,9 +44,11 @@ export async function preflightExternalDoctorAgentLease(
     await import("../state/openclaw-agent-db-lease.js");
   let activeAgentLease = false;
   try {
-    activeAgentLease =
-      readActiveOpenClawAgentDatabaseLeasesReadOnly({ env }, openDoctorStateSchemaReadAdmission)
-        .length > 0;
+    activeAgentLease = withEngineStoreAdmission(
+      () =>
+        readActiveOpenClawAgentDatabaseLeasesReadOnly({ env }, openDoctorStateSchemaReadAdmission)
+          .length > 0,
+    );
   } catch (error) {
     if (hasCommandProcessCleanupError(error)) {
       throw error;
@@ -81,7 +84,9 @@ export async function assertDoctorAgentLeaseAdmission(env: NodeJS.ProcessEnv): P
   const { assertNoOpenClawAgentDatabaseLeasesReadOnly, OpenClawAgentDatabaseLeaseActiveError } =
     await import("../state/openclaw-agent-db-lease.js");
   try {
-    assertNoOpenClawAgentDatabaseLeasesReadOnly({ env }, openDoctorStateSchemaReadAdmission);
+    withEngineStoreAdmission(() =>
+      assertNoOpenClawAgentDatabaseLeasesReadOnly({ env }, openDoctorStateSchemaReadAdmission),
+    );
   } catch (error) {
     if (error instanceof OpenClawAgentDatabaseLeaseActiveError) {
       throw createDoctorAgentLeaseRefusal(env, error);
@@ -115,7 +120,11 @@ function describeHolders(pids: readonly number[]) {
  * to close its database, which Doctor's maintenance ownership would refuse.
  */
 export async function admitDoctorAgentLeases(params: {
-  state: { readonly env: NodeJS.ProcessEnv; release(): Promise<Error | undefined> };
+  state: {
+    readonly env: NodeJS.ProcessEnv;
+    run<T>(operation: () => T): T;
+    release(): Promise<Error | undefined>;
+  };
   wait: boolean;
   acquire: () => Promise<void>;
   assertCurrent?: () => void;
@@ -135,7 +144,7 @@ export async function admitDoctorAgentLeases(params: {
   for (;;) {
     await params.acquire();
     try {
-      await assertDoctorAgentLeaseAdmission(params.state.env);
+      await params.state.run(() => assertDoctorAgentLeaseAdmission(params.state.env));
       if (waited) {
         params.log(
           `Agent databases closed after ${formatDoctorWaitSeconds(performance.now() - startedAt)}; continuing Doctor maintenance.`,
@@ -159,7 +168,7 @@ export async function admitDoctorAgentLeases(params: {
           ? createDoctorAgentLeaseRefusal(
               params.state.env,
               cause,
-              `Waited ${formatDoctorWaitSeconds(performance.now() - startedAt)}; ${describeHolders(holders)} still ${holders.length === 1 ? "has" : "have"} an agent database open.`,
+              `Waited ${formatDoctorWaitSeconds(performance.now() - startedAt)}; database held by PID ${holders.slice(0, 3).join(", ")}${holders.length > 3 ? ", ..." : ""}.`,
             )
           : error;
       }
@@ -190,14 +199,14 @@ export async function admitDoctorAgentLeases(params: {
       pollMs = Math.min(pollMs * 2, 2_000);
       let live: readonly number[];
       try {
-        live = [
+        live = withEngineStoreAdmission(() => [
           ...new Set(
             readActiveOpenClawAgentDatabaseLeasesReadOnly(
               { env: params.state.env },
               openDoctorStateSchemaReadAdmission,
             ).map((row) => row.owner_pid),
           ),
-        ];
+        ]);
       } catch (error) {
         if (hasCommandProcessCleanupError(error)) {
           throw error;

@@ -28,7 +28,7 @@ vi.mock("../channels/plugins/catalog.js", () => ({
 }));
 
 // mock-isolation: Observe parsed options without writing account configuration.
-vi.mock("../commands/channels.js", () => ({ channelsAddCommand: addCommand }));
+vi.mock("../commands/channels/add.js", () => ({ channelsAddCommand: addCommand }));
 
 // mock-isolation: Login and logout are unrelated to add-command argument parsing.
 vi.mock("./channel-auth.js", () => ({ runChannelLogin: vi.fn(), runChannelLogout: vi.fn() }));

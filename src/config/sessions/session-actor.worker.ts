@@ -1,6 +1,5 @@
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
-import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { sqlPublicationAnchor } from "../../infra/sql-connection.js";
 import {
@@ -13,14 +12,18 @@ import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { readSqliteNativeMutationRevision } from "../../infra/sqlite-schema-facts.js";
 import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
 import {
-  SQLITE_WORKER_MAX_MESSAGE_BYTES,
   hasSqliteWorkerOutcomeUnknown,
   type SqliteWorkerCommand,
 } from "../../infra/sqlite-worker-contract.js";
-import { deferSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-admission.js";
+import {
+  deferCapturedSqliteWorkerCommitReceipt,
+  deferSqliteWorkerCommitReceipt,
+} from "../../infra/sqlite-worker-operation-admission.js";
+import { captureSqliteWorkerCommitReceipt } from "../../infra/sqlite-worker-operation-settlement.js";
 import { createSqliteWorkerTransferOwner } from "../../infra/sqlite-worker-transfer.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import type { AgentWorkerOperationContext } from "../../state/openclaw-agent-operation-context.js";
+import { readStagedConversationPublications } from "./session-accessor.sqlite-conversation-publication.js";
 import type { SessionEntryReplacementPublication } from "./session-accessor.sqlite-entry-cache.types.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import { projectSessionActorAuthority } from "./session-actor-command.js";
@@ -60,7 +63,8 @@ import type { SessionEntryWritePostimages } from "./session-entry-write-postimag
 import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import { prepareSessionTurnPredicates } from "./session-turn-predicate.js";
-import { prepareVoiceTranscriptCommit } from "./session-turn.worker.js";
+import type { SessionTurnPlan } from "./session-turn.types.js";
+import { prepareSessionTurn, prepareVoiceTranscriptCommit } from "./session-turn.worker.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 type Command = SqliteWorkerCommand<SessionActorOperations>;
@@ -83,7 +87,9 @@ function transcriptPayloadBytes(command: Command): number | undefined {
         typeof append.input.event === "string"
           ? append.input.event
           : JSON.stringify(append.input.event),
-      ) + Buffer.byteLength(append.input.message?.messageJson ?? "")
+      ) +
+      Buffer.byteLength(append.input.message?.messageJson ?? "") +
+      (append.input.initialModel ? Buffer.byteLength(JSON.stringify(append.input.initialModel)) : 0)
     );
   }
   if ("eventJson" in input) {
@@ -194,8 +200,6 @@ export function createSessionActorWorker(
         working.hot.version = version;
         if (singleStatement) {
           stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
-            stage() {},
-            rollback() {},
             commit() {
               const committedToken = token(
                 database,
@@ -269,7 +273,10 @@ export function createSessionActorWorker(
       }
       working.hot.writeToken = pendingToken;
       if (stageResidentState(database, working)) {
-        publication.actorPostimages = new Map([[sessionKey, structuredClone(working.hot)]]);
+        // The synchronous transfer shares the publication's canonical entry, including snapshots.
+        publication.actorPostimages = new Map([
+          [sessionKey, { ...working.hot, entry: postimage.entry }],
+        ]);
       }
     };
     return {
@@ -277,7 +284,7 @@ export function createSessionActorWorker(
         captureSessionEntrySnapshot({
           entry: structuredClone(previousEntry),
           row: {
-            ...structuredClone(selected.row),
+            ...selected.row,
             window: before.window ? structuredClone(before.window) : null,
             member_ids_json: JSON.stringify(before.hot.members.map((member) => member.identityId)),
             board_present: before.hasBoard ? 1 : 0,
@@ -336,8 +343,6 @@ export function createSessionActorWorker(
           const mutationRevision = readSqliteNativeMutationRevision(opened.db);
           if (
             !stageSqliteTransactionState(sqlPublicationAnchor(opened.db), {
-              stage() {},
-              rollback() {},
               commit() {
                 // A later nested writer must not install this intermediate transcript.
                 if (readSqliteNativeMutationRevision(opened.db) === mutationRevision) {
@@ -403,6 +408,21 @@ export function createSessionActorWorker(
     return hydrated;
   };
   return {
+    prepareTurn(input: SessionTurnPlan) {
+      const database = context.open();
+      const resident = retainedState(database, input.sessionKey);
+      // Only the exact current window proves runtime selection. Moved, cold, or
+      // evicted sessions retain canonical preparation, without hydrating an actor.
+      const reusable =
+        input.options.resolveRuntimeTarget &&
+        !input.options.sessionTurnMutation &&
+        resident?.hot.entry?.sessionId === input.options.expectedSessionId &&
+        resident.window?.session_id === input.options.expectedSessionId &&
+        resident.window.session_key === input.sessionKey &&
+        resident.entryRows.get(input.sessionKey) &&
+        !resident.transcript.coldArchive;
+      return prepareSessionTurn(input, context, undefined, reusable ? resident : undefined);
+    },
     async prepare(command: Command) {
       if (command.type === "session.actor.read") {
         return;
@@ -532,12 +552,11 @@ export function createSessionActorWorker(
               after: working.hot,
               payloads: working.transcript.payloads,
               transcriptAuthority: readStagedSessionTranscriptAuthority(opened),
+              conversationPublication: readStagedConversationPublications(opened),
               applied,
             });
             if (
               !stageSqliteTransactionState(sqlPublicationAnchor(opened.db), {
-                stage() {},
-                rollback() {},
                 commit() {
                   committed = true;
                   residents.remember(working);
@@ -555,13 +574,15 @@ export function createSessionActorWorker(
                 : value && "turn" in value
                   ? value.turn
                   : undefined;
-            const serialized = serialize(accepted);
-            diagnosticContext.actorReceiptBytes = serialized.byteLength;
-            if (serialized.byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
+            const captured = captureSqliteWorkerCommitReceipt(accepted);
+            diagnosticContext.actorReceiptBytes =
+              captured.kind === "inline" ? captured.payloadBytes : captured.serialized.byteLength;
+            if (captured.kind === "oversized") {
               const transfer = createSqliteWorkerTransferOwner();
-              const handle = transfer.start([{ kind: "outcome", serialized }].values(), {
-                kinds: ["outcome"],
-              });
+              const handle = transfer.start(
+                [{ kind: "outcome", serialized: captured.serialized }].values(),
+                { kinds: ["outcome"] },
+              );
               try {
                 let frame = transfer.next(handle.id);
                 let finalFrames;
@@ -595,6 +616,7 @@ export function createSessionActorWorker(
                     transfer: { handle, frames: finalFrames },
                     publication: turn ?? commitPublication,
                   },
+                  conversationPublication: accepted.receipt.conversationPublication,
                   final: true,
                 });
                 return { kind: "committed" as const };
@@ -602,12 +624,13 @@ export function createSessionActorWorker(
                 transfer.cancel();
               }
             }
-            deferSqliteWorkerCommitReceipt(sqlPublicationAnchor(opened.db), accepted);
+            deferCapturedSqliteWorkerCommitReceipt(sqlPublicationAnchor(opened.db), captured);
             recordPhase("actorReceiptMs");
             admit("commit", {
               kind: "session-actor-admission",
               snapshot: projectSessionActorAuthority(working.hot),
               publication: turn ?? commitPublication,
+              conversationPublication: accepted.receipt.conversationPublication,
               final: true,
             });
             return { kind: "committed" as const };

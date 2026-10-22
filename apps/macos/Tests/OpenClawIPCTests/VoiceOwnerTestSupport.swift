@@ -174,21 +174,17 @@ final class VoiceOwnerFixture {
         let log = self.log
         return .init(
             appStatePermissions: .init(
-                supported: { true },
                 granted: { appPermissionGranted },
                 ensure: { [appPermission] _ in await appPermission.request() }),
             pttPermissions: .init(
-                supported: { true },
                 granted: { false },
                 ensure: { [pttPermission] _ in await pttPermission.request() }),
             wakePermissions: .init(
-                supported: { true },
                 granted: { log.record("wake.permission")
                     return false
                 },
                 ensure: { _ in false }),
             talkPermissions: .init(
-                supported: { true },
                 granted: { true },
                 ensure: { [talkPermission] _ in await talkPermission.request() }),
             talkAudioCapture: { _ in VoiceOwnerCapture(log: log) },

@@ -1,4 +1,3 @@
-// Backup verify tests cover archive inspection, gzip validation, and corrupted backup diagnostics.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +22,7 @@ vi.mock("tar", async (importOriginal) => {
 const actualTar = await vi.importActual<typeof import("tar")>("tar");
 
 const TEST_ARCHIVE_ROOT = "2026-03-09T00-00-00.000Z-openclaw-backup";
+const STATE_ROOT = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createBackupManifest(
@@ -37,26 +37,39 @@ function createBackupManifest(
     runtimeVersion: "test",
     platform: process.platform,
     nodeVersion: process.version,
-    paths: {
-      stateDir,
-    },
-    assets: [
-      {
-        kind: "state",
-        sourcePath: stateDir,
-        archivePath: assetArchivePath,
-      },
-    ],
+    paths: { stateDir },
+    assets: [{ kind: "state", sourcePath: stateDir, archivePath: assetArchivePath }],
   };
+}
+
+function createAgentManifest(
+  agentDir: string,
+  asset: Pick<BackupManifest["assets"][number], "kind" | "sourcePath">,
+): BackupManifest {
+  const manifest = createBackupManifest(
+    buildBackupArchivePath(TEST_ARCHIVE_ROOT, "/tmp/.openclaw"),
+  );
+  manifest.paths = {
+    stateDir: "/tmp/.openclaw",
+    agentRoots: [{ agentId: "main", sourcePath: agentDir }],
+  };
+  manifest.assets.push({
+    ...asset,
+    archivePath: buildBackupArchivePath(TEST_ARCHIVE_ROOT, asset.sourcePath),
+  });
+  return manifest;
 }
 
 function encodeTarEntry(params: {
   path: string;
-  contents?: string;
+  contents?: string | Uint8Array;
   type?: "File" | "Link" | "SymbolicLink";
   linkpath?: string;
 }): Buffer {
-  const body = Buffer.from(params.contents ?? "", "utf8");
+  const body =
+    typeof params.contents === "string"
+      ? Buffer.from(params.contents, "utf8")
+      : Buffer.from(params.contents ?? []);
   const type = params.type ?? "File";
   const header = new tar.Header({
     path: params.path,
@@ -77,110 +90,98 @@ function encodeTarEntry(params: {
   return Buffer.concat([headerBlock, body, padding]);
 }
 
-function isTarSourcePath(entryPath: string, sourcePath: string): boolean {
-  return path.resolve(entryPath) === path.resolve(sourcePath);
+async function createHardlinkArchive(linkpath: string) {
+  const archive = path.join(tempDirs.make("openclaw-backup-hardlink-"), "backup.tar.gz");
+  const payloadPath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/target.txt`;
+  await fs.writeFile(
+    archive,
+    gzipSync(
+      Buffer.concat([
+        encodeTarEntry({
+          path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+          contents: `${JSON.stringify(createBackupManifest(payloadPath), null, 2)}\n`,
+        }),
+        encodeTarEntry({ path: payloadPath, contents: "payload\n" }),
+        encodeTarEntry({
+          path: `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/hardlink.txt`,
+          type: "Link",
+          linkpath,
+        }),
+        Buffer.alloc(1024),
+      ]),
+    ),
+  );
+  return archive;
 }
 
-async function createArchiveWithManifestContent(
-  options: {
-    tempPrefix: string;
-    manifestContent: string;
-    payloadArchivePath?: string;
-  },
-  run: (archivePath: string) => Promise<void>,
-) {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), options.tempPrefix));
-  const archivePath = path.join(tempDir, "broken.tar.gz");
-  const manifestPath = path.join(tempDir, "manifest.json");
-  const payloadPath = path.join(tempDir, "payload.txt");
-  const payloadArchivePath =
-    options.payloadArchivePath ?? `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/payload.txt`;
-  try {
-    await fs.writeFile(manifestPath, options.manifestContent, "utf8");
-    await fs.writeFile(payloadPath, "payload\n", "utf8");
-    await tar.c(
-      {
-        file: archivePath,
-        gzip: true,
-        portable: true,
-        preservePaths: true,
-        onWriteEntry: (entry) => {
-          if (isTarSourcePath(entry.path, manifestPath)) {
-            entry.path = `${TEST_ARCHIVE_ROOT}/manifest.json`;
-            return;
-          }
-          if (isTarSourcePath(entry.path, payloadPath)) {
-            entry.path = payloadArchivePath;
-          }
-        },
-      },
-      [manifestPath, payloadPath],
-    );
-    await run(archivePath);
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  }
+async function createArchiveWithManifestContent(options: {
+  manifestContent: string;
+  payloadArchivePath?: string;
+}) {
+  return await createArchiveFixture({
+    manifestContent: options.manifestContent,
+    manifestAssetArchivePath:
+      options.payloadArchivePath ?? `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/payload.txt`,
+    payloads: [{ contents: "payload\n" }],
+  });
 }
 
-async function withBrokenArchiveFixture(
-  options: {
-    tempPrefix: string;
-    manifestAssetArchivePath: string;
-    manifest?: ReturnType<typeof createBackupManifest>;
-    payloads: Array<{ fileName: string; contents: string | Uint8Array; archivePath?: string }>;
-    buildTarEntries?: (paths: { manifestPath: string; payloadPaths: string[] }) => string[];
-  },
-  run: (archivePath: string) => Promise<void>,
-) {
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), options.tempPrefix));
-  const archivePath = path.join(tempDir, "broken.tar.gz");
-  const manifestPath = path.join(tempDir, "manifest.json");
-  const payloadSpecs = await Promise.all(
-    options.payloads.map(async (payload) => {
-      const payloadPath = path.join(tempDir, payload.fileName);
-      await fs.writeFile(payloadPath, payload.contents, "utf8");
-      return {
-        path: payloadPath,
-        archivePath: payload.archivePath ?? options.manifestAssetArchivePath,
-      };
-    }),
-  );
-  const payloadEntryPathBySource = new Map(
-    payloadSpecs.map((payload) => [path.resolve(payload.path), payload.archivePath]),
-  );
+function archivePayload(archivePath: string, contents: string | Uint8Array) {
+  return { archivePath, contents };
+}
 
-  try {
-    await fs.writeFile(
+async function createArchiveFixture(options: {
+  manifestAssetArchivePath?: string;
+  manifest?: ReturnType<typeof createBackupManifest>;
+  manifestContent?: string;
+  payloads: Array<{ contents: string | Uint8Array; archivePath?: string }>;
+  buildTarEntries?: (paths: { manifestPath: string; payloadPaths: string[] }) => string[];
+}) {
+  const tempDir = tempDirs.make("openclaw-backup-verify-");
+  const archivePath = path.join(tempDir, "broken.tar.gz");
+  const assetPath = options.manifestAssetArchivePath ?? STATE_ROOT;
+  const manifestPath = "manifest";
+  const payloadPaths = options.payloads.map((_, index) => `payload-${index}`);
+  const entries = new Map([
+    [
       manifestPath,
-      `${JSON.stringify(options.manifest ?? createBackupManifest(options.manifestAssetArchivePath), null, 2)}\n`,
-      "utf8",
-    );
-    await tar.c(
-      {
-        file: archivePath,
-        gzip: true,
-        portable: true,
-        preservePaths: true,
-        onWriteEntry: (entry) => {
-          if (isTarSourcePath(entry.path, manifestPath)) {
-            entry.path = `${TEST_ARCHIVE_ROOT}/manifest.json`;
-            return;
-          }
-          const payloadEntryPath = payloadEntryPathBySource.get(path.resolve(entry.path));
-          if (payloadEntryPath) {
-            entry.path = payloadEntryPath;
-          }
-        },
-      },
-      options.buildTarEntries?.({
-        manifestPath,
-        payloadPaths: payloadSpecs.map((payload) => payload.path),
-      }) ?? [manifestPath, ...payloadSpecs.map((payload) => payload.path)],
-    );
-    await run(archivePath);
-  } finally {
-    await fs.rm(tempDir, { recursive: true, force: true });
-  }
+      encodeTarEntry({
+        path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+        contents:
+          options.manifestContent ??
+          JSON.stringify(options.manifest ?? createBackupManifest(assetPath)),
+      }),
+    ],
+    ...options.payloads.map((payload, index): [string, Buffer] => [
+      payloadPaths[index]!,
+      encodeTarEntry({ path: payload.archivePath ?? assetPath, contents: payload.contents }),
+    ]),
+  ]);
+  const order = options.buildTarEntries?.({ manifestPath, payloadPaths }) ?? [
+    manifestPath,
+    ...payloadPaths,
+  ];
+  await fs.writeFile(
+    archivePath,
+    gzipSync(Buffer.concat([...order.map((name) => entries.get(name)!), Buffer.alloc(1024)])),
+  );
+  return archivePath;
+}
+
+async function expectRejectedArchive(
+  options: Parameters<typeof createArchiveFixture>[0],
+  error: string | RegExp,
+) {
+  const archive = await createArchiveFixture(options);
+  await expect(backupVerifyCommand(createTestRuntime(), { archive })).rejects.toThrow(error);
+}
+
+async function expectRejectedManifest(
+  options: Parameters<typeof createArchiveWithManifestContent>[0],
+  error: string | RegExp,
+) {
+  const archive = await createArchiveWithManifestContent(options);
+  await expect(backupVerifyCommand(createTestRuntime(), { archive })).rejects.toThrow(error);
 }
 
 async function createSqlitePayload(setup: (database: DatabaseSync) => void): Promise<Buffer> {
@@ -205,10 +206,9 @@ async function createRegisteredAgentPayload(
   databasePath = "",
   stateDir = "/tmp/.openclaw",
 ) {
-  return {
-    fileName: "registry.sqlite",
-    archivePath: `${buildBackupArchivePath(TEST_ARCHIVE_ROOT, stateDir)}/state/openclaw.sqlite`,
-    contents: await createSqlitePayload((database) => {
+  return archivePayload(
+    `${buildBackupArchivePath(TEST_ARCHIVE_ROOT, stateDir)}/state/openclaw.sqlite`,
+    await createSqlitePayload((database) => {
       database.exec(`
         CREATE TABLE schema_meta (meta_key TEXT PRIMARY KEY, role TEXT NOT NULL);
         INSERT INTO schema_meta VALUES ('primary', 'global');
@@ -220,14 +220,70 @@ async function createRegisteredAgentPayload(
           .run(agentId, databasePath);
       }
     }),
+  );
+}
+
+async function agentFixture(
+  agentDir: string,
+  asset: Parameters<typeof createAgentManifest>[1],
+  contents: string | Uint8Array,
+  filename = "openclaw-agent.sqlite",
+) {
+  return {
+    manifest: createAgentManifest(agentDir, asset),
+    payloads: [
+      await createRegisteredAgentPayload("main", `${agentDir}/openclaw-agent.sqlite`),
+      archivePayload(`${STATE_ROOT}/state.txt`, "state\n"),
+      archivePayload(
+        `${buildBackupArchivePath(TEST_ARCHIVE_ROOT, agentDir)}/${filename}`,
+        contents,
+      ),
+    ],
   };
 }
+
+const agentPayload = (role: string, agentId: string) =>
+  createSqlitePayload((database) => {
+    database.exec(`
+    CREATE TABLE schema_meta (meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL,
+      schema_version INTEGER NOT NULL, agent_id TEXT);
+  `);
+    database.prepare("INSERT INTO schema_meta VALUES ('primary', ?, 1, ?)").run(role, agentId);
+  });
 
 describe("backupVerifyCommand", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     vi.mocked(tar.t).mockReset().mockImplementation(actualTar.t);
     vi.mocked(tar.x).mockReset().mockImplementation(actualTar.x);
+  });
+
+  it.each(["first", "last"])("reads the archive once with its manifest %s", async (position) => {
+    const archive = path.join(tempDirs.make("openclaw-backup-single-pass-"), "backup.tar.gz");
+    const payloadPath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/payload.txt`;
+    const manifest = encodeTarEntry({
+      // Repeated separators are accepted archive spelling, including for a final manifest.
+      path: `${TEST_ARCHIVE_ROOT}//manifest.json`,
+      contents: JSON.stringify(createBackupManifest(payloadPath)),
+    });
+    const payload = encodeTarEntry({ path: payloadPath, contents: "payload\n" });
+    await fs.writeFile(
+      archive,
+      gzipSync(
+        Buffer.concat([
+          ...(position === "first" ? [manifest, payload] : [payload, manifest]),
+          Buffer.alloc(1024),
+        ]),
+      ),
+    );
+
+    await expect(verifyBackupArchive(archive)).resolves.toMatchObject({
+      ok: true,
+      assetCount: 1,
+      entryCount: 2,
+    });
+    // Each file-backed tar listing opens and decompresses the entire gzip stream.
+    expect(tar.t).toHaveBeenCalledTimes(1);
   });
 
   it.each([
@@ -258,123 +314,51 @@ describe("backupVerifyCommand", () => {
     expect(runtime.exit).toHaveBeenCalledWith(1);
   });
 
-  it.each([{ name: "missing path", type: "File" as const, detail: "path is required" }])(
-    "rejects a $name header after valid backup entries",
-    async ({ name, type, detail }) => {
-      const tempDir = tempDirs.make("openclaw-backup-verify-invalid-header-");
-      const archivePath = path.join(tempDir, "invalid.tar.gz");
-      const payloadPath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/note.txt`;
-      const invalidEntry = encodeTarEntry({
-        path: name === "missing path" ? "" : `${TEST_ARCHIVE_ROOT}/payload/invalid`,
-        type,
-        ...(name === "forbidden link target" ? { linkpath: "note.txt" } : {}),
-      });
-      if (name === "bad checksum") {
-        invalidEntry.writeUInt8(invalidEntry.readUInt8(0) ^ 1, 0);
-      }
-      await fs.writeFile(
-        archivePath,
-        gzipSync(
-          Buffer.concat([
-            encodeTarEntry({
-              path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
-              contents: JSON.stringify(createBackupManifest(payloadPath)),
-            }),
-            encodeTarEntry({ path: payloadPath, contents: "retained payload\n" }),
-            invalidEntry,
-            Buffer.alloc(1024),
-          ]),
-        ),
-      );
-      const runtime = createTestRuntime();
+  it("rejects a missing path header after valid backup entries", async () => {
+    const tempDir = tempDirs.make("openclaw-backup-verify-invalid-header-");
+    const archivePath = path.join(tempDir, "invalid.tar.gz");
+    const payloadPath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/note.txt`;
+    const invalidEntry = encodeTarEntry({ path: "", type: "File" });
+    await fs.writeFile(
+      archivePath,
+      gzipSync(
+        Buffer.concat([
+          encodeTarEntry({
+            path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+            contents: JSON.stringify(createBackupManifest(payloadPath)),
+          }),
+          encodeTarEntry({ path: payloadPath, contents: "retained payload\n" }),
+          invalidEntry,
+          Buffer.alloc(1024),
+        ]),
+      ),
+    );
+    const runtime = createTestRuntime();
 
-      await runCommandWithRuntime(runtime, async () => {
-        await backupVerifyCommand(runtime, { archive: archivePath });
-      });
-
-      expect(runtime.error).toHaveBeenCalledWith(
-        `Backup archive verification failed: ${archivePath}. Archive is not a valid OpenClaw backup. ${detail}. Choose another archive or create a new one with \`openclaw backup create\`.`,
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.log).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    {
-      name: "standalone agent asset",
-      agentDir: "/tmp/custom-agent",
-      coveringAsset: { kind: "agent", sourcePath: "/tmp/custom-agent" },
-    },
-  ])("verifies the declared agent owner beneath a $name", async ({ agentDir, coveringAsset }) => {
-    const stateAssetArchivePath = buildBackupArchivePath(TEST_ARCHIVE_ROOT, "/tmp/.openclaw");
-    const agentArchivePath = buildBackupArchivePath(TEST_ARCHIVE_ROOT, agentDir);
-    const manifest = {
-      ...createBackupManifest(stateAssetArchivePath),
-      paths: {
-        stateDir: "/tmp/.openclaw",
-        agentRoots: [{ agentId: "main", sourcePath: agentDir }],
-      },
-      assets: [
-        ...createBackupManifest(stateAssetArchivePath).assets,
-        ...(coveringAsset
-          ? [
-              {
-                ...coveringAsset,
-                archivePath: buildBackupArchivePath(TEST_ARCHIVE_ROOT, coveringAsset.sourcePath),
-              },
-            ]
-          : []),
-      ],
-    };
-    const sqlitePayload = await createSqlitePayload((database) => {
-      database.exec(`
-        CREATE TABLE schema_meta (
-          meta_key TEXT NOT NULL PRIMARY KEY,
-          role TEXT NOT NULL,
-          schema_version INTEGER NOT NULL,
-          agent_id TEXT
-        );
-        INSERT INTO schema_meta (meta_key, role, schema_version, agent_id)
-        VALUES ('primary', 'agent', 1, 'main');
-      `);
+    await runCommandWithRuntime(runtime, async () => {
+      await backupVerifyCommand(runtime, { archive: archivePath });
     });
 
-    await withBrokenArchiveFixture(
-      {
-        tempPrefix: "openclaw-backup-custom-agent-sqlite-",
-        manifestAssetArchivePath: stateAssetArchivePath,
-        manifest,
-        payloads: [
-          await createRegisteredAgentPayload("main", `${agentDir}/openclaw-agent.sqlite`),
-          {
-            fileName: "state.txt",
-            contents: "state\n",
-            archivePath: `${stateAssetArchivePath}/state.txt`,
-          },
-          {
-            fileName: "openclaw-agent.sqlite",
-            contents: sqlitePayload,
-            archivePath: `${agentArchivePath}/openclaw-agent.sqlite`,
-          },
-          ...(coveringAsset?.kind === "workspace"
-            ? [
-                {
-                  fileName: "workspace.sqlite",
-                  contents: "workspace SQLite files retain raw-file semantics",
-                  archivePath: `${buildBackupArchivePath(TEST_ARCHIVE_ROOT, coveringAsset.sourcePath)}/workspace.sqlite`,
-                },
-              ]
-            : []),
-        ],
-      },
-      async (archivePath) => {
-        const runtime = createTestRuntime();
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject(
-          { ok: true },
-        );
-      },
+    expect(runtime.error).toHaveBeenCalledWith(
+      `Backup archive verification failed: ${archivePath}. Archive is not a valid OpenClaw backup. path is required. Choose another archive or create a new one with \`openclaw backup create\`.`,
     );
+    expect(runtime.exit).toHaveBeenCalledWith(1);
+    expect(runtime.log).not.toHaveBeenCalled();
+  });
+
+  it("verifies the declared agent owner beneath a standalone agent asset", async () => {
+    const agentDir = "/tmp/custom-agent";
+    const archivePath = await createArchiveFixture(
+      await agentFixture(
+        agentDir,
+        { kind: "agent", sourcePath: agentDir },
+        await agentPayload("agent", "main"),
+      ),
+    );
+    const runtime = createTestRuntime();
+    await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject({
+      ok: true,
+    });
   });
 
   it.each([
@@ -391,59 +375,13 @@ describe("backupVerifyCommand", () => {
       error: /belongs to agent worker; requested agent main/iu,
     },
   ])("rejects a custom agent SQLite snapshot with the $name", async ({ role, agentId, error }) => {
-    const stateAssetArchivePath = buildBackupArchivePath(TEST_ARCHIVE_ROOT, "/tmp/.openclaw");
-    const agentDir = "/tmp/workspace/custom-agent";
-    const workspaceArchivePath = buildBackupArchivePath(TEST_ARCHIVE_ROOT, "/tmp/workspace");
-    const manifest = {
-      ...createBackupManifest(stateAssetArchivePath),
-      paths: {
-        stateDir: "/tmp/.openclaw",
-        agentRoots: [{ agentId: "main", sourcePath: agentDir }],
-      },
-      assets: [
-        ...createBackupManifest(stateAssetArchivePath).assets,
-        { kind: "workspace", sourcePath: "/tmp/workspace", archivePath: workspaceArchivePath },
-      ],
-    };
-    const sqlitePayload = await createSqlitePayload((database) => {
-      database.exec(`
-        CREATE TABLE schema_meta (
-          meta_key TEXT NOT NULL PRIMARY KEY,
-          role TEXT NOT NULL,
-          schema_version INTEGER NOT NULL,
-          agent_id TEXT
-        );
-      `);
-      database
-        .prepare(
-          "INSERT INTO schema_meta (meta_key, role, schema_version, agent_id) VALUES ('primary', ?, 1, ?)",
-        )
-        .run(role, agentId);
-    });
-
-    await withBrokenArchiveFixture(
-      {
-        tempPrefix: "openclaw-backup-custom-agent-owner-",
-        manifestAssetArchivePath: stateAssetArchivePath,
-        manifest,
-        payloads: [
-          await createRegisteredAgentPayload("main", `${agentDir}/openclaw-agent.sqlite`),
-          {
-            fileName: "state.txt",
-            contents: "state\n",
-            archivePath: `${stateAssetArchivePath}/state.txt`,
-          },
-          {
-            fileName: "openclaw-agent.sqlite",
-            contents: sqlitePayload,
-            archivePath: `${buildBackupArchivePath(TEST_ARCHIVE_ROOT, agentDir)}/openclaw-agent.sqlite`,
-          },
-        ],
-      },
-      async (archivePath) => {
-        const runtime = createTestRuntime();
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(error);
-      },
+    await expectRejectedArchive(
+      await agentFixture(
+        "/tmp/workspace/custom-agent",
+        { kind: "workspace", sourcePath: "/tmp/workspace" },
+        await agentPayload(role, agentId),
+      ),
+      error,
     );
   });
 
@@ -455,227 +393,116 @@ describe("backupVerifyCommand", () => {
       const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
       const sqlitePayload = await createSqlitePayload((database) => {
         database.exec(`
-          CREATE TABLE schema_meta (
-            meta_key TEXT NOT NULL PRIMARY KEY,
-            role TEXT NOT NULL
-          );
+          CREATE TABLE schema_meta (meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL);
           INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'global');
         `);
       });
 
-      await withBrokenArchiveFixture(
-        {
-          tempPrefix: "openclaw-backup-windows-long-path-",
-          manifestAssetArchivePath: stateAssetArchivePath,
-          manifest: createBackupManifest(stateAssetArchivePath, TEST_ARCHIVE_ROOT, stateDir),
-          payloads: [
-            {
-              fileName: "openclaw.sqlite",
-              contents: sqlitePayload,
-              archivePath: sqliteArchivePath,
-            },
-          ],
-        },
-        async (archivePath) => {
-          const verificationTempBase = tempDirs.make("openclaw-backup-verify-long-path-");
-          let verificationTempRoot = verificationTempBase;
-          const resolveMinimumExtractedPath = () =>
-            path.join(
-              verificationTempRoot,
-              "openclaw-backup-verify-sqlite-",
-              ...sqliteArchivePath.split("/"),
-            );
-          while (resolveMinimumExtractedPath().length <= 260) {
-            verificationTempRoot = path.join(verificationTempRoot, `segment-${"x".repeat(24)}`);
-          }
-          await fs.mkdir(verificationTempRoot, { recursive: true });
-          expect(verificationTempRoot.startsWith("\\\\?\\")).toBe(false);
-          expect(resolveMinimumExtractedPath().length).toBeGreaterThan(260);
-
-          const tmpdirSpy = vi.spyOn(os, "tmpdir").mockReturnValue(verificationTempRoot);
-          try {
-            const runtime = createTestRuntime();
-            await expect(
-              backupVerifyCommand(runtime, { archive: archivePath }),
-            ).resolves.toMatchObject({ ok: true });
-            await expect(fs.readdir(verificationTempRoot)).resolves.toEqual([]);
-          } finally {
-            tmpdirSpy.mockRestore();
-          }
-        },
-      );
+      const archivePath = await createArchiveFixture({
+        manifestAssetArchivePath: stateAssetArchivePath,
+        manifest: createBackupManifest(stateAssetArchivePath, TEST_ARCHIVE_ROOT, stateDir),
+        payloads: [archivePayload(sqliteArchivePath, sqlitePayload)],
+      });
+      const verificationTempBase = tempDirs.make("openclaw-backup-verify-long-path-");
+      let verificationTempRoot = verificationTempBase;
+      const resolveMinimumExtractedPath = () =>
+        path.join(
+          verificationTempRoot,
+          "openclaw-backup-verify-sqlite-",
+          ...sqliteArchivePath.split("/"),
+        );
+      while (resolveMinimumExtractedPath().length <= 260) {
+        verificationTempRoot = path.join(verificationTempRoot, `segment-${"x".repeat(24)}`);
+      }
+      await fs.mkdir(verificationTempRoot, { recursive: true });
+      expect(verificationTempRoot.startsWith("\\\\?\\")).toBe(false);
+      expect(resolveMinimumExtractedPath().length).toBeGreaterThan(260);
+      const tmpdirSpy = vi.spyOn(os, "tmpdir").mockReturnValue(verificationTempRoot);
+      try {
+        const runtime = createTestRuntime();
+        await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject(
+          { ok: true },
+        );
+        await expect(fs.readdir(verificationTempRoot)).resolves.toEqual([]);
+      } finally {
+        tmpdirSpy.mockRestore();
+      }
     },
   );
 
   it("rejects a structurally valid archive containing a malformed SQLite snapshot", async () => {
-    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
-    const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
+    const sqliteArchivePath = `${STATE_ROOT}/state/openclaw.sqlite`;
     const invalidSqlite = Buffer.from("not a sqlite database", "utf8");
 
-    await withBrokenArchiveFixture(
-      {
-        tempPrefix: "openclaw-backup-invalid-sqlite-",
-        manifestAssetArchivePath: stateAssetArchivePath,
-        payloads: [
-          {
-            fileName: "openclaw.sqlite",
-            contents: invalidSqlite,
-            archivePath: sqliteArchivePath,
-          },
-        ],
-      },
-      async (archivePath) => {
-        const verificationTempRoot = tempDirs.make("openclaw-backup-verify-cleanup-");
-        const tmpdirSpy = vi.spyOn(os, "tmpdir").mockReturnValue(verificationTempRoot);
-        try {
-          const runtime = createTestRuntime();
-          await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-            /Backup SQLite snapshot failed verification.*openclaw\.sqlite/iu,
-          );
-          await expect(fs.readdir(verificationTempRoot)).resolves.toEqual([]);
-        } finally {
-          tmpdirSpy.mockRestore();
-          await fs.rm(verificationTempRoot, { recursive: true, force: true });
-        }
-      },
-    );
+    const archivePath = await createArchiveFixture({
+      payloads: [archivePayload(sqliteArchivePath, invalidSqlite)],
+    });
+    const verificationTempRoot = tempDirs.make("openclaw-backup-verify-cleanup-");
+    const tmpdirSpy = vi.spyOn(os, "tmpdir").mockReturnValue(verificationTempRoot);
+    try {
+      const runtime = createTestRuntime();
+      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+        /Backup SQLite snapshot failed verification.*openclaw\.sqlite/iu,
+      );
+      await expect(fs.readdir(verificationTempRoot)).resolves.toEqual([]);
+    } finally {
+      tmpdirSpy.mockRestore();
+      await fs.rm(verificationTempRoot, { recursive: true, force: true });
+    }
   });
 
   it("rejects an empty canonical SQLite snapshot instead of accepting a new empty database", async () => {
-    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
-    const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
+    const sqliteArchivePath = `${STATE_ROOT}/state/openclaw.sqlite`;
 
-    await withBrokenArchiveFixture(
+    await expectRejectedArchive(
       {
-        tempPrefix: "openclaw-backup-empty-sqlite-",
-        manifestAssetArchivePath: stateAssetArchivePath,
-        payloads: [
-          {
-            fileName: "empty.sqlite",
-            contents: new Uint8Array(),
-            archivePath: sqliteArchivePath,
-          },
-        ],
+        payloads: [archivePayload(sqliteArchivePath, new Uint8Array())],
       },
-      async (archivePath) => {
-        const runtime = createTestRuntime();
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-          /SQLite snapshot is empty.*openclaw\.sqlite/iu,
-        );
-      },
+      /SQLite snapshot is empty.*openclaw\.sqlite/iu,
     );
   });
 
   it("rejects custom-agent SQLite sidecars covered by a workspace asset", async () => {
-    const stateAssetArchivePath = buildBackupArchivePath(TEST_ARCHIVE_ROOT, "/tmp/.openclaw");
-    const agentDir = "/tmp/workspace/custom-agent";
-    const agentArchivePath = buildBackupArchivePath(TEST_ARCHIVE_ROOT, agentDir);
-    const manifest = {
-      ...createBackupManifest(stateAssetArchivePath),
-      paths: {
-        stateDir: "/tmp/.openclaw",
-        agentRoots: [{ agentId: "main", sourcePath: agentDir }],
-      },
-      assets: [
-        ...createBackupManifest(stateAssetArchivePath).assets,
-        {
-          kind: "workspace",
-          sourcePath: "/tmp/workspace",
-          archivePath: buildBackupArchivePath(TEST_ARCHIVE_ROOT, "/tmp/workspace"),
-        },
-      ],
-    };
-
-    await withBrokenArchiveFixture(
-      {
-        tempPrefix: "openclaw-backup-custom-agent-sidecar-",
-        manifestAssetArchivePath: stateAssetArchivePath,
-        manifest,
-        payloads: [
-          await createRegisteredAgentPayload("main", `${agentDir}/openclaw-agent.sqlite`),
-          {
-            fileName: "state.txt",
-            contents: "state\n",
-            archivePath: `${stateAssetArchivePath}/state.txt`,
-          },
-          {
-            fileName: "openclaw-agent.sqlite-wal",
-            contents: "unverified transaction data",
-            archivePath: `${agentArchivePath}/openclaw-agent.sqlite-wal`,
-          },
-        ],
-      },
-      async (archivePath) => {
-        const runtime = createTestRuntime();
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-          /contains a SQLite snapshot sidecar.*openclaw-agent\.sqlite-wal/iu,
-        );
-      },
+    await expectRejectedArchive(
+      await agentFixture(
+        "/tmp/workspace/custom-agent",
+        { kind: "workspace", sourcePath: "/tmp/workspace" },
+        "unverified transaction data",
+        "openclaw-agent.sqlite-wal",
+      ),
+      /contains a SQLite snapshot sidecar.*openclaw-agent\.sqlite-wal/iu,
     );
   });
 
   it("rejects case-mangled canonical SQLite paths", async () => {
-    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
-    const sqliteArchivePath = `${stateAssetArchivePath}/State/OpenClaw.SQLITE`;
+    const sqliteArchivePath = `${STATE_ROOT}/State/OpenClaw.SQLITE`;
     const sqlitePayload = await createSqlitePayload((database) => {
       database.exec(`
-        CREATE TABLE schema_meta (
-          meta_key TEXT NOT NULL PRIMARY KEY,
-          role TEXT NOT NULL
-        );
+        CREATE TABLE schema_meta (meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL);
         INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'global');
       `);
     });
 
-    await withBrokenArchiveFixture(
+    await expectRejectedArchive(
       {
-        tempPrefix: "openclaw-backup-sqlite-case-alias-",
-        manifestAssetArchivePath: stateAssetArchivePath,
-        payloads: [
-          {
-            fileName: "openclaw.sqlite",
-            contents: sqlitePayload,
-            archivePath: sqliteArchivePath,
-          },
-        ],
+        payloads: [archivePayload(sqliteArchivePath, sqlitePayload)],
       },
-      async (archivePath) => {
-        const runtime = createTestRuntime();
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-          /SQLite path with incorrect letter casing.*State\/OpenClaw\.SQLITE/u,
-        );
-      },
+      /SQLite path with incorrect letter casing.*State\/OpenClaw\.SQLITE/u,
     );
   });
 
   it("rejects case-mangled aliases of the state asset root", async () => {
-    const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
-    const statePayloadArchivePath = `${stateAssetArchivePath}/payload.txt`;
+    const statePayloadArchivePath = `${STATE_ROOT}/payload.txt`;
     const aliasSidecarArchivePath = `${TEST_ARCHIVE_ROOT}/PAYLOAD/posix/tmp/.openclaw/plugins/dedicated/custom.sqlite-wal`;
 
-    await withBrokenArchiveFixture(
+    await expectRejectedArchive(
       {
-        tempPrefix: "openclaw-backup-state-root-case-alias-",
-        manifestAssetArchivePath: stateAssetArchivePath,
         payloads: [
-          {
-            fileName: "payload.txt",
-            contents: "payload\n",
-            archivePath: statePayloadArchivePath,
-          },
-          {
-            fileName: "custom.sqlite-wal",
-            contents: "unverified transaction data",
-            archivePath: aliasSidecarArchivePath,
-          },
+          archivePayload(statePayloadArchivePath, "payload\n"),
+          archivePayload(aliasSidecarArchivePath, "unverified transaction data"),
         ],
       },
-      async (archivePath) => {
-        const runtime = createTestRuntime();
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-          /case-mangled state asset path.*PAYLOAD.*custom\.sqlite-wal/iu,
-        );
-      },
+      /case-mangled state asset path.*PAYLOAD.*custom\.sqlite-wal/iu,
     );
   });
 
@@ -716,23 +543,17 @@ describe("backupVerifyCommand", () => {
       };
       const sqlitePayload = await createSqlitePayload((database) => database.exec(schema));
 
-      await withBrokenArchiveFixture(
-        {
-          tempPrefix: "openclaw-backup-enclosed-state-sqlite-",
-          manifestAssetArchivePath: agentArchivePath,
-          manifest,
-          payloads: [
-            {
-              fileName: "openclaw.sqlite",
-              contents: sqlitePayload,
-              archivePath: `${buildBackupArchivePath(TEST_ARCHIVE_ROOT, stateDir)}/state/openclaw.sqlite`,
-            },
-          ],
-        },
-        async (archivePath) => {
-          await expect(verifyBackupArchive(archivePath)).rejects.toThrow(error);
-        },
-      );
+      const archivePath = await createArchiveFixture({
+        manifestAssetArchivePath: agentArchivePath,
+        manifest,
+        payloads: [
+          archivePayload(
+            `${buildBackupArchivePath(TEST_ARCHIVE_ROOT, stateDir)}/state/openclaw.sqlite`,
+            sqlitePayload,
+          ),
+        ],
+      });
+      await expect(verifyBackupArchive(archivePath)).rejects.toThrow(error);
     },
   );
 
@@ -741,33 +562,18 @@ describe("backupVerifyCommand", () => {
     const sqliteArchivePath = `${declaredStateAssetRoot}/posix/tmp/.openclaw/state/openclaw.sqlite`;
     const sqlitePayload = await createSqlitePayload((database) => {
       database.exec(`
-        CREATE TABLE schema_meta (
-          meta_key TEXT NOT NULL PRIMARY KEY,
-          role TEXT NOT NULL
-        );
+        CREATE TABLE schema_meta (meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL);
         INSERT INTO schema_meta (meta_key, role) VALUES ('primary', 'agent');
       `);
     });
 
-    await withBrokenArchiveFixture(
+    await expectRejectedArchive(
       {
-        tempPrefix: "openclaw-backup-state-root-bypass-",
         manifestAssetArchivePath: declaredStateAssetRoot,
         manifest: createBackupManifest(declaredStateAssetRoot),
-        payloads: [
-          {
-            fileName: "openclaw.sqlite",
-            contents: sqlitePayload,
-            archivePath: sqliteArchivePath,
-          },
-        ],
+        payloads: [archivePayload(sqliteArchivePath, sqlitePayload)],
       },
-      async (archivePath) => {
-        const runtime = createTestRuntime();
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-          /state asset archivePath does not match its sourcePath/iu,
-        );
-      },
+      /state asset archivePath does not match its sourcePath/iu,
     );
   });
 
@@ -787,8 +593,7 @@ describe("backupVerifyCommand", () => {
   ])(
     "rejects SQLite extraction before writing when $name",
     async ({ availableBytes, simulatedSize, error }) => {
-      const stateAssetArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`;
-      const sqliteArchivePath = `${stateAssetArchivePath}/state/openclaw.sqlite`;
+      const sqliteArchivePath = `${STATE_ROOT}/state/openclaw.sqlite`;
       const sqlitePayload = await createSqlitePayload((database) => {
         database.exec(`
           CREATE TABLE schema_meta (meta_key TEXT NOT NULL PRIMARY KEY, role TEXT NOT NULL);
@@ -796,115 +601,70 @@ describe("backupVerifyCommand", () => {
         `);
       });
 
-      await withBrokenArchiveFixture(
-        {
-          tempPrefix: "openclaw-backup-extraction-budget-",
-          manifestAssetArchivePath: stateAssetArchivePath,
-          payloads: [
-            {
-              fileName: "openclaw.sqlite",
-              contents: sqlitePayload,
-              archivePath: sqliteArchivePath,
+      const archivePath = await createArchiveFixture({
+        payloads: [archivePayload(sqliteArchivePath, sqlitePayload)],
+      });
+      vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) =>
+        availableBytes === null
+          ? null
+          : {
+              targetPath,
+              checkedPath: targetPath,
+              availableBytes,
+              totalBytes: 1024 * 1024 * 1024,
             },
-          ],
-        },
-        async (archivePath) => {
-          vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) =>
-            availableBytes === null
-              ? null
-              : {
-                  targetPath,
-                  checkedPath: targetPath,
-                  availableBytes,
-                  totalBytes: 1024 * 1024 * 1024,
-                },
-          );
-          if (simulatedSize !== undefined) {
-            vi.mocked(tar.t).mockImplementation((options) => {
-              if (options.filter) {
-                return actualTar.t(options);
-              }
-              return actualTar.t({
-                ...options,
-                onReadEntry: (entry) => {
-                  const originalSize = entry.size;
-                  if (entry.path === sqliteArchivePath) {
-                    entry.size = simulatedSize;
-                  }
-                  try {
-                    options.onReadEntry?.(entry);
-                  } finally {
-                    entry.size = originalSize;
-                  }
-                },
-              });
-            });
-          }
-          const mkdtemp = vi.spyOn(fs, "mkdtemp");
-          const extract = vi.mocked(tar.x).mockClear();
-
-          await expect(
-            backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
-          ).rejects.toThrow(error);
-          expect(mkdtemp).not.toHaveBeenCalled();
-          expect(extract).not.toHaveBeenCalled();
-        },
       );
+      if (simulatedSize !== undefined) {
+        vi.mocked(tar.t).mockImplementation((options) => {
+          if (options.filter) {
+            return actualTar.t(options);
+          }
+          return actualTar.t({
+            ...options,
+            onReadEntry: (entry) => {
+              const originalSize = entry.size;
+              if (entry.path === sqliteArchivePath) {
+                entry.size = simulatedSize;
+              }
+              try {
+                options.onReadEntry?.(entry);
+              } finally {
+                entry.size = originalSize;
+              }
+            },
+          });
+        });
+      }
+      const mkdtemp = vi.spyOn(fs, "mkdtemp");
+      const extract = vi.mocked(tar.x).mockClear();
+      await expect(
+        backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
+      ).rejects.toThrow(error);
+      expect(mkdtemp).not.toHaveBeenCalled();
+      expect(extract).not.toHaveBeenCalled();
     },
   );
 
   it("fails when the manifest references a missing asset payload", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-missing-asset-"));
-    const archivePath = path.join(tempDir, "broken.tar.gz");
-    try {
-      const rootName = "2026-03-09T00-00-00.000Z-openclaw-backup";
-      const root = path.join(tempDir, rootName);
-      await fs.mkdir(root, { recursive: true });
-      const manifest = {
-        schemaVersion: 1,
-        createdAt: "2026-03-09T00:00:00.000Z",
-        archiveRoot: rootName,
-        runtimeVersion: "test",
-        platform: process.platform,
-        nodeVersion: process.version,
-        assets: [
-          {
-            kind: "state",
-            sourcePath: "/tmp/.openclaw",
-            archivePath: `${rootName}/payload/posix/tmp/.openclaw`,
-          },
-        ],
-      };
-      await fs.writeFile(
-        path.join(root, "manifest.json"),
-        `${JSON.stringify(manifest, null, 2)}\n`,
-      );
-      await tar.c({ file: archivePath, gzip: true, cwd: tempDir }, [rootName]);
-
-      const runtime = createTestRuntime();
-      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-        /missing payload for manifest asset/i,
-      );
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    await expectRejectedArchive(
+      {
+        manifestAssetArchivePath: `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw`,
+        payloads: [],
+      },
+      /missing payload for manifest asset/i,
+    );
   });
 
   it("reports malformed manifest JSON without leaking parser internals", async () => {
-    await createArchiveWithManifestContent(
-      {
-        tempPrefix: "openclaw-backup-bad-manifest-json-",
-        manifestContent: '{"schemaVersion":1,',
-      },
-      async (archivePath) => {
-        const runtime = createTestRuntime();
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-          `Backup archive verification failed: ${archivePath}. Backup manifest is not valid JSON.`,
-        );
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.not.toThrow(
-          /position|Unexpected|Expected|SyntaxError/u,
-        );
-      },
+    const archivePath = await createArchiveWithManifestContent({
+      manifestContent: '{"schemaVersion":1,',
+    });
+    const runtime = createTestRuntime();
+    await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
+      `Backup archive verification failed: ${archivePath}. Backup manifest is not valid JSON.`,
+    );
+    await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.not.toThrow(
+      /position|Unexpected|Expected|SyntaxError/u,
     );
   });
 
@@ -939,126 +699,84 @@ describe("backupVerifyCommand", () => {
       error: /duplicate agent root ownership/u,
     },
   ])("rejects $name in backup agent ownership metadata", async ({ agentRoots, error }) => {
-    const stateAssetArchivePath = buildBackupArchivePath(TEST_ARCHIVE_ROOT, "/tmp/.openclaw");
     const manifest = {
-      ...createBackupManifest(stateAssetArchivePath),
+      ...createBackupManifest(STATE_ROOT),
       paths: { stateDir: "/tmp/.openclaw", agentRoots },
     };
-    await createArchiveWithManifestContent(
+    await expectRejectedManifest(
       {
-        tempPrefix: "openclaw-backup-invalid-agent-roots-",
         manifestContent: JSON.stringify(manifest),
       },
-      async (archivePath) => {
-        const runtime = createTestRuntime();
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(error);
-      },
+      error,
     );
   });
 
   it("rejects oversized manifest entries without retaining the full body", async () => {
-    await createArchiveWithManifestContent(
-      {
-        tempPrefix: "openclaw-backup-huge-manifest-",
-        manifestContent: "x".repeat(1024 * 1024 + 1),
-      },
-      async (archivePath) => {
-        const runtime = createTestRuntime();
-        await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-          /Backup manifest exceeds 1048576 byte limit/,
-        );
-      },
+    const archive = await createArchiveWithManifestContent({
+      manifestContent: "x".repeat(1024 * 1024 + 1),
+    });
+    const collect = vi.spyOn(tar.ReadEntry.prototype, "concat");
+    await expect(verifyBackupArchive(archive)).rejects.toThrow(
+      /Backup manifest exceeds 1048576 byte limit/u,
     );
+    expect(collect).not.toHaveBeenCalled();
   });
 
   it("rejects unsafe archive paths", async () => {
-    for (const { tempPrefix, archivePath, error } of [
+    for (const { archivePath, error } of [
       {
-        tempPrefix: "openclaw-backup-traversal-",
         archivePath: `${TEST_ARCHIVE_ROOT}/payload/../escaped.txt`,
         error: /path traversal segments/i,
       },
       {
-        tempPrefix: "openclaw-backup-backslash-",
         archivePath: `${TEST_ARCHIVE_ROOT}/payload\\escaped.txt`,
         error: /forward slashes/i,
       },
     ]) {
-      await withBrokenArchiveFixture(
-        {
-          tempPrefix,
-          manifestAssetArchivePath: archivePath,
-          payloads: [{ fileName: "payload.txt", contents: "payload\n", archivePath }],
-        },
-        async (brokenArchivePath) => {
-          const runtime = createTestRuntime();
-          await expect(
-            backupVerifyCommand(runtime, { archive: brokenArchivePath }),
-          ).rejects.toThrow(error);
-        },
+      const brokenArchivePath = await createArchiveFixture({
+        manifestAssetArchivePath: archivePath,
+        payloads: [{ contents: "payload\n", archivePath }],
+      });
+      const runtime = createTestRuntime();
+      await expect(backupVerifyCommand(runtime, { archive: brokenArchivePath })).rejects.toThrow(
+        error,
       );
     }
   });
 
-  it.each([
-    {
-      platform: "win32",
-      stateDir: "C:\\state",
-      workspaceDir: "D:\\credentials",
+  it("accepts older Windows cross-asset links and checks external records", async () => {
+    const stateDir = "C:\\state";
+    const workspaceDir = "D:\\credentials";
+    const tempDir = tempDirs.make("openclaw-backup-safe-symlinks-");
+    const archivePath = path.join(tempDir, "backup.tar.gz");
+    const stateAssetRoot = buildBackupArchivePath(TEST_ARCHIVE_ROOT, stateDir);
+    const workspaceAssetRoot = buildBackupArchivePath(TEST_ARCHIVE_ROOT, workspaceDir);
+    const manifest = createBackupManifest(stateAssetRoot, TEST_ARCHIVE_ROOT, stateDir);
+    manifest.platform = "win32";
+    manifest.assets.push({
       kind: "credentials",
-    },
-  ])(
-    "backupVerifyCommand accepts older $platform cross-asset links and checks external records",
-    async ({ platform, stateDir, workspaceDir, kind }) => {
-      const tempDir = tempDirs.make("openclaw-backup-safe-symlinks-");
-      const archivePath = path.join(tempDir, "backup.tar.gz");
-      const stateAssetRoot = buildBackupArchivePath(TEST_ARCHIVE_ROOT, stateDir);
-      const workspaceAssetRoot = buildBackupArchivePath(TEST_ARCHIVE_ROOT, workspaceDir);
-      const manifest = createBackupManifest(stateAssetRoot, TEST_ARCHIVE_ROOT, stateDir);
-      manifest.platform = platform;
-      manifest.assets.push({
-        kind,
-        sourcePath: workspaceDir,
-        archivePath: workspaceAssetRoot,
-      });
-      const archiveEntries = [
-        encodeTarEntry({
-          path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
-          contents: `${JSON.stringify(manifest)}\n`,
-        }),
-        encodeTarEntry({ path: `${stateAssetRoot}/state.txt`, contents: "state\n" }),
-        encodeTarEntry({ path: `${workspaceAssetRoot}/workspace.txt`, contents: "workspace\n" }),
-        encodeTarEntry({
-          path: `${stateAssetRoot}/workspace-link`,
-          type: "SymbolicLink",
-          linkpath: path.posix.relative(stateAssetRoot, `${workspaceAssetRoot}/workspace.txt`),
-        }),
-        encodeTarEntry({
-          path: `${stateAssetRoot}/dangling-link`,
-          type: "SymbolicLink",
-          linkpath: "missing-durable-file.txt",
-        }),
-      ];
-      await fs.writeFile(
-        archivePath,
-        gzipSync(Buffer.concat([...archiveEntries, Buffer.alloc(1024)])),
-      );
-
-      await expect(
-        backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
-      ).resolves.toMatchObject({
-        ok: true,
-        assetCount: 2,
-        symlinkCount: 2,
-        externalSymbolicLinks: [
-          {
-            entryPath: `${stateAssetRoot}/workspace-link`,
-            linkpath: path.posix.relative(stateAssetRoot, `${workspaceAssetRoot}/workspace.txt`),
-          },
-        ],
-      });
-
-      manifest.externalSymbolicLinks = [];
+      sourcePath: workspaceDir,
+      archivePath: workspaceAssetRoot,
+    });
+    const archiveEntries = [
+      encodeTarEntry({
+        path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
+        contents: `${JSON.stringify(manifest)}\n`,
+      }),
+      encodeTarEntry({ path: `${stateAssetRoot}/state.txt`, contents: "state\n" }),
+      encodeTarEntry({ path: `${workspaceAssetRoot}/workspace.txt`, contents: "workspace\n" }),
+      encodeTarEntry({
+        path: `${stateAssetRoot}/workspace-link`,
+        type: "SymbolicLink",
+        linkpath: path.posix.relative(stateAssetRoot, `${workspaceAssetRoot}/workspace.txt`),
+      }),
+      encodeTarEntry({
+        path: `${stateAssetRoot}/dangling-link`,
+        type: "SymbolicLink",
+        linkpath: "missing-durable-file.txt",
+      }),
+    ];
+    const writeArchive = async () => {
       archiveEntries[0] = encodeTarEntry({
         path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
         contents: `${JSON.stringify(manifest)}\n`,
@@ -1067,161 +785,89 @@ describe("backupVerifyCommand", () => {
         archivePath,
         gzipSync(Buffer.concat([...archiveEntries, Buffer.alloc(1024)])),
       );
-      await expect(
-        backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
-      ).rejects.toThrow(/external symbolic links do not match archive entries/iu);
+    };
+    await writeArchive();
 
-      delete manifest.externalSymbolicLinks;
-      archiveEntries[0] = encodeTarEntry({
-        path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
-        contents: `${JSON.stringify(manifest)}\n`,
-      });
-      archiveEntries.push(
-        encodeTarEntry({
-          path: `${stateAssetRoot}/escaping-link`,
-          type: "SymbolicLink",
-          linkpath: "../outside-declared-assets",
-        }),
-      );
-      await fs.writeFile(
-        archivePath,
-        gzipSync(Buffer.concat([...archiveEntries, Buffer.alloc(1024)])),
-      );
-      await expect(
-        backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
-      ).rejects.toThrow(/external symbolic links do not match archive entries/iu);
-      manifest.externalSymbolicLinks = [
+    await expect(
+      backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
+    ).resolves.toMatchObject({
+      ok: true,
+      assetCount: 2,
+      symlinkCount: 2,
+      externalSymbolicLinks: [
         {
           entryPath: `${stateAssetRoot}/workspace-link`,
           linkpath: path.posix.relative(stateAssetRoot, `${workspaceAssetRoot}/workspace.txt`),
         },
-        {
-          entryPath: `${stateAssetRoot}/escaping-link`,
-          linkpath: "../outside-declared-assets",
-        },
-      ];
-      archiveEntries[0] = encodeTarEntry({
-        path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
-        contents: `${JSON.stringify(manifest)}\n`,
-      });
-      await fs.writeFile(
-        archivePath,
-        gzipSync(Buffer.concat([...archiveEntries, Buffer.alloc(1024)])),
-      );
-      await expect(
-        backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
-      ).resolves.toMatchObject({
-        ok: true,
-        symlinkCount: 3,
-        externalSymbolicLinks: manifest.externalSymbolicLinks,
-      });
-    },
-  );
+      ],
+    });
+
+    manifest.externalSymbolicLinks = [];
+    await writeArchive();
+    await expect(
+      backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
+    ).rejects.toThrow(/external symbolic links do not match archive entries/iu);
+
+    delete manifest.externalSymbolicLinks;
+    archiveEntries.push(
+      encodeTarEntry({
+        path: `${stateAssetRoot}/escaping-link`,
+        type: "SymbolicLink",
+        linkpath: "../outside-declared-assets",
+      }),
+    );
+    await writeArchive();
+    await expect(
+      backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
+    ).rejects.toThrow(/external symbolic links do not match archive entries/iu);
+    manifest.externalSymbolicLinks = [
+      {
+        entryPath: `${stateAssetRoot}/workspace-link`,
+        linkpath: path.posix.relative(stateAssetRoot, `${workspaceAssetRoot}/workspace.txt`),
+      },
+      {
+        entryPath: `${stateAssetRoot}/escaping-link`,
+        linkpath: "../outside-declared-assets",
+      },
+    ];
+    await writeArchive();
+    await expect(
+      backupVerifyCommand(createTestRuntime(), { archive: archivePath }),
+    ).resolves.toMatchObject({
+      ok: true,
+      symlinkCount: 3,
+      externalSymbolicLinks: manifest.externalSymbolicLinks,
+    });
+  });
 
   it("rejects unsafe hardlink targets", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-linkpath-"));
-    const archivePath = path.join(tempDir, "broken.tar.gz");
-    const payloadArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/target.txt`;
-    const hardlinkArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/hardlink.txt`;
-    try {
-      const archive = gzipSync(
-        Buffer.concat([
-          encodeTarEntry({
-            path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
-            contents: `${JSON.stringify(createBackupManifest(payloadArchivePath), null, 2)}\n`,
-          }),
-          encodeTarEntry({ path: payloadArchivePath, contents: "payload\n" }),
-          encodeTarEntry({
-            path: hardlinkArchivePath,
-            type: "Link",
-            linkpath: `${TEST_ARCHIVE_ROOT}/payload/../escaped.txt`,
-          }),
-          Buffer.alloc(1024),
-        ]),
-      );
-      await fs.writeFile(archivePath, archive);
-
-      const runtime = createTestRuntime();
-      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-        /hardlink target.*path traversal segments/i,
-      );
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    const archive = await createHardlinkArchive(`${TEST_ARCHIVE_ROOT}/payload/../escaped.txt`);
+    await expect(backupVerifyCommand(createTestRuntime(), { archive })).rejects.toThrow(
+      /hardlink target.*path traversal segments/i,
+    );
   });
 
   it("accepts root-relative internal hardlink targets from older backups", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-rootless-linkpath-"));
-    const archivePath = path.join(tempDir, "backup.tar.gz");
-    const rootRelativeTargetPath = "payload/posix/tmp/.openclaw/target.txt";
-    const payloadArchivePath = `${TEST_ARCHIVE_ROOT}/${rootRelativeTargetPath}`;
-    const hardlinkArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/hardlink.txt`;
-    try {
-      const archive = gzipSync(
-        Buffer.concat([
-          encodeTarEntry({
-            path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
-            contents: `${JSON.stringify(createBackupManifest(payloadArchivePath), null, 2)}\n`,
-          }),
-          encodeTarEntry({ path: payloadArchivePath, contents: "payload\n" }),
-          encodeTarEntry({
-            path: hardlinkArchivePath,
-            type: "Link",
-            linkpath: rootRelativeTargetPath,
-          }),
-          Buffer.alloc(1024),
-        ]),
-      );
-      await fs.writeFile(archivePath, archive);
-
-      const runtime = createTestRuntime();
-      await expect(backupVerifyCommand(runtime, { archive: archivePath })).resolves.toMatchObject({
-        ok: true,
-      });
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    const archive = await createHardlinkArchive("payload/posix/tmp/.openclaw/target.txt");
+    await expect(backupVerifyCommand(createTestRuntime(), { archive })).resolves.toMatchObject({
+      ok: true,
+    });
   });
 
   it("rejects hardlink targets missing from archive entries", async () => {
-    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-backup-missing-linkpath-"));
-    const archivePath = path.join(tempDir, "broken.tar.gz");
-    const payloadArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/target.txt`;
-    const hardlinkArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/hardlink.txt`;
-    const missingTargetPath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/missing-target.txt`;
-    try {
-      const archive = gzipSync(
-        Buffer.concat([
-          encodeTarEntry({
-            path: `${TEST_ARCHIVE_ROOT}/manifest.json`,
-            contents: `${JSON.stringify(createBackupManifest(payloadArchivePath), null, 2)}\n`,
-          }),
-          encodeTarEntry({ path: payloadArchivePath, contents: "payload\n" }),
-          encodeTarEntry({
-            path: hardlinkArchivePath,
-            type: "Link",
-            linkpath: missingTargetPath,
-          }),
-          Buffer.alloc(1024),
-        ]),
-      );
-      await fs.writeFile(archivePath, archive);
-
-      const runtime = createTestRuntime();
-      await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-        /hardlink target is missing from archive entries/i,
-      );
-    } finally {
-      await fs.rm(tempDir, { recursive: true, force: true });
-    }
+    const archive = await createHardlinkArchive(
+      `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/missing-target.txt`,
+    );
+    await expect(backupVerifyCommand(createTestRuntime(), { archive })).rejects.toThrow(
+      /hardlink target is missing from archive entries/i,
+    );
   });
 
   it("rejects duplicate manifest and payload entries", async () => {
     const payloadArchivePath = `${TEST_ARCHIVE_ROOT}/payload/posix/tmp/.openclaw/payload.txt`;
     for (const options of [
       {
-        tempPrefix: "openclaw-backup-duplicate-manifest-",
-        payloads: [{ fileName: "payload.txt", contents: "payload\n" }],
+        payloads: [{ contents: "payload\n" }],
         buildTarEntries: ({
           manifestPath,
           payloadPaths,
@@ -1232,41 +878,30 @@ describe("backupVerifyCommand", () => {
         error: /expected exactly one backup manifest entry, found 2/i,
       },
       {
-        tempPrefix: "openclaw-backup-duplicate-payload-",
         payloads: [
-          { fileName: "payload-a.txt", contents: "payload-a\n", archivePath: payloadArchivePath },
-          { fileName: "payload-b.txt", contents: "payload-b\n", archivePath: payloadArchivePath },
+          archivePayload(payloadArchivePath, "payload-a\n"),
+          archivePayload(payloadArchivePath, "payload-b\n"),
         ],
         error: /duplicate entry path/i,
       },
       {
-        tempPrefix: "openclaw-backup-portable-path-collision-",
         payloads: [
-          { fileName: "payload-a.txt", contents: "payload-a\n", archivePath: payloadArchivePath },
-          {
-            fileName: "payload-b.txt",
-            contents: "payload-b\n",
-            archivePath: payloadArchivePath.toUpperCase(),
-          },
+          archivePayload(payloadArchivePath, "payload-a\n"),
+          archivePayload(payloadArchivePath.toUpperCase(), "payload-b\n"),
         ],
         error: /portable path collision/i,
       },
     ]) {
-      await withBrokenArchiveFixture(
+      await expectRejectedArchive(
         {
-          tempPrefix: options.tempPrefix,
           manifestAssetArchivePath: payloadArchivePath,
+          // Inventory failures must win over a manifest body collected earlier in the scan.
+          manifestContent: "{invalid",
           payloads: options.payloads,
           buildTarEntries: options.buildTarEntries,
         },
-        async (archivePath) => {
-          const runtime = createTestRuntime();
-          await expect(backupVerifyCommand(runtime, { archive: archivePath })).rejects.toThrow(
-            options.error,
-          );
-        },
+        options.error,
       );
     }
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

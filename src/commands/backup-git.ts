@@ -36,6 +36,7 @@ type BackupGitCreateOptions = {
 type BackupGitScopeOptions = {
   global?: boolean;
   agent?: string;
+  store?: string;
 };
 
 export const GIT_BACKUP_PUSH_CREDENTIAL_WARNING =
@@ -93,11 +94,21 @@ async function resolveCreateDatabases(options: BackupGitCreateOptions) {
 
 function resolveOneIdentity(options: BackupGitScopeOptions): GitBackupIdentity {
   const agent = options.agent?.trim();
-  if (options.global === true && agent) {
-    throw new Error("Choose exactly one Git backup scope: --global or --agent <id>.");
+  const store = options.store?.trim();
+  if (options.store !== undefined && !store) {
+    throw new Error("--store must not be blank");
   }
-  if (options.global !== true && !agent) {
-    throw new Error("Choose a Git backup scope: --global or --agent <id>.");
+  const scopes = Number(options.global === true) + Number(Boolean(agent)) + Number(Boolean(store));
+  if (scopes > 1) {
+    throw new Error(
+      "Choose exactly one Git backup scope: --global, --agent <id>, or --store <id>.",
+    );
+  }
+  if (scopes === 0) {
+    throw new Error("Choose a Git backup scope: --global, --agent <id>, or --store <id>.");
+  }
+  if (store) {
+    return { role: "generic", id: store };
   }
   return options.global === true
     ? { role: "global" }
@@ -185,11 +196,7 @@ export async function backupGitLogCommand(
   options: { repository?: string; limit?: number; json?: boolean },
 ) {
   const repositoryPath = resolveRequiredBackupPath(options.repository, "--repository");
-  const limit = options.limit ?? 20;
-  if (!Number.isSafeInteger(limit) || limit < 1) {
-    throw new Error("--limit must be a positive integer.");
-  }
-  const entries = await readGitBackupLog({ repositoryPath, limit });
+  const entries = await readGitBackupLog({ repositoryPath, limit: options.limit ?? 20 });
   if (options.json) {
     writeRuntimeJson(runtime, { repositoryPath, entries });
   } else if (entries.length === 0) {

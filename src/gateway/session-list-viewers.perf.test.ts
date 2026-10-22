@@ -1,10 +1,8 @@
 import { expect, test, vi } from "vitest";
+import { expandSessionRowFacts } from "../../packages/gateway-protocol/src/session-row-fields.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions.js";
-import {
-  deleteSessionEntryLifecycle,
-  replaceSessionEntrySync,
-} from "../config/sessions/session-accessor.js";
+import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
@@ -15,13 +13,15 @@ import { setDisplayName } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import type { GatewayClient } from "./server-methods/types.js";
+import { profileActor, writeListEntry } from "./session-list-entry.test-support.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { writeResidentEntries } from "./session-utils.perf.test-support.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 
-function viewer(profileId: string): GatewayClient {
+function viewer(name: string): GatewayClient {
+  const profileId = ensureProfileForEmail(`${name}@example.com`).id;
   return {
     connect: {
       minProtocol: 1,
@@ -35,28 +35,59 @@ function viewer(profileId: string): GatewayClient {
   };
 }
 
+function initialize(
+  cfg: Parameters<typeof setRuntimeConfigSnapshot>[0] = { agents: { entries: { main: {} } } },
+) {
+  resetPluginRuntimeStateForTest();
+  setActivePluginRegistry(createEmptyPluginRegistry());
+  resetConfigRuntimeState();
+  setRuntimeConfigSnapshot(cfg);
+  return cfg;
+}
+
+function viewerPage(ids: string, order: string, activityOrder: string, roles: string) {
+  const orderedIds = order.split(" ");
+  return {
+    ids: ids.split(" "),
+    order: orderedIds,
+    activityOrder: activityOrder.split(" "),
+    roles: roles.split(" "),
+    total: orderedIds.length,
+  };
+}
+
+function expectPage(
+  result: Awaited<ReturnType<typeof listProjectedSessions>>,
+  ids: string[],
+  total: number,
+) {
+  expect([sessionIds(result), result.totalCount]).toEqual([ids, total]);
+}
+
+function sessionIds(result: Awaited<ReturnType<typeof listProjectedSessions>>) {
+  return result.sessions.map((row) => row.sessionId);
+}
+
+function patchEntry(
+  store: Record<string, SessionEntry>,
+  key: string,
+  patch: Partial<SessionEntry>,
+) {
+  writeListEntry(key, { ...store[key]!, ...patch });
+}
+
 test("preserves viewer pages across publications while bounding shared predicate work", async () => {
   await withStateDirEnv("openclaw-list-viewer-golden-", async () => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    const cfg = {
+    const cfg = initialize({
       agents: { entries: { main: {} }, defaults: { thinkingDefault: "off" as const } },
-    };
-    resetConfigRuntimeState();
-    setRuntimeConfigSnapshot(cfg);
-    const clients = ["alice", "bob", "admin"].map((name) =>
-      viewer(ensureProfileForEmail(`${name}@example.com`).id),
-    );
+    });
+    const clients = ["alice", "bob", "admin"].map(viewer);
     clients[2]!.connect.scopes = ["operator.admin"];
     const entry = (sessionId: string, owner: number, updatedAt: number): SessionEntry => ({
       sessionId,
       updatedAt,
       lastInteractionAt: 20 - updatedAt,
-      createdActor: {
-        type: "human",
-        source: "profile",
-        id: clients[owner]!.authenticatedUserProfile!.profileId,
-      },
+      createdActor: profileActor(clients[owner]!.authenticatedUserProfile!.profileId),
     });
     const store = {
       "agent:main:a": {
@@ -72,174 +103,111 @@ test("preserves viewer pages across publications while bounding shared predicate
     writeResidentEntries(store);
     const release = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const predicate = vi.spyOn(visibility, "isSystemCreatedSessionRow");
-    const selectEntries = vi.spyOn(projection, "selectEntries");
+    using predicate = vi.spyOn(visibility, "isSystemCreatedSessionRow");
+    using selectEntries = vi.spyOn(projection, "selectEntries");
     const opts = { limit: 2, ownerFirst: true, excludeSystem: true };
+    const read = (
+      client: GatewayClient | undefined,
+      overrides: Parameters<typeof listProjectedSessions>[0]["opts"] = {},
+    ) => listProjectedSessions({ projection, client, opts: { ...opts, ...overrides } });
     const golden = [
       [
-        {
-          ids: ["b", "a", "c"],
-          order: ["b", "c", "f", "a"],
-          activityOrder: ["a", "f", "c", "b"],
-          total: 4,
-        },
-        { ids: ["c", "f"], order: ["c", "f", "a"], activityOrder: ["a", "f", "c"], total: 3 },
-        {
-          ids: ["f", "b", "c"],
-          order: ["b", "c", "f", "a"],
-          activityOrder: ["a", "f", "c", "b"],
-          total: 4,
-        },
+        viewerPage("b a c", "b c f a", "a f c b", "owner owner viewer"),
+        viewerPage("c f", "c f a", "a f c", "owner viewer"),
+        viewerPage("f b c", "b c f a", "a f c b", "admin admin admin"),
       ],
       [
-        { ids: ["b", "d"], order: ["d", "b"], activityOrder: ["b", "d"], total: 2 },
-        { ids: ["d", "b"], order: ["d", "b"], activityOrder: ["b", "d"], total: 2 },
-        { ids: ["f", "d"], order: ["f", "d", "b"], activityOrder: ["b", "d", "f"], total: 3 },
+        viewerPage("b d", "d b", "b d", "owner viewer"),
+        viewerPage("d b", "d b", "b d", "owner viewer"),
+        viewerPage("f d", "f d b", "b d f", "admin admin"),
       ],
     ];
     try {
+      await projection.ensureMaterialized();
+      // Establish active display demand without priming list selection or cold archives.
+      for (const row of projection.selectEntries()) {
+        if (row.entry?.archivedAt === undefined) {
+          projection.describe(row);
+        }
+      }
       for (let revision = 0; revision < 2; revision++) {
         await projection.ensureMaterialized();
-        // The first viewer primes only viewer-independent membership.
-        await listProjectedSessions({ projection, client: clients[0], opts });
+        await read(clients[0]);
         predicate.mockClear();
         selectEntries.mockClear();
         for (const [index, client] of clients.entries()) {
           const expected = golden[revision]![index]!;
-          const projectOwner = vi.spyOn(projection.state.rowContext.identityProjection!, "owner");
-          let result: Awaited<ReturnType<typeof listProjectedSessions>>;
-          try {
-            result = await listProjectedSessions({ projection, client, opts });
-            expect(projectOwner.mock.calls.length).toBeLessThanOrEqual(expected.total);
-          } finally {
-            projectOwner.mockRestore();
-          }
-          expect({
-            ids: result.sessions.map((row) => row.sessionId),
-            total: result.totalCount,
-          }).toEqual({ ids: expected.ids, total: expected.total });
-          expect(result.count).toBe(expected.ids.length);
-          expect(result.hasMore).toBe(expected.total > 2);
-          expect(result.nextOffset).toBe(expected.total > 2 ? 2 : null);
-          expect(result.sessions.map((row) => row.sharingRole)).toEqual(
-            expected.ids.map((id) =>
-              client === clients[2]
-                ? "admin"
-                : (client === clients[0] ? ["a", "b"] : ["c", "d"]).includes(id)
-                  ? "owner"
-                  : "viewer",
-            ),
-          );
-          for (const page of [
-            { limit: 1, offset: 1 },
-            { limit: 2, offset: 1 },
-            { limit: 1, offset: 2 },
-          ]) {
-            const next = await listProjectedSessions({
-              projection,
-              client,
-              opts: { ...opts, ...page },
-            });
-            expect(next.sessions.map((row) => row.sessionId)).toEqual(
-              expected.order.slice(page.offset, page.offset + page.limit),
-            );
-            expect(next.totalCount).toBe(expected.total);
-          }
-          const activity = await listProjectedSessions({
-            projection,
-            client,
-            opts: { ...opts, ownerFirst: false, sortBy: "activity", includeActivitySummary: false },
+          using projectOwner = vi.spyOn(projection.state.rowContext.identityProjection!, "owner");
+          const result = await read(client);
+          expect(projectOwner.mock.calls.length).toBeLessThanOrEqual(expected.total);
+          expectPage(result, expected.ids, expected.total);
+          expect(result).toMatchObject({
+            count: expected.ids.length,
+            hasMore: expected.total > 2,
+            nextOffset: expected.total > 2 ? 2 : null,
           });
-          expect(activity.sessions.map((row) => row.sessionId)).toEqual(
-            expected.activityOrder.slice(0, opts.limit),
-          );
-          expect(activity.totalCount).toBe(expected.total);
-          const people = await listProjectedSessions({
-            projection,
-            client,
-            opts: { ...opts, ownerFirst: false, sortBy: "updatedAt", includePeople: true },
+          expect(result.sessions.map((row) => row.sharingRole)).toEqual(expected.roles);
+          for (const [limit, offset] of [
+            [1, 1],
+            [2, 1],
+            [1, 2],
+          ] as const) {
+            const next = await read(client, { limit, offset });
+            expectPage(next, expected.order.slice(offset, offset + limit), expected.total);
+          }
+          const activity = await read(client, {
+            ownerFirst: false,
+            sortBy: "activity",
+            includeActivitySummary: false,
           });
-          expect(people.sessions.map((row) => row.sessionId)).toEqual(
-            expected.order.slice(0, opts.limit),
-          );
+          expectPage(activity, expected.activityOrder.slice(0, opts.limit), expected.total);
+          const people = await read(client, {
+            ownerFirst: false,
+            sortBy: "updatedAt",
+            includePeople: true,
+          });
+          expect(sessionIds(people)).toEqual(expected.order.slice(0, opts.limit));
           expect(people.peopleSessionCount).toBe(expected.total);
           expect(people.people?.reduce((count, person) => count + person.sessionCount, 0)).toBe(
             expected.total,
           );
         }
-        expect.soft(predicate.mock.calls.length).toBe(0);
-        expect.soft(selectEntries.mock.calls.length).toBe(0);
-        const searched = await listProjectedSessions({
-          projection,
-          client: clients[0],
-          opts: { ...opts, ownerFirst: false, search: "agent:main:b" },
-        });
-        expect(searched.sessions.map((row) => row.sessionId)).toEqual(["b"]);
-        const clock = vi.spyOn(Date, "now").mockReturnValue(60_000);
-        try {
-          const recent = () =>
-            listProjectedSessions({
-              projection,
-              client: clients[0],
-              opts: { ...opts, activeMinutes: 1 },
-            });
+        expect(
+          sessionIds(await read(clients[0], { ownerFirst: false, search: "agent:main:b" })),
+        ).toEqual(["b"]);
+        {
+          using clock = vi.spyOn(Date, "now").mockReturnValue(60_000);
+          const recent = () => read(clients[0], { activeMinutes: 1 });
           expect((await recent()).totalCount).toBe(golden[revision]![0]!.total);
           clock.mockReturnValue(120_000);
           expect((await recent()).sessions).toEqual([]);
-        } finally {
-          clock.mockRestore();
         }
         expect(selectEntries.mock.calls.length).toBe(0);
         expect(predicate).not.toHaveBeenCalled();
-        const archived = await listProjectedSessions({
-          projection,
-          client: clients[0],
-          opts: { ...opts, ownerFirst: false, archived: true },
-        });
         // Removing a heartbeat's operator label changes its accepted classification.
         const archivedIds = revision === 0 ? ["d"] : [];
-        expect(archived.sessions.map((row) => row.sessionId)).toEqual(archivedIds);
-        expect(archived.totalCount).toBe(archivedIds.length);
+        const readArchive = () => read(clients[0], { ownerFirst: false, archived: true });
+        expectPage(await readArchive(), archivedIds, archivedIds.length);
         // Cold archives can acquire metadata; warm reads and filter changes reuse those facts.
         predicate.mockClear();
-        const warmArchive = await listProjectedSessions({
-          projection,
-          client: clients[0],
-          opts: { ...opts, ownerFirst: false, archived: true },
-        });
-        expect(warmArchive.sessions.map((row) => row.sessionId)).toEqual(archivedIds);
+        expect(sessionIds(await readArchive())).toEqual(archivedIds);
         expect(predicate).not.toHaveBeenCalled();
-        const unarchived = await listProjectedSessions({ projection, client: clients[0], opts });
-        expect(unarchived.sessions.map((row) => row.sessionId)).toEqual(golden[revision]![0]!.ids);
+        expect(sessionIds(await read(clients[0]))).toEqual(golden[revision]![0]!.ids);
         expect(predicate).not.toHaveBeenCalled();
         if (revision === 0) {
-          replaceSessionEntrySync(
-            { agentId: "main", sessionKey: "agent:main:a" },
-            { ...store["agent:main:a"], label: undefined, archivedAt: 2 },
-          );
-          replaceSessionEntrySync(
-            { agentId: "main", sessionKey: "agent:main:b" },
-            { ...store["agent:main:b"], visibility: "shared" },
-          );
+          patchEntry(store, "agent:main:a", { label: undefined, archivedAt: 2 });
+          patchEntry(store, "agent:main:b", { visibility: "shared" });
           await deleteSessionEntryLifecycle({
             agentId: "main",
             storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
             archiveTranscript: false,
             target: { canonicalKey: "agent:main:c", storeKeys: ["agent:main:c"] },
           });
-          replaceSessionEntrySync(
-            { agentId: "main", sessionKey: "agent:main:d" },
-            entry("d", 1, 11),
-          );
-          replaceSessionEntrySync(
-            { agentId: "main", sessionKey: "agent:main:f" },
-            { ...entry("f", 2, 12), visibility: "draft" },
-          );
+          writeListEntry("agent:main:d", entry("d", 1, 11));
+          writeListEntry("agent:main:f", { ...entry("f", 2, 12), visibility: "draft" });
         }
       }
     } finally {
-      predicate.mockRestore();
-      selectEntries.mockRestore();
       projection.dispose();
       release();
     }
@@ -248,22 +216,18 @@ test("preserves viewer pages across publications while bounding shared predicate
 
 test("refreshes cached lists after placement readiness and refuses disposed responses", async () => {
   await withStateDirEnv("openclaw-list-placement-readiness-", async () => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    const cfg = { agents: { entries: { main: {} } } };
-    resetConfigRuntimeState();
-    setRuntimeConfigSnapshot(cfg);
-    const alice = viewer(ensureProfileForEmail("alice@placement.example").id);
+    const cfg = initialize();
+    const alice = viewer("alice");
     const bob = ensureProfileForEmail("bob@placement.example");
     alice.connect.scopes = ["operator.admin"];
     const initialNow = 1_800_000_000_000;
-    const clock = vi.spyOn(Date, "now").mockReturnValue(initialNow);
+    using clock = vi.spyOn(Date, "now").mockReturnValue(initialNow);
     const entry = (sessionId: string): SessionEntry => ({
       sessionId,
       updatedAt: sessionId === "aged" ? initialNow : initialNow + 2,
       archivedAt: 1,
       visibility: sessionId === "admin-only" ? "draft" : "shared",
-      createdActor: { type: "human", source: "profile", id: bob.id },
+      createdActor: profileActor(bob.id),
     });
     const store = Object.fromEntries(
       ["admin-only", "publication", "aged", "stable"].map((id) => [`agent:main:${id}`, entry(id)]),
@@ -294,43 +258,37 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
       modelCatalog: [],
       placementFactsReader: { readProjection },
     });
-    const selected = vi.spyOn(projection, "selectEntries");
+    using selected = vi.spyOn(projection, "selectEntries");
+    const read = () =>
+      listProjectedSessions({
+        projection,
+        client: alice,
+        opts: { archived: true, activeMinutes: 1 },
+      });
     let pending: ReturnType<typeof listProjectedSessions> | undefined;
     try {
       // Populate common selection while all rows and their placement facts remain cold.
       expect((await listProjectedSessions({ projection, opts: {} })).sessions).toEqual([]);
       selected.mockClear();
-      pending = listProjectedSessions({
-        projection,
-        client: alice,
-        opts: { archived: true, activeMinutes: 1 },
-      });
+      pending = read();
       await entered.promise;
       alice.connect.scopes = ["operator.read"];
       clock.mockReturnValue(initialNow + 60_001);
-      replaceSessionEntrySync(
-        { agentId: "main", sessionKey: "agent:main:publication" },
-        { ...entry("publication"), updatedAt: Date.now(), visibility: "draft" },
-      );
+      writeListEntry("agent:main:publication", {
+        ...entry("publication"),
+        updatedAt: Date.now(),
+        visibility: "draft",
+      });
       hold = false;
       paused.resolve(empty);
       const result = await pending;
-      expect(result.sessions.map((row) => row.sessionId)).toEqual(["stable"]);
+      expect(sessionIds(result)).toEqual(["stable"]);
       expect(result.sessions[0]?.sharingRole).toBe("viewer");
       // The publication can leave unselected archives dirty; warm its completed revision.
-      await listProjectedSessions({
-        projection,
-        client: alice,
-        opts: { archived: true, activeMinutes: 1 },
-      });
+      await read();
       selected.mockClear();
       readProjection.mockClear();
-      const warm = await listProjectedSessions({
-        projection,
-        client: alice,
-        opts: { archived: true, activeMinutes: 1 },
-      });
-      expect(warm.sessions.map((row) => row.sessionId)).toEqual(["stable"]);
+      expect(sessionIds(await read())).toEqual(["stable"]);
       expect(selected).not.toHaveBeenCalled();
       expect(readProjection).not.toHaveBeenCalled();
 
@@ -359,24 +317,18 @@ test("refreshes cached lists after placement readiness and refuses disposed resp
       projection.dispose();
       paused.resolve(empty);
       await settled;
-      selected.mockRestore();
       release();
-      clock.mockRestore();
     }
   });
 });
 
 test("shares concurrent list selection across row modes and refilters only published partitions", async () => {
   await withStateDirEnv("openclaw-list-selection-repeat-", async () => {
-    resetPluginRuntimeStateForTest();
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    const cfg = { agents: { entries: { main: {} } } };
-    resetConfigRuntimeState();
-    setRuntimeConfigSnapshot(cfg);
-    const alice = viewer(ensureProfileForEmail("alice@selection.example").id);
-    const bob = viewer(ensureProfileForEmail("bob@selection.example").id);
+    const cfg = initialize();
+    const alice = viewer("alice");
+    const bob = viewer("bob");
     const now = 1_800_000_000_000;
-    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    using clock = vi.spyOn(Date, "now").mockReturnValue(now);
     const store = Object.fromEntries(
       Array.from({ length: 128 }, (_, index) => [
         `agent:main:selection-${index}`,
@@ -384,82 +336,84 @@ test("shares concurrent list selection across row modes and refilters only publi
           sessionId: `s${index}`,
           updatedAt: now + index,
           visibility: "shared" as const,
-          createdActor: {
-            type: "human" as const,
-            source: "profile" as const,
-            id: (index === 127 ? bob : alice).authenticatedUserProfile!.profileId,
-          },
+          createdActor: profileActor(
+            (index === 127 ? bob : alice).authenticatedUserProfile!.profileId,
+          ),
         },
       ]),
     );
     writeResidentEntries(store);
     const release = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
-    const opts = { limit: 2, activeMinutes: 1 };
-    const read = (rowMode: "compact" | "sidebar", client = alice) =>
+    const read = (rowMode: "compact" | "sidebar", client = alice, limit = 2) =>
       listProjectedSessions({
         projection,
         client,
         acceptsSerializedJson: true,
-        opts: { ...opts, rowMode },
+        opts: { limit, activeMinutes: 1, rowMode },
       });
     try {
-      expect((await read("compact")).sessions.map((row) => row.sessionId)).toEqual([
-        "s127",
-        "s126",
-      ]);
-      const owner = vi.spyOn(projection.state.rowContext.identityProjection!, "owner");
-      try {
-        const repeated = await Promise.all(
-          Array.from({ length: 8 }, (_, i) => read(i % 2 ? "compact" : "sidebar")),
-        );
-        expect(repeated.map((result) => result.totalCount)).toEqual(Array(8).fill(128));
-        expect(owner).not.toHaveBeenCalled();
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: "agent:main:selection-0" },
-          {
-            ...store["agent:main:selection-0"]!,
-            updatedAt: now + 200,
-            visibility: "draft",
-          },
-        );
-        const changed = await read("compact");
-        expect(changed.sessions.map((row) => row.sessionId)).toEqual(["s0", "s127"]);
-        expect(changed.totalCount).toBe(128);
-        expect(owner.mock.calls.length).toBeLessThan(32);
-        const other = await read("compact", bob);
-        expect(other.sessions.map((row) => row.sessionId)).toEqual(["s127", "s126"]);
-        expect(other.totalCount).toBe(127);
-        // An exact publication must not hide an expired retained partition.
-        clock.mockReturnValue(now + 60_128);
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: "agent:main:selection-1" },
-          {
-            ...store["agent:main:selection-1"]!,
-            updatedAt: Date.now(),
-          },
-        );
-        const expired = await read("compact");
-        expect(expired.sessions.map((row) => row.sessionId)).toEqual(["s1", "s0"]);
-        expect(expired.totalCount).toBe(2);
-        setDisplayName(alice.authenticatedUserProfile!.profileId, "Renamed Alice");
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey: "agent:main:selection-127" },
-          { ...store["agent:main:selection-127"]!, updatedAt: Date.now() },
-        );
-        const renamed = await read("compact");
-        expect(renamed.totalCount).toBe(3);
-        expect(
-          renamed.owners?.find((actor) => actor.id === alice.authenticatedUserProfile!.profileId)
-            ?.label,
-        ).toBe("Renamed Alice");
-      } finally {
-        owner.mockRestore();
+      expect(sessionIds(await read("compact"))).toEqual(["s127", "s126"]);
+      using owner = vi.spyOn(projection.state.rowContext.identityProjection!, "owner");
+      const repeated = await Promise.all(
+        Array.from({ length: 8 }, (_, i) => read(i % 2 ? "compact" : "sidebar")),
+      );
+      expect(repeated.map((result) => result.totalCount)).toEqual(Array(8).fill(128));
+      expect(owner).not.toHaveBeenCalled();
+      for (const client of [alice, bob]) {
+        for (const rowMode of ["compact", "sidebar"] as const) {
+          await read(rowMode, client, 2);
+          await read(rowMode, client, 128);
+        }
       }
+      using stringify = vi.spyOn(JSON, "stringify");
+      using present = vi.spyOn(projection, "present");
+      for (const client of [alice, bob, alice, bob]) {
+        for (const rowMode of ["compact", "sidebar"] as const) {
+          stringify.mockClear();
+          await read(rowMode, client, 2);
+          const smallPageEncodings = stringify.mock.calls.length;
+          stringify.mockClear();
+          const result = await read(rowMode, client, 128);
+          const encodings = stringify.mock.calls.length;
+          expect(result.totalCount).toBe(128);
+          // Fixed request preparation may encode facts; additional warm rows must not.
+          expect(encodings, `warm ${rowMode} serialization scales with row count`).toBe(
+            smallPageEncodings,
+          );
+          const rows = expandSessionRowFacts(result.sessions, result.sharedFacts);
+          expect(rows.every((row) => row.rowMode === rowMode)).toBe(true);
+          expect(rows.find((row) => row.sessionId === "s127")?.sharingRole).toBe(
+            client === bob ? "owner" : "viewer",
+          );
+          expect(rows.find((row) => row.sessionId === "s0")?.sharingRole).toBe(
+            client === alice ? "owner" : "viewer",
+          );
+        }
+      }
+      expect(present).not.toHaveBeenCalled();
+      stringify.mockRestore();
+      present.mockRestore();
+      owner.mockClear();
+      patchEntry(store, "agent:main:selection-0", { updatedAt: now + 200, visibility: "draft" });
+      expectPage(await read("compact"), ["s0", "s127"], 128);
+      expect(owner.mock.calls.length).toBeLessThan(32);
+      expectPage(await read("compact", bob), ["s127", "s126"], 127);
+      // An exact publication must not hide an expired retained partition.
+      clock.mockReturnValue(now + 60_128);
+      patchEntry(store, "agent:main:selection-1", { updatedAt: Date.now() });
+      expectPage(await read("compact"), ["s1", "s0"], 2);
+      setDisplayName(alice.authenticatedUserProfile!.profileId, "Renamed Alice");
+      patchEntry(store, "agent:main:selection-127", { updatedAt: Date.now() });
+      const renamed = await read("compact");
+      expect(renamed.totalCount).toBe(3);
+      expect(
+        renamed.owners?.find((actor) => actor.id === alice.authenticatedUserProfile!.profileId)
+          ?.label,
+      ).toBe("Renamed Alice");
     } finally {
       projection.dispose();
       release();
-      clock.mockRestore();
     }
   });
 });

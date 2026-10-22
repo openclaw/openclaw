@@ -16,16 +16,17 @@ const composerPickerDismissals = new WeakMap<
   { owners: Set<symbol>; dispose: () => void }
 >();
 const CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT = "openclaw-composer-dismiss-invocations";
-const INVOCATION_MENUS = ".agent-chat__input > :is(.slash-menu, .skill-menu)";
+type InvocationMenu = { element: HTMLElement; getTextarea: () => HTMLTextAreaElement | null };
+const invocationMenus = new WeakMap<Document, Set<InvocationMenu>>();
 let nextPickerId = 0;
 
 /** Keep native details selectors while the shared overlay owns visibility and dismissal. */
 function bindChatPickerOverlay(
   details: HTMLDetailsElement,
+  trigger: HTMLElement,
+  surface: HTMLElement,
   onOpenChange?: (details: HTMLDetailsElement) => void,
-): () => void {
-  const trigger = details.querySelector<HTMLElement>(":scope > summary")!;
-  const surface = details.querySelector<HTMLElement>(":scope > [data-anchored-overlay]")!;
+) {
   const overlay = createOverlay(`chat-picker-${++nextPickerId}`, findOverlayParent(trigger), {
     exclusiveGroup: "menu",
     interactionElements: () => [details],
@@ -55,6 +56,7 @@ function bindChatPickerOverlay(
   };
   details.setAttribute("data-chat-native-picker", "");
   let lastOpen = overlay.open;
+  // Mirror each open/close edge into native details and its dismissal callback synchronously.
   const stop = overlay.subscribe((open) => {
     details.open = open;
     if (open !== lastOpen) {
@@ -79,28 +81,53 @@ function bindChatPickerOverlay(
     details.open = !details.open;
     toggle();
   };
-  const stopClick = listen(details, "click", activate);
-  const stopToggle = listen(details, "toggle", toggle);
   sync();
-  return () => {
-    stopClick();
-    stopToggle();
-    stop();
-    details.removeAttribute("data-chat-native-picker");
-    overlay.dispose();
-    anchor.dispose();
+  return {
+    onClick: activate,
+    onToggle: toggle,
+    dispose() {
+      stop();
+      details.removeAttribute("data-chat-native-picker");
+      overlay.dispose();
+      anchor.dispose();
+    },
   };
 }
 
 /** The ref only publishes the node; the component owner binds and releases its surface. */
-export function createChatPickerOverlay(
-  onOpenChange?: (details: HTMLDetailsElement) => void,
-): (details: HTMLDetailsElement) => void {
-  let element!: HTMLDetailsElement;
-  onSettled(() => bindChatPickerOverlay(element, onOpenChange));
-  return (details) => {
-    element = details;
+export function createChatPickerOverlay(onOpenChange?: (details: HTMLDetailsElement) => void) {
+  let details!: HTMLDetailsElement;
+  let trigger!: HTMLElement;
+  let surface!: HTMLElement;
+  let binding: ReturnType<typeof bindChatPickerOverlay> | undefined;
+  onSettled(() => {
+    const current = bindChatPickerOverlay(details, trigger, surface, onOpenChange);
+    binding = current;
+    return () => {
+      binding = undefined;
+      current.dispose();
+    };
+  });
+  return {
+    details: (element: HTMLDetailsElement) => (details = element),
+    trigger: (element: HTMLElement) => (trigger = element),
+    surface: (element: HTMLElement) => (surface = element),
+    onClick: (event: MouseEvent) => binding?.onClick(event),
+    onToggle: () => binding?.onToggle(),
   };
+}
+
+/** Invocation menus publish their owned nodes instead of searching other composers' DOM. */
+export function registerChatComposerInvocationMenu(
+  element: HTMLElement,
+  getTextarea: () => HTMLTextAreaElement | null,
+): () => void {
+  const doc = element.ownerDocument;
+  const menus = invocationMenus.get(doc) ?? new Set<InvocationMenu>();
+  const entry = { element, getTextarea };
+  menus.add(entry);
+  invocationMenus.set(doc, menus);
+  return () => menus.delete(entry);
 }
 
 // Split panes and Home can overlap New Session. Keep one document listener set
@@ -128,11 +155,11 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
 
   function dismissChatComposerPickersOutside(event: Event): void {
     const path = event.composedPath();
-    for (const menu of ownerDocument.querySelectorAll<HTMLElement>(INVOCATION_MENUS)) {
-      if (!path.includes(menu)) {
-        menu
-          .closest(".agent-chat__input")
-          ?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
+    for (const { element } of invocationMenus.get(ownerDocument) ?? []) {
+      if (element.isConnected && !path.includes(element)) {
+        element.parentElement?.dispatchEvent(
+          new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT, { bubbles: true }),
+        );
       }
     }
   }
@@ -144,25 +171,28 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
       event.defaultPrevented ||
       consumeTooltipEscape(event, ownerDocument) ||
       event.key !== "Escape" ||
-      ownerDocument.querySelector(".shell-nav[aria-modal='true']")
+      // The modal navigation drawer owns focus and Escape within its subtree.
+      event
+        .composedPath()
+        .some((node) => node instanceof Element && node.matches(".shell-nav[aria-modal='true']"))
     ) {
       return;
     }
     if (registryFor(ownerDocument).stack.at(-1)?.open) {
       return;
     }
-    const invocationComposer = ownerDocument
-      .querySelector<HTMLElement>(INVOCATION_MENUS)
-      ?.closest<HTMLElement>(".agent-chat__input");
-    if (!invocationComposer) {
+    const menu = [...(invocationMenus.get(ownerDocument) ?? [])].find(
+      ({ element }) => element.isConnected,
+    );
+    if (!menu) {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    invocationComposer.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
-    invocationComposer
-      .querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
-      ?.focus({ preventScroll: true });
+    menu.element.parentElement?.dispatchEvent(
+      new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT, { bubbles: true }),
+    );
+    menu.getTextarea()?.focus({ preventScroll: true });
   }
 
   listen(ownerDocument, "pointerdown", dismissChatComposerPickersOutside, options);

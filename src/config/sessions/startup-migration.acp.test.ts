@@ -22,10 +22,10 @@ import {
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { migrateLegacyMainSessionKeys } from "./legacy-main-session-migration.js";
+import * as legacyMainMigration from "./legacy-main-session-migration.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { resolveSqliteSessionKey } from "./session-accessor.sqlite-scope.js";
-import { seedCanonicalSessionValidation } from "./session-canonical-validation.js";
+import { markCanonicalSessionValidationPending } from "./session-canonical-key.js";
 import { runSessionStartupMigration } from "./startup-migration.js";
 
 it.each([false, true])(
@@ -53,14 +53,13 @@ it.each([false, true])(
           }
           return await originalRead(...args);
         });
-      const inspectLegacy = vi.fn(migrateLegacyMainSessionKeys);
+      const inspectLegacy = vi.spyOn(legacyMainMigration, "migrateLegacyMainSessionKeys");
       const handoffDatabase = vi.fn(async () => {});
       const outcome = runSessionStartupMigration({
         cfg,
         env,
         log: { info() {}, warn() {} },
         handoffDatabase,
-        deps: { migrateLegacyMainSessionKeys: inspectLegacy },
       }).then(
         () => undefined,
         (error: unknown) => error,
@@ -76,6 +75,7 @@ it.each([false, true])(
         release.resolve();
         await outcome;
         reading.mockRestore();
+        inspectLegacy.mockRestore();
       }
     });
   },
@@ -251,7 +251,9 @@ it("startup requires offline ACP repair before handing restored stores to runtim
       if (shape === "unsettled-embedded") {
         const database = openOpenClawAgentDatabase({ agentId, env });
         const { db } = database;
-        runSqliteImmediateTransactionSync(db, () => seedCanonicalSessionValidation(database));
+        runSqliteImmediateTransactionSync(db, () =>
+          markCanonicalSessionValidationPending(database),
+        );
         const raw = `${JSON.stringify(currentEntry).slice(0, -1)},"acp":null,"acp":${JSON.stringify(meta)}}`;
         db.prepare(
           "UPDATE session_nodes SET entry_json = ?, entry_valid = 0 WHERE session_key = ?",

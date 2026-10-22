@@ -1,15 +1,66 @@
-// Codex tests cover attempt steering plugin behavior.
+import { runAgentHarnessGatewayQuestion } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createNativeSessionBindingAuthority } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerCodexSteeringConfirmationCases } from "./attempt-steering.confirmation.test-support.js";
 import {
   CodexSteeringAcceptedUnconfirmedError,
   createCodexSteeringQueue,
+  createCodexQuestionInputHandlers,
 } from "./attempt-steering.js";
 import { createClientHarness } from "./test-support.js";
 import { buildCodexUserInput } from "./user-input.js";
 
 type QueueParams = Parameters<typeof createCodexSteeringQueue>[0];
+type Queue = ReturnType<typeof createCodexSteeringQueue>;
+const turn = { turnId: "turn-1" };
+const image = {
+  type: "image" as const,
+  data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z0V8AAAAASUVORK5CYII=",
+  mimeType: "image/png",
+};
+const noop = () => {};
+const captureError = (error: unknown) => error;
+const resolved = async () => {};
+const tick = (ms = 0) => vi.advanceTimersByTimeAsync(ms);
+const unconfirmed = (pending: Promise<void>) =>
+  expect(pending).rejects.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
+const settlement = (pending: Promise<void>) =>
+  pending.then(
+    () => "accepted",
+    () => "rejected",
+  );
+function confirm(queue: Queue, line: string, text?: string) {
+  const { params } = JSON.parse(line);
+  if (text !== undefined) {
+    expect(params.input).toEqual(textInput(text));
+  }
+  expect(queue.confirmConsumed(params.clientUserMessageId)).toBe(true);
+}
+function pendingRequest() {
+  const accepted = createDeferred<void>();
+  const request = vi.fn(async () => {
+    await accepted.promise;
+    return turn;
+  });
+  return { accepted, request, queue: createQueue({ request }) };
+}
+function tracked(queue: Queue, text: string, debounceMs = 0) {
+  const accepted = vi.fn();
+  return { accepted, pending: queue.queue(text, { debounceMs, onQueueAccepted: accepted }) };
+}
+function pause() {
+  const entered = createDeferred<void>();
+  const resume = createDeferred<void>();
+  return {
+    entered: entered.promise,
+    resume: resume.resolve,
+    wait: async () => {
+      entered.resolve();
+      await resume.promise;
+    },
+  };
+}
 
 const prepareMessage: QueueParams["prepareMessage"] = async (text, options) => ({
   input: buildCodexUserInput(text, options.images),
@@ -20,44 +71,35 @@ const prepareMessage: QueueParams["prepareMessage"] = async (text, options) => (
   },
 });
 
-const PNG_1X1 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z0V8AAAAASUVORK5CYII=";
+function createReplyHarness() {
+  return createClientHarness({
+    onWrite: (line, send) => {
+      const request = JSON.parse(line);
+      send({ id: request.id, result: turn });
+    },
+  });
+}
+const textInput = (text: string) => [{ type: "text", text, text_elements: [] }];
+
+function createQueue(
+  client: QueueParams["client"] | { request: ReturnType<typeof vi.fn> },
+  options: Partial<Omit<QueueParams, "client" | "threadId" | "turnId" | "assertActive">> = {},
+) {
+  return createCodexSteeringQueue({
+    client: client as QueueParams["client"],
+    threadId: "thread-1",
+    turnId: "turn-1",
+    requestTimeoutMs: 60_000,
+    signal: new AbortController().signal,
+    assertActive: noop,
+    prepareMessage,
+    ...options,
+  });
+}
 
 describe("Codex app-server steering queue", () => {
-  beforeEach(() => {
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  function createQueue(
-    client: QueueParams["client"] | { request: ReturnType<typeof vi.fn> },
-    options: Partial<
-      Pick<
-        QueueParams,
-        | "signal"
-        | "requestTimeoutMs"
-        | "prepareMessage"
-        | "beforeSubmit"
-        | "withCurrent"
-        | "withPreparedCurrent"
-      >
-    > = {},
-  ) {
-    return createCodexSteeringQueue({
-      client: client as QueueParams["client"],
-      threadId: "thread-1",
-      turnId: "turn-1",
-      requestTimeoutMs: 60_000,
-      signal: new AbortController().signal,
-      assertActive: () => {},
-      prepareMessage,
-      ...options,
-    });
-  }
-
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
   const steerRequestOptions = {
     timeoutMs: 60_000,
     signal: expect.any(AbortSignal),
@@ -68,53 +110,41 @@ describe("Codex app-server steering queue", () => {
   it.each(["owner", "compat"] as const)(
     "handles %s refusal at the native wire boundary",
     async (kind) => {
-      const harness = createClientHarness({
-        onWrite: (line, send) => {
-          const request = JSON.parse(line);
-          send({ id: request.id, result: { turnId: "turn-1" } });
-        },
-      });
-      const authority = createNativeSessionBindingAuthority([], () => {});
+      const harness = createReplyHarness();
+      const authority = createNativeSessionBindingAuthority([], noop);
       const queue = createQueue(harness.client, {
         withCurrent: authority.withCurrent,
         withPreparedCurrent: authority.withPreparedCurrent,
       });
-      const entered = createDeferred<void>();
-      const resume = createDeferred<void>();
+      const gate = pause();
       let callerCurrent = true;
+      const assertCurrent = () => {
+        if (!callerCurrent) {
+          throw new Error("caller policy changed");
+        }
+      };
       const rejectedAcceptance = vi.fn();
       const survivorAcceptance = vi.fn();
       const revoked = queue
-        .queue("revoked", { debounceMs: 5, onQueueAccepted: rejectedAcceptance }, () => {}, {
-          assertCurrent() {
-            if (kind === "owner" && !callerCurrent) {
-              throw new Error("caller policy changed");
-            }
-          },
-          async prepareCurrent() {
-            entered.resolve();
-            await resume.promise;
-          },
-          compatAssertCurrent() {
-            if (kind === "compat" && !callerCurrent) {
-              throw new Error("caller policy changed");
-            }
-          },
+        .queue("revoked", { debounceMs: 5, onQueueAccepted: rejectedAcceptance }, noop, {
+          assertCurrent: kind === "owner" ? assertCurrent : noop,
+          prepareCurrent: gate.wait,
+          compatAssertCurrent: kind === "compat" ? assertCurrent : noop,
         })
-        .catch((error: unknown) => error);
+        .catch(captureError);
       const survivor = queue
-        .queue("survivor", { debounceMs: 5, onQueueAccepted: survivorAcceptance }, () => {}, {
-          assertCurrent() {},
-          async prepareCurrent() {},
-          compatAssertCurrent() {},
+        .queue("survivor", { debounceMs: 5, onQueueAccepted: survivorAcceptance }, noop, {
+          assertCurrent: noop,
+          prepareCurrent: resolved,
+          compatAssertCurrent: noop,
         })
-        .catch((error: unknown) => error);
+        .catch(captureError);
       try {
         await vi.advanceTimersByTimeAsync(5);
-        await entered.promise;
+        await gate.entered;
         callerCurrent = false;
         expect(harness.writes).toEqual([]);
-        resume.resolve();
+        gate.resume();
         await vi.advanceTimersByTimeAsync(0);
         expect(await revoked).toMatchObject({ message: "caller policy changed" });
         expect(rejectedAcceptance).toHaveBeenCalledExactlyOnceWith(false);
@@ -127,14 +157,13 @@ describe("Codex app-server steering queue", () => {
         }
         expect(harness.writes).toHaveLength(1);
         const request = JSON.parse(harness.writes[0]!);
-        expect(request.params.expectedTurnId).toBe("turn-1");
-        expect(request.params.input).toEqual(buildCodexUserInput("survivor"));
-        expect(queue.confirmConsumed(request.params.clientUserMessageId)).toBe(true);
+        expect(request.params).toMatchObject({ expectedTurnId: "turn-1" });
+        confirm(queue, harness.writes[0]!, "survivor");
         await survivor;
         expect(survivorAcceptance).toHaveBeenCalledExactlyOnceWith(true);
         expect(queue.getAcceptedMessages()).toHaveLength(1);
       } finally {
-        resume.resolve();
+        gate.resume();
         queue.cancel();
         await Promise.allSettled([revoked, survivor]);
         harness.client.close();
@@ -144,17 +173,15 @@ describe("Codex app-server steering queue", () => {
 
   it("does not accept a steering batch aborted while fresh authority is pending", async () => {
     const harness = createClientHarness();
-    const entered = createDeferred<void>();
-    const resume = createDeferred<void>();
+    const gate = pause();
     const released = createDeferred<void>();
     const controller = new AbortController();
     const onQueueAccepted = vi.fn();
     const queue = createQueue(harness.client, {
       signal: controller.signal,
       withCurrent: async (write) => {
-        entered.resolve();
         try {
-          await resume.promise;
+          await gate.wait();
           write();
         } finally {
           released.resolve();
@@ -164,16 +191,16 @@ describe("Codex app-server steering queue", () => {
     const delivery = queue.queue("steer", { debounceMs: 0, onQueueAccepted });
     const rejected = expect(delivery).rejects.toThrow("aborted");
     try {
-      await entered.promise;
+      await gate.entered;
       controller.abort();
       await rejected;
       expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(false);
       expect(queue.getAcceptedMessages()).toEqual([]);
-      resume.resolve();
+      gate.resume();
       await released.promise;
       expect(harness.writes).toEqual([]);
     } finally {
-      resume.resolve();
+      gate.resume();
       queue.cancel();
       harness.client.close();
     }
@@ -182,19 +209,12 @@ describe("Codex app-server steering queue", () => {
   it.each(["committed", "failed", "revoked", "aborted", "sealed"] as const)(
     "guards physical steering submission after the source commit is %s",
     async (outcome) => {
-      const harness = createClientHarness({
-        onWrite: (line, send) => {
-          const request = JSON.parse(line);
-          send({ id: request.id, result: { turnId: "turn-1" } });
-        },
-      });
-      const committing = createDeferred<void>();
-      const releaseCommit = createDeferred<void>();
+      const harness = createReplyHarness();
+      const gate = pause();
       const controller = new AbortController();
       let sourceCurrent = true;
       const beforeSubmit = vi.fn(async () => {
-        committing.resolve();
-        await releaseCommit.promise;
+        await gate.wait();
         if (outcome === "failed") {
           throw new Error("source persistence unavailable");
         }
@@ -211,12 +231,9 @@ describe("Codex app-server steering queue", () => {
           }
         },
       );
-      const settled = delivery.then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+      const settled = delivery.catch(captureError);
       try {
-        await committing.promise;
+        await gate.entered;
         expect(harness.writes).toEqual([]);
         expect(onQueueAccepted).not.toHaveBeenCalled();
         expect(onQueueSettled).not.toHaveBeenCalled();
@@ -227,12 +244,11 @@ describe("Codex app-server steering queue", () => {
         } else if (outcome === "sealed") {
           queue.sealAdmission();
         }
-        releaseCommit.resolve();
+        gate.resume();
         await vi.advanceTimersByTimeAsync(0);
         if (outcome === "committed") {
           expect(harness.writes).toHaveLength(1);
-          const request = JSON.parse(harness.writes[0]!);
-          expect(queue.confirmConsumed(request.params.clientUserMessageId)).toBe(true);
+          confirm(queue, harness.writes[0]!);
           expect(await settled).toBeUndefined();
           expect(onQueueAccepted).toHaveBeenCalledExactlyOnceWith(true);
         } else {
@@ -243,7 +259,7 @@ describe("Codex app-server steering queue", () => {
         expect(beforeSubmit).toHaveBeenCalledOnce();
         expect(onQueueSettled).toHaveBeenCalledOnce();
       } finally {
-        releaseCommit.resolve();
+        gate.resume();
         queue.cancel();
         harness.client.close();
         await settled;
@@ -252,68 +268,46 @@ describe("Codex app-server steering queue", () => {
   );
 
   it("rechecks each source after later batch preparation at actual I/O: revoked", async () => {
-    const harness = createClientHarness({
-      onWrite: (line, send) => {
-        const request = JSON.parse(line);
-        send({ id: request.id, result: { turnId: "turn-1" } });
-      },
-    });
-    const preparing = createDeferred<void>();
-    const release = createDeferred<void>();
+    const harness = createReplyHarness();
+    const gate = pause();
     let sourceCurrent = true;
     const controller = new AbortController();
     const queue = createQueue(harness.client, {
       signal: controller.signal,
       prepareMessage: async (text, options, assertCurrent) => {
         if (text === "independent") {
-          preparing.resolve();
-          await release.promise;
+          await gate.wait();
         }
         return prepareMessage(text, options, assertCurrent);
       },
     });
     const acceptance = vi.fn();
-    const first = queue
-      .queue("controlled", { debounceMs: 5, onQueueAccepted: acceptance }, () => {
+    const first = settlement(
+      queue.queue("controlled", { debounceMs: 5, onQueueAccepted: acceptance }, () => {
         if (!sourceCurrent) {
           throw new Error("source claim replaced");
         }
-      })
-      .then(
-        () => "accepted",
-        () => "rejected",
-      );
+      }),
+    );
     const second = queue.queue("independent", { debounceMs: 5 }, () => {});
     try {
       await vi.advanceTimersByTimeAsync(5);
-      await preparing.promise;
+      await gate.entered;
       expect(harness.writes).toEqual([]);
       sourceCurrent = false;
-      release.resolve();
+      gate.resume();
       await vi.advanceTimersByTimeAsync(0);
-      const frame = JSON.parse(harness.writes[0]!);
-      expect(frame.params.input).toEqual(
-        ["independent"].map((text) => ({
-          type: "text",
-          text,
-          text_elements: [],
-        })),
-      );
-      expect(queue.confirmConsumed(frame.params.clientUserMessageId)).toBe(true);
+      confirm(queue, harness.writes[0]!, "independent");
       await second;
       expect(await first).toBe("rejected");
       expect(acceptance).toHaveBeenCalledExactlyOnceWith(sourceCurrent);
       const later = queue.queue("later authorized", { debounceMs: 0 }, () => {});
       await vi.advanceTimersByTimeAsync(0);
-      const next = JSON.parse(harness.writes[1]!);
-      expect(next.params.input).toEqual([
-        { type: "text", text: "later authorized", text_elements: [] },
-      ]);
-      expect(queue.confirmConsumed(next.params.clientUserMessageId)).toBe(true);
+      confirm(queue, harness.writes[1]!, "later authorized");
       await later;
       expect(controller.signal.aborted).toBe(false);
     } finally {
-      release.resolve();
+      gate.resume();
       queue.cancel();
       harness.client.close();
     }
@@ -336,16 +330,13 @@ describe("Codex app-server steering queue", () => {
         },
       });
       const queue = createQueue(harness.client);
-      const first = queue
-        .queue("revoked before retry", { debounceMs: 5 }, () => {
+      const first = settlement(
+        queue.queue("revoked before retry", { debounceMs: 5 }, () => {
           if (!sourceCurrent) {
             throw new Error("source closed");
           }
-        })
-        .then(
-          () => "accepted",
-          () => "rejected",
-        );
+        }),
+      );
       const sibling = mixed ? queue.queue("independent", { debounceMs: 5 }, () => {}) : undefined;
       let later: ReturnType<typeof queue.queue> | undefined;
       try {
@@ -353,20 +344,12 @@ describe("Codex app-server steering queue", () => {
         expect(await first).toBe("rejected");
         expect(harness.writes).toHaveLength(mixed ? 2 : 1);
         if (mixed) {
-          const frame = JSON.parse(harness.writes[1]!);
-          expect(frame.params.input).toEqual([
-            { type: "text", text: "independent", text_elements: [] },
-          ]);
-          expect(queue.confirmConsumed(frame.params.clientUserMessageId)).toBe(true);
+          confirm(queue, harness.writes[1]!, "independent");
           await sibling;
         }
         later = queue.queue("later authorized", { debounceMs: 0 }, () => {});
         await vi.advanceTimersByTimeAsync(0);
-        const frame = JSON.parse(harness.writes.at(-1)!);
-        expect(frame.params.input).toEqual([
-          { type: "text", text: "later authorized", text_elements: [] },
-        ]);
-        expect(queue.confirmConsumed(frame.params.clientUserMessageId)).toBe(true);
+        confirm(queue, harness.writes.at(-1)!, "later authorized");
         await later;
       } finally {
         queue.cancel();
@@ -390,10 +373,9 @@ describe("Codex app-server steering queue", () => {
       signal: controller.signal,
       withCurrent: async (write) => write(),
     });
-    const result = queue.queue("not enqueued", { debounceMs: 0 }).then(
-      () => "accepted",
-      (error: unknown) => error,
-    );
+    const result = queue
+      .queue("not enqueued", { debounceMs: 0 })
+      .then(() => "accepted", captureError);
     try {
       await vi.advanceTimersByTimeAsync(0);
       await rejected.promise;
@@ -412,30 +394,18 @@ describe("Codex app-server steering queue", () => {
   });
 
   it("fails the steer when the app-server never answers turn/steer", async () => {
-    // Real client over an in-memory transport: only the app-server process is faked,
-    // so this exercises the production request deadline rather than a stub.
     const harness = createClientHarness();
     const beforeSubmit = vi.fn(async () => {});
     const queue = createQueue(harness.client, { requestTimeoutMs: 1_000, beforeSubmit });
 
-    const outcomes: unknown[] = [];
-    void queue.queue("steer me", { debounceMs: 0 }).then(
-      () => outcomes.push("resolved"),
-      (error: unknown) => outcomes.push(error),
-    );
+    const result = queue.queue("steer me", { debounceMs: 0 }).catch(captureError);
     await vi.advanceTimersByTimeAsync(0);
-    expect((JSON.parse(harness.writes[0] ?? "{}") as { method?: string }).method).toBe(
-      "turn/steer",
-    );
-
-    // Codex accepted the frame but never responds: the caller must not wait forever.
+    expect(JSON.parse(harness.writes[0] ?? "{}").method).toBe("turn/steer");
     await vi.advanceTimersByTimeAsync(5_000);
 
-    expect(outcomes[0]).toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
+    expect(await result).toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
     expect(beforeSubmit).toHaveBeenCalledOnce();
-    expect((outcomes[0] as Error & { cause?: unknown }).cause).toMatchObject({
-      message: "turn/steer timed out",
-    });
+    expect(await result).toMatchObject({ cause: { message: "turn/steer timed out" } });
     harness.client.close();
   });
 
@@ -448,7 +418,7 @@ describe("Codex app-server steering queue", () => {
     ).pending;
 
     const queued = queue.queue("steer me", { debounceMs: 0 });
-    const rejected = expect(queued).rejects.toBeInstanceOf(CodexSteeringAcceptedUnconfirmedError);
+    const rejected = unconfirmed(queued);
     await vi.advanceTimersByTimeAsync(0);
     expect(pendingRequests.size).toBe(1);
 
@@ -459,18 +429,15 @@ describe("Codex app-server steering queue", () => {
     harness.client.close();
   });
 
+  registerCodexSteeringConfirmationCases({ createQueue, createReplyHarness });
+
   it("batches ordered text and images under one correlated user-message id", async () => {
-    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const request = vi.fn(async () => turn);
     const queue = createQueue({ request });
 
-    const first = queue.queue("first", {
-      debounceMs: 5,
-      images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
-    });
-    const second = queue.queue("second", {
-      debounceMs: 5,
-      images: [{ type: "image", data: PNG_1X1, mimeType: "image/png" }],
-    });
+    const options = { debounceMs: 5, images: [image] };
+    const first = queue.queue("first", options);
+    const second = queue.queue("second", options);
     const settled = vi.fn();
     const delivery = Promise.all([first, second]).then(settled);
     await vi.advanceTimersByTimeAsync(5);
@@ -486,9 +453,9 @@ describe("Codex app-server steering queue", () => {
         expectedTurnId: "turn-1",
         input: [
           { type: "text", text: "first", text_elements: [] },
-          { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
+          { type: "image", url: `data:image/png;base64,${image.data}` },
           { type: "text", text: "second", text_elements: [] },
-          { type: "image", url: `data:image/png;base64,${PNG_1X1}` },
+          { type: "image", url: `data:image/png;base64,${image.data}` },
         ],
         clientUserMessageId: "openclaw:turn-1:steer:1",
       },
@@ -497,13 +464,8 @@ describe("Codex app-server steering queue", () => {
   });
 
   it("rejects later steering behind a failed batch", async () => {
-    let rejectFirstSteer: ((error: Error) => void) | undefined;
-    const request = vi.fn(
-      () =>
-        new Promise<{ turnId: string }>((_resolve, reject) => {
-          rejectFirstSteer = reject;
-        }),
-    );
+    const firstSteer = createDeferred<{ turnId: string }>();
+    const request = vi.fn(() => firstSteer.promise);
     const queue = createQueue({ request });
 
     const settled: string[] = [];
@@ -517,7 +479,7 @@ describe("Codex app-server steering queue", () => {
     await vi.advanceTimersByTimeAsync(0);
 
     expect(request).toHaveBeenCalledOnce();
-    rejectFirstSteer?.(new Error("cannot steer this turn"));
+    firstSteer.reject(new Error("cannot steer this turn"));
     await vi.advanceTimersByTimeAsync(0);
     await Promise.all([first, second]);
 
@@ -531,7 +493,7 @@ describe("Codex app-server steering queue", () => {
   ] as const)("fences preparation that finishes after $closure", async ({ closure, reason }) => {
     const started = createDeferred<void>();
     const finished = createDeferred<Awaited<ReturnType<QueueParams["prepareMessage"]>>>();
-    const request = vi.fn(async () => ({ turnId: "turn-1" }));
+    const request = vi.fn(async () => turn);
     const controller = new AbortController();
     const queue = createQueue(
       { request },
@@ -543,7 +505,7 @@ describe("Codex app-server steering queue", () => {
         },
       },
     );
-    const images = [{ type: "image" as const, data: PNG_1X1, mimeType: "image/png" }];
+    const images = [image];
     const prepared = await prepareMessage("delayed image", { images }, () => {});
     const onQueueAccepted = vi.fn();
     const queued = queue.queue("delayed image", { images, debounceMs: 0, onQueueAccepted });
@@ -575,131 +537,80 @@ describe("Codex app-server steering queue", () => {
   });
 
   it("does not dispatch a chained batch after cancellation", async () => {
-    let acceptFirstSteer: (() => void) | undefined;
-    const firstSteerAccepted = new Promise<void>((resolve) => {
-      acceptFirstSteer = resolve;
-    });
-    const request = vi
-      .fn()
+    const { accepted, request, queue } = pendingRequest();
+    request
       .mockImplementationOnce(async () => {
-        await firstSteerAccepted;
-        return { turnId: "turn-1" };
+        await accepted.promise;
+        return turn;
       })
-      .mockResolvedValue({ turnId: "turn-1" });
-    const queue = createQueue({ request });
-    const onFirstAccepted = vi.fn();
-    const onSecondAccepted = vi.fn();
-
-    const first = queue.queue("on the wire", {
-      debounceMs: 0,
-      onQueueAccepted: onFirstAccepted,
-    });
-    const firstRejected = expect(first).rejects.toBeInstanceOf(
-      CodexSteeringAcceptedUnconfirmedError,
-    );
-    await vi.advanceTimersByTimeAsync(0);
-    const second = queue.queue("waiting", {
-      debounceMs: 0,
-      onQueueAccepted: onSecondAccepted,
-    });
-    const secondRejected = expect(second).rejects.toThrow("steering queue cancelled");
-    await vi.advanceTimersByTimeAsync(0);
+      .mockResolvedValue(turn);
+    const first = tracked(queue, "on the wire");
+    const firstRejected = unconfirmed(first.pending);
+    await tick();
+    const second = tracked(queue, "waiting");
+    const secondRejected = expect(second.pending).rejects.toThrow("steering queue cancelled");
+    await tick();
 
     queue.cancel();
-    acceptFirstSteer?.();
-    await vi.advanceTimersByTimeAsync(0);
+    accepted.resolve();
+    await tick();
     await Promise.all([firstRejected, secondRejected]);
     expect(request).toHaveBeenCalledTimes(1);
-    expect(onFirstAccepted).toHaveBeenCalledWith(true);
-    expect(onSecondAccepted).toHaveBeenCalledWith(false);
+    expect(first.accepted).toHaveBeenCalledWith(true);
+    expect(second.accepted).toHaveBeenCalledWith(false);
   });
 
   it("seals unsent admission while preserving a dispatched consumption confirmation", async () => {
-    let acceptFirstSteer: (() => void) | undefined;
-    const firstSteerAccepted = new Promise<void>((resolve) => {
-      acceptFirstSteer = resolve;
-    });
-    const request = vi.fn(async () => {
-      await firstSteerAccepted;
-      return { turnId: "turn-1" };
-    });
-    const queue = createQueue({ request });
-    const onDispatchedAccepted = vi.fn();
-    const onChainedAccepted = vi.fn();
-    const onDebouncedAccepted = vi.fn();
-    const onLateAccepted = vi.fn();
-
-    const dispatched = queue.queue("on the wire", {
-      debounceMs: 0,
-      onQueueAccepted: onDispatchedAccepted,
-    });
-    await vi.advanceTimersByTimeAsync(0);
-    const chained = queue.queue("waiting on send chain", {
-      debounceMs: 0,
-      onQueueAccepted: onChainedAccepted,
-    });
-    const chainedRejected = expect(chained).rejects.toThrow("queue admission sealed");
-    const debounced = queue.queue("still debounced", {
-      debounceMs: 30_000,
-      onQueueAccepted: onDebouncedAccepted,
-    });
-    const debouncedRejected = expect(debounced).rejects.toThrow("queue admission sealed");
-    await vi.advanceTimersByTimeAsync(0);
+    const { accepted, request, queue } = pendingRequest();
+    const dispatched = tracked(queue, "on the wire");
+    await tick();
+    const chained = tracked(queue, "waiting on send chain");
+    const chainedRejected = expect(chained.pending).rejects.toThrow("queue admission sealed");
+    const debounced = tracked(queue, "still debounced", 30_000);
+    const debouncedRejected = expect(debounced.pending).rejects.toThrow("queue admission sealed");
+    await tick();
 
     queue.sealAdmission();
 
     await Promise.all([chainedRejected, debouncedRejected]);
-    await expect(
-      queue.queue("too late", { debounceMs: 0, onQueueAccepted: onLateAccepted }),
-    ).rejects.toThrow("queue admission sealed");
+    const late = tracked(queue, "too late");
+    await expect(late.pending).rejects.toThrow("queue admission sealed");
     expect(request).toHaveBeenCalledOnce();
-    expect(onChainedAccepted).toHaveBeenCalledWith(false);
-    expect(onDebouncedAccepted).toHaveBeenCalledWith(false);
-    expect(onLateAccepted).toHaveBeenCalledWith(false);
-    expect(onDispatchedAccepted).not.toHaveBeenCalled();
+    for (const delivery of [chained, debounced, late]) {
+      expect(delivery.accepted).toHaveBeenCalledWith(false);
+    }
+    expect(dispatched.accepted).not.toHaveBeenCalled();
 
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(true);
-    await dispatched;
-    expect(onDispatchedAccepted).toHaveBeenCalledWith(true);
+    await dispatched.pending;
+    expect(dispatched.accepted).toHaveBeenCalledWith(true);
 
     queue.cancel();
-    acceptFirstSteer?.();
-    await vi.advanceTimersByTimeAsync(0);
+    accepted.resolve();
+    await tick();
     expect(request).toHaveBeenCalledOnce();
   });
 
   it("fully cancels a dispatched batch after admission was sealed", async () => {
-    let acceptSteer: (() => void) | undefined;
-    const steerAccepted = new Promise<void>((resolve) => {
-      acceptSteer = resolve;
-    });
-    const request = vi.fn(async () => {
-      await steerAccepted;
-      return { turnId: "turn-1" };
-    });
-    const queue = createQueue({ request });
-    const onQueueAccepted = vi.fn();
-
-    const dispatched = queue.queue("on the wire", { debounceMs: 0, onQueueAccepted });
-    const rejected = expect(dispatched).rejects.toBeInstanceOf(
-      CodexSteeringAcceptedUnconfirmedError,
-    );
-    await vi.advanceTimersByTimeAsync(0);
+    const { accepted, queue } = pendingRequest();
+    const dispatched = tracked(queue, "on the wire");
+    const rejected = unconfirmed(dispatched.pending);
+    await tick();
 
     queue.sealAdmission();
-    expect(onQueueAccepted).not.toHaveBeenCalled();
+    expect(dispatched.accepted).not.toHaveBeenCalled();
     queue.cancel();
     queue.cancel();
 
     await rejected;
-    expect(onQueueAccepted).toHaveBeenCalledWith(true);
+    expect(dispatched.accepted).toHaveBeenCalledWith(true);
     expect(queue.getAcceptedMessages()).toEqual([
       { role: "user", content: [{ type: "text", text: "on the wire" }], timestamp: 1 },
     ]);
     expect(queue.confirmConsumed("openclaw:turn-1:steer:1")).toBe(false);
     expect(queue.getAcceptedMessages()).toHaveLength(1);
-    acceptSteer?.();
-    await vi.advanceTimersByTimeAsync(0);
+    accepted.resolve();
+    await tick();
   });
 
   it("rejects before dispatch when the run is already aborted", async () => {
@@ -715,4 +626,37 @@ describe("Codex app-server steering queue", () => {
     expect(onQueueAccepted).toHaveBeenCalledWith(false);
     expect(request).not.toHaveBeenCalled();
   });
+});
+
+it("keeps a Codex question pending for a human who cannot answer that question", async () => {
+  const sessionKey = "agent:main:codex-question-permission";
+  const abort = new AbortController();
+  const pending = runAgentHarnessGatewayQuestion({
+    questions: [
+      { id: "answer", header: "Answer", question: "Continue?", isSecret: true, options: [] },
+    ],
+    sessionKey,
+    timeoutMs: 60_000,
+    signal: abort.signal,
+    delivery: { onBlockReply: vi.fn(async () => undefined) },
+  });
+  const input = createCodexQuestionInputHandlers(sessionKey, () => {});
+  try {
+    await expect(
+      input.claimPendingUserInputAnswer("status control", {
+        isInboundUserMessage: true,
+        allowPendingUserInputAnswer: false,
+      }),
+    ).resolves.toBe(false);
+    await expect(
+      input.claimPendingUserInputAnswer("Continue", { isInboundUserMessage: true }),
+    ).resolves.toBe(true);
+    await expect(pending).resolves.toMatchObject({
+      status: "answered",
+      answers: { answers: { answer: ["Continue"] } },
+    });
+  } finally {
+    abort.abort();
+    await pending;
+  }
 });

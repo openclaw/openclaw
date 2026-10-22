@@ -1,5 +1,5 @@
-import { Value } from "typebox/value";
-import { describe, expect, it } from "vitest";
+import { describe, it } from "vitest";
+import { schemaValidation, withOverrides } from "./protocol-validation.test-support.js";
 import {
   SessionGitHubConfirmParamsSchema,
   SessionGitHubOptionsResultSchema,
@@ -9,70 +9,120 @@ import {
 } from "./session-github-publication.js";
 import { UsersGitHubAuthorizeStartParamsSchema, UsersGitHubStatusParamsSchema } from "./users.js";
 
-describe("session GitHub publication protocol", () => {
-  it("admits only a current-workspace refresh and bounded conflict acknowledgment", () => {
-    const refresh = { sessionKey: "agent:main:publication", action: "refresh_base" };
-    expect(Value.Check(SessionGitHubActionParamsSchema, refresh)).toBe(true);
-    expect(
-      Value.Check(SessionGitHubActionParamsSchema, {
-        ...refresh,
-        conflictsResolved: true,
-        baseCommit: "a".repeat(40),
-      }),
-    ).toBe(true);
-    for (const extra of [
-      { repository: "other/repo" },
-      { ref: "main" },
-      { publishingSessionKey: "other" },
-      { requestId: "a1111111-1111-4111-8111-111111111111" },
-      { mergeMethod: "merge" },
-      { baseCommit: "main" },
-    ]) {
-      expect(Value.Check(SessionGitHubActionParamsSchema, { ...refresh, ...extra })).toBe(false);
-    }
-  });
-  it("keeps session PR actions closed to arbitrary targets, credentials and auto-merge", () => {
-    const inspect = { sessionKey: "agent:main:publication", action: "inspect" };
-    expect(Value.Check(SessionGitHubActionParamsSchema, inspect)).toBe(true);
-    for (const extra of [
-      { action: "auto_merge" },
-      { url: "https://github.com/another/repository/pull/1" },
-      { token: "synthetic" },
-      { admin: true },
-      { mergeMethod: "admin" },
-    ]) {
-      expect(Value.Check(SessionGitHubActionParamsSchema, { ...inspect, ...extra })).toBe(false);
-    }
-  });
-  it("accepts typed publication unavailability without accepting arbitrary diagnostics", () => {
-    const options = { personal: null, shared: null, pendingPersonal: null, latestShared: null };
-    for (const sharedUnavailableReason of [
-      "unavailable",
-      "changed",
-      "rate_limited",
-      "unverified",
-      "unsupported_workspace",
-    ]) {
-      expect(
-        Value.Check(SessionGitHubOptionsResultSchema, { ...options, sharedUnavailableReason }),
-      ).toBe(true);
-    }
-    expect(
-      Value.Check(SessionGitHubOptionsResultSchema, {
-        ...options,
-        sharedUnavailableReason: "raw diagnostics",
-      }),
-    ).toBe(false);
-  });
+const action = schemaValidation(SessionGitHubActionParamsSchema);
+const options = schemaValidation(SessionGitHubOptionsResultSchema);
+const publish = schemaValidation(SessionGitHubPublishParamsSchema);
+const confirm = schemaValidation(SessionGitHubConfirmParamsSchema);
+const result = schemaValidation(SessionGitHubPublicationResultSchema);
+const requestId = "a1111111-1111-4111-8111-111111111111";
+const head = "a".repeat(40);
+const account = { accountId: 101, login: "alice" };
+const selection = { source: "personal", generation: requestId, account };
+const sessionKey = "agent:main:publication";
+const emptyOptions = { personal: null, shared: null, pendingPersonal: null, latestShared: null };
+const request = (operation: string) => ({ sessionKey, action: operation });
 
-  it("allows shared-only options and one closed personal recovery descriptor", () => {
-    const sharedOnly = {
-      personal: null,
-      shared: { source: "system-detected", accountId: 42, login: "bot" },
-      pendingPersonal: null,
-      latestShared: null,
+describe("session GitHub publication protocol", () => {
+  it("binds review requests to the current PR without freeform text", () => {
+    const review = { ...request("request_review"), requestId, expectedHeadCommit: head };
+    action.accepts(review, { ...review, requestId: undefined });
+    action.rejects(
+      ...[
+        { body: "@clawsweeper stop" },
+        { focus: "maintainer instructions" },
+        { publishingSessionKey: "child" },
+        { repository: "other/repo" },
+        { url: "https://github.com/other/repo/pull/1" },
+        { mergeMethod: "squash" },
+        { expectedHeadCommit: undefined },
+      ].map(withOverrides(review)),
+    );
+  });
+  it("bounds current-workspace refresh and conflict acknowledgment", () => {
+    const refresh = request("refresh_base");
+    action.accepts(refresh, { ...refresh, conflictsResolved: true, baseCommit: head });
+    action.rejects(
+      ...[
+        { repository: "other/repo" },
+        { ref: "main" },
+        { publishingSessionKey: "other" },
+        { requestId },
+        { mergeMethod: "merge" },
+        { baseCommit: "main" },
+      ].map(withOverrides(refresh)),
+    );
+  });
+  it("binds metadata edits without target or lifecycle selectors", () => {
+    const edit = request("edit");
+    action.accepts(edit, {
+      ...edit,
+      title: "New title",
+      expectedTitle: "Old title",
+      body: "Full description",
+      expectedBody: "Previous description",
+      requestId,
+      expectedHeadCommit: head,
+    });
+    action.rejects(
+      ...[
+        { publishingSessionKey: "other" },
+        { repository: "other/repo" },
+        { url: "https://github.com/other/repo/pull/1" },
+        { mergeMethod: "squash" },
+        { draft: false },
+        { state: "closed" },
+        { token: "synthetic" },
+        { conflictsResolved: true },
+        { body: "x".repeat(65537) },
+      ].map(withOverrides(edit)),
+    );
+  });
+  it("excludes arbitrary targets, credentials and auto-merge from PR actions", () => {
+    const inspect = request("inspect");
+    action.accepts(inspect);
+    action.rejects(
+      ...[
+        { action: "auto_merge" },
+        { url: "https://github.com/another/repository/pull/1" },
+        { token: "synthetic" },
+        { admin: true },
+        { mergeMethod: "admin" },
+      ].map(withOverrides(inspect)),
+    );
+  });
+  it("admits an explicit own-PR inspection URL without publication or authority fields", () => {
+    const inspection = {
+      ...request("inspect_pr"),
+      pullRequestUrl: "https://github.com/example/repository/pull/1",
     };
-    expect(Value.Check(SessionGitHubOptionsResultSchema, sharedOnly)).toBe(true);
+    action.accepts(inspection);
+    action.rejects(
+      ...[
+        { pullRequestUrl: undefined },
+        { pullRequestUrl: "" },
+        { publishingSessionKey: "child" },
+        { expectedHeadCommit: head },
+        { requestId },
+        { title: "Write" },
+        { token: "synthetic" },
+        { profileId: "other" },
+        { mergeMethod: "merge" },
+      ].map(withOverrides(inspection)),
+    );
+  });
+  it("accepts typed unavailability rather than arbitrary diagnostics", () => {
+    options.accepts(
+      ...["unavailable", "changed", "rate_limited", "unverified", "unsupported_workspace"].map(
+        (sharedUnavailableReason) => Object.assign({}, emptyOptions, { sharedUnavailableReason }),
+      ),
+    );
+    options.rejects({ ...emptyOptions, sharedUnavailableReason: "raw diagnostics" });
+  });
+  it("accepts shared-only options and closed personal recovery descriptors", () => {
+    const sharedOnly = {
+      ...emptyOptions,
+      shared: { source: "system-detected", accountId: 42, login: "bot" },
+    };
     const latestShared = {
       result: {
         requestId: "b1111111-1111-4111-8111-111111111111",
@@ -81,134 +131,101 @@ describe("session GitHub publication protocol", () => {
         url: "https://github.com/org/repo/pull/1",
         repository: "org/repo",
         branch: "topic",
-        headCommit: "a".repeat(40),
+        headCommit: head,
       },
       confirmation: null,
     };
-    expect(Value.Check(SessionGitHubOptionsResultSchema, { ...sharedOnly, latestShared })).toBe(
-      true,
-    );
     const pendingPersonal = {
       result: {
-        requestId: "a1111111-1111-4111-8111-111111111111",
+        requestId,
         status: "needs_confirmation",
-        publisher: { source: "personal", accountId: 101, login: "alice" },
+        publisher: { source: "personal", ...account },
         message: "Confirm the original request.",
       },
       confirmation: {
         requestDigest: "a".repeat(64),
-        generation: "a1111111-1111-4111-8111-111111111111",
-        account: { accountId: 101, login: "alice" },
+        generation: requestId,
+        account,
         pushRepository: "alice/repo",
         repository: "org/repo",
         branch: "topic",
         baseBranch: "main",
-        sourceHeadCommit: "a".repeat(40),
+        sourceHeadCommit: head,
         sourceIndexTree: "b".repeat(40),
         workspaceTree: "c".repeat(40),
       },
     };
-    expect(Value.Check(SessionGitHubOptionsResultSchema, { ...sharedOnly, pendingPersonal })).toBe(
-      true,
+    options.accepts(
+      sharedOnly,
+      { ...sharedOnly, latestShared },
+      { ...sharedOnly, pendingPersonal },
     );
-    for (const invalid of [
-      [pendingPersonal],
-      { ...pendingPersonal, owner: "another-profile" },
-      { ...pendingPersonal, confirmation: { ...pendingPersonal.confirmation, token: "synthetic" } },
-    ]) {
-      for (const field of ["pendingPersonal", "latestShared"] as const) {
-        expect(
-          Value.Check(SessionGitHubOptionsResultSchema, { ...sharedOnly, [field]: invalid }),
-        ).toBe(false);
-      }
+    for (const field of ["pendingPersonal", "latestShared"]) {
+      options.rejects(
+        ...[
+          [pendingPersonal],
+          { ...pendingPersonal, owner: "another-profile" },
+          {
+            ...pendingPersonal,
+            confirmation: { ...pendingPersonal.confirmation, token: "synthetic" },
+          },
+        ].map((invalid) => Object.assign({}, sharedOnly, { [field]: invalid })),
+      );
     }
   });
-
-  it("closes personal selection and confirmation over display preconditions without accepting bearer authority", () => {
-    const selection = {
-      source: "personal",
-      generation: "a1111111-1111-4111-8111-111111111111",
-      account: { accountId: 101, login: "alice" },
-    };
-    const request = { sessionKey: "agent:main:main", idempotencyKey: "personal", selection };
-    expect(Value.Check(SessionGitHubPublishParamsSchema, request)).toBe(true);
-    for (const key of ["ownerProfileId", "token", "profileDir", "repository"]) {
-      expect(
-        Value.Check(SessionGitHubPublishParamsSchema, {
-          ...request,
-          selection: { ...selection, [key]: "caller-owned" },
+  it("requires display preconditions, never caller-owned bearer authority", () => {
+    const personal = { sessionKey: "agent:main:main", idempotencyKey: "personal", selection };
+    publish.accepts(personal);
+    publish.rejects(
+      ...["ownerProfileId", "token", "profileDir", "repository"].map((key) =>
+        Object.assign({}, personal, {
+          selection: Object.assign({}, selection, { [key]: "caller-owned" }),
         }),
-        key,
-      ).toBe(false);
-    }
-    expect(
-      Value.Check(SessionGitHubPublishParamsSchema, {
-        ...request,
-        selection: { source: "personal", account: selection.account },
-      }),
-    ).toBe(false);
+      ),
+      { ...personal, selection: { source: "personal", account } },
+    );
     const confirmation = {
-      sessionKey: request.sessionKey,
-      requestId: selection.generation,
-      generation: selection.generation,
-      account: selection.account,
+      sessionKey: personal.sessionKey,
+      requestId,
+      generation: requestId,
+      account,
       requestDigest: "a".repeat(64),
     };
-    expect(Value.Check(SessionGitHubConfirmParamsSchema, confirmation)).toBe(true);
-    expect(
-      Value.Check(SessionGitHubConfirmParamsSchema, { ...confirmation, repository: "other/repo" }),
-    ).toBe(false);
+    confirm.accepts(confirmation);
+    confirm.rejects({ ...confirmation, repository: "other/repo" });
     for (const schema of [UsersGitHubAuthorizeStartParamsSchema, UsersGitHubStatusParamsSchema]) {
-      expect(Value.Check(schema, {})).toBe(true);
-      expect(Value.Check(schema, { ownerProfileId: "other" })).toBe(false);
-      expect(Value.Check(schema, { token: "synthetic-PAT" })).toBe(false);
+      const user = schemaValidation(schema);
+      user.accepts({});
+      user.rejects({ ownerProfileId: "other" }, { token: "synthetic-PAT" });
     }
   });
-  it("accepts bounded intent without caller-owned repository authority", () => {
-    expect(
-      Value.Check(SessionGitHubPublishParamsSchema, {
-        idempotencyKey: "tool-call-1",
-        title: "Fix the gateway",
-        body: "Explains the change.",
-      }),
-    ).toBe(true);
-    expect(
-      Value.Check(SessionGitHubPublishParamsSchema, {
-        idempotencyKey: "tool-call-1",
-        title: "Fix the gateway\nCo-authored-by: unverified <unverified@example.test>",
-      }),
-    ).toBe(false);
-    expect(
-      Value.Check(SessionGitHubPublishParamsSchema, {
-        idempotencyKey: "tool-call-1",
-        title: "Fix the gateway",
-        commitMessage: "model-controlled trailer",
-      }),
-    ).toBe(false);
+  it.each([undefined, false, true, "true", 1, null])("validates draft choice %s", (draft) => {
+    const value = { idempotencyKey: "draft-choice", ...(draft !== undefined ? { draft } : {}) };
+    if (draft === undefined || typeof draft === "boolean") {
+      publish.accepts(value);
+    } else {
+      publish.rejects(value);
+    }
   });
-
-  it.each([["token", "secret"]])(
-    "rejects caller-owned %s authority independently",
-    (field, value) => {
-      expect(
-        Value.Check(SessionGitHubPublishParamsSchema, {
-          idempotencyKey: "tool-call-1",
-          [field]: value,
-        }),
-      ).toBe(false);
-    },
-  );
-
+  it("bounds intent and excludes model-controlled commit trailers", () => {
+    const intent = { idempotencyKey: "tool-call-1", title: "Fix the gateway" };
+    publish.accepts({ ...intent, body: "Explains the change." });
+    publish.rejects(
+      { ...intent, title: "Fix the gateway\nCo-authored-by: unverified <unverified@example.test>" },
+      { ...intent, commitMessage: "model-controlled trailer" },
+    );
+  });
+  it("rejects caller-owned token authority independently", () => {
+    publish.rejects({ idempotencyKey: "tool-call-1", token: "secret" });
+  });
   it("rejects extra fields from terminal results", () => {
-    expect(
-      Value.Check(SessionGitHubPublicationResultSchema, {
-        requestId: "request-1",
-        status: "failed",
-        code: "push_rejected",
-        message: "GitHub publication failed.",
-        nextAction: "Check branch access and retry.",
-        token: "secret",
-      }),
-    ).toBe(false);
+    result.rejects({
+      requestId: "request-1",
+      status: "failed",
+      code: "push_rejected",
+      message: "GitHub publication failed.",
+      nextAction: "Check branch access and retry.",
+      token: "secret",
+    });
   });
 });

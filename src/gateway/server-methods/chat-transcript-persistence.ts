@@ -51,7 +51,10 @@ type AssistantTranscriptScopeParams = {
   agentId?: string;
 };
 
-type ResolvedAssistantTranscriptScope = SessionTranscriptWriteScope & { sessionId: string };
+export type ResolvedAssistantTranscriptScope = SessionTranscriptWriteScope & {
+  sessionId: string;
+  sessionKey: string;
+};
 
 type SourceReplyTranscriptMirrorMetadata = NonNullable<
   ReturnType<typeof getReplyPayloadMetadata>
@@ -103,7 +106,7 @@ function mergeAssistantDisplayContent(
   return content;
 }
 
-function buildAssistantDisplayRewrite(params: {
+export function buildAssistantDisplayRewrite(params: {
   message: Record<string, unknown>;
   displayContent: AssistantDisplayContentBlock[];
   mediaBySource?: AssistantDisplayMediaBySource;
@@ -517,10 +520,10 @@ async function touchAssistantTranscriptSessionEntry(
         target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
       },
       operation,
-      { skipMaintenance: true },
+      { result: "none", skipMaintenance: true },
     );
   } else {
-    await applySessionEntryOperation(target, operation, { skipMaintenance: true });
+    await applySessionEntryOperation(target, operation, { result: "none", skipMaintenance: true });
   }
 }
 

@@ -279,14 +279,6 @@ export class TwilioProvider implements VoiceCallProvider {
     return undefined;
   }
 
-  private static parseConfidence(value: string | null): number {
-    const trimmed = value?.trim();
-    if (!trimmed || !/^\d+(?:\.\d+)?$/.test(trimmed)) {
-      return 0.9;
-    }
-    return Number(trimmed);
-  }
-
   private normalizeEvent(
     params: URLSearchParams,
     options?: {
@@ -323,7 +315,6 @@ export class TwilioProvider implements VoiceCallProvider {
       return { ...baseEvent, type: "call.amd", answeredBy };
     }
 
-    // Handle speech result (from <Gather>)
     const speechResult = params.get("SpeechResult");
     if (speechResult?.trim()) {
       return {
@@ -331,7 +322,6 @@ export class TwilioProvider implements VoiceCallProvider {
         type: "call.speech",
         transcript: speechResult,
         isFinal: true,
-        confidence: TwilioProvider.parseConfidence(params.get("Confidence")),
       };
     }
 
@@ -340,7 +330,6 @@ export class TwilioProvider implements VoiceCallProvider {
       return { ...baseEvent, type: "call.dtmf", digits };
     }
 
-    // Handle call status changes
     const rawCallStatus = params.get("CallStatus");
     const callStatus = normalizeProviderStatus(rawCallStatus);
     if (callStatus === "initiated") {

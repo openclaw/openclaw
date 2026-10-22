@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { deriveDeliveryQueueRetentionColumns } from "../infra/delivery-queue-retention-columns.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
-import type { RuntimeEnv } from "../runtime.js";
 import { createLocalSqliteSnapshotProvider } from "../snapshot/local-repository.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -18,6 +17,7 @@ import {
   backupSqliteRestoreCommand,
   backupSqliteVerifyCommand,
 } from "./backup-sqlite.js";
+import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
 const configMocks = vi.hoisted(() => ({
   getRuntimeConfig: vi.fn(),
@@ -63,41 +63,21 @@ function createGlobalDatabase(databasePath: string): void {
       PRAGMA wal_autocheckpoint = 0;
       ${OPENCLAW_STATE_SCHEMA_SQL}
       PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
-      CREATE TABLE durable_entries (
-        id INTEGER PRIMARY KEY,
-        value TEXT NOT NULL
-      );
+      CREATE TABLE durable_entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
     `);
     database
       .prepare(
-        `
-          INSERT INTO schema_meta (
-            meta_key,
-            role,
-            schema_version,
-            agent_id,
-            app_version,
-            created_at,
-            updated_at
-          ) VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)
-        `,
+        "INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at) VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)",
       )
       .run(OPENCLAW_STATE_SCHEMA_VERSION);
     const entryJson = '{"payload":"do-not-restore"}';
     database
       .prepare(
         `
-          INSERT INTO delivery_queue_entries (
-            queue_name,
-            id,
-            status,
-            entry_json,
-            retention_id_prefix,
-            retention_max_age_ms,
-            retention_max_entries,
-            enqueued_at,
-            updated_at
-          ) VALUES ('delivery', 'queued', 'pending', ?,
+          INSERT INTO delivery_queue_entries
+            (queue_name, id, status, entry_json, retention_id_prefix,
+             retention_max_age_ms, retention_max_entries, enqueued_at, updated_at)
+          VALUES ('delivery', 'queued', 'pending', ?,
             @retention_id_prefix, @retention_max_age_ms, @retention_max_entries, 1, 1)
         `,
       )
@@ -128,7 +108,7 @@ describe("SQLite backup commands", () => {
       await fs.mkdir(scratchPath, { mode: 0o700 });
       await fs.chmod(scratchPath, 0o700);
       createGlobalDatabase(databasePath);
-      const runtime = createRuntimeCapture();
+      const runtime = createRuntime();
 
       const created = await backupSqliteCreateCommand(runtime, {
         global: true,
@@ -140,7 +120,7 @@ describe("SQLite backup commands", () => {
         basename: "openclaw.sqlite",
         userVersion: OPENCLAW_STATE_SCHEMA_VERSION,
       });
-      expect(JSON.parse(runtime.logs.shift() ?? "{}")).toEqual(created);
+      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual(created);
 
       const listed = await backupSqliteListCommand(runtime, {
         repository: repositoryPath,
@@ -174,7 +154,7 @@ describe("SQLite backup commands", () => {
         snapshotPath: created.snapshotPath,
         targetPath: restorePath,
       });
-      expect(runtime.errors).toEqual([]);
+      expect(runtime.error).not.toHaveBeenCalled();
 
       const sqlite = requireNodeSqlite();
       const restoredDatabase = new sqlite.DatabaseSync(restorePath, { readOnly: true });
@@ -192,11 +172,10 @@ describe("SQLite backup commands", () => {
   );
 
   it("reports missing snapshot paths for verify and restore", async () => {
-    const tempDir = state.root;
-    const repositoryPath = path.join(tempDir, "snapshots");
+    const repositoryPath = state.path("snapshots");
     const snapshotPath = path.join(repositoryPath, "missing-snapshot");
-    const restorePath = path.join(tempDir, "restored.sqlite");
-    const runtime = createRuntimeCapture();
+    const restorePath = state.path("restored.sqlite");
+    const runtime = createRuntime();
     const missingRepositoryMessage = `SQLite snapshot repository does not exist: ${repositoryPath}. Check the snapshot path or create a snapshot with \`openclaw backup sqlite create\`.`;
 
     await expect(backupSqliteVerifyCommand(runtime, snapshotPath, {})).rejects.toThrow(
@@ -216,8 +195,29 @@ describe("SQLite backup commands", () => {
     ).rejects.toThrow(missingSnapshotMessage);
   });
 
+  it.each(["directory", "file"])(
+    "reports a repository-format mismatch when listing a Git backup as SQLite (%s marker)",
+    async (marker) => {
+      const repositoryPath = path.join(state.root, "git-backup");
+      const gitPath = path.join(repositoryPath, ".git");
+      if (marker === "directory") {
+        await fs.mkdir(gitPath, { recursive: true });
+      } else {
+        await fs.mkdir(repositoryPath);
+        await fs.writeFile(gitPath, "gitdir: ../git-admin\n");
+      }
+
+      const runtime = createRuntime();
+      await expect(
+        backupSqliteListCommand(runtime, { repository: repositoryPath, json: true }),
+      ).rejects.toThrow(
+        `Git backup repository is not a SQLite snapshot repository: ${repositoryPath}. Use \`openclaw backup git log --repository <path>\` instead.`,
+      );
+    },
+  );
+
   it("requires exactly one named OpenClaw database source", async () => {
-    const runtime = createRuntimeCapture();
+    const runtime = createRuntime();
 
     await expect(
       backupSqliteCreateCommand(runtime, { repository: "/tmp/snapshots" }),
@@ -240,7 +240,7 @@ describe("SQLite backup commands", () => {
     ["whitespace-only", "   ", "--agent must not be blank"],
   ])("rejects an %s SQLite snapshot agent", async (_label, agent, message) => {
     await expect(
-      backupSqliteCreateCommand(createRuntimeCapture(), {
+      backupSqliteCreateCommand(createRuntime(), {
         agent,
         repository: "/tmp/snapshots",
       }),
@@ -248,25 +248,24 @@ describe("SQLite backup commands", () => {
   });
 
   it("does not claim completion when a corrupt database also rejects outcome recording", async () => {
-    const tempDir = state.root;
-    const repositoryPath = path.join(tempDir, "snapshots");
+    const repositoryPath = state.path("snapshots");
     const databasePath = resolveOpenClawStateSqlitePath();
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     await fs.writeFile(databasePath, Buffer.alloc(32));
-    const runtime = createRuntimeCapture();
+    const runtime = createRuntime();
 
     await expect(
       backupSqliteCreateCommand(runtime, { global: true, repository: repositoryPath }),
     ).rejects.toThrow(/cannot be snapshotted safely/u);
 
-    expect(runtime.errors).toEqual([
+    expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
       `Warning: the backup outcome could not be recorded: Cannot admit backup.recordOutcome for backup outcome ledger in state root ${path.dirname(path.dirname(databasePath))}: failed to acquire gateway state ownership | file is not a database | ERR_SQLITE_ERROR. No local mutation was attempted. Inspect openclaw gateway status. Update the Gateway or fix authentication and retry. To run offline, stop the Gateway through its service owner, wait for ownership to release, then rerun this exact command. | ERR_SQLITE_ERROR`,
-    ]);
+    );
     await expect(fs.readdir(repositoryPath)).resolves.toEqual([]);
   });
 
   it("requires repository, snapshot, and restore target paths", async () => {
-    const runtime = createRuntimeCapture();
+    const runtime = createRuntime();
 
     await expect(backupSqliteCreateCommand(runtime, { global: true })).rejects.toThrow(
       "Missing required --repository value",
@@ -280,10 +279,9 @@ describe("SQLite backup commands", () => {
   });
 
   it("rejects generic provider artifacts before verify or restore", async () => {
-    const tempDir = state.root;
-    const databasePath = path.join(tempDir, "generic.sqlite");
-    const repositoryPath = path.join(tempDir, "snapshots");
-    const restorePath = path.join(tempDir, "restore", "generic.sqlite");
+    const databasePath = state.path("generic.sqlite");
+    const repositoryPath = state.path("snapshots");
+    const restorePath = state.path("restore", "generic.sqlite");
     const sqlite = requireNodeSqlite();
     const database = new sqlite.DatabaseSync(databasePath);
     try {
@@ -295,7 +293,7 @@ describe("SQLite backup commands", () => {
       path: databasePath,
       identity: { role: "generic", id: "generic-test" },
     });
-    const runtime = createRuntimeCapture();
+    const runtime = createRuntime();
 
     await expect(backupSqliteListCommand(runtime, { repository: repositoryPath })).rejects.toThrow(
       /database role generic is not allowed/u,
@@ -310,23 +308,10 @@ describe("SQLite backup commands", () => {
   });
 });
 
-function createRuntimeCapture(): RuntimeEnv & {
-  logs: string[];
-  errors: string[];
-} {
-  const logs: string[] = [];
-  const errors: string[] = [];
-  return {
-    logs,
-    errors,
-    log(value) {
-      logs.push(String(value));
-    },
-    error(value) {
-      errors.push(String(value));
-    },
-    exit(code) {
-      throw new Error(`exit ${code}`);
-    },
-  };
+function createRuntime() {
+  const runtime = createTestRuntime();
+  runtime.exit.mockImplementation((code) => {
+    throw new Error(`exit ${code}`);
+  });
+  return runtime;
 }

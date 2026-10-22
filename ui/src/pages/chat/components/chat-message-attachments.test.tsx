@@ -5,13 +5,13 @@ import { createMemo, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { normalizeAttachmentContentBlock } from "../../../lib/chat/message-normalizer-attachments.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { AssistantAttachments } from "./chat-message-attachments-solid.tsx";
 import { MessageImages } from "./chat-message-images-solid.tsx";
 import { stubObjectUrls, ticketResponse } from "./chat-message-media.test-helpers.ts";
 import {
   projectMessageMedia,
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type AttachmentItem,
   type AssistantAttachmentItem,
 } from "./chat-message-media.ts";
@@ -98,7 +98,7 @@ function drawReactive(
   options: AttachmentTestProps["options"] = {},
   onOpenSidebar?: AttachmentTestProps["onOpenSidebar"],
 ) {
-  const update = () => draw(content(), { ...options, onRequestUpdate: update }, onOpenSidebar);
+  const update = () => draw(content(), { ...options, mediaOwner: update }, onOpenSidebar);
   subscribers.add(update);
   update();
 }
@@ -152,7 +152,7 @@ afterEach(() => {
     unmountAttachments(target);
   }
   for (const subscriber of subscribers) {
-    releaseChatMediaResourceSubscriber(subscriber);
+    releaseChatMediaResourceOwner(subscriber);
   }
   subscribers.clear();
   document.body.replaceChildren();
@@ -183,17 +183,20 @@ describe("attachment sidebar source ownership", () => {
       "application/octet-stream; charset=binary",
       `${window.location.origin}/download/photo.png`,
     ],
-  ])("renders document-shaped %s attachments as expandable images", (label, mimeType, source) => {
-    const onOpenImage = vi.fn();
-    draw([makeAttachment(source, label, mimeType)], { onOpenImage });
+  ])(
+    "renders document-shaped %s attachments as expandable images",
+    async (label, mimeType, source) => {
+      const onOpenImage = vi.fn();
+      draw([makeAttachment(source, label, mimeType)], { onOpenImage });
 
-    expect(card("")).toBeNull();
-    expect(imageNode()?.getAttribute("src")).toBe(source);
-    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
-    expect(onOpenImage).toHaveBeenCalledWith(
-      expect.objectContaining({ src: source, title: label }),
-    );
-  });
+      expect(card("")).toBeNull();
+      await waitForSolid(() => expect(imageNode()?.getAttribute("src")).toBe(source));
+      container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
+      expect(onOpenImage).toHaveBeenCalledWith(
+        expect.objectContaining({ src: source, title: label }),
+      );
+    },
+  );
 
   it.each([
     { kind: "image", outcome: "offline" },
@@ -221,7 +224,7 @@ describe("attachment sidebar source ownership", () => {
       const rerender = () =>
         draw([attachment], {
           authToken: "test-token",
-          onRequestUpdate: rerender,
+          mediaOwner: rerender,
         });
       subscribers.add(rerender);
       rerender();
@@ -342,11 +345,20 @@ describe("attachment sidebar source ownership", () => {
     );
     const lightboxItem = onOpenImage.mock.calls[0]?.[0] as { release?: () => void } | undefined;
     expect(lightboxItem?.release).toBeTypeOf("function");
+    container.querySelector<HTMLButtonElement>(".chat-message-image-button")?.click();
+    const secondLightboxItem = onOpenImage.mock.calls[1]?.[0] as
+      | { release?: () => void }
+      | undefined;
+    expect(secondLightboxItem?.release).toBeTypeOf("function");
     container.remove();
     await Promise.resolve();
     expect(revokeObjectURL).not.toHaveBeenCalledWith(objectUrl);
     lightboxItem?.release?.();
-    expect(revokeObjectURL).toHaveBeenCalledWith(objectUrl);
+    lightboxItem?.release?.();
+    expect(revokeObjectURL).not.toHaveBeenCalledWith(objectUrl);
+    secondLightboxItem?.release?.();
+    secondLightboxItem?.release?.();
+    expect(revokeObjectURL).toHaveBeenCalledExactlyOnceWith(objectUrl);
   });
 
   it("keeps a cross-origin SVG with an extensionless label compact under the image CSP", async () => {

@@ -76,6 +76,8 @@ it("pages and searches archived sessions without materializing excluded candidat
     using fixture = await archiveProjection(cfg);
     const { list, projection } = fixture;
     await projection.ensureMaterialized();
+    expect(projection.materializedCount).toBe(0);
+    await list({ archived: false });
     expect(projection.materializedCount).toBe(3);
     for (const [request, count, totalCount, nextOffset, ids, materializedCount] of [
       [{ archived: true, limit: 2 }, 2, 4, 2, ["row-6", "row-4"], 5],

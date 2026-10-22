@@ -40,7 +40,7 @@ import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.mjs";
 import { testRunnerFixtureEnv } from "./prepared-script-wrapper.test-support.js";
-import { childTermination } from "./run-vitest.test-support.js";
+import { captureWatchdog, childTermination } from "./run-vitest.test-support.js";
 
 const posixIt = process.platform === "win32" ? it.skip : it;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -226,14 +226,10 @@ describe("scripts/run-vitest", () => {
           throw error;
         },
       }),
-    ).toThrow(
-      [
-        "[vitest] node_modules is missing; Vitest cannot be resolved.",
-        "Install dependencies before running scripts/run-vitest.mjs:",
-        "  pnpm install --frozen-lockfile",
-        "For raw Crabbox/AWS macOS source syncs, hydrate or install dependencies before this runner.",
-      ].join("\n"),
-    );
+    ).toThrow(`[vitest] node_modules is missing; Vitest cannot be resolved.
+Install dependencies before running scripts/run-vitest.mjs:
+  pnpm install --frozen-lockfile
+For raw Crabbox/AWS macOS source syncs, hydrate or install dependencies before this runner.`);
   });
 
   it("selects Bun without changing the compiled bootstrap or test operands", () =>
@@ -460,11 +456,11 @@ registerHooks({resolve(specifier, context, nextResolve) {
     expect(resolveImplicitVitestArgs(argv)).toEqual(expected);
   });
 
-  it("inserts bounded Gateway targets before the native separator", () => {
-    const argv = directArgs(gatewayConfig, "--reporter=verbose");
+  it("replaces broad Gateway filters while retaining options and the native separator", () => {
+    const argv = directArgs(gatewayConfig, "--reporter=verbose", "--testNamePattern", "server");
     const targets = ["src/gateway/server-a.test.ts", "src/gateway/server-b.test.ts"];
     expect(
-      resolveBoundedVitestInvocations([...argv, "--", "-x"], {
+      resolveBoundedVitestInvocations([...argv, "server", "--", "-x"], {
         env: {},
         gatewayServerTargetChunks: targets.map((target) => [target]),
       }),
@@ -476,7 +472,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
     const invocations = resolveBoundedVitestInvocations(argv, { env: { CI: "1" } });
     const targets = invocations.map((args) => args.slice(argv.length));
 
-    expect(targets.every((files) => files.length > 0 && files.length <= 50)).toBe(true);
+    expect(targets.every((files) => files.length > 0 && files.length <= 16)).toBe(true);
     expect(targets.flat()).toEqual(
       listGitTrackedFiles({ pathspecs: "src/gateway" })
         ?.filter(isGatewayServerTestFile)
@@ -644,10 +640,6 @@ registerHooks({resolve(specifier, context, nextResolve) {
         ...(row.nativeBun ? { OPENCLAW_LIVE_TEST: "1", OPENCLAW_LIVE_USE_REAL_HOME: "1" } : {}),
       };
       let noOutputTimedOut = false;
-      // Only watchdog timers are fake; child I/O, diagnostics, and group joins stay real.
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-      const { clock } = setTimeout as typeof setTimeout & { clock: { tick(ms: number): void } };
-      let watched: ReturnType<typeof spawnWatchedVitestProcess>;
       const fixtureArgs = [
         "-e",
         descendantFixture(
@@ -663,25 +655,26 @@ registerHooks({resolve(specifier, context, nextResolve) {
             args: fixtureArgs,
           })
         : undefined;
-      try {
-        watched = spawnWatchedVitestProcess({
-          ...(row.nativeBun
-            ? { nativeBunFiles: ["./test/scripts/run-vitest.test.ts"] }
-            : { pnpmArgs: ["exec", "node", ...fixtureArgs] }),
-          spawnParams: {
-            detached: true,
+      const { handle: watched, clock } = captureWatchdog(() => {
+        try {
+          return spawnWatchedVitestProcess({
+            ...(row.nativeBun
+              ? { nativeBunFiles: ["./test/scripts/run-vitest.test.ts"] }
+              : { pnpmArgs: ["exec", "node", ...fixtureArgs] }),
+            spawnParams: {
+              detached: true,
+              env: watchedEnv,
+              stdio: ["ignore", "pipe", "pipe"],
+            },
             env: watchedEnv,
-            stdio: ["ignore", "pipe", "pipe"],
-          },
-          env: watchedEnv,
-          onNoOutputTimeout: () => {
-            noOutputTimedOut = true;
-          },
-        });
-      } finally {
-        vi.useRealTimers();
-        nativeCommand?.mockRestore();
-      }
+            onNoOutputTimeout: () => {
+              noOutputTimedOut = true;
+            },
+          });
+        } finally {
+          nativeCommand?.mockRestore();
+        }
+      });
       const rawExit = childTermination(watched.child);
       let descendantPid = 0;
       let nativeTempRoot: string | undefined;

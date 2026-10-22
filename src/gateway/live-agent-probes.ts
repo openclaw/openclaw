@@ -75,6 +75,7 @@ export function createLiveCronProbeSpec(
   params: {
     agentId?: string;
     sessionKey?: string;
+    model?: string;
   } = {},
 ): LiveCronProbeSpec {
   const nonce = randomBytes(3).toString("hex").toUpperCase();
@@ -89,7 +90,7 @@ export function createLiveCronProbeSpec(
     job: {
       name,
       schedule: { kind: "at", at },
-      payload: { kind: "agentTurn", message },
+      payload: { kind: "agentTurn", message, ...(params.model ? { model: params.model } : {}) },
       // Live harnesses use synthetic channels that must not become announce targets.
       delivery: { mode: "none" },
       sessionTarget: params.sessionKey ? `session:${params.sessionKey}` : "current",

@@ -2,7 +2,10 @@ import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   discoveryCategories,
   discoveryResult,
@@ -48,7 +51,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     await install?.(page);
-    await installMockGateway(page, gatewayOptions);
+    const gateway = await installMockGateway(page, gatewayOptions);
     await page.goto(`${suite.server.baseUrl}${route}`);
     await page.locator(ready).first().waitFor({ state: "attached" });
     if (direction) {
@@ -68,7 +71,7 @@ suite.define(() => {
       .locator(native ? ".macos-titlebar-controls" : ".shell-chrome-controls")
       .boundingBox();
     expect(box).not.toBeNull();
-    return { page, toolbar: box! };
+    return { page, gateway, toolbar: box! };
   }
 
   async function expectAligned(target: Locator, reference: Locator | number, axis: "x" | "y") {
@@ -88,19 +91,11 @@ suite.define(() => {
       await page.screenshot({ animations: "disabled", path: path.join(proofDir, file) });
     }
   }
-  async function expectActions(header: Locator, y: number, right: number) {
-    const buttons = header.locator(".page-header-actions .btn");
-    const count = await buttons.count();
-    expect(count).toBeGreaterThan(0);
-    for (let index = 0; index < count; index++) {
-      await expectAligned(buttons.nth(index), y, "y");
-      expect((await buttons.nth(index).boundingBox())!.x).toBeGreaterThan(right);
-    }
-  }
 
+  // Built-in Pages use the stacked hub header; Memory import keeps the toolbar-row title.
   it.each([true, false])("centers page titles and clears controls (native: %s)", async (native) => {
     const { page, toolbar } = await openPage(
-      "agents",
+      "memory-import",
       native ? installNativeWebChrome : undefined,
       undefined,
       undefined,
@@ -112,7 +107,6 @@ suite.define(() => {
     await expectAligned(title, y, "y");
     await expectAligned(title, header, "x");
     const titleBox = (await title.boundingBox())!;
-    let right = titleBox.x + titleBox.width;
     if (native) {
       expect(toolbar.y + toolbar.height).toBe(52);
       expect(titleBox.x).toBeGreaterThan(toolbar.x + toolbar.width);
@@ -122,26 +116,160 @@ suite.define(() => {
       const edges = await page
         .locator(".shell-chrome-controls button:visible")
         .evaluateAll((buttons) => buttons.map((button) => button.getBoundingClientRect().right));
-      right = Math.max(right, ...edges);
+      expect(titleBox.x).toBeGreaterThan(Math.max(...edges));
     }
-    await expectActions(header, y, right);
   });
 
-  it("puts hub tabs in the row instead of a redundant title", async () => {
-    const { page, toolbar } = await openPage(
-      "sessions",
-      installNativeWebChrome,
-      ".hub-page-header__tabs",
-    );
-    const header = page.locator(".content .content-header.hub-page-header");
-    const titleBox = (await header.locator(".page-title").boundingBox())!;
-    expect(Math.max(titleBox.width, titleBox.height)).toBeLessThanOrEqual(1);
-    const tabs = header.locator(".hub-page-header__tabs");
-    await expectAligned(tabs, center(toolbar, "y"), "y");
-    await expectAligned(tabs, header, "x");
-    const tabsBox = (await tabs.boundingBox())!;
-    expect(tabsBox.x).toBeGreaterThan(toolbar.x + toolbar.width);
-  });
+  it.each([
+    { width: 1524, height: 864, native: false, narrowColumn: false },
+    { width: 1366, height: 768, native: false, narrowColumn: false },
+    { width: 768, height: 1024, native: false, narrowColumn: false },
+    { width: 768, height: 1024, native: false, narrowColumn: true },
+    { width: 390, height: 844, native: false, narrowColumn: false },
+    { width: 1524, height: 864, native: true, narrowColumn: false },
+  ])(
+    "keeps the Claws heading and discovery search reachable at $width×$height (native: $native, narrow: $narrowColumn)",
+    async ({ width, height, native, narrowColumn }) => {
+      const config = { gateway: { controlUi: { experimental: { claws: true } } } };
+      const { page, gateway, toolbar } = await openPage(
+        "claws",
+        native ? installNativeWebChrome : undefined,
+        ".claws-catalog-header",
+        {
+          featureMethods: [...defaultControlUiFeatureMethods, "claws.catalog.search"],
+          methodResponses: {
+            "config.get": {
+              config,
+              sourceConfig: config,
+              hash: "claws-header-config",
+              valid: true,
+              issues: [],
+            },
+            "claws.catalog.search": { entries: [] },
+          },
+        },
+      );
+      await page.setViewportSize({ width, height });
+      if (narrowColumn) {
+        // Match the content width left during the tablet sidebar transition.
+        await page.locator(".claws-catalog-header").evaluate((element) => {
+          (element as HTMLElement).style.width = "430px";
+        });
+      }
+      if (width <= 560) {
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .toContain("shell--mobile-nav");
+      }
+      const header = page.locator(".claws-catalog-header");
+      const title = header.getByRole("heading", { name: "Claws", exact: true });
+      const subtitle = header.locator(".page-subtitle");
+      await expect
+        .poll(async () => {
+          const [heading, intro] = await Promise.all([title.boundingBox(), subtitle.boundingBox()]);
+          return heading && intro ? Math.abs(heading.x - intro.x) : Infinity;
+        })
+        .toBeLessThanOrEqual(1);
+      // A viewport change can move the header between separate boundingBox calls.
+      const { heading, intro } = await header.evaluate((element) => {
+        const box = (selector: string): Box => {
+          const rect = element.querySelector(selector)!.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        };
+        return { heading: box(".page-title"), intro: box(".page-subtitle") };
+      });
+      expect(intro.y).toBeGreaterThanOrEqual(heading.y + heading.height);
+      expect(intro.y - heading.y - heading.height).toBeLessThanOrEqual(8);
+      if (native) {
+        expect(heading.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+      }
+      const search = page.getByRole("searchbox", { name: "Search Claws", exact: true });
+      const { box, introBox } = await search.evaluate((element) => {
+        const bounds = (target: Element): Box => {
+          const rect = target.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        };
+        const introElement = document.querySelector(".claws-catalog-header .page-subtitle")!;
+        return { box: bounds(element), introBox: bounds(introElement) };
+      });
+      expect(box.x).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width).toBeLessThanOrEqual(width);
+      expect(box.y + box.height).toBeLessThanOrEqual(height);
+      expect(
+        box.x + box.width <= introBox.x ||
+          box.x >= introBox.x + introBox.width ||
+          box.y + box.height <= introBox.y ||
+          box.y >= introBox.y + introBox.height,
+        `Claws search ${JSON.stringify(box)} overlaps intro ${JSON.stringify(introBox)}`,
+      ).toBe(true);
+      await search.click({ trial: true });
+      await capture(
+        page,
+        `claws-header-${width}-${native ? "native" : "browser"}${narrowColumn ? "-narrow" : ""}.png`,
+      );
+      await search.fill("workflow");
+      await gateway.waitForRequest("claws.catalog.search", { match: { query: "workflow" } });
+      expect(new URL(page.url()).pathname).toBe("/claws");
+    },
+  );
+
+  it.each([
+    { width: 1280, height: 900 },
+    { width: 390, height: 844 },
+  ])(
+    "shares a stacked title and aligned tabs across Sessions and Worktrees at $width px",
+    async ({ width, height }) => {
+      const { page, toolbar } = await openPage(
+        "sessions",
+        installNativeWebChrome,
+        ".hub-page-header__tabs",
+        { methodResponses: { "worktrees.list": { worktrees: [] } } },
+      );
+      await page.setViewportSize({ width, height });
+      if (width <= 560) {
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .toContain("shell--mobile-nav");
+      }
+      const header = page.locator(".content .content-header.hub-page-header");
+      const title = header.locator(".page-title");
+      await expect.poll(() => title.textContent()).toBe("Sessions");
+      const tabs = header.locator(".hub-page-header__tabs");
+      const alignment = () =>
+        header.evaluate((element) => {
+          const titleBox = element.querySelector(".page-title")!.getBoundingClientRect();
+          const tabsBox = element.querySelector(".hub-page-header__tabs")!.getBoundingClientRect();
+          return {
+            titleWidth: titleBox.width,
+            titleY: titleBox.y,
+            tabsBelowTitle: tabsBox.y >= titleBox.bottom,
+            xDelta: Math.abs(tabsBox.x - titleBox.x),
+          };
+        });
+      const expectAlignedHub = async () => {
+        await expect
+          .poll(async () => {
+            const { titleWidth, tabsBelowTitle, xDelta } = await alignment();
+            return titleWidth > 1 && tabsBelowTitle ? xDelta : Infinity;
+          })
+          .toBeLessThanOrEqual(1);
+      };
+      await expectAlignedHub();
+      if (width > 560) {
+        expect((await alignment()).titleY).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+      }
+      await capture(page, `sessions-stacked-header-${width}.png`);
+      await tabs.getByRole("tab", { name: "Worktrees" }).click();
+      await expect.poll(() => title.textContent()).toBe("Worktrees");
+      await expectAlignedHub();
+      if (width > 560) {
+        await expect
+          .poll(async () => (await title.boundingBox())?.y ?? -1)
+          .toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+      }
+      await capture(page, `worktrees-stacked-header-${width}.png`);
+    },
+  );
 
   it.each(["ltr", "rtl"] as const)(
     "keeps the stacked hub title and tabs below collapsed Mac controls (%s)",
@@ -183,7 +311,7 @@ suite.define(() => {
   );
 
   it("keeps the legacy Mac app's lowered web controls clear of intro text", async () => {
-    const { page } = await openPage("agents", async (target) => {
+    const { page } = await openPage("memory-import", async (target) => {
       await target.addInitScript(() => {
         const stamp = () => document.documentElement.classList.add("openclaw-native-macos");
         if (document.documentElement) {
@@ -198,7 +326,7 @@ suite.define(() => {
       await page
         .locator(".shell-chrome-controls button, .shell-chrome-controls a")
         .evaluateAll((elements) => elements.map((element) => element.getAttribute("aria-label"))),
-    ).toEqual(["Expand sidebar", "Open command palette"]);
+    ).toEqual(["Expand sidebar", "Command palette"]);
     expect(controls.y + controls.height).toBeGreaterThan(52);
     const header = page.locator(".content .content-header").first();
     await expectAligned(header.locator(".page-title"), 25, "y");

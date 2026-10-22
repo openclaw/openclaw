@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIResponsesParams } from "../../../../packages/ai/src/transports/openai-responses-params-internal.js";
 import { createSolidPngBuffer } from "../../../../test/helpers/image-fixtures.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -10,6 +10,11 @@ import {
   loadTranscriptEventsSync,
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
+import { loadSessionEntryForAdmission } from "../../../config/sessions/session-accessor.sqlite-entry-admission.js";
+import { createSessionActorFactory } from "../../../config/sessions/session-actor-durable.js";
+import * as messageRewrite from "../../../config/sessions/session-message-rewrite-domain.js";
+import { withOwnedSessionTranscriptWrites } from "../../../config/sessions/transcript-write-context.js";
+import { readDatabasePathIdentitySync } from "../../../infra/sqlite-worker-identity.js";
 import type { Context, ImageContent } from "../../../llm/types.js";
 import { finalizeRuntimePromptImages } from "../../../media/runtime-prompt-image-provenance.js";
 import { annotateInterSessionPromptText } from "../../../sessions/input-provenance.js";
@@ -17,6 +22,10 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnInput,
 } from "../../../sessions/user-turn-transcript.js";
+import {
+  isUserMessage,
+  readModelPromptProjection,
+} from "../../../sessions/user-turn-transcript.message.js";
 import { readTranscriptMessages } from "../../../sessions/user-turn-transcript.test-support.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
@@ -28,6 +37,7 @@ import {
   streamMocks,
   testModel,
 } from "../../sessions/agent-session-loop-correctness.test-support.js";
+import { createResourceLoader } from "../../sessions/agent-session-loop-resource-loader.test-support.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { serializeCacheTtlToolResultProjections } from "../cache-ttl-checkpoint.js";
@@ -46,6 +56,7 @@ import {
 } from "./attempt-prompt-submit.test-support.js";
 import { createUserTranscriptContextRegistry } from "./attempt-user-transcript-context-registry.js";
 import { hydratePromptMediaMessages } from "./images.js";
+import { buildRuntimeContextCustomMessage } from "./runtime-context-prompt.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
 
 registerAgentSessionLoopTestLifecycle();
@@ -57,6 +68,154 @@ afterEach(() => {
 
 describe("durable model prompt projection at provider dispatch", () => {
   const sessionId = modelPromptSessionId;
+  it("commits final listener text with its actor carrier without a separate rewrite request", async () => {
+    await withOpenClawTestState({ label: "actor-prompt-projection" }, async (state) => {
+      const target = {
+        agentId: "main",
+        sessionId,
+        sessionKey: "agent:main:actor-prompt-projection",
+        storePath: path.join(state.agentDir("main"), "openclaw-agent.sqlite"),
+      };
+      await upsertSessionEntryCore(target, { sessionId, updatedAt: 1 });
+      const { databaseClaim } = await loadSessionEntryForAdmission(target);
+      if (!("kind" in databaseClaim) || databaseClaim.kind !== "worker" || !databaseClaim.reader) {
+        throw new Error("Expected an admitted durable reader");
+      }
+      const reader = databaseClaim.reader;
+      const identity = readDatabasePathIdentitySync(reader.database.path);
+      if (!identity.key.startsWith("file:")) {
+        throw new Error("Expected a physical actor database");
+      }
+      const assertCurrent = () => reader.assertCurrent();
+      const actor = await createSessionActorFactory(reader.database).acquire(
+        {
+          sessionKey: target.sessionKey,
+          database: {
+            kind: "file",
+            physicalIdentity: identity.key.slice(5),
+            birthtime: identity.birthtime,
+            nativeLocation: reader.database.path,
+          },
+        },
+        { assertCurrent, assertReadable: assertCurrent },
+      );
+      if ("kind" in actor) {
+        throw new Error("Expected a durable session actor");
+      }
+      const rewrite = vi.spyOn(messageRewrite, "executeSessionMessageRewriteOperation");
+      try {
+        await actor.read({ assertCurrent, authorize: assertCurrent });
+        await withOwnedSessionTranscriptWrites(
+          {
+            sessionTarget: target,
+            sessionReader: reader,
+            sessionActor: { actor, database: reader.database },
+            withTranscriptWrite: async (write) => write(),
+          },
+          async () => {
+            const manager = await SessionManager.openAsync(target, state.workspaceDir);
+            const contexts = createUserTranscriptContextRegistry();
+            const recorder = createUserTurnTranscriptRecorder({
+              input: { text: "original", timestamp: 1, idempotencyKey: "actor-projection:user" },
+              target: { ...target, sessionEntry: { sessionId, updatedAt: 1 } },
+            });
+            const { session } = await createTestSession({
+              sessionManager: manager,
+              resourceLoader: await createResourceLoader((api) => {
+                api.on("message_end", async (event: unknown) => {
+                  if (
+                    typeof event === "object" &&
+                    event !== null &&
+                    "message" in event &&
+                    isUserMessage(event.message)
+                  ) {
+                    return { message: { ...event.message, content: "extension text" } };
+                  }
+                  return undefined;
+                });
+              }),
+            });
+            const convert = session.agent.convertToLlm;
+            session.agent.convertToLlm = async (messages) =>
+              convert(
+                normalizeMessagesForLlmBoundary(messages, {
+                  sessionVersion: manager.getHeader()?.version,
+                  userTranscriptContexts: contexts.list(),
+                  timezone: "UTC",
+                }),
+              );
+            session.subscribe((event) => {
+              if (
+                event.type === "message_end" &&
+                event.message.role === "user" &&
+                typeof event.message.content === "string"
+              ) {
+                event.message.content = `listener after ${event.message.content}`;
+              }
+            });
+            guardSessionManager(manager, {
+              preparedUserTurnMessage: recorder.message,
+              preparedUserTurnTranscriptRecorder: recorder,
+              onUserMessagePersisted: (message, runtimeMessage) => {
+                if (runtimeMessage) {
+                  contexts.record(runtimeMessage, message);
+                }
+              },
+            });
+            const requests: Context["messages"][] = [];
+            streamMocks.streamSimple.mockImplementation((model, context) => {
+              requests.push(structuredClone(context.messages));
+              return createAssistantResultStream(createAssistant(model, "done"));
+            });
+            await submitEmbeddedAttemptPrompt({
+              ...createBaseInput(),
+              attempt: { sessionId, userTurnTranscriptRecorder: recorder },
+              activeSession: session,
+              appendOnlyRuntimeContext: true,
+              runtimeContextMessage: buildRuntimeContextCustomMessage("Synthetic runtime"),
+              transcriptPrompt: "original",
+              modelPrompt: "",
+              prependContext: "before",
+              appendContext: "after",
+              getUserTranscriptContexts: () => contexts.list(),
+              withTranscriptWrite: (write) => withSessionManagerWrite(manager, write),
+              promptActiveSession: (prompt, options) => session.prompt(prompt, options),
+            });
+            expect(rewrite).not.toHaveBeenCalled();
+            expect(session.getLastAssistantText()).toBe("done");
+            const expected = "before\n\nlistener after extension text\n\nafter";
+            expect(requests).toHaveLength(1);
+            expect(JSON.stringify(requests[0])).toContain(expected.replaceAll("\n", "\\n"));
+            expect(readModelPromptProjection(recorder.getPersistedMessage?.())).toBe(expected);
+            const entries = manager.getEntries();
+            const user = entries.find(
+              (entry) => entry.type === "message" && entry.message.role === "user",
+            );
+            expect(user).toMatchObject({
+              type: "message",
+              message: { __openclaw: { modelPromptProjection: { version: 1, text: expected } } },
+            });
+            expect(entries).toContainEqual(
+              expect.objectContaining({
+                type: "custom_message",
+                customType: "openclaw.runtime-context",
+                parentId: user?.id,
+                content: "Synthetic runtime",
+              }),
+            );
+            session.dispose();
+            const reopened = await SessionManager.openAsync(target, state.workspaceDir);
+            expect(reopened.getEntries()).toEqual(entries);
+          },
+        );
+      } finally {
+        rewrite.mockRestore();
+        await actor.release();
+        await databaseClaim.release();
+      }
+    });
+  });
+
   it.each([
     { projection: "unchanged prompt", steering: "midturn" },
     { projection: "unchanged prompt", steering: "retry" },

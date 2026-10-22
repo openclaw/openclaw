@@ -19,6 +19,37 @@ import { validateConfigObjectRaw } from "../../src/config/validation-core.js";
 
 const MODEL = "anthropic/claude-sonnet-5-5";
 const ROOT = path.resolve("matrix-fixture");
+const modelMetadata = {
+  agentRuntime: { id: "openclaw" },
+  params: { fastMode: false, thinking: "low" },
+};
+
+function gatewayConfig(
+  task: Parameters<typeof createGatewayMatrixWorkload>[0],
+  mode: "direct" | "code",
+  executor: "node" | "quickjs" = "node",
+) {
+  const fixture = isMatrixPerformanceTask(task)
+    ? createMatrixPerformanceFixture(task, 1)
+    : createGatewayMatrixFixture(task, 1);
+  const configPatch = "configPatch" in fixture ? fixture.configPatch : undefined;
+  const workload = createGatewayMatrixWorkload(task, 1, "low", 180, executor);
+  const config = expectCurrentConfig(
+    createGatewayMatrixConfig({
+      root: ROOT,
+      port: 18789,
+      token: "synthetic-matrix-test",
+      model: MODEL,
+      thinking: "low",
+      mode,
+      executor,
+      requiredTools: fixture.requiredTools,
+      allowedTools: workload.settings.allowedTools,
+      configPatch,
+    }),
+  );
+  return { config, configPatch, workload };
+}
 
 function expectCurrentConfig(config: unknown) {
   // Validate the serialized payload passed to Gateway, not schema-normalized output.
@@ -34,53 +65,26 @@ describe.each(["direct", "code"] as const)("Gateway matrix %s config", (mode) =>
   it.each([...GATEWAY_MATRIX_TASKS, ...MATRIX_PERFORMANCE_TASKS])(
     "emits canonical %s config and preserves workload controls",
     (task) => {
-      const fixture = isMatrixPerformanceTask(task)
-        ? createMatrixPerformanceFixture(task, 1)
-        : createGatewayMatrixFixture(task, 1);
-      const configPatch = "configPatch" in fixture ? fixture.configPatch : undefined;
-      const workload = createGatewayMatrixWorkload(task, 1, "low", 180);
-      const config = expectCurrentConfig(
-        createGatewayMatrixConfig({
-          root: ROOT,
-          port: 18789,
-          token: "synthetic-matrix-test",
-          model: MODEL,
-          thinking: "low",
-          mode,
-          executor: "node",
-          requiredTools: fixture.requiredTools,
-          allowedTools: workload.settings.allowedTools,
-          configPatch,
-        }),
-      );
-      expect(config).toMatchObject({
-        agents: {
-          defaults: {
-            model: { primary: MODEL, fallbacks: [] },
-            modelPolicy: { allow: [MODEL] },
-            fastModeDefault: false,
-            thinkingDefault: "low",
-            models: {
-              [MODEL]: {
-                agentRuntime: { id: "openclaw" },
-                params: { fastMode: false, thinking: "low" },
-              },
-            },
-          },
-        },
-        tools: {
-          profile: "full",
-          allow: workload.settings.allowedTools,
-          fs: { workspaceOnly: true },
-          exec: { mode: "full" },
-          codeMode: { enabled: mode === "code", executor: "node" },
-        },
-        gateway: {
-          mode: "local",
-          bind: "loopback",
-          port: 18789,
-          auth: { mode: "token", token: "synthetic-matrix-test" },
-        },
+      const { config, configPatch, workload } = gatewayConfig(task, mode);
+      expect(config.agents.defaults).toMatchObject({
+        model: { primary: MODEL, fallbacks: [] },
+        modelPolicy: { allow: [MODEL] },
+        fastModeDefault: false,
+        thinkingDefault: "low",
+        models: { [MODEL]: modelMetadata },
+      });
+      expect(config.tools).toMatchObject({
+        profile: "full",
+        allow: workload.settings.allowedTools,
+        fs: { workspaceOnly: true },
+        exec: { mode: "full" },
+        codeMode: { enabled: mode === "code", executor: "node" },
+      });
+      expect(config.gateway).toMatchObject({
+        mode: "local",
+        bind: "loopback",
+        port: 18789,
+        auth: { mode: "token", token: "synthetic-matrix-test" },
       });
       if (configPatch) {
         expect(config).toMatchObject(configPatch);
@@ -92,28 +96,11 @@ describe.each(["direct", "code"] as const)("Gateway matrix %s config", (mode) =>
 it("keeps agent-exec model metadata valid without legacy allowlist migration", () => {
   const config = expectCurrentConfig(createAgentExecMatrixConfig(MODEL, "low"));
   expect(config.agents.defaults.modelPolicy).toEqual({ allow: [MODEL] });
-  expect(config.agents.defaults.models[MODEL]).toMatchObject({
-    agentRuntime: { id: "openclaw" },
-    params: { fastMode: false, thinking: "low" },
-  });
+  expect(config.agents.defaults.models[MODEL]).toMatchObject(modelMetadata);
 });
 
 it("enables the selected QuickJS executor without losing the real fixture plugin", () => {
-  const fixture = createGatewayMatrixFixture("invoices-auto-retention", 1);
-  const workload = createGatewayMatrixWorkload("invoices-auto-retention", 1, "low", 180, "quickjs");
-  const config = expectCurrentConfig(
-    createGatewayMatrixConfig({
-      root: ROOT,
-      port: 18789,
-      token: "synthetic-matrix-test",
-      model: MODEL,
-      thinking: "low",
-      mode: "code",
-      executor: "quickjs",
-      requiredTools: fixture.requiredTools,
-      allowedTools: workload.settings.allowedTools,
-    }),
-  );
+  const { config } = gatewayConfig("invoices-auto-retention", "code", "quickjs");
   expect(config.tools.codeMode).toEqual({ enabled: true, executor: "quickjs" });
   expect(config.plugins.allow).toEqual([
     "anthropic",

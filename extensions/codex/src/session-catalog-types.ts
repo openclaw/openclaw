@@ -50,7 +50,6 @@ export type CodexCatalogHome = {
   usesProcessHomeFallback: boolean;
 };
 
-/** Read-only metadata for one Codex app-server thread. */
 export type CodexSessionCatalogSession = {
   threadId: string;
   /** Opaque connection identity; never exposes the underlying Codex home path. */

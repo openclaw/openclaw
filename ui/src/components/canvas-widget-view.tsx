@@ -8,33 +8,32 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Show, createEffect, createMemo, onCleanup, onSettled } from "solid-js";
 import type { ApplicationContext } from "../app/context.ts";
-import { hasOperatorReadAccess } from "../app/operator-access.ts";
+import { hasOperatorReadAccess, hasOperatorSelfReadAccess } from "../app/operator-access.ts";
+import { registerBoardEnglish } from "../i18n/locales/en-board.ts";
 import { getCanvasWidgetFrameConnectionGeneration } from "../lib/chat/canvas-widget-frame-generation.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { isAwaitingGatewayFailure, isGatewayAvailable } from "../lib/gateway-availability.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
+import { projectCallbackOwner } from "../lib/reactive/callback-owner.ts";
 import { useApplication } from "../lib/reactive/context.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { generateUUID } from "../lib/uuid.ts";
-import {
-  WidgetSandboxHost,
-  WIDGET_LOAD_TIMEOUT_MS,
-  WIDGET_LOAD_NOTICE_MS,
-} from "../lib/widget-sandbox-host.ts";
+import { WidgetSandboxHost, WIDGET_LOAD_NOTICE_MS } from "../lib/widget-sandbox-host.ts";
 import { registerWidgetThemeFrame, postWidgetTheme } from "../lib/widget-theme.ts";
 import { forwardChatWheelToTranscript } from "../pages/chat/chat-scroll-input.ts";
+import {
+  createCanvasWidgetViewLoader,
+  isCanvasWidgetLoadRetryEvent,
+  type CanvasWidgetViewBinding,
+} from "./canvas-widget-view-loader.ts";
 import { allowWidgetPrompt, dispatchWidgetPrompt } from "./mcp-app-security.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
-type WidgetClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
-type ViewBinding = {
-  client: WidgetClient;
-  generation: number;
-  docId: string;
-  sessionKey: string;
+registerEnglishCatalog(registerBoardEnglish);
+
+type ViewBinding = CanvasWidgetViewBinding & {
   connectionRevision: number;
   gatewayUrl: string;
   profileId: string | null;
@@ -44,38 +43,6 @@ type ViewBinding = {
 const reportedRuntimeErrors = new Set<string>();
 // Fresh renders ping the agent; old restored history only shows the notice.
 const WIDGET_RUNTIME_ERROR_REPORT_WINDOW_MS = 10 * 60_000;
-const pendingViews = new WeakMap<
-  WidgetClient,
-  {
-    generation: number;
-    requests: Map<string, Promise<CanvasDocumentViewResult>>;
-  }
->();
-
-function loadCanvasView(binding: ViewBinding): Promise<CanvasDocumentViewResult> {
-  let pending = pendingViews.get(binding.client);
-  if (!pending || pending.generation !== binding.generation) {
-    pending = { generation: binding.generation, requests: new Map() };
-    pendingViews.set(binding.client, pending);
-  }
-  const existing = pending.requests.get(binding.docId);
-  if (existing) {
-    return existing;
-  }
-  const request = binding.client.request<CanvasDocumentViewResult>(
-    "canvas.document.view",
-    { docId: binding.docId },
-    { timeoutMs: WIDGET_LOAD_TIMEOUT_MS },
-  );
-  // Canvas also supports replacing a named document. Share concurrent reads,
-  // but only the mounted view retains bytes; a remount revalidates the source.
-  if (pending.requests.size < 32) {
-    const requests = pending.requests;
-    requests.set(binding.docId, request);
-    void request.finally(() => requests.delete(binding.docId)).catch(() => {});
-  }
-  return request;
-}
 
 export type CanvasWidgetViewProps = {
   docId: string;
@@ -91,23 +58,36 @@ export type CanvasWidgetViewProps = {
 
 export type OpenClawCanvasWidgetView = SolidBridgeElement<CanvasWidgetViewProps> & {
   readonly documentHtml: string | undefined;
+  readonly previewFrame: HTMLIFrameElement | undefined;
 };
 
 function createCanvasWidget(
   props: CanvasWidgetViewProps,
   element: HTMLElement,
   context: ApplicationContext,
+  notify: () => void,
 ) {
+  const loader = createCanvasWidgetViewLoader(context.sessions);
   // Document identity and private-port authority stay synchronous; the view reads a projection.
   const state: {
     view?: CanvasDocumentViewResult;
     error: string;
+    accessDenied: boolean;
+    awaitingResult: boolean;
     runtimeError: string;
     resourceError: boolean;
     contentHeight?: number;
     sandboxGeneration: number;
     pending: boolean;
-  } = { error: "", runtimeError: "", resourceError: false, sandboxGeneration: 0, pending: false };
+  } = {
+    error: "",
+    accessDenied: false,
+    awaitingResult: false,
+    runtimeError: "",
+    resourceError: false,
+    sandboxGeneration: 0,
+    pending: false,
+  };
   let activeBinding: ViewBinding | undefined;
   let sandboxHost: WidgetSandboxHost | undefined;
   let promptPort: MessagePort | undefined;
@@ -121,8 +101,16 @@ function createCanvasWidget(
   let retryTimer: number | undefined;
   let slowTimer: number | undefined;
   let retryDelayMs = 1_000;
-  const listeners = new Set<() => void>();
-  const notify = () => listeners.forEach((listener) => listener());
+  Object.defineProperties(element, {
+    documentHtml: {
+      configurable: true,
+      get: () => (sameOwner(ownerBinding) ? state.view?.html : undefined),
+    },
+    previewFrame: {
+      configurable: true,
+      get: () => (frameElement?.isConnected ? frameElement : undefined),
+    },
+  });
   function clearRetry(): void {
     window.clearTimeout(slowTimer);
     slowTimer = undefined;
@@ -158,7 +146,10 @@ function createCanvasWidget(
   }
 
   function clearView(): void {
+    loader.forget(activeBinding);
+    loader.release();
     clearRetry();
+    state.awaitingResult = false;
     validatedBinding = undefined;
     ownerBinding = undefined;
     state.sandboxGeneration += 1;
@@ -200,7 +191,8 @@ function createCanvasWidget(
           !snapshot.selfUser?.id ||
           binding.profileId === snapshot.selfUser.id) &&
           binding.recoveryScope === snapshot.hello?.auth?.recoveryScope &&
-          hasOperatorReadAccess(snapshot.hello?.auth ?? null))),
+          binding.operatorRead === hasOperatorReadAccess(snapshot.hello?.auth ?? null) &&
+          hasOperatorSelfReadAccess(snapshot.hello?.auth ?? null))),
     );
   }
 
@@ -232,14 +224,17 @@ function createCanvasWidget(
     // the current generation. Keep the private port inert rather than remounting.
     if (!isGatewayAvailable(gateway.snapshot)) {
       activeBinding = undefined;
+      loader.release();
       clearRetry();
       validatedBinding = undefined;
       sandboxHost?.setActive(false);
+      state.awaitingResult = false;
       state.pending = true;
       return;
     }
-    if (!hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null)) {
-      state.error = t("board.widget.sandboxUnavailable");
+    if (!hasOperatorSelfReadAccess(gateway.snapshot.hello?.auth ?? null)) {
+      state.accessDenied = true;
+      state.error = t("board.widget.accessDenied");
       return;
     }
     const profileId = gateway.snapshot.selfUser?.id;
@@ -258,6 +253,7 @@ function createCanvasWidget(
     clearRetry();
     validatedBinding = undefined;
     state.error = "";
+    state.accessDenied = false;
     const binding: ViewBinding = {
       client,
       docId: props.docId,
@@ -269,20 +265,23 @@ function createCanvasWidget(
       // binds verified principals. Preserve known attribution until it resolves.
       profileId: gateway.snapshot.selfUser?.id ?? ownerBinding?.profileId ?? null,
       recoveryScope: gateway.snapshot.hello?.auth?.recoveryScope,
+      operatorRead: hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null),
     };
     activeBinding = binding;
-    state.pending = Boolean(state.view);
+    state.pending = Boolean(state.view) || state.awaitingResult;
     slowTimer = window.setTimeout(() => {
       if (isCurrent(binding)) {
         state.pending = true;
         notify();
       }
     }, WIDGET_LOAD_NOTICE_MS);
-    void loadCanvasView(binding)
+    void loader
+      .load(binding, () => isCurrent(binding))
       .then((view) => {
-        if (!isCurrent(binding)) {
+        if (!view || !isCurrent(binding)) {
           return;
         }
+        loader.release();
         clearRetry();
         const previous = state.view;
         if (
@@ -301,6 +300,7 @@ function createCanvasWidget(
         ownerBinding = binding;
         validatedBinding = binding;
         state.pending = false;
+        state.awaitingResult = false;
         retryDelayMs = 1_000;
         sandboxHost?.setActive(props.presentationActive);
       })
@@ -309,6 +309,9 @@ function createCanvasWidget(
           return;
         }
         clearRetry();
+        state.awaitingResult =
+          error instanceof GatewayProtocolRequestError &&
+          asOptionalRecord(error.details)?.type === "canvas_widget_pending";
         if (
           isAwaitingGatewayFailure(error, gateway.snapshot) ||
           error instanceof GatewayProtocolRequestTimeoutError ||
@@ -326,10 +329,26 @@ function createCanvasWidget(
         state.view = undefined;
         clearSandbox();
         state.pending = false;
+        state.accessDenied =
+          error instanceof GatewayProtocolRequestError && error.gatewayCode === "FORBIDDEN";
         state.error = formatUiError(error);
       })
       .finally(notify);
   }
+
+  onSettled(() =>
+    context.gateway.subscribeEvents((event) => {
+      const binding = activeBinding;
+      if (!isCurrent(binding) || state.view || !isCanvasWidgetLoadRetryEvent(event, binding)) {
+        return;
+      }
+      // Retire an in-flight pre-commit lookup too; a remount must not borrow its stale miss.
+      loader.forget(binding);
+      activeBinding = undefined;
+      reconcile();
+      notify();
+    }),
+  );
 
   function syncSandbox(): void {
     const active = props.presentationActive && isCurrent(validatedBinding);
@@ -529,15 +548,6 @@ function createCanvasWidget(
     setFrame: (frame: HTMLIFrameElement) => {
       frameElement = frame;
     },
-    get documentHtml() {
-      return sameOwner(ownerBinding) ? state.view?.html : undefined;
-    },
-    subscribe(listener: () => void) {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
   };
 }
 
@@ -548,8 +558,10 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
     host.style.minHeight = "";
     const context = useApplication();
     const gateway = projectGateway(context.gateway);
-    const widget = createCanvasWidget(host, host, context);
-    const projection = projectOwner(widget, (owner) => owner.state);
+    const { owner: widget, view: projection } = projectCallbackOwner(
+      (notify) => createCanvasWidget(host, host, context, notify),
+      (owner) => owner.state,
+    );
     const scriptProperty = Object.getOwnPropertyDescriptor(host, "allowScripts")!;
     // Even a false→true change within one commit must revoke the old private port.
     Object.defineProperty(host, "allowScripts", {
@@ -563,10 +575,6 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
       },
     });
     const read = projection.read;
-    Object.defineProperty(host, "documentHtml", {
-      configurable: true,
-      get: () => widget.documentHtml,
-    });
     // Admit authenticated reads and retire stale sandbox authority when external identity changes.
     createEffect(
       () => [
@@ -622,9 +630,11 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
         fallback={
           <div class="board-widget__error" role="alert">
             {read().error}
-            <button class="btn btn--small" onClick={retry}>
-              {t("common.retry")}
-            </button>
+            <Show when={!read().accessDenied}>
+              <button class="btn btn--small" onClick={retry}>
+                {t("common.retry")}
+              </button>
+            </Show>
           </div>
         }
       >
@@ -647,7 +657,11 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
                 role="status"
                 style={{ "min-height": `${height()}px` }}
               >
-                {t("board.widget.waitingForConnection")}
+                {t(
+                  read().awaitingResult
+                    ? "board.widget.waitingForResult"
+                    : "board.widget.waitingForConnection",
+                )}
               </div>
             </Show>
           }
@@ -655,7 +669,11 @@ export const CanvasWidgetView = defineSolidBridge<CanvasWidgetViewProps>(
           <Show when={!source()?.error} fallback={<div role="alert">{source()?.error}</div>}>
             <Show when={read().pending}>
               <div class="board-widget__notice" role="status">
-                {t("board.widget.waitingForConnection")}
+                {t(
+                  read().awaitingResult
+                    ? "board.widget.waitingForResult"
+                    : "board.widget.waitingForConnection",
+                )}
               </div>
             </Show>
             <Show when={read().resourceError}>

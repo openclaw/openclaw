@@ -87,8 +87,9 @@ export function cronJobMessageActionAuthorityInputsEqual(
 }
 
 /** Binds native requester authority to executable inputs using the canonical storage projection. */
-function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
+export function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
   const {
+    operatorSource: _operatorSource,
     description: _description,
     displayName: _displayName,
     createdActor: _createdActor,
@@ -96,6 +97,37 @@ function resolveCronRequesterExecutionRevision(job: CronStoredJob): string {
     ...executableJob
   } = job;
   return resolveCronJobConfigRevision(executableJob);
+}
+
+/** Executable edits cannot borrow the previous creator's authenticated source. */
+export function reconcileCronOperatorSource(params: {
+  job: CronStoredJob;
+  previousJob?: CronStoredJob;
+  captured?: NonNullable<CronStoredJob["operatorSource"]>["source"];
+}): void {
+  const { job, previousJob, captured } = params;
+  const previous = previousJob?.operatorSource;
+  const source = captured ?? previous?.source;
+  if (!source) {
+    delete job.operatorSource;
+    return;
+  }
+  const policy = job.scheduledToolPolicy;
+  const executionRevision = resolveCronRequesterExecutionRevision(job);
+  if (
+    source &&
+    (captured || previous?.executionRevision === executionRevision) &&
+    job.payload.kind === "agentTurn" &&
+    policy?.mode === "account" &&
+    job.owner?.sessionKey === source.sessionKey &&
+    policy.ownerSessionKey === source.sessionKey &&
+    job.agentId === source.agentId &&
+    job.sessionTarget === `session:${source.sessionKey}`
+  ) {
+    job.operatorSource = { source, executionRevision };
+  } else {
+    delete job.operatorSource;
+  }
 }
 
 /** Rebinds or clears authenticated requester facts after the complete mutation is known. */

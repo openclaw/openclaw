@@ -3,6 +3,7 @@ import { randomUUID } from "node:crypto";
 import { connect } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import * as timers from "node:timers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
@@ -17,6 +18,8 @@ import { buildOpenAISpeechProvider } from "./speech-provider.js";
 const REQUEST_TIMEOUT_MS = 100;
 const STALLED_REQUEST_WATCHDOG_MS = 1_000;
 const TIMEOUT_CASE_MS = 2_000;
+// Vitest also replaces node:timers exports; retain the real watchdog functions first.
+const { clearTimeout: clearWatchdog, setTimeout: setWatchdog } = timers;
 
 const { resolveTtsConfig, getTtsProvider } = ttsRuntime;
 const { parseTtsDirectives, resolveModelOverridePolicy, getResolvedSpeechProviderConfig } =
@@ -59,20 +62,22 @@ async function withHangingSpeechServer<T>(
     getRequestCount: () => number,
     isConnectionClosed: () => boolean,
     getRequestStartedAt: () => number,
+    requestStarted: Promise<void>,
   ) => Promise<void>,
 ): Promise<void> {
   const startedAt = Date.now();
   // Keep setup finite and leave one caller timeout for drainage before the case deadline.
   const watchdogDeadline = startedAt + TIMEOUT_CASE_MS - REQUEST_TIMEOUT_MS;
   const watchdogFailure = createDeferred<never>();
-  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  const requestStarted = createDeferred<void>();
+  let watchdog: ReturnType<typeof setWatchdog> | undefined;
   let requestCount = 0;
   let requestStartedAt = 0;
   let connectionClosed = false;
   let settlement: Promise<void> | undefined;
   const armWatchdog = (deadline: number) => {
-    clearTimeout(watchdog);
-    watchdog = setTimeout(
+    clearWatchdog(watchdog);
+    watchdog = setWatchdog(
       () => {
         watchdogFailure.reject(
           new Error(
@@ -89,8 +94,8 @@ async function withHangingSpeechServer<T>(
         requestCount += 1;
         if (requestCount === 1) {
           requestStartedAt = Date.now();
-          // The provider request timeout excludes policy preparation before transport starts.
           armWatchdog(Math.min(watchdogDeadline, requestStartedAt + STALLED_REQUEST_WATCHDOG_MS));
+          requestStarted.resolve();
         }
         res.on("close", () => {
           connectionClosed = true;
@@ -111,11 +116,12 @@ async function withHangingSpeechServer<T>(
           () => requestCount,
           () => connectionClosed,
           () => requestStartedAt,
+          requestStarted.promise,
         );
       },
     );
   } finally {
-    clearTimeout(watchdog);
+    clearWatchdog(watchdog);
     // Socket teardown must precede drainage when the watchdog interrupts a hanging response.
     await settlement;
   }
@@ -151,6 +157,7 @@ describe("OpenAI speech public runtime contract", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     setActivePluginRegistry(createEmptyPluginRegistry());
     vi.unstubAllEnvs();
   });
@@ -221,7 +228,10 @@ describe("OpenAI speech public runtime contract", () => {
         name: "config wins over env",
         cfg: asLegacyTtsConfig({
           ...baseCfg,
-          tts: { ...baseCfg.tts, openai: { baseUrl: "http://my-server:9000/v1" } },
+          tts: {
+            ...baseCfg.tts,
+            providers: { openai: { baseUrl: "http://my-server:9000/v1" } },
+          },
         }),
         env: { OPENAI_TTS_BASE_URL: "http://localhost:8880/v1" },
         expected: "http://my-server:9000/v1",
@@ -232,7 +242,7 @@ describe("OpenAI speech public runtime contract", () => {
           ...baseCfg,
           tts: {
             ...baseCfg.tts,
-            openai: { baseUrl: "http://my-server:9000/v1///" },
+            providers: { openai: { baseUrl: "http://my-server:9000/v1///" } },
           },
         }),
         env: { OPENAI_TTS_BASE_URL: undefined },
@@ -349,6 +359,10 @@ describe("OpenAI speech public runtime contract", () => {
     "aborts stalled OpenAI $name waiting for $stage within the caller timeout",
     { timeout: TIMEOUT_CASE_MS },
     async (testCase) => {
+      if (!testCase.partialBody) {
+        // Reach the header stall before advancing the caller's deadline; connection setup varies.
+        vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+      }
       await withHangingSpeechServer(
         testCase.partialBody,
         (baseUrl) => {
@@ -367,7 +381,17 @@ describe("OpenAI speech public runtime contract", () => {
           });
           return testCase.run(cfg, REQUEST_TIMEOUT_MS);
         },
-        async (operation, getRequestCount, isConnectionClosed, getRequestStartedAt) => {
+        async (
+          operation,
+          getRequestCount,
+          isConnectionClosed,
+          getRequestStartedAt,
+          requestStarted,
+        ) => {
+          if (!testCase.partialBody) {
+            await Promise.race([requestStarted, operation]);
+            await vi.advanceTimersByTimeAsync(REQUEST_TIMEOUT_MS);
+          }
           const result = await operation;
 
           expect(result.success).toBe(false);

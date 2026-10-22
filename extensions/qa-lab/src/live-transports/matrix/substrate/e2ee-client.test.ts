@@ -69,6 +69,13 @@ vi.mock("openclaw/plugin-sdk/qa-runner-runtime", async (importOriginal) => ({
   }),
 }));
 
+type Operation = Exclude<keyof typeof runtimeFixture, "logging" | "ready" | "unexpectedOperation">;
+function expectCalls(counts: Partial<Record<Operation, number>>) {
+  for (const [operation, count] of Object.entries(counts)) {
+    expect(runtimeFixture[operation as Operation]).toHaveBeenCalledTimes(count);
+  }
+}
+const shutdownFailure = "shutdown failed while waiting for active Matrix SDK operations";
 describe("matrix qa e2ee client", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   let client: Awaited<ReturnType<typeof createMatrixQaE2eeScenarioClient>>;
@@ -80,6 +87,8 @@ describe("matrix qa e2ee client", () => {
     contentType: "image/png",
     fileName: "fixture.png",
   };
+  const encryptedMedia = () => ({ buffer: image.buffer, file: {} });
+  const sendText = (body = "text") => client.sendTextMessage({ roomId: image.roomId, body });
   const createClient = (timeoutMs = 100) =>
     createMatrixQaE2eeScenarioClient({
       accessToken: "fixture-token",
@@ -94,7 +103,7 @@ describe("matrix qa e2ee client", () => {
   beforeEach(async () => {
     vi.useFakeTimers();
     runtimeFixture.ready.mockReset().mockResolvedValue(() => undefined);
-    runtimeFixture.encrypt.mockReset().mockResolvedValue({ buffer: image.buffer, file: {} });
+    runtimeFixture.encrypt.mockReset().mockResolvedValue(encryptedMedia());
     runtimeFixture.upload.mockReset().mockResolvedValue("mxc://matrix.test/image");
     runtimeFixture.send.mockReset().mockResolvedValue("$sent");
     runtimeFixture.detach.mockReset();
@@ -119,14 +128,13 @@ describe("matrix qa e2ee client", () => {
       const operation =
         kind === "image"
           ? client.sendImageMessage(image)
-          : kind === "notice"
-            ? client.sendNoticeMessage({ roomId: image.roomId, body: "notice" })
-            : client.sendTextMessage({ roomId: image.roomId, body: "text" });
+          : client[kind === "notice" ? "sendNoticeMessage" : "sendTextMessage"]({
+              roomId: image.roomId,
+              body: kind,
+            });
       try {
         await vi.advanceTimersByTimeAsync(0);
-        expect(runtimeFixture.encrypt).not.toHaveBeenCalled();
-        expect(runtimeFixture.upload).not.toHaveBeenCalled();
-        expect(runtimeFixture.send).not.toHaveBeenCalled();
+        expectCalls({ encrypt: 0, upload: 0, send: 0 });
       } finally {
         ready.resolve(() => undefined);
         await operation;
@@ -158,28 +166,21 @@ describe("matrix qa e2ee client", () => {
     });
     try {
       await vi.advanceTimersByTimeAsync(101);
-      expect(runtimeFixture.persist).not.toHaveBeenCalled();
-      expect(runtimeFixture.discard).not.toHaveBeenCalled();
-      expect(runtimeFixture.abort).toHaveBeenCalledOnce();
+      expectCalls({ persist: 0, discard: 0, abort: 1 });
       expect(stopped).toBe(false);
-      encryption.resolve({ buffer: image.buffer, file: {} });
+      encryption.resolve(encryptedMedia());
       await settled;
       await vi.advanceTimersByTimeAsync(0);
       expect(runtimeFixture.discard).toHaveBeenCalledOnce();
       expect(stopped).toBe(false);
     } finally {
-      encryption.resolve({ buffer: image.buffer, file: {} });
+      encryption.resolve(encryptedMedia());
       discarded.resolve();
       await settled;
       await stopSettled;
     }
-    await expect(stop).rejects.toThrow(
-      "shutdown failed while waiting for active Matrix SDK operations",
-    );
-    expect(runtimeFixture.discard).toHaveBeenCalledOnce();
-    expect(runtimeFixture.persist).not.toHaveBeenCalled();
-    expect(runtimeFixture.upload).not.toHaveBeenCalled();
-    expect(runtimeFixture.send).not.toHaveBeenCalled();
+    await expect(stop).rejects.toThrow(shutdownFailure);
+    expectCalls({ discard: 1, persist: 0, upload: 0, send: 0 });
   });
 
   it.each(["encryption", "upload"])(
@@ -192,25 +193,17 @@ describe("matrix qa e2ee client", () => {
           throw new Error("room changed");
         }
       });
-      if (stage === "encryption") {
-        runtimeFixture.encrypt.mockImplementation(async () => {
-          await finish.promise;
-          return { buffer: image.buffer, file: {} };
-        });
-      } else {
-        runtimeFixture.upload.mockImplementation(async () => {
-          await finish.promise;
-          return "mxc://matrix.test/image";
-        });
-      }
+      runtimeFixture[stage === "encryption" ? "encrypt" : "upload"].mockImplementation(async () => {
+        await finish.promise;
+        return stage === "encryption" ? encryptedMedia() : "mxc://matrix.test/image";
+      });
       const operation = client.sendImageMessage(image);
       const settled = Promise.allSettled([operation]);
       await vi.advanceTimersByTimeAsync(0);
       current = false;
       finish.resolve();
       await settled;
-      expect(runtimeFixture.send).not.toHaveBeenCalled();
-      expect(runtimeFixture.upload).toHaveBeenCalledTimes(stage === "upload" ? 1 : 0);
+      expectCalls({ send: 0, upload: stage === "upload" ? 1 : 0 });
       await expect(operation).rejects.toThrow("room changed");
     },
   );
@@ -218,99 +211,72 @@ describe("matrix qa e2ee client", () => {
   it("times out a dispatched send without claiming it was unsent or retrying", async () => {
     const send = createDeferred<string>();
     runtimeFixture.send.mockReturnValue(send.promise);
-    const operation = client.sendTextMessage({ roomId: image.roomId, body: "text" });
+    const operation = sendText();
     const settled = Promise.allSettled([operation]);
     try {
       await vi.advanceTimersByTimeAsync(100);
-      const [result] = await settled;
-      expect(result.status).toBe("rejected");
-      if (result.status === "rejected") {
-        expect(result.reason).not.toBeInstanceOf(PlatformMessageNotDispatchedError);
-      }
+      await settled;
+      await expect(operation).rejects.not.toBeInstanceOf(PlatformMessageNotDispatchedError);
       await expect(operation).rejects.toThrow("Matrix E2EE text send timed out after 100ms");
-      expect(runtimeFixture.detach).toHaveBeenCalledTimes(2);
-      expect(runtimeFixture.abort).not.toHaveBeenCalled();
-      expect(runtimeFixture.persist).not.toHaveBeenCalled();
-      expect(runtimeFixture.discard).not.toHaveBeenCalled();
+      expectCalls({ detach: 2, abort: 0, persist: 0, discard: 0 });
       await vi.advanceTimersByTimeAsync(100);
-      expect(runtimeFixture.abort).toHaveBeenCalledOnce();
-      expect(runtimeFixture.discard).not.toHaveBeenCalled();
+      expectCalls({ abort: 1, discard: 0 });
     } finally {
       send.resolve("$possibly-sent");
       await settled;
     }
-    await expect(client.stop()).rejects.toThrow(
-      "shutdown failed while waiting for active Matrix SDK operations",
-    );
-    expect(runtimeFixture.discard).toHaveBeenCalledOnce();
-    expect(runtimeFixture.persist).not.toHaveBeenCalled();
-    expect(runtimeFixture.send).toHaveBeenCalledOnce();
+    await expect(client.stop()).rejects.toThrow(shutdownFailure);
+    expectCalls({ discard: 1, persist: 0, send: 1 });
   });
   it("provides normal diagnostics without enabling secret-bearing SDK debug output", async () => {
     const debug = vi.spyOn(console, "debug").mockImplementation(() => {});
-    const info = vi.spyOn(console, "info").mockImplementation(() => {});
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    const levels = ["info", "warn", "error"] as const;
+    const spies = levels.map((level) => vi.spyOn(console, level).mockImplementation(() => {}));
     expect(runtimeFixture.logging).toBeDefined();
     const logger = runtimeFixture.logging!.getChildLogger({ module: "matrix:crypto" });
     logger.debug?.('shared_secret: "fixture-only-qr-secret"');
-    logger.info("verification started");
-    logger.warn("verification warning");
-    logger.error("verification failure");
+    for (const [index, level] of levels.entries()) {
+      logger[level](`verification ${level}`);
+      expect(spies[index]).toHaveBeenCalledExactlyOnceWith(`verification ${level}`);
+    }
     expect(debug).not.toHaveBeenCalled();
-    expect(info).toHaveBeenCalledExactlyOnceWith("verification started");
-    expect(warn).toHaveBeenCalledExactlyOnceWith("verification warning");
-    expect(error).toHaveBeenCalledExactlyOnceWith("verification failure");
   });
 
-  it("shares one stop promise across concurrent and repeated shutdown requests", async () => {
-    const first = client.stop();
-    const second = client.stop();
-    await Promise.all([first, second]);
-    const third = client.stop();
-
-    expect(second).toBe(first);
-    expect(third).toBe(first);
-    await expect(
-      client.sendTextMessage({ roomId: image.roomId, body: "must not send" }),
-    ).rejects.toThrow("shutdown has started");
-    expect(runtimeFixture.send).not.toHaveBeenCalled();
-    expect(runtimeFixture.detach.mock.calls.map(([event]) => event)).toEqual([
-      "room.message",
-      "verification.summary",
-    ]);
-    expect(runtimeFixture.drain).toHaveBeenCalledOnce();
-    expect(runtimeFixture.persist).toHaveBeenCalledOnce();
-    expect(runtimeFixture.discard).not.toHaveBeenCalled();
-  });
-
-  it("gives an admitted send a bounded grace period before draining and persisting", async () => {
+  it("shares shutdown while giving admitted sends a grace period before draining and persisting", async () => {
     const calls: string[] = [];
     const finish = createDeferred<string>();
     runtimeFixture.send.mockImplementation(() => {
       calls.push("operation");
       return finish.promise;
     });
-    runtimeFixture.detach.mockImplementation(() => calls.push("detach"));
+    runtimeFixture.detach.mockImplementation((event) => calls.push(`detach:${event}`));
     runtimeFixture.drain.mockImplementation(async () => {
       calls.push("drain");
     });
     runtimeFixture.persist.mockImplementation(async () => {
       calls.push("stop-and-persist");
     });
-    const operation = client.sendTextMessage({ roomId: image.roomId, body: "text" });
+    const operation = sendText();
     await vi.advanceTimersByTimeAsync(0);
     const stop = client.stop();
     try {
-      expect(calls).toEqual(["operation", "detach", "detach"]);
+      expect(client.stop()).toBe(stop);
+      expect(calls).toEqual(["operation", "detach:room.message", "detach:verification.summary"]);
     } finally {
       finish.resolve("$sent");
     }
     await expect(operation).resolves.toBe("$sent");
     await stop;
-    expect(calls).toEqual(["operation", "detach", "detach", "drain", "stop-and-persist"]);
-    expect(runtimeFixture.abort).not.toHaveBeenCalled();
-    expect(runtimeFixture.discard).not.toHaveBeenCalled();
+    expect(client.stop()).toBe(stop);
+    await expect(sendText("must not send")).rejects.toThrow("shutdown has started");
+    expect(calls).toEqual([
+      "operation",
+      "detach:room.message",
+      "detach:verification.summary",
+      "drain",
+      "stop-and-persist",
+    ]);
+    expectCalls({ send: 1, drain: 1, persist: 1, abort: 0, discard: 0 });
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -321,10 +287,7 @@ describe("matrix qa e2ee client", () => {
     );
     await vi.advanceTimersByTimeAsync(100);
     await rejection;
-    expect(runtimeFixture.detach).toHaveBeenCalledTimes(2);
-    expect(runtimeFixture.drain).toHaveBeenCalledOnce();
-    expect(runtimeFixture.discard).toHaveBeenCalledOnce();
-    expect(runtimeFixture.persist).not.toHaveBeenCalled();
+    expectCalls({ detach: 2, drain: 1, discard: 1, persist: 0 });
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -336,26 +299,19 @@ describe("matrix qa e2ee client", () => {
     runtimeFixture.persist.mockClear();
     const finish = createDeferred<string>();
     runtimeFixture.send.mockReturnValue(finish.promise);
-    const operation = client.sendTextMessage({ roomId: image.roomId, body: "text" });
+    const operation = sendText();
     const operationRejection = expect(operation).rejects.toThrow("late send failure");
     await vi.advanceTimersByTimeAsync(0);
-    const stopRejection = expect(client.stop()).rejects.toThrow(
-      "shutdown failed while waiting for active Matrix SDK operations",
-    );
+    const stopRejection = expect(client.stop()).rejects.toThrow(shutdownFailure);
     try {
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(runtimeFixture.detach).toHaveBeenCalledTimes(2);
-      expect(runtimeFixture.abort).toHaveBeenCalledOnce();
-      expect(runtimeFixture.drain).not.toHaveBeenCalled();
-      expect(runtimeFixture.discard).not.toHaveBeenCalled();
+      expectCalls({ detach: 2, abort: 1, drain: 0, discard: 0 });
     } finally {
       finish.reject(new Error("late send failure"));
     }
     await operationRejection;
     await stopRejection;
-    expect(runtimeFixture.send).toHaveBeenCalledOnce();
-    expect(runtimeFixture.discard).toHaveBeenCalledOnce();
-    expect(runtimeFixture.persist).not.toHaveBeenCalled();
+    expectCalls({ send: 1, discard: 1, persist: 0 });
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -371,69 +327,45 @@ describe("matrix qa e2ee client", () => {
 });
 
 describe("matrix qa e2ee event recording", () => {
-  it("records late-decrypted payload updates for an existing event id", () => {
-    const previous = {
-      eventId: "$reply",
-      kind: "message" as const,
+  it("deduplicates late decryption and rehydrates replacements of the threaded target", () => {
+    const observed: MatrixQaObservedEvent[] = [];
+    const recorder = createMatrixQaE2eeObservedEventRecorder({
+      append: (event) => observed.push(event),
+    });
+    const previous: MatrixQaObservedEvent = {
+      eventId: "$preview",
+      kind: "message",
       roomId: "!room:matrix-qa.test",
       sender: "@bot:matrix-qa.test",
       type: "m.room.message",
     };
-    const observed: MatrixQaObservedEvent[] = [];
-    const recorder = createMatrixQaE2eeObservedEventRecorder({
-      append: (event) => observed.push(event),
-    });
-    const decrypted = {
-      ...previous,
-      body: "MATRIX_QA_E2EE_CLI_GATEWAY_OK",
-      msgtype: "m.text",
-    };
-
-    recorder.record(previous);
-    recorder.record(decrypted);
-    recorder.record(decrypted);
-
-    expect(observed).toEqual([previous, decrypted]);
-  });
-
-  it("rehydrates a replacement when its threaded target decrypts later", () => {
-    const observed: MatrixQaObservedEvent[] = [];
-    const recorder = createMatrixQaE2eeObservedEventRecorder({
-      append: (event) => observed.push(event),
-    });
     const replacement = {
+      ...previous,
       eventId: "$final",
-      kind: "message" as const,
-      roomId: "!room:matrix-qa.test",
-      sender: "@bot:matrix-qa.test",
-      type: "m.room.message",
       body: "final",
       msgtype: "m.text",
       replacesEventId: "$preview",
     };
-    const relation = {
-      eventId: "$root",
-      inReplyToId: "$driver",
-      isFallingBack: true,
-      relType: "m.thread",
+    const decrypted = {
+      ...previous,
+      body: "MATRIX_QA_E2EE_CLI_GATEWAY_OK",
+      msgtype: "m.text",
+      relatesTo: {
+        eventId: "$root",
+        inReplyToId: "$driver",
+        isFallingBack: true,
+        relType: "m.thread",
+      },
     };
-
     recorder.record(replacement);
-    recorder.record({
-      eventId: "$preview",
-      kind: "notice",
-      roomId: "!room:matrix-qa.test",
-      sender: "@bot:matrix-qa.test",
-      type: "m.room.message",
-      body: "preview",
-      msgtype: "m.notice",
-      relatesTo: relation,
-    });
-
+    recorder.record(previous);
+    recorder.record(decrypted);
+    recorder.record(decrypted);
     expect(observed).toEqual([
       replacement,
-      expect.objectContaining({ eventId: "$preview", relatesTo: relation }),
-      { ...replacement, relatesTo: relation },
+      previous,
+      decrypted,
+      { ...replacement, relatesTo: decrypted.relatesTo },
     ]);
   });
 });

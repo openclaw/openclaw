@@ -5,8 +5,8 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
-import type { FallbackStatus } from "./tool-stream-contract.ts";
 import { handleSessionOperationEvent } from "./tool-stream-status.ts";
 import {
   agentEvent,
@@ -16,36 +16,93 @@ import {
 } from "./tool-stream.test-helpers.ts";
 import { handleAgentEvent } from "./tool-stream.ts";
 
-function emitEvent(
+function createTimedHost(overrides?: Parameters<typeof createHost>[0]) {
+  useToolStreamFakeTimers();
+  return createHost(overrides);
+}
+const globalHost = () =>
+  createHost({
+    sessionKey: "global",
+    assistantAgentId: "work",
+    agentsList: { defaultId: "main" },
+  });
+
+function emitEvent(host: ReturnType<typeof createHost>, ...event: Parameters<typeof agentEvent>) {
+  handleAgentEvent(host, agentEvent(...event));
+}
+
+const fallback = {
+  phase: "fallback",
+  selectedProvider: "fireworks",
+  selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+  activeProvider: "deepinfra",
+  activeModel: "moonshotai/Kimi-K2.5",
+};
+const expectedPreamble = (text: string) => ({
+  text,
+  ts: TOOL_STREAM_TEST_NOW,
+  runId: "run-1",
+  itemId: "msg-preamble-1",
+});
+
+function emitGlobal(
   host: ReturnType<typeof createHost>,
   runId: string,
   seq: number,
   stream: Parameters<typeof agentEvent>[2],
   data: Parameters<typeof agentEvent>[3],
-  sessionKey = "main",
+  agentId = "main",
 ) {
-  handleAgentEvent(host, agentEvent(runId, seq, stream, data, sessionKey));
+  handleAgentEvent(host, { ...agentEvent(runId, seq, stream, data, "global"), agentId });
+}
+
+function emitPreamble(
+  host: ReturnType<typeof createHost>,
+  runId: string,
+  seq: number,
+  progressText: string,
+  itemId: string,
+) {
+  emitEvent(host, runId, seq, "item", { kind: "preamble", itemId, progressText });
+}
+
+function emitOperation(
+  host: ReturnType<typeof createHost>,
+  operationId: string,
+  phase: "start" | "end",
+  sessionKey: string,
+  extra: Partial<NonNullable<Parameters<typeof handleSessionOperationEvent>[1]>> = {},
+) {
+  handleSessionOperationEvent(host, {
+    operationId,
+    operation: "compact",
+    phase,
+    sessionKey,
+    ts: TOOL_STREAM_TEST_NOW,
+    ...extra,
+  });
+}
+
+function compaction(
+  phase: "active" | "retrying" | "complete",
+  runId: string,
+  extra: { itemId?: string } = {},
+) {
+  return {
+    ...extra,
+    phase,
+    runId,
+    startedAt: TOOL_STREAM_TEST_NOW,
+    completedAt: phase === "complete" ? TOOL_STREAM_TEST_NOW : null,
+  };
 }
 
 function expectCompactionCompleteAndRetained(host: ReturnType<typeof createHost>, itemId?: string) {
-  expect(host.compactionStatus).toEqual({
-    ...(itemId ? { itemId } : {}),
-    phase: "complete",
-    runId: "run-1",
-    startedAt: TOOL_STREAM_TEST_NOW,
-    completedAt: TOOL_STREAM_TEST_NOW,
-  });
+  expect(host.compactionStatus).toEqual(compaction("complete", "run-1", itemId ? { itemId } : {}));
   const status = host.compactionStatus;
   vi.advanceTimersByTime(5_000);
   expect(host.compactionStatus).toBe(status);
   expect(host.compactionClearTimer).toBeNull();
-}
-
-function requireFallbackStatus(host: ReturnType<typeof createHost>): FallbackStatus {
-  if (!host.fallbackStatus) {
-    throw new Error("expected fallback status");
-  }
-  return host.fallbackStatus;
 }
 
 describe("app-tool-stream fallback lifecycle handling", () => {
@@ -92,52 +149,43 @@ describe("app-tool-stream fallback lifecycle handling", () => {
   });
 
   it("auto-clears fallback status after toast duration", () => {
-    useToolStreamFakeTimers();
-    const requestUpdate = vi.fn();
-    const host = createHost({ requestUpdate });
+    const publication = vi.fn();
+    const host = createTimedHost();
+    chatRunPresentation(host).subscribe(publication);
 
-    emitEvent(host, "run-1", 1, "lifecycle", {
-      phase: "fallback",
-      selectedProvider: "fireworks",
-      selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-      activeProvider: "deepinfra",
-      activeModel: "moonshotai/Kimi-K2.5",
-      reasonSummary: "rate limit",
-    });
+    emitEvent(host, "run-1", 1, "lifecycle", { ...fallback, reasonSummary: "rate limit" });
 
-    let fallbackStatus = requireFallbackStatus(host);
-    expect(fallbackStatus.reason).toBe("rate limit");
-    expect(fallbackStatus.phase).toBe("active");
-    expect(fallbackStatus.selected).toBe("fireworks/accounts/fireworks/routers/kimi-k2p5-turbo");
-    expect(fallbackStatus.active).toBe("deepinfra/moonshotai/Kimi-K2.5");
+    publication.mockClear();
+    const expected = {
+      phase: "active",
+      selected: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+      active: "deepinfra/moonshotai/Kimi-K2.5",
+    };
+    expect(host.fallbackStatus).toMatchObject({ ...expected, reason: "rate limit" });
     vi.advanceTimersByTime(7_999);
-    fallbackStatus = requireFallbackStatus(host);
-    expect(fallbackStatus.phase).toBe("active");
-    expect(fallbackStatus.selected).toBe("fireworks/accounts/fireworks/routers/kimi-k2p5-turbo");
-    expect(fallbackStatus.active).toBe("deepinfra/moonshotai/Kimi-K2.5");
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(host.fallbackStatus).toMatchObject(expected);
+    expect(publication).not.toHaveBeenCalled();
     vi.advanceTimersByTime(1);
     expect(host.fallbackStatus).toBeNull();
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(publication).toHaveBeenCalledOnce();
   });
 
   it("builds previous fallback label from provider + model on fallback_cleared", () => {
-    useToolStreamFakeTimers();
-    const host = createHost();
+    const host = createTimedHost();
 
     emitEvent(host, "run-1", 1, "lifecycle", {
+      ...fallback,
       phase: "fallback_cleared",
-      selectedProvider: "fireworks",
-      selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
       activeProvider: "fireworks",
       activeModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
       previousActiveProvider: "deepinfra",
       previousActiveModel: "moonshotai/Kimi-K2.5",
     });
 
-    const fallbackStatus = requireFallbackStatus(host);
-    expect(fallbackStatus.phase).toBe("cleared");
-    expect(fallbackStatus.previous).toBe("deepinfra/moonshotai/Kimi-K2.5");
+    expect(host.fallbackStatus).toMatchObject({
+      phase: "cleared",
+      previous: "deepinfra/moonshotai/Kimi-K2.5",
+    });
   });
 
   it.each([
@@ -181,12 +229,14 @@ describe("app-tool-stream fallback lifecycle handling", () => {
         },
         agentId,
       );
-      const host = createHost({
-        sessionKey: key,
-        assistantAgentId: agentId,
-        agentsList: { defaultId: "main", scope: target === "global" ? "global" : "per-sender" },
-        sessions,
-      });
+      const sessionHost = () =>
+        createHost({
+          sessionKey: key,
+          assistantAgentId: agentId,
+          agentsList: { defaultId: "main", scope: target === "global" ? "global" : "per-sender" },
+          sessions,
+        });
+      const host = sessionHost();
       const event = {
         ...agentEvent(
           "run-1",
@@ -214,15 +264,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       // Replaying an old tool result reads today's row, without replacing a newer UI intent.
       result.sessions = [{ ...row, model: "gpt-5-mini" }];
       const patch = sessions.patch(key, { model: "openai/gpt-5.6-luna" });
-      handleAgentEvent(
-        createHost({
-          sessionKey: key,
-          assistantAgentId: agentId,
-          agentsList: { defaultId: "main", scope: target === "global" ? "global" : "per-sender" },
-          sessions,
-        }),
-        event,
-      );
+      handleAgentEvent(sessionHost(), event);
       await waitForFast(() =>
         expect(request.mock.calls.filter(([method]) => method === "sessions.list")).toHaveLength(2),
       );
@@ -242,11 +284,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     { changedModel: true, sessionKey: "agent:work:other", agentId: "work" },
     { changedModel: true, sessionKey: "global", agentId: "main" },
   ])("does not refresh an unrelated/read-only status result (%j)", (details) => {
-    const host = createHost({
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-    });
+    const host = globalHost();
     handleAgentEvent(host, {
       ...agentEvent(
         "run-1",
@@ -267,28 +305,12 @@ describe("app-tool-stream fallback lifecycle handling", () => {
   });
 
   it("stores keyed preamble item progress as stream segments", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({ chatRunId: "run-1" });
+    const host = createTimedHost({ chatRunId: "run-1" });
 
-    emitEvent(host, "run-1", 1, "item", {
-      kind: "preamble",
-      itemId: "msg-preamble-1",
-      progressText: "Checking",
-    });
-    emitEvent(host, "run-1", 2, "item", {
-      kind: "preamble",
-      itemId: "msg-preamble-1",
-      progressText: "Checking the app-server stream",
-    });
+    emitPreamble(host, "run-1", 1, "Checking", "msg-preamble-1");
+    emitPreamble(host, "run-1", 2, "Checking the app-server stream", "msg-preamble-1");
 
-    expect(host.chatStreamSegments).toEqual([
-      {
-        text: "Checking the app-server stream",
-        ts: TOOL_STREAM_TEST_NOW,
-        runId: "run-1",
-        itemId: "msg-preamble-1",
-      },
-    ]);
+    expect(host.chatStreamSegments).toEqual([expectedPreamble("Checking the app-server stream")]);
     expect(host.chatStream).toBeNull();
   });
 
@@ -314,11 +336,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       );
       if (runId) {
         state.chatMessages = [persisted];
-        emitEvent(state, runId, 4, "item", {
-          kind: "preamble",
-          itemId: "shared-item",
-          progressText: "Completed progress",
-        });
+        emitPreamble(state, runId, 4, "Completed progress", "shared-item");
         expect(state.chatStreamSegments).toEqual(
           originalSegments.filter((segment) => segment.runId !== runId),
         );
@@ -330,181 +348,69 @@ describe("app-tool-stream fallback lifecycle handling", () => {
     { progressText: "Another run's commentary", name: "replace" },
     { progressText: "", name: "clear" },
   ])("does not let another run $name the active preamble", ({ progressText }) => {
-    useToolStreamFakeTimers();
-    const host = createHost({ chatRunId: "run-1" });
+    const host = createTimedHost({ chatRunId: "run-1" });
 
-    emitEvent(host, "run-1", 1, "item", {
-      kind: "preamble",
-      itemId: "msg-preamble-1",
-      progressText: "The active run's commentary",
-    });
-    emitEvent(host, "run-2", 2, "item", {
-      kind: "preamble",
-      itemId: "msg-preamble-1",
-      progressText,
-    });
+    emitPreamble(host, "run-1", 1, "The active run's commentary", "msg-preamble-1");
+    emitPreamble(host, "run-2", 2, progressText, "msg-preamble-1");
 
-    expect(host.chatStreamSegments).toEqual([
-      {
-        text: "The active run's commentary",
-        ts: TOOL_STREAM_TEST_NOW,
-        runId: "run-1",
-        itemId: "msg-preamble-1",
-      },
-    ]);
+    expect(host.chatStreamSegments).toEqual([expectedPreamble("The active run's commentary")]);
   });
 
   it("does not insert another run's preamble into the active transcript", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({ chatRunId: "run-1" });
+    const host = createTimedHost({ chatRunId: "run-1" });
 
-    emitEvent(host, "run-2", 1, "item", {
-      kind: "preamble",
-      itemId: "msg-preamble-2",
-      progressText: "Another run's commentary",
-    });
+    emitPreamble(host, "run-2", 1, "Another run's commentary", "msg-preamble-2");
 
     expect(host.chatStreamSegments).toEqual([]);
   });
 
   it("accepts a session-scoped preamble while no run is active", () => {
-    useToolStreamFakeTimers();
-    const host = createHost();
+    const host = createTimedHost();
 
-    emitEvent(host, "run-1", 1, "item", {
-      kind: "preamble",
-      itemId: "msg-preamble-1",
-      progressText: "An already active session's commentary",
-    });
+    emitPreamble(host, "run-1", 1, "An already active session's commentary", "msg-preamble-1");
 
     expect(host.chatStreamSegments).toEqual([
-      {
-        text: "An already active session's commentary",
-        ts: TOOL_STREAM_TEST_NOW,
-        runId: "run-1",
-        itemId: "msg-preamble-1",
-      },
+      expectedPreamble("An already active session's commentary"),
     ]);
   });
 
   it("clears keyed preamble item progress on empty updates", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({ chatRunId: "run-1" });
+    const host = createTimedHost({ chatRunId: "run-1" });
 
-    emitEvent(host, "run-1", 1, "item", {
-      kind: "preamble",
-      itemId: "msg-preamble-1",
-      progressText: "Checking",
-    });
-    emitEvent(host, "run-1", 2, "item", {
-      kind: "preamble",
-      itemId: "msg-preamble-1",
-      progressText: "",
-    });
+    emitPreamble(host, "run-1", 1, "Checking", "msg-preamble-1");
+    emitPreamble(host, "run-1", 2, "", "msg-preamble-1");
 
     expect(host.chatStreamSegments).toEqual([]);
   });
 
   it("preserves prepared marker text while stripping inline directive tags", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({ chatRunId: "run-1" });
+    const host = createTimedHost({ chatRunId: "run-1" });
 
-    emitEvent(host, "run-1", 1, "item", {
-      kind: "preamble",
-      itemId: "msg-preamble-1",
-      progressText: "Checking [[reply_to_current]]",
-    });
-    emitEvent(host, "run-1", 2, "item", {
-      kind: "preamble",
-      itemId: "msg-preamble-2",
-      progressText: "[[reply_to_current]]",
-    });
-    emitEvent(host, "run-1", 3, "item", {
-      kind: "preamble",
-      itemId: "msg-preamble-1",
-      progressText: "**NO_REPLY",
-    });
+    emitPreamble(host, "run-1", 1, "Checking [[reply_to_current]]", "msg-preamble-1");
+    emitPreamble(host, "run-1", 2, "[[reply_to_current]]", "msg-preamble-2");
+    emitPreamble(host, "run-1", 3, "**NO_REPLY", "msg-preamble-1");
 
-    expect(host.chatStreamSegments).toEqual([
-      {
-        text: "**NO_REPLY",
-        ts: TOOL_STREAM_TEST_NOW,
-        runId: "run-1",
-        itemId: "msg-preamble-1",
-      },
-    ]);
+    expect(host.chatStreamSegments).toEqual([expectedPreamble("**NO_REPLY")]);
   });
 
   it("ignores selected-global tool events from another agent", () => {
-    const host = createHost({
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-    });
+    const host = globalHost();
 
-    handleAgentEvent(host, {
-      runId: "run-main-global",
-      seq: 1,
-      stream: "tool",
-      ts: Date.now(),
-      sessionKey: "global",
-      agentId: "main",
-      data: {
-        phase: "start",
-        name: "exec",
-        toolCallId: "tool-main-global",
-      },
+    emitGlobal(host, "run-main-global", 1, "tool", {
+      phase: "start",
+      name: "exec",
+      toolCallId: "tool-main-global",
     });
 
     expect(host.toolStreamOrder).toHaveLength(0);
   });
 
   it("ignores selected-global lifecycle and fallback events from another agent", () => {
-    const host = createHost({
-      sessionKey: "global",
-      assistantAgentId: "work",
-      agentsList: { defaultId: "main" },
-    });
+    const host = globalHost();
 
-    handleAgentEvent(host, {
-      runId: "run-main-global",
-      seq: 1,
-      stream: "compaction",
-      ts: Date.now(),
-      sessionKey: "global",
-      agentId: "main",
-      data: { phase: "start" },
-    });
-    handleAgentEvent(host, {
-      runId: "run-main-global",
-      seq: 2,
-      stream: "lifecycle",
-      ts: Date.now(),
-      sessionKey: "global",
-      agentId: "main",
-      data: {
-        phase: "fallback",
-        selectedProvider: "fireworks",
-        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-        activeProvider: "deepinfra",
-        activeModel: "moonshotai/Kimi-K2.5",
-      },
-    });
-    handleAgentEvent(host, {
-      runId: "run-main-global",
-      seq: 3,
-      stream: "fallback",
-      ts: Date.now(),
-      sessionKey: "global",
-      agentId: "main",
-      data: {
-        phase: "fallback",
-        selectedProvider: "fireworks",
-        selectedModel: "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
-        activeProvider: "deepinfra",
-        activeModel: "moonshotai/Kimi-K2.5",
-      },
-    });
+    emitGlobal(host, "run-main-global", 1, "compaction", { phase: "start" });
+    emitGlobal(host, "run-main-global", 2, "lifecycle", fallback);
+    emitGlobal(host, "run-main-global", 3, "fallback", fallback);
 
     expect(host.compactionStatus).toBeNull();
     expect(host.fallbackStatus).toBeNull();
@@ -513,8 +419,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
   it.each([{ phase: "start" }, { phase: "end", completed: true, willRetry: true }])(
     "keeps newer compaction active after stale $phase event %j",
     (staleData) => {
-      useToolStreamFakeTimers();
-      const host = createHost();
+      const host = createTimedHost();
       emitEvent(host, "run-1", 1, "compaction", { phase: "start", itemId: "compact-1" });
       emitEvent(host, "run-1", 3, "compaction", { phase: "start", itemId: "compact-2" });
       emitEvent(host, "run-1", 2, "compaction", { ...staleData, itemId: "compact-1" });
@@ -540,18 +445,11 @@ describe("app-tool-stream fallback lifecycle handling", () => {
   );
 
   it("keeps compaction in retry-pending state until the matching lifecycle end", () => {
-    useToolStreamFakeTimers();
-    const host = createHost();
+    const host = createTimedHost();
 
     emitEvent(host, "run-1", 1, "compaction", { phase: "start", itemId: "compact-1" });
 
-    expect(host.compactionStatus).toEqual({
-      itemId: "compact-1",
-      phase: "active",
-      runId: "run-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
+    expect(host.compactionStatus).toEqual(compaction("active", "run-1", { itemId: "compact-1" }));
 
     emitEvent(host, "run-1", 2, "compaction", {
       phase: "end",
@@ -559,29 +457,30 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       completed: true,
     });
 
-    expect(host.compactionStatus).toEqual({
-      itemId: "compact-1",
-      phase: "retrying",
-      runId: "run-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
+    expect(host.compactionStatus).toEqual(compaction("retrying", "run-1", { itemId: "compact-1" }));
     expect(host.compactionClearTimer).not.toBeNull();
 
     emitEvent(host, "run-2", 3, "lifecycle", { phase: "end" });
     emitEvent(host, "run-1", 1, "lifecycle", { phase: "end" });
 
-    expect(host.compactionStatus).toEqual({
-      itemId: "compact-1",
-      phase: "retrying",
-      runId: "run-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
+    expect(host.compactionStatus).toEqual(compaction("retrying", "run-1", { itemId: "compact-1" }));
 
     emitEvent(host, "run-1", 4, "lifecycle", { phase: "end" });
 
     expectCompactionCompleteAndRetained(host, "compact-1");
+  });
+
+  it("keeps recovery compaction status and expiry when hook notices arrive", () => {
+    const host = createTimedHost();
+    emitEvent(host, "run-1", 1, "compaction", { phase: "start", itemId: "recovery-1" });
+    const status = host.compactionStatus;
+    const timer = host.compactionClearTimer;
+    emitEvent(host, "run-1", 2, "compaction", { phase: "notice", messages: ["Preparing context"] });
+    expect(host.compactionStatus).toBe(status);
+    expect(host.compactionClearTimer).toBe(timer);
+    vi.advanceTimersByTime(5 * 60_000);
+    expect(host.compactionStatus).toBeNull();
+    expect(host.compactionClearTimer).toBeNull();
   });
 
   it("auto-clears active compaction after the stale timeout", () => {
@@ -611,8 +510,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
   });
 
   it("shows manual session operation compaction progress while idle", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({
+    const host = createTimedHost({
       sessionKey: "main",
       hello: {
         snapshot: {
@@ -625,36 +523,13 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       },
     });
 
-    handleSessionOperationEvent(host, {
-      operationId: "operation-1",
-      operation: "compact",
-      phase: "start",
-      sessionKey: "agent:main:main",
-      ts: TOOL_STREAM_TEST_NOW,
-    });
+    emitOperation(host, "operation-1", "start", "agent:main:main");
 
-    expect(host.compactionStatus).toEqual({
-      phase: "active",
-      runId: "operation-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
+    expect(host.compactionStatus).toEqual(compaction("active", "operation-1"));
 
-    handleSessionOperationEvent(host, {
-      operationId: "operation-1",
-      operation: "compact",
-      phase: "end",
-      sessionKey: "agent:main:main",
-      ts: TOOL_STREAM_TEST_NOW,
-      completed: true,
-    });
+    emitOperation(host, "operation-1", "end", "agent:main:main", { completed: true });
 
-    expect(host.compactionStatus).toEqual({
-      phase: "complete",
-      runId: "operation-1",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: TOOL_STREAM_TEST_NOW,
-    });
+    expect(host.compactionStatus).toEqual(compaction("complete", "operation-1"));
   });
 
   it("ignores manual session operation compaction for other sessions", () => {
@@ -674,100 +549,45 @@ describe("app-tool-stream fallback lifecycle handling", () => {
   });
 
   it("ignores selected-global session operation compaction for another agent", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({
+    const host = createTimedHost({
       sessionKey: "global",
       assistantAgentId: "work",
       agentsList: { defaultId: "main" },
     });
 
-    handleSessionOperationEvent(host, {
-      operationId: "operation-main",
-      operation: "compact",
-      phase: "start",
-      sessionKey: "global",
-      agentId: "main",
-      ts: TOOL_STREAM_TEST_NOW,
-    });
+    emitOperation(host, "operation-main", "start", "global", { agentId: "main" });
 
     expect(host.compactionStatus).toBeNull();
     expect(host.compactionClearTimer).toBeNull();
   });
 
   it("accepts canonical global live events for selected agent main aliases", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({
+    const host = createTimedHost({
       sessionKey: "agent:work:main",
       agentsList: { defaultId: "main", scope: "global" },
     });
 
-    handleAgentEvent(host, {
-      runId: "run-work",
-      seq: 1,
-      stream: "compaction",
-      ts: TOOL_STREAM_TEST_NOW,
-      sessionKey: "global",
-      agentId: "work",
-      data: { phase: "start" },
-    });
+    emitGlobal(host, "run-work", 1, "compaction", { phase: "start" }, "work");
 
-    expect(host.compactionStatus).toEqual({
-      phase: "active",
-      runId: "run-work",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
+    expect(host.compactionStatus).toEqual(compaction("active", "run-work"));
 
-    handleAgentEvent(host, {
-      runId: "run-main",
-      seq: 2,
-      stream: "fallback",
-      ts: TOOL_STREAM_TEST_NOW,
-      sessionKey: "global",
-      agentId: "main",
-      data: {
-        phase: "fallback_started",
-        selectedProvider: "openai",
-        selectedModel: "gpt-5",
-      },
+    emitGlobal(host, "run-main", 2, "fallback", {
+      phase: "fallback_started",
+      selectedProvider: "openai",
+      selectedModel: "gpt-5",
     });
 
     expect(host.fallbackStatus).toBeNull();
   });
 
   it("ignores stale manual session operation completion after a newer start", () => {
-    useToolStreamFakeTimers();
-    const host = createHost({ sessionKey: "agent:main:main" });
+    const host = createTimedHost({ sessionKey: "agent:main:main" });
 
-    handleSessionOperationEvent(host, {
-      operationId: "operation-1",
-      operation: "compact",
-      phase: "start",
-      sessionKey: "agent:main:main",
-      ts: TOOL_STREAM_TEST_NOW,
-    });
-    handleSessionOperationEvent(host, {
-      operationId: "operation-2",
-      operation: "compact",
-      phase: "start",
-      sessionKey: "agent:main:main",
-      ts: TOOL_STREAM_TEST_NOW,
-    });
-    handleSessionOperationEvent(host, {
-      operationId: "operation-1",
-      operation: "compact",
-      phase: "end",
-      sessionKey: "agent:main:main",
-      ts: TOOL_STREAM_TEST_NOW,
-      completed: true,
-    });
+    emitOperation(host, "operation-1", "start", "agent:main:main");
+    emitOperation(host, "operation-2", "start", "agent:main:main");
+    emitOperation(host, "operation-1", "end", "agent:main:main", { completed: true });
 
-    expect(host.compactionStatus).toEqual({
-      phase: "active",
-      runId: "operation-2",
-      startedAt: TOOL_STREAM_TEST_NOW,
-      completedAt: null,
-    });
+    expect(host.compactionStatus).toEqual(compaction("active", "operation-2"));
     vi.advanceTimersByTime(5 * 60_000);
     expect(host.compactionStatus).toBeNull();
     expect(host.compactionClearTimer).toBeNull();
@@ -798,8 +618,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
   });
 
   it("does not surface retrying or complete when retry compaction failed", () => {
-    useToolStreamFakeTimers();
-    const host = createHost();
+    const host = createTimedHost();
 
     emitEvent(host, "run-1", 1, "compaction", { phase: "start" });
 

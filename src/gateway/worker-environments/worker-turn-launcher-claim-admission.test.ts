@@ -1,10 +1,10 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import { installSessionPlacementAdmissionProvider } from "../../agents/session-placement-admission.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { result as processResult } from "./bootstrap.test-support.js";
 import { placementTurnOwner } from "./placement-record.js";
@@ -17,6 +17,7 @@ import {
   completeTurn,
   createLauncher,
   environmentForTunnel,
+  expectUncalled,
   launchDescriptor,
   executeTurn,
   localResult,
@@ -185,7 +186,9 @@ describe("worker turn launcher claim admission", () => {
       const replacement = executeTurn(provider, "next-run");
       void replacement.catch(() => undefined);
       await vi.waitFor(() => expect(waitForRelease).toHaveBeenCalledOnce());
-      expect(waitForRelease).toHaveBeenCalledWith(SESSION_ID, {});
+      expect(waitForRelease).toHaveBeenCalledWith(SESSION_ID, {
+        signal: expect.any(AbortSignal),
+      });
       expect(placements.get(SESSION_ID)?.turnClaim?.runId).toBe(priorClaim.runId);
 
       await placements.updateWorkspaceBaseManifest({
@@ -273,6 +276,7 @@ describe("worker turn launcher claim admission", () => {
     await seedActivePlacement();
     const cancelled = new AbortController();
     const cancellationStarted = createDeferred();
+    const transportCancelled = createDeferred();
     const finishCancellation = createDeferred();
     let launchCount = 0;
     const stopTunnel = vi.fn(async () => {});
@@ -281,6 +285,9 @@ describe("worker turn launcher claim admission", () => {
       request.onDispatchReady?.();
       launchCount += 1;
       if (launchCount === 1) {
+        request.signal?.addEventListener("abort", () => transportCancelled.resolve(), {
+          once: true,
+        });
         cancellationStarted.resolve();
         await finishCancellation.promise;
         return processResult({ code: 1, killed: true });
@@ -310,18 +317,20 @@ describe("worker turn launcher claim admission", () => {
 
     try {
       await cancellationStarted.promise;
-      await expect(executeTurn(provider, firstRunId)).rejects.toThrow(
-        "already has an active turn claim",
-      );
-      await expect(executeTurn(provider, "run-live-collision")).rejects.toThrow(
-        "already has an active turn claim",
-      );
-      const waitForRelease = vi.spyOn(placements, "waitForTurnClaimRelease");
-      cancelled.abort(new Error("operator stopped the previous turn"));
+      // The session controller queues a follow-up while the current producer owns custody.
       replacement = executeTurn(provider, "run-after-cancellation");
-      void replacement.catch(() => undefined);
-
-      await vi.waitFor(() => expect(waitForRelease).toHaveBeenCalledOnce());
+      cancelled.abort(new Error("operator stopped the previous turn"));
+      await transportCancelled.promise;
+      let replacementSettled = false;
+      void replacement.then(
+        () => {
+          replacementSettled = true;
+        },
+        () => {
+          replacementSettled = true;
+        },
+      );
+      expect(replacementSettled).toBe(false);
       expect(placements.get(SESSION_ID)?.turnClaim?.runId).toBe(firstRunId);
       expect(launchTurn).toHaveBeenCalledOnce();
 
@@ -330,9 +339,8 @@ describe("worker turn launcher claim admission", () => {
       await expect(replacement).resolves.toMatchObject({
         payloads: [{ text: "Recovered after cancellation" }],
       });
-      await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
-      expect(stopTunnel).not.toHaveBeenCalled();
-      expect(destroy).not.toHaveBeenCalled();
+      await waitForSessionRunEnd(SESSION_ID, null);
+      expectUncalled(stopTunnel, destroy);
       expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
     } finally {
       finishCancellation.resolve();
@@ -388,6 +396,8 @@ describe("worker turn launcher claim admission", () => {
     try {
       await withWorkerCompactionAdoption("run-overlap", async (adopt, workerTurn) => {
         const controller = new AbortController();
+        const queuedController = new AbortController();
+        const queuedTurn = turn("run-overlap");
         const runLocal = vi.fn(localResult);
         const first = provider.executeTurn(
           claim,
@@ -411,10 +421,19 @@ describe("worker turn launcher claim admission", () => {
           expect(placements.validateTurnClaim(launchRequest.turnClaim)).toBe(true);
           expect(launchRequest.signal?.aborted).toBe(false);
           expect(runLocal).not.toHaveBeenCalled();
-          await expect(provider.executeTurn(claim, turn("run-overlap"), runLocal)).rejects.toThrow(
-            "already has an active turn claim",
+          const queued = provider.executeTurn(
+            claim,
+            { ...queuedTurn, abortSignal: queuedController.signal },
+            runLocal,
           );
+          void queued.catch(() => undefined);
+          // A second caller waits in the session mailbox; cancelling that caller
+          // must not cancel or replace the already dispatched worker's exact claim.
+          queuedController.abort(new Error("Queued duplicate cancelled"));
+          await expect(queued).rejects.toThrow("Queued duplicate cancelled");
           expect(launchTurn).toHaveBeenCalledOnce();
+          expect(launchRequest.signal?.aborted).toBe(false);
+          expect(placements.validateTurnClaim(launchRequest.turnClaim)).toBe(true);
 
           const completed = await openSessionManager();
           const leafId = await completed.appendMessageAsync(
@@ -459,7 +478,7 @@ describe("worker turn launcher claim admission", () => {
             }),
           );
           await expect(first).resolves.toMatchObject({ payloads: [{ text: "Only worker reply" }] });
-          await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
+          await waitForSessionRunEnd(SESSION_ID, null);
           const completedPlacement = placements.get(SESSION_ID);
           if (completedPlacement?.state !== "active") {
             throw new Error("expected active placement after worker completion");
@@ -473,6 +492,8 @@ describe("worker turn launcher claim admission", () => {
           expect(placements.get(SESSION_ID)).toMatchObject({ state: "draining", turnClaim: null });
         } finally {
           controller.abort();
+          queuedController.abort();
+          queuedTurn.preparedRunAdmission.close();
           commandFinished.resolve(
             processResult({
               stderr: "fixture closed",
@@ -545,11 +566,10 @@ describe("worker turn launcher claim admission", () => {
     await expect(executeTurn(provider, "run-model-recovered")).resolves.toMatchObject({
       payloads: [{ text: "Recovered worker reply" }],
     });
-    await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
+    await waitForSessionRunEnd(SESSION_ID, null);
     expect(turnIds).toHaveLength(2);
     expect(turnIds[0]).not.toBe(turnIds[1]);
-    expect(stopTunnel).not.toHaveBeenCalled();
-    expect(destroy).not.toHaveBeenCalled();
+    expectUncalled(stopTunnel, destroy);
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "active", turnClaim: null });
   });
 });

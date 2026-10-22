@@ -21,7 +21,6 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   getAdmittedSqliteSchemaFacts,
-  runSqliteDeferredTransactionSync,
   tableExists,
   tableHasColumn,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
@@ -236,7 +235,6 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
                 : schema!.tables.has(MEMORY_INDEX_FTS_TABLE)),
             facts: hasIndex ? readMemoryDatabaseFacts(db) : undefined,
             identity: readOpenClawAgentDatabaseIdentity(opened.database),
-            schemaVersion: schema?.userVersion,
           },
         };
       }
@@ -259,14 +257,10 @@ serveWorkerTasks(async (input): Promise<MemorySearchWorkerOutput> => {
       };
     }
     if (request.kind === "index-read") {
-      const read = () => readMemoryIndex(db, request.command);
       return {
         kind: "index-read",
-        // Cache lookup can span provider identities and batches of hashes.
-        read:
-          request.command.type === "cache.read"
-            ? runSqliteDeferredTransactionSync(db, read)
-            : read(),
+        // Cache entries are independent content-addressed values; eviction is a cache miss.
+        read: readMemoryIndex(db, request.command),
       };
     }
     if (request.kind === "index-state") {

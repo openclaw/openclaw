@@ -1,13 +1,9 @@
-// One boundary for the usage.status RPC. A successful empty response is valid data;
-// request failure remains a separate closed Result arm for consumer views.
-// Never convert cancellation into that arm: Lit Task discards superseded work.
-import { err, ok, type Result } from "@openclaw/normalization-core/result";
+// A successful empty usage.status response is valid data, distinct from failure.
+// Cancellation still propagates so consumers can discard superseded work.
 import type { UsageSummary } from "../../../src/infra/provider-usage.types.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 
-type ProviderUsageRequestFailure = { kind: "request-failed" };
-
-export type ProviderUsageRequestResult = Result<UsageSummary, ProviderUsageRequestFailure>;
+export type ProviderUsageRequestResult = { ok: true; value: UsageSummary } | { ok: false };
 
 export async function requestProviderUsage(
   client: GatewayBrowserClient,
@@ -15,11 +11,11 @@ export async function requestProviderUsage(
 ): Promise<ProviderUsageRequestResult> {
   try {
     const summary = await client.request<UsageSummary>("usage.status", undefined, opts);
-    return ok<UsageSummary, ProviderUsageRequestFailure>(summary);
+    return { ok: true, value: summary };
   } catch (error) {
     if (opts?.signal?.aborted) {
       throw error;
     }
-    return err<UsageSummary, ProviderUsageRequestFailure>({ kind: "request-failed" });
+    return { ok: false };
   }
 }

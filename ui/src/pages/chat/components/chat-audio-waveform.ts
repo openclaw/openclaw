@@ -40,11 +40,8 @@ export function shouldFetchChatAudioWaveform(params: {
   );
 }
 
-export function computeChatAudioWaveformPeaks(
-  buffer: ChatAudioBufferLike,
-  bucketCount = CHAT_AUDIO_WAVEFORM_BUCKET_COUNT,
-): number[] {
-  const count = Math.max(1, Math.floor(bucketCount));
+export function computeChatAudioWaveformPeaks(buffer: ChatAudioBufferLike): number[] {
+  const count = CHAT_AUDIO_WAVEFORM_BUCKET_COUNT;
   if (buffer.length <= 0 || buffer.numberOfChannels <= 0) {
     return Array.from({ length: count }, () => 0);
   }

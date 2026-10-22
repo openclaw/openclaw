@@ -61,8 +61,7 @@ export async function withPluginGenerationSourceCustody<T>(run: () => Promise<T>
   }
 }
 
-/** A preparation worker retains this same owner across its sequential loader tasks. */
-export function createPluginGenerationSourceCustody() {
+function createPluginGenerationSourceCustody() {
   const scope = {
     sources: new Map<string, SourceCustody>(),
     async disposeAsync() {
@@ -158,7 +157,7 @@ export function createPluginSourceFacts(
     resolveDependency: createPluginDependencyResolver(dependencyLookupBoundary),
     captureCustody: (capture: () => PluginRecoverySource): SourceCustody => ({
       source: capture(),
-      files: structuredClone(files),
+      files,
     }),
   };
 }
@@ -248,14 +247,34 @@ function copyRecoverySource({
   let recovery: ReturnType<typeof createPluginSourceCapture> | undefined;
   try {
     recovery = createPluginSourceCapture();
+    const directory = recovery.directory;
+    const relocate = (filename: string) =>
+      path.join(directory, path.relative(boundaryRoot, filename));
     const hardlinkedTargets = new Map<string, PluginNativeArtifactFact>();
-    // Preserve relative dependency links without reopening an updated package.
+    // Keep dependency links within the new capture without reopening installed packages.
     fs.cpSync(boundaryRoot, recovery.directory, {
       recursive: true,
       verbatimSymlinks: true,
       filter: (from, to) => {
         const fact = native?.references.get(from);
         if (!fact) {
+          if (fs.lstatSync(from).isSymbolicLink()) {
+            const target = fs.readlinkSync(from);
+            const relative = path.isAbsolute(target)
+              ? relativePluginPathInsideRootSync(boundaryRoot, target)
+              : undefined;
+            if (relative !== undefined) {
+              // Windows junctions store absolute targets. A verbatim copy would
+              // point at the seed after custody disposes it, then fail on fork.
+              fs.mkdirSync(path.dirname(to), { recursive: true, mode: 0o700 });
+              fs.symlinkSync(
+                path.relative(path.dirname(to), path.join(directory, relative)),
+                to,
+                fs.statSync(from).isDirectory() ? "junction" : "file",
+              );
+              return false;
+            }
+          }
           return true;
         }
         const retained = { ...fact, sourceIdentity: fact.capturedIdentity };
@@ -270,9 +289,6 @@ function copyRecoverySource({
     for (const [target, fact] of hardlinkedTargets) {
       assertReference(target, fact, native!.namespaces.get(fact.namespace)!);
     }
-    const directory = recovery.directory;
-    const relocate = (filename: string) =>
-      path.join(directory, path.relative(boundaryRoot, filename));
     const copiedSources = new Map(
       Array.from(sources, ([source, captured]) => [source, relocate(captured)]),
     );

@@ -47,17 +47,39 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
       });
     },
     async buildStart() {
-      await prepareControlUiSettings(repoRoot);
+      // The build wrapper prepares before hashing cache inputs; other entry points own preparation.
+      if (
+        serving ||
+        this.meta.watchMode ||
+        process.env.OPENCLAW_CONTROL_UI_PREPARED_SETTINGS_ROOT !== repoRoot
+      ) {
+        await prepareControlUiSettings(repoRoot);
+      }
       const directory = path.join(repoRoot, "dist/extensions");
       const required = process.env.OPENCLAW_CONTROL_UI_REQUIRE_PLUGIN_DISTRIBUTIONS === "1";
       const promised = required
         ? collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot })
-            .filter(
-              (entry) =>
-                !entry.isolated &&
-                isRecord(entry.packageJson) &&
-                controlUiSource(entry.packageJson),
-            )
+            .filter((entry) => {
+              if (!isRecord(entry.packageJson) || !controlUiSource(entry.packageJson)) {
+                return false;
+              }
+              if (!entry.isolated) {
+                return true;
+              }
+              const manifest = JSON.parse(
+                fs.readFileSync(
+                  path.join(repoRoot, "extensions", entry.id, "openclaw.plugin.json"),
+                  "utf8",
+                ),
+              );
+              const declaration = normalizeManifestControlUi(manifest.controlUi, manifest.channels);
+              if (!declaration.ok) {
+                throw new Error(
+                  `Invalid Control UI declaration for ${entry.id}: ${declaration.error}`,
+                );
+              }
+              return Boolean(declaration.value?.settingsViews?.length);
+            })
             .map((entry) => entry.id)
         : [];
       const entries = fs.existsSync(directory)
@@ -83,7 +105,7 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
         if (!isRecord(manifest) || !pluginId) {
           throw new Error(`Invalid packaged plugin manifest for ${id}: missing plugin id`);
         }
-        const result = normalizeManifestControlUi(manifest.controlUi);
+        const result = normalizeManifestControlUi(manifest.controlUi, manifest.channels);
         if (!result.ok) {
           throw new Error(`Invalid packaged plugin manifest for ${id}: ${result.error}`);
         }
@@ -151,8 +173,11 @@ export function controlUiPluginDistributionsPlugin(repoRoot: string, inputs: Set
       }
       source = `export const controlUiPluginDistributions = [${modules.join(",")}];`;
     },
-    transform(_code, id) {
-      return id.split("?")[0] === inventoryModule ? { code: source, map: null } : null;
+    transform: {
+      filter: { id: /\/ui\/src\/plugins\/control-ui-distribution\.ts(?:\?.*)?$/ },
+      handler(_code, id) {
+        return id.split("?")[0] === inventoryModule ? { code: source, map: null } : null;
+      },
     },
   };
 }

@@ -1,10 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { addAbortListener } from "node:events";
 import path from "node:path";
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { sleepWithAbort } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { isSqliteLockError } from "../infra/sqlite-error-diagnostics.js";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
 import { retainSqliteWorkerErrorCode } from "../infra/sqlite-worker-contract.js";
 import {
   assertExistingDatabaseIdentity,
@@ -15,10 +16,7 @@ import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.
 import { createDeferredCore } from "../shared/deferred.js";
 import { notifyListeners } from "../shared/listeners.js";
 import * as creationClaims from "./agent-creation-claim.js";
-import {
-  AgentDatabaseExecutionAdmissionClosedError,
-  AgentDatabaseSchemaAdmissionChangedError,
-} from "./agent-database-admission-error.js";
+import { AgentDatabaseExecutionAdmissionClosedError } from "./agent-database-admission-error.js";
 import { captureAgentDatabaseAdmission } from "./agent-database-admission.js";
 import {
   assertAgentDeletionExecutionCleanupAccess,
@@ -44,9 +42,9 @@ import { createAgentDatabaseNativeGeneration } from "./openclaw-agent-execution-
 import {
   type AgentDatabaseExecutionPreparedTarget,
   assertBorrowedAgentDatabaseFileIdentity,
-  captureBorrowedAgentDatabaseGenerationClaim,
   captureNativeAgentDatabaseExecutionIdentity,
   supportsAgentDatabaseExecutionScope,
+  toAgentExecutionConstraints,
 } from "./openclaw-agent-execution-scope.js";
 import { createAgentDatabaseAcceptedWork } from "./openclaw-agent-execution-work.js";
 import {
@@ -206,7 +204,6 @@ export function createAgentDatabaseExecution(
     creatingTarget?: DatabasePathIdentity,
     signal?: AbortSignal,
     contentionDeadline?: number,
-    schemaReadmitted = false,
   ): Promise<T | undefined> {
     const pending = agentDatabaseLifecycle.pending.get(pathname);
     if (pending) {
@@ -218,6 +215,11 @@ export function createAgentDatabaseExecution(
       }
       await pending.promise;
       pending.controller.signal.throwIfAborted();
+      assertCallerCurrent();
+    }
+    const nativeOpen = generation?.getPendingNativeOpen();
+    if (nativeOpen) {
+      await racePromiseWithAbortSignal(nativeOpen, signal, (aborted) => aborted.reason);
       assertCallerCurrent();
     }
     if (nativeClosing) {
@@ -244,7 +246,7 @@ export function createAgentDatabaseExecution(
             throw new Error("Agent cleanup no longer owns its original execution reference");
           }
         },
-        expectedIdentity ?? fileIdentity,
+        expectedIdentity ?? fileIdentity ?? toAgentExecutionConstraints(identity).expectedIdentity,
         acceptFileIdentity,
         reportTerminal,
         fileIdentity ? undefined : (creationIdentity ?? creatingTarget),
@@ -273,13 +275,7 @@ export function createAgentDatabaseExecution(
     } catch (error) {
       const nativeFailure = current.failure();
       const contended = !entered && isSqliteLockError(error);
-      const schemaChanged =
-        !entered &&
-        !schemaReadmitted &&
-        nativeFailure !== "native" &&
-        nativeFailure !== "lost" &&
-        error instanceof AgentDatabaseSchemaAdmissionChangedError;
-      if (generation === current && (nativeFailure || retireNativeOnFailure || schemaChanged)) {
+      if (generation === current && (nativeFailure || retireNativeOnFailure)) {
         try {
           if (nativeFailure === "native" && !contended && !nativeClosing) {
             reportTerminal(error);
@@ -297,25 +293,6 @@ export function createAgentDatabaseExecution(
             error,
           );
         }
-      }
-      if (schemaChanged) {
-        // Fresh proof can recover a refused publication; an entered operation is never replayed.
-        assertCurrent();
-        source.assertCurrent();
-        assertCallerCurrent();
-        signal?.throwIfAborted();
-        return run(
-          source,
-          operation,
-          assertCallerCurrent,
-          expectedIdentity,
-          retireNativeOnFailure,
-          createIfMissing,
-          creatingTarget,
-          signal,
-          contentionDeadline,
-          true,
-        );
       }
       if (contended) {
         const deadline =
@@ -344,7 +321,6 @@ export function createAgentDatabaseExecution(
             creatingTarget,
             signal,
             deadline,
-            schemaReadmitted,
           );
         }
       }
@@ -360,9 +336,7 @@ export function createAgentDatabaseExecution(
     get creationIdentity() {
       return creationIdentity;
     },
-    getPendingPreparation() {
-      return generation?.getPendingPreparation();
-    },
+    getPendingPreparation: () => generation?.getPendingPreparation(),
     borrow(borrowedPath, expected, creating, requestedPath) {
       const cleanup = getAgentDeletionDatabaseCleanup({ ...executionOptions, path: borrowedPath });
       const expectedIdentity = expected ? Object.freeze({ ...expected }) : undefined;
@@ -424,8 +398,13 @@ export function createAgentDatabaseExecution(
         cleanup?.assertCurrentHost();
         assertReferenceCurrent();
       };
-      const captureGenerationClaim = () =>
-        captureBorrowedAgentDatabaseGenerationClaim(assertBorrowed, () => generation);
+      const captureGenerationClaim = () => {
+        assertBorrowed();
+        if (!generation) {
+          throw new Error("Agent database execution has no admitted generation");
+        }
+        return generation.captureClaim(assertBorrowed);
+      };
       const borrowed: OpenClawAgentDatabaseExecution = {
         agentId,
         path: borrowedPath,
@@ -520,7 +499,20 @@ export function createAgentDatabaseExecution(
             }
             return await execute();
           } catch (error) {
-            if (runOptions?.retireNativeOnFailure && capturedGeneration) {
+            let retireNative = runOptions?.retireNativeOnFailure === true;
+            if (capturedGeneration && generation === capturedGeneration && fileIdentity) {
+              try {
+                // A caller refusal preserves co-users; loss of our own physical file cannot.
+                assertExistingDatabaseIdentity(
+                  fileIdentity.nativeLocation,
+                  `file:${fileIdentity.physicalIdentity}`,
+                  fileIdentity.birthtime,
+                );
+              } catch {
+                retireNative = true;
+              }
+            }
+            if (retireNative && capturedGeneration) {
               try {
                 await closeNative(capturedGeneration);
               } catch (cleanupError) {
@@ -590,7 +582,7 @@ export function createAgentDatabaseExecution(
                     return;
                   }
                   void owner.closeIdle().catch(reportCleanupFailure);
-                }, SQLITE_IDLE_HANDLE_TTL_MS),
+                }, resolveAgentDatabaseIdleHandleTtlMs()),
               );
               idleTimer = timer;
               timer.unref();
@@ -689,13 +681,12 @@ export function createAgentDatabaseExecution(
     // Config changes do not drain captured executors; unused stores expire normally.
     // Callers resolve new routing, while accepted work keeps its original physical store.
     unregisterShared = registerOpenClawStateDatabaseAsyncResource({
-      close: async (sharedIdentity) => {
-        if (!sharedIdentity || sharedIdentity.key === context.admission.identity.key) {
-          reportTerminal(
-            new AgentDatabaseExecutionAdmissionClosedError("Agent database state admission closed"),
-          );
-          await acceptedWork.closeAccepted(() => owner.close());
-        }
+      admission: context.admission,
+      close: async () => {
+        reportTerminal(
+          new AgentDatabaseExecutionAdmissionClosedError("Agent database state admission closed"),
+        );
+        await acceptedWork.closeAccepted(() => owner.close());
       },
     });
     return owner.borrow(

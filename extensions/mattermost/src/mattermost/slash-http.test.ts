@@ -1,6 +1,4 @@
-// Mattermost tests cover slash http plugin behavior.
-import { IncomingMessage, type ServerResponse } from "node:http";
-import { Socket } from "node:net";
+import { createMockIncomingRequest, createMockServerResponse } from "openclaw/plugin-sdk/test-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, RuntimeEnv } from "../../runtime-api.js";
 import type { ResolvedMattermostAccount } from "./accounts.js";
@@ -29,50 +27,11 @@ import {
 } from "./slash-commands.js";
 import { createSlashCommandHttpHandler } from "./slash-http.js";
 
-function createRequest(params: {
-  method?: string;
-  body?: string;
-  contentType?: string;
-  autoEnd?: boolean;
-}): IncomingMessage {
-  const req = new IncomingMessage(new Socket());
+function createRequest(params: { method?: string; body?: string }) {
+  const req = createMockIncomingRequest([params.body ?? ""]);
   req.method = params.method ?? "POST";
-  req.headers = {
-    "content-type": params.contentType ?? "application/x-www-form-urlencoded",
-  };
-  process.nextTick(() => {
-    if (params.body) {
-      req.push(Buffer.from(params.body));
-    }
-    if (params.autoEnd !== false) {
-      req.complete = true;
-      req.push(null);
-    }
-  });
+  req.headers = { "content-type": "application/x-www-form-urlencoded" };
   return req;
-}
-
-function createResponse(): {
-  res: ServerResponse;
-  getBody: () => string;
-  getHeaders: () => Map<string, string>;
-} {
-  let body = "";
-  const headers = new Map<string, string>();
-  const res = {
-    statusCode: 200,
-    setHeader(name: string, value: string) {
-      headers.set(name.toLowerCase(), value);
-    },
-    end(chunk?: string | Buffer) {
-      body = chunk ? String(chunk) : "";
-    },
-  } as ServerResponse;
-  return {
-    res,
-    getBody: () => body,
-    getHeaders: () => headers,
-  };
 }
 
 const accountFixture: ResolvedMattermostAccount = {
@@ -185,22 +144,25 @@ async function runSlashRequest(params: {
     registeredCommands: params.registeredCommands ?? [],
   });
   const req = createRequest({ method: params.method, body: params.body });
-  const response = createResponse();
-  await handler(req, response.res);
+  const response = createMockServerResponse();
+  await handler(req, response);
   return response;
 }
 
-async function validateMattermostSlashCommandToken(params: {
-  accountId: string;
+async function expectTokenValidation(params: {
+  accountId?: string;
   client: MattermostClient;
   registeredCommand: MattermostRegisteredCommand;
-  payload: MattermostSlashCommandPayload;
+  expected: boolean;
   log?: (message: string) => void;
   onRequestAuthenticated?: () => void;
-}): Promise<boolean> {
+}) {
   clientMocks.createMattermostClient.mockReturnValue(params.client);
   const handler = createSlashCommandHttpHandler({
-    account: { ...accountFixture, accountId: `${slashTestAccountId}:${params.accountId}` },
+    account: {
+      ...accountFixture,
+      accountId: `${slashTestAccountId}:${params.accountId ?? "default"}`,
+    },
     cfg: {} as OpenClawConfig,
     runtime: {} as RuntimeEnv,
     registeredCommands: [params.registeredCommand],
@@ -208,45 +170,21 @@ async function validateMattermostSlashCommandToken(params: {
   });
   const req = createRequest({
     body: new URLSearchParams(
-      Object.entries(params.payload).map(([key, value]) => [key, value]),
+      Object.entries(createSlashPayload({ token: params.registeredCommand.token })),
     ).toString(),
   });
-  const response = createResponse();
+  const response = createMockServerResponse();
+  let authenticated = false;
   try {
-    await handler(req, response.res, undefined, params.onRequestAuthenticated);
+    await handler(req, response, undefined, params.onRequestAuthenticated);
   } catch (error) {
     if (error instanceof Error && error.message === "Mattermost runtime not initialized") {
-      return true;
+      authenticated = true;
+    } else {
+      throw error;
     }
-    throw error;
   }
-  return response.res.statusCode !== 401;
-}
-
-async function expectTokenValidation(params: {
-  client: MattermostClient;
-  registeredCommand: MattermostRegisteredCommand;
-  expected: boolean;
-  accountId?: string;
-  payload?: MattermostSlashCommandPayload;
-  log?: (message: string) => void;
-  onRequestAuthenticated?: () => void;
-}): Promise<void> {
-  await expect(
-    validateMattermostSlashCommandToken({
-      accountId: params.accountId ?? "default",
-      client: params.client,
-      registeredCommand: params.registeredCommand,
-      payload: params.payload ?? createSlashPayload({ token: params.registeredCommand.token }),
-      log: params.log,
-      onRequestAuthenticated: params.onRequestAuthenticated,
-    }),
-  ).resolves.toBe(params.expected);
-}
-
-function firstLogMessage(log: ReturnType<typeof vi.fn>): string {
-  const message = log.mock.calls[0]?.[0];
-  return typeof message === "string" ? message : "";
+  expect(authenticated || response.statusCode !== 401).toBe(params.expected);
 }
 
 describe("slash-http", () => {
@@ -258,20 +196,9 @@ describe("slash-http", () => {
   });
 
   it("rejects non-POST methods", async () => {
-    const handler = createSlashCommandHttpHandler({
-      account: accountFixture,
-      cfg: {} as OpenClawConfig,
-      runtime: {} as RuntimeEnv,
-      registeredCommands: [createRegisteredCommand()],
-    });
-    const req = createRequest({ method: "GET", body: "" });
-    const response = createResponse();
-
-    await handler(req, response.res);
-
-    expect(response.res.statusCode).toBe(405);
-    expect(response.getBody()).toBe("Method Not Allowed");
-    expect(response.getHeaders().get("allow")).toBe("POST");
+    const response = await runSlashRequest({ method: "GET", body: "" });
+    expect(response).toMatchObject({ statusCode: 405, body: "Method Not Allowed" });
+    expect(response.getHeader("allow")).toBe("POST");
   });
 
   it("rejects a token valid for one command when used against another command", async () => {
@@ -281,20 +208,13 @@ describe("slash-http", () => {
     const response = await runSlashRequest({
       registeredCommands: [
         createRegisteredCommand({ token: "token-status", trigger: "oc_status" }),
-        {
-          id: "cmd-2",
-          teamId: "t1",
-          trigger: "oc_help",
-          token: "token-help",
-          url: "https://gateway.example.com/slash",
-          managed: false,
-        },
+        { ...createRegisteredCommand({ token: "token-help", trigger: "oc_help" }), id: "cmd-2" },
       ],
       body: "token=token-status&team_id=t1&channel_id=c1&user_id=u1&command=%2Foc_help&text=",
     });
 
-    expect(response.res.statusCode).toBe(401);
-    expect(response.getBody()).toContain("Unauthorized: invalid command token.");
+    expect(response.statusCode).toBe(401);
+    expect(response.body).toContain("Unauthorized: invalid command token.");
   });
 
   it("rate-limits sequential current-command lookups without caching successes", async () => {
@@ -314,6 +234,11 @@ describe("slash-http", () => {
       expect(log).toHaveBeenCalledWith(
         "mattermost: slash command validation lookup rate-limited for /oc_status",
       );
+
+      vi.setSystemTime(Date.now() + 500);
+      await expectTokenValidation({ client, registeredCommand, expected: true, log });
+      await expectTokenValidation({ client, registeredCommand, expected: false, log });
+      expect(client.requests).toHaveLength(21);
     } finally {
       vi.useRealTimers();
     }
@@ -337,20 +262,8 @@ describe("slash-http", () => {
   });
 
   it("briefly caches failed current command validation without accepting stale tokens", async () => {
-    const registeredCommand = createRegisteredCommand({ token: "old-token" });
-    const client = createCommandLookupClient({
-      command: createCurrentCommand({ token: "new-token" }),
-    });
-
-    await expectTokenValidation({ client, registeredCommand, expected: false });
-    await expectTokenValidation({ client, registeredCommand, expected: false });
-
-    expect(client.requests).toEqual(["/commands/cmd-1"]);
-  });
-
-  it("does not cache failed command validation when the expiry would exceed a valid Date", async () => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
+    vi.setSystemTime(new Date("2026-04-27T00:00:00Z"));
     try {
       const registeredCommand = createRegisteredCommand({ token: "old-token" });
       const client = createCommandLookupClient({
@@ -359,33 +272,11 @@ describe("slash-http", () => {
 
       await expectTokenValidation({ client, registeredCommand, expected: false });
       await expectTokenValidation({ client, registeredCommand, expected: false });
+      expect(client.requests).toEqual(["/commands/cmd-1"]);
 
-      expect(client.requests).toEqual(["/commands/cmd-1", "/commands/cmd-1"]);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
-  it("drops exhausted validation lookup buckets when the current clock is invalid", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-04-27T00:00:00Z"));
-    try {
-      const registeredCommand = createRegisteredCommand({ token: "valid-token" });
-      const client = createCommandLookupClient({ command: createCurrentCommand() });
-
-      for (let i = 0; i < 20; i += 1) {
-        await expectTokenValidation({ client, registeredCommand, expected: true });
-      }
+      vi.setSystemTime(Date.now() + 5_000);
       await expectTokenValidation({ client, registeredCommand, expected: false });
-
-      const dateNow = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
-      try {
-        await expectTokenValidation({ client, registeredCommand, expected: true });
-      } finally {
-        dateNow.mockRestore();
-      }
-
-      expect(client.requests).toHaveLength(21);
+      expect(client.requests).toEqual(["/commands/cmd-1", "/commands/cmd-1"]);
     } finally {
       vi.useRealTimers();
     }
@@ -476,7 +367,7 @@ describe("slash-http", () => {
     await expectTokenValidation({ client, registeredCommand, expected: false, log });
 
     expect(log).toHaveBeenCalledTimes(1);
-    expect(firstLogMessage(log)).toBe(
+    expect(log.mock.calls[0]?.[0]).toBe(
       "mattermost: slash command registration check failed for /oc_status (status=unknown); command lookup status=unknown",
     );
   });

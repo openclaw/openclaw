@@ -257,28 +257,24 @@ async function fetchAvatarDataUrl(
       avatarCaches.set(fetchImpl, cache);
     }
     const { value } = await racePromiseWithAbortSignal(
-      cache.read(
-        url.href,
-        async () => {
-          const response = await fetchImpl(url, {
-            headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
-            redirect: "error",
-            signal: AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS),
-          });
-          const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
-          if (
-            !response.ok ||
-            !contentType ||
-            !["image/gif", "image/jpeg", "image/png", "image/webp"].includes(contentType)
-          ) {
-            await discardResponse(response);
-            return undefined;
-          }
-          const body = await readBoundedResponse(response, GITHUB_AVATAR_MAX_BYTES);
-          return `data:${contentType};base64,${body.toString("base64")}`;
-        },
-        { allowStale: false },
-      ),
+      cache.read(url.href, async () => {
+        const response = await fetchImpl(url, {
+          headers: { Accept: "image/webp,image/png,image/jpeg,image/gif" },
+          redirect: "error",
+          signal: AbortSignal.timeout(GITHUB_PREVIEW_TIMEOUT_MS),
+        });
+        const contentType = response.headers.get("content-type")?.split(";", 1)[0]?.trim();
+        if (
+          !response.ok ||
+          !contentType ||
+          !["image/gif", "image/jpeg", "image/png", "image/webp"].includes(contentType)
+        ) {
+          await discardResponse(response);
+          return undefined;
+        }
+        const body = await readBoundedResponse(response, GITHUB_AVATAR_MAX_BYTES);
+        return `data:${contentType};base64,${body.toString("base64")}`;
+      }),
       signal,
     );
     return value;

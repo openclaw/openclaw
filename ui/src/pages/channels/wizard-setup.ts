@@ -1,15 +1,16 @@
-import { createSignal, createStore, onCleanup } from "solid-js";
+import { createSignal, createStore, onSettled } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { createChannelWizard, type ChannelWizardState } from "./wizard-runner.ts";
 
 type WizardSetupDeps = {
   getContext: () => ApplicationContext;
   clearSelection: () => void;
+  presentWizard: (pending: Promise<void>) => Promise<void>;
+  retire: () => void;
+  startWhatsApp: (force: boolean, accountId: string) => Promise<void>;
 };
-
-export type ChannelSetup = ReturnType<typeof createChannelSetup>;
 
 export function createChannelSetup(deps: WizardSetupDeps) {
   const [fields, setDraft] = createStore<{
@@ -36,35 +37,36 @@ export function createChannelSetup(deps: WizardSetupDeps) {
     () => t("channels.setup.sessionExpired"),
   );
   // Completion account identity stays synchronous with the RPC runner.
-  const state = projectSource(wizard, {
-    read: (source) => ({ wizard: source.state, whatsappAccountId }),
-    subscribe: (_source, notify) => {
-      publish = notify;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
-  onCleanup(() => {
+  const state = projectMutableSource(wizard, (source) => ({
+    wizard: source.state,
+    whatsappAccountId,
+  }));
+  publish = state.publish;
+  onSettled(() => () => {
+    deps.retire();
     disposed = true;
     // The Gateway retains an unfinished session, so teardown cancels it.
     void wizard.cancel();
   });
 
   function startSetup(channel: string | null): void {
+    if (deps.getContext().gateway.snapshot.phase !== "connected") {
+      return;
+    }
     // Completion reloads config; keep any unsaved advanced-form edits intact.
     if (deps.getContext().runtimeConfig.state.configFormDirty) {
       setBlockedByDirtyConfig(true);
       return;
     }
     setBlockedByDirtyConfig(false);
+    deps.retire();
     whatsappAccountId = undefined;
     deps.clearSelection();
-    void wizard.start(channel);
+    void deps.presentWizard(wizard.start(channel));
   }
 
   function close(): void {
+    deps.retire();
     const wasActive = wizard.state.phase !== "idle";
     void wizard.cancel();
     if (wasActive) {
@@ -110,7 +112,7 @@ export function createChannelSetup(deps: WizardSetupDeps) {
     if (whatsapp) {
       whatsappAccountId = whatsapp.accountId;
       publish();
-      await context.channels.startWhatsApp(false, whatsapp.accountId);
+      await deps.startWhatsApp(false, whatsapp.accountId);
     }
   }
 
@@ -126,7 +128,7 @@ export function createChannelSetup(deps: WizardSetupDeps) {
     startSetup,
     close,
     answer: (value: unknown) => {
-      void wizard.answer(value);
+      void deps.presentWizard(wizard.answer(value));
     },
     toggleMultiselect: (value: unknown) =>
       setDraft((draft) => {

@@ -1,10 +1,16 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { buildBrowserGatewayConnectPlan } from "../api/gateway-connect-plan.ts";
 import { loadCommandPaletteCatalogItems } from "../components/command-palette-catalog-search.ts";
+import { isGatewayConnectionAttemptPending } from "../lib/gateway-status.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { resolveAvatar } from "../lib/identity-avatar.ts";
+import { invalidateModelCatalogCache } from "../lib/model-catalog-cache.ts";
+import { loadModelCatalog } from "../lib/model-catalog-store.ts";
+import { requestSessionList } from "../lib/sessions/session-requests.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore as createStore,
@@ -58,8 +64,214 @@ describe("createApplicationGateway connection ownership", () => {
 
   function connect() {
     gateway.start();
-    current().opts.onHello?.(HELLO);
+    current().testOptions.onHello?.(HELLO);
   }
+
+  it.each([false, true])(
+    "waits for a connect catalog only when the peer advertises it: %s",
+    async (advertised) => {
+      vi.useFakeTimers();
+      const scope = { agentId: "main", sessionKey: "agent:main:catalog" };
+      const catalog = { models: [{ id: "current", provider: "fixture", name: "Current" }] };
+      ({ gateway, current } = createStore({ getModelCatalogTarget: () => scope }));
+      gateway.start();
+      // Authentication is unrelated to whether this peer negotiated catalog publication.
+      vi.stubGlobal("crypto", undefined);
+      const plan = await buildBrowserGatewayConnectPlan({
+        opts: current().testOptions,
+        connectNonce: "catalog-challenge",
+        connectChallengeTs: 1_800_000_000_000,
+        generation: 1,
+        serverCapabilities: advertised ? [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] : [],
+        nativeSignal: new AbortController().signal,
+        selectAuth: () => ({}),
+      });
+      expect(plan.params.modelCatalog).toEqual(advertised ? scope : undefined);
+      current().testOptions.onHello?.(HELLO);
+      current().request.mockResolvedValue(catalog);
+      const read = loadModelCatalog(gateway.snapshot.client!, scope).catch(
+        (error: unknown) => error,
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(current().request.mock.calls.filter(([method]) => method === "models.list")).toEqual(
+        advertised ? [] : [["models.list", { ...scope, view: "configured" }]],
+      );
+      if (advertised) {
+        current().testOptions.onEvent?.(
+          createGatewayEvent("models.snapshot", { target: scope, scope, catalog }),
+        );
+      }
+      expect(await read).toEqual(catalog);
+    },
+  );
+
+  it("retires a negotiated catalog target before reconnecting to a peer without snapshots", async () => {
+    vi.useFakeTimers();
+    const scope = { agentId: "main", sessionKey: "agent:main:catalog" };
+    const catalog = { models: [{ id: "current", provider: "fixture", name: "Current" }] };
+    ({ gateway, current } = createStore({ getModelCatalogTarget: () => scope }));
+    gateway.start();
+    vi.stubGlobal("crypto", undefined);
+    const plan = (serverCapabilities: string[]) =>
+      buildBrowserGatewayConnectPlan({
+        opts: current().testOptions,
+        connectNonce: "catalog-challenge",
+        connectChallengeTs: 1_800_000_000_000,
+        generation: 1,
+        serverCapabilities,
+        nativeSignal: new AbortController().signal,
+        selectAuth: () => ({}),
+      });
+    await plan([GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT]);
+    current().testOptions.onHello?.(HELLO);
+    current().testOptions.onEvent?.(
+      createGatewayEvent("models.snapshot", { target: scope, scope, catalog }),
+    );
+    expect(await loadModelCatalog(gateway.snapshot.client!, scope)).toEqual(catalog);
+
+    current().testOptions.onClose?.({ code: 1006, reason: "reconnect", willRetry: true });
+    expect((await plan([])).params.modelCatalog).toBeUndefined();
+    current().testOptions.onHello?.(HELLO);
+    current().request.mockResolvedValue(catalog);
+    const read = loadModelCatalog(gateway.snapshot.client!, scope).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(current().request).toHaveBeenCalledExactlyOnceWith("models.list", {
+      ...scope,
+      view: "configured",
+    });
+    expect(await read).toEqual(catalog);
+  });
+
+  it("keeps interleaved native clients scoped to their Gateway store", () => {
+    const other = createStore();
+    try {
+      gateway.start();
+      other.gateway.start();
+      const first = current();
+      const second = other.current();
+      expect(gateway.snapshot.client).toBe(first);
+      expect(other.gateway.snapshot.client).toBe(second);
+      first.testOptions.onHello?.(HELLO);
+      expect(gateway.snapshot.phase).toBe("connected");
+      expect(other.gateway.snapshot.phase).toBe("connecting");
+      other.gateway.connect();
+      gateway.connect();
+      expect(clients).toHaveLength(2);
+      expect(other.clients).toHaveLength(2);
+      expect(first.stopped).toBe(1);
+      expect(second.stopped).toBe(1);
+      expect(current()).not.toBe(other.current());
+      expect(gateway.snapshot.client).toBe(current());
+      expect(other.gateway.snapshot.client).toBe(other.current());
+      other.current().testOptions.onHello?.(HELLO);
+      expect(other.gateway.snapshot.phase).toBe("connected");
+      expect(gateway.snapshot.phase).toBe("reconnecting");
+    } finally {
+      other.gateway.stop();
+    }
+  });
+
+  it("retires attempt feedback on stop and ignores callbacks from a replaced client", () => {
+    connect();
+    const previous = current();
+    previous.testOptions.onClose?.({ code: 1006, reason: "lost transport", willRetry: true });
+    previous.testOptions.onConnecting?.();
+    expect(isGatewayConnectionAttemptPending(gateway.snapshot)).toBe(true);
+    gateway.connect();
+    const replacement = current();
+    replacement.testOptions.onConnecting?.();
+    previous.testOptions.onReconnectScheduled?.(800);
+    previous.testOptions.onClose?.({ code: 1006, reason: "retired attempt", willRetry: true });
+    expect(isGatewayConnectionAttemptPending(gateway.snapshot)).toBe(true);
+    replacement.testOptions.onHello?.(HELLO);
+    expect(isGatewayConnectionAttemptPending(gateway.snapshot)).toBe(false);
+    replacement.testOptions.onConnecting?.();
+    gateway.stop();
+    replacement.testOptions.onConnecting?.();
+    expect(isGatewayConnectionAttemptPending(gateway.snapshot)).toBe(false);
+    expect(gateway.snapshot.phase).toBe("stopped");
+  });
+
+  it.each(["session", "agent", "short", "late"])(
+    "shares the connect %s catalog across cold readers and returns",
+    async (kind) => {
+      vi.useFakeTimers();
+      const scope = {
+        agentId: "main",
+        ...(kind !== "agent"
+          ? { sessionKey: "agent:main:12345678-1234-1234-1234-123456789abc" }
+          : {}),
+      };
+      const catalog = { models: [{ id: "first", provider: "fixture", name: "First" }] };
+      const target =
+        kind === "agent" ? {} : kind === "short" ? { agentId: "main", shortId: "12345678" } : scope;
+      ({ gateway, current } = createStore({ getModelCatalogTarget: () => target }));
+      gateway.start();
+      expect(current().testOptions.modelCatalog).toEqual(target);
+      current().testOptions.onHello?.(HELLO);
+      current().request.mockResolvedValue(catalog);
+      if (kind === "late") {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      const client = gateway.snapshot.client!;
+      const first = loadModelCatalog(client, scope);
+      const shared = loadModelCatalog(client, scope);
+      expect(current().request).not.toHaveBeenCalledWith("models.list", expect.anything());
+      current().testOptions.onEvent?.(
+        createGatewayEvent("models.snapshot", { target, scope, catalog }),
+      );
+      expect(await first).toEqual(catalog);
+      expect(await shared).toEqual(catalog);
+      const other = { agentId: "main", sessionKey: "agent:main:other" };
+      await loadModelCatalog(client, other);
+      await loadModelCatalog(client, scope);
+      await loadModelCatalog(client, other);
+      expect(current().request.mock.calls.filter(([method]) => method === "models.list")).toEqual([
+        ["models.list", { ...other, view: "configured" }],
+      ]);
+    },
+  );
+
+  it.each(["timeout", "invalidation", "refresh", "reconnect"])(
+    "recovers a waiting bootstrap read after %s without publishing retired facts",
+    async (recovery) => {
+      vi.useFakeTimers();
+      const scope = { agentId: "main", sessionKey: "agent:main:catalog" };
+      const catalog = { models: [{ id: "current", provider: "fixture", name: "Current" }] };
+      ({ gateway, current } = createStore({ getModelCatalogTarget: () => scope }));
+      gateway.start();
+      expect(current().testOptions.modelCatalog).toEqual(scope);
+      current().testOptions.onHello?.(HELLO);
+      current().request.mockResolvedValue(catalog);
+      const client = gateway.snapshot.client!;
+      const waiting = loadModelCatalog(client, scope);
+      const outcome = waiting.catch((error: unknown) => error);
+      if (recovery === "timeout") {
+        await vi.advanceTimersByTimeAsync(1_000);
+      } else if (recovery === "invalidation") {
+        invalidateModelCatalogCache(client, scope);
+      } else if (recovery === "refresh") {
+        await loadModelCatalog(client, { ...scope, refresh: true });
+      } else {
+        current().testOptions.onClose?.({ code: 1006, reason: "restart", willRetry: true });
+        expect(await outcome).toMatchObject({ name: "AbortError" });
+        expect(current().request).not.toHaveBeenCalled();
+        return;
+      }
+      expect(await outcome).toEqual(catalog);
+      current().testOptions.onEvent?.(
+        createGatewayEvent("models.snapshot", {
+          target: scope,
+          scope,
+          catalog: { models: [{ id: "retired", provider: "fixture", name: "Retired" }] },
+        }),
+      );
+      expect(await loadModelCatalog(client, scope)).toEqual(catalog);
+      expect(
+        current().request.mock.calls.filter(([method]) => method === "models.list"),
+      ).toHaveLength(recovery === "refresh" ? 2 : 1);
+    },
+  );
 
   function unavailable(reason: string, details: Record<string, unknown>, code = 1013) {
     return {
@@ -71,7 +283,7 @@ describe("createApplicationGateway connection ownership", () => {
   }
 
   function rejectUnavailable(reason: string, phase?: string) {
-    current().opts.onClose?.(unavailable(reason, { reason, phase }));
+    current().testOptions.onClose?.(unavailable(reason, { reason, phase }));
   }
 
   it("passes the explicit same-origin resource base to avatar resolution", () => {
@@ -115,7 +327,7 @@ describe("createApplicationGateway connection ownership", () => {
         gateway.connect();
       }
     });
-    current().opts.onHello?.({
+    current().testOptions.onHello?.({
       ...HELLO,
       server: { version: "2026.7.19", buildId: "replacement-build", connId: "native-conn" },
       pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/hello" },
@@ -123,8 +335,8 @@ describe("createApplicationGateway connection ownership", () => {
     await scheduleStaleChunkReloadMock.mock.results[0]?.value;
     expect(fetchMock).not.toHaveBeenCalled();
     expect(replace).not.toHaveBeenCalled();
-    expect(current().opts.bootstrapToken).toBeUndefined();
-    expect(current().opts.bootstrapProfile).toBeUndefined();
+    expect(current().testOptions.bootstrapToken).toBeUndefined();
+    expect(current().testOptions.bootstrapProfile).toBeUndefined();
     expect(sessionStorage.getItem("openclaw.controlUi.staleChunkReloadBuildId")).toBeNull();
   });
 
@@ -133,14 +345,22 @@ describe("createApplicationGateway connection ownership", () => {
     const legacyHello = {
       ...HELLO,
       server: { version: "2026.7.20", connId: "legacy-conn" },
+      features: { methods: ["plugins.reload"] },
     };
 
-    current().opts.onHello?.(legacyHello);
+    current().testOptions.onHello?.(legacyHello);
     expect(gateway.snapshot.phase).toBe("connected");
+    const capabilities = gateway.snapshot.pluginCapabilities;
+    expect(capabilities).not.toBeNull();
 
-    current().opts.onClose?.({ code: 1006, reason: "restarting", willRetry: true });
-    current().opts.onHello?.(legacyHello);
+    current().testOptions.onClose?.({ code: 1006, reason: "restarting", willRetry: true });
+    expect(gateway.snapshot.hello).toBe(legacyHello);
+    expect(gateway.snapshot.pluginCapabilities).toBe(capabilities);
+    const staleHello = { ...legacyHello };
+    current().testOptions.onHello?.(staleHello);
     expect(gateway.snapshot.phase).toBe("reconnecting");
+    expect(gateway.snapshot.hello).toBe(staleHello);
+    expect(gateway.snapshot.pluginCapabilities).toBeNull();
   });
 
   it("does not invent an assistant agent id before the gateway advertises one", () => {
@@ -149,7 +369,7 @@ describe("createApplicationGateway connection ownership", () => {
     expect(gateway.snapshot.assistantAgentId).toBeNull();
 
     gateway.connect();
-    current().opts.onHello?.({
+    current().testOptions.onHello?.({
       ...HELLO,
       snapshot: {
         sessionDefaults: {
@@ -173,7 +393,7 @@ describe("createApplicationGateway connection ownership", () => {
         ? firstRefresh.promise
         : Promise.resolve({ profile: { id: "reader", emails: [] } }),
     );
-    first.opts.onHello?.({
+    first.testOptions.onHello?.({
       ...HELLO,
       auth: { role: "operator", scopes: ["operator.read"] },
       pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/first" },
@@ -185,7 +405,7 @@ describe("createApplicationGateway connection ownership", () => {
     });
 
     gateway.connect();
-    current().opts.onHello?.({
+    current().testOptions.onHello?.({
       ...HELLO,
       pluginSurfaceUrls: { canvas: "https://canvas.test/__openclaw__/cap/current" },
     });
@@ -210,7 +430,7 @@ describe("createApplicationGateway connection ownership", () => {
       4013,
     );
     Object.assign(startupClose.error, { retryAfterMs: 250 });
-    current().opts.onClose?.(startupClose);
+    current().testOptions.onClose?.(startupClose);
 
     expect(gateway.snapshot.phase).toBe("starting");
     expect(gateway.snapshot.lastError).toBeNull();
@@ -218,7 +438,7 @@ describe("createApplicationGateway connection ownership", () => {
 
     const listener = vi.fn();
     gateway.subscribe(listener);
-    current().opts.onClose?.(startupClose);
+    current().testOptions.onClose?.(startupClose);
     expect(listener).not.toHaveBeenCalled();
   });
 
@@ -232,7 +452,7 @@ describe("createApplicationGateway connection ownership", () => {
     } else {
       connect();
     }
-    current().opts.onClose?.({ code: 1006, reason, willRetry });
+    current().testOptions.onClose?.({ code: 1006, reason, willRetry });
     if (reason) {
       expect(gateway.snapshot.lastError).toContain("OPENAI_API_KEY=sk-123...cdef");
       expect(gateway.snapshot.lastError).not.toContain("sk-1234567890abcdef");
@@ -269,10 +489,10 @@ describe("createApplicationGateway connection ownership", () => {
 
     expect(gateway.snapshot.sessionKey).toBe("global");
     expect(loadSettings()).toMatchObject(selection);
-    expect(current().opts.token).toBeUndefined();
-    expect(current().opts.password).toBeUndefined();
-    expect(current().opts.bootstrapToken).toBeUndefined();
-    current().opts.onClose?.({ code: 1006, reason: "remote refused", willRetry: true });
+    expect(current().testOptions.token).toBeUndefined();
+    expect(current().testOptions.password).toBeUndefined();
+    expect(current().testOptions.bootstrapToken).toBeUndefined();
+    current().testOptions.onClose?.({ code: 1006, reason: "remote refused", willRetry: true });
     expect(gateway.snapshot.phase).toBe("connecting");
     expect(gateway.snapshot.lastError).toBe("disconnected (1006): remote refused");
   });
@@ -290,7 +510,7 @@ describe("createApplicationGateway connection ownership", () => {
   it("keeps reload-required ahead of retryable startup presentation", () => {
     gateway.start();
 
-    current().opts.onClose?.(
+    current().testOptions.onClose?.(
       unavailable(
         "Control UI updated; reload this page to continue",
         {
@@ -312,13 +532,17 @@ describe("createApplicationGateway connection ownership", () => {
   });
 
   it.each([false, true])(
-    "discards a gapped frame when recovery replaces its client (observer=%s)",
-    (observer) => {
+    "retains row bases through gap recovery unless an observer replaces the client (observer=%s)",
+    async (observer) => {
       const listener = vi.fn();
       gateway.subscribeEventLog(() => {});
       gateway.subscribeEvents(listener);
       connect();
       const stale = current();
+      const row = { key: "agent:main:held", kind: "direct" as const };
+      stale.request.mockResolvedValue({ sessions: [row], rowsRevision: "held-revision" });
+      const query = { rowMode: "sidebar" as const };
+      await requestSessionList(gateway.snapshot.client!, query, () => true);
       if (observer) {
         gateway.subscribe((snapshot) => {
           if (snapshot.lastError?.startsWith("event gap detected")) {
@@ -326,16 +550,35 @@ describe("createApplicationGateway connection ownership", () => {
           }
         });
       }
-      // The protocol invokes onGap before onEvent for the same received frame.
-      stale.opts.onGap?.({ expected: 2, received: 5 });
-      stale.opts.onEvent?.(createGatewayEvent("stale.gap", { stale: true }, 5));
+      // The protocol drops the gapped frame and owns socket reconnection.
+      stale.testOptions.onGap?.({ expected: 2, received: 5 });
+      expect(clients).toHaveLength(observer ? 2 : 1);
+      if (observer) {
+        stale.testOptions.onEvent?.(createGatewayEvent("stale.gap", { stale: true }, 5));
+      } else {
+        stale.testOptions.onClose?.({ code: 4000, reason: "event sequence gap", willRetry: true });
+        stale.testOptions.onHello?.(HELLO);
+        stale.request.mockResolvedValue({
+          sessions: [],
+          rowsRevision: "held-revision",
+          rowsUnchanged: true,
+        });
+        expect(await requestSessionList(gateway.snapshot.client!, query, () => true)).toMatchObject(
+          {
+            sessions: [row],
+          },
+        );
+        expect(stale.request).toHaveBeenLastCalledWith(
+          "sessions.list",
+          expect.objectContaining({ ifRowsRevision: "delta:held-revision" }),
+        );
+      }
       expect(listener).not.toHaveBeenCalled();
       expect(gateway.eventLog).toEqual([]);
-      expect(clients).toHaveLength(2);
       expect(current().started).toBe(1);
       expect(gateway.snapshot.client).toBe(current());
       const activeEvent = createGatewayEvent("fresh.event", { active: true }, 6);
-      current().opts.onEvent?.(activeEvent);
+      current().testOptions.onEvent?.(activeEvent);
       expect(listener).toHaveBeenCalledExactlyOnceWith(activeEvent);
       expect(gateway.eventLog).toMatchObject([{ event: "fresh.event", payload: { active: true } }]);
     },
@@ -360,14 +603,14 @@ describe("createApplicationGateway connection ownership", () => {
       unsubscribeSecond = gateway.subscribeEvents(second);
       gateway.start();
       const firstEvent = createGatewayEvent("chat", { text: "first" });
-      current().opts.onEvent?.(firstEvent);
+      current().testOptions.onEvent?.(firstEvent);
       expect(first).toHaveBeenCalledExactlyOnceWith(firstEvent);
       expect(second).toHaveBeenCalledExactlyOnceWith(firstEvent);
       expect(third).not.toHaveBeenCalled();
       expect(gateway.eventLog).toMatchObject([{ event: "chat", payload: { text: "first" } }]);
       if (action === "subscription change") {
         const secondEvent = createGatewayEvent("chat", { text: "second" }, 2);
-        current().opts.onEvent?.(secondEvent);
+        current().testOptions.onEvent?.(secondEvent);
         expect(first).toHaveBeenCalledTimes(2);
         expect(second).toHaveBeenCalledOnce();
         expect(third).toHaveBeenCalledExactlyOnceWith(secondEvent);
@@ -391,14 +634,14 @@ describe("createApplicationGateway connection ownership", () => {
     gateway.start();
     gateway.connect({ gatewayUrl: pageGateway, token: "approval-token", password: "pw" });
 
-    expect(current().opts.url).toBe(pageGateway);
-    expect(current().opts.token).toBe("approval-token");
+    expect(current().testOptions.url).toBe(pageGateway);
+    expect(current().testOptions.token).toBe("approval-token");
     expect(localStorage.getItem(pageSettingsKey)).toBeNull();
     expect(localStorage.getItem(selectionKey)).toBe(remoteGateway);
 
     gateway.connect({ gatewayUrl: otherGateway });
 
-    expect(current().opts.url).toBe(otherGateway);
+    expect(current().testOptions.url).toBe(otherGateway);
     expect(localStorage.getItem(selectionKey)).toBe(otherGateway);
   });
 
@@ -408,7 +651,7 @@ describe("createApplicationGateway connection ownership", () => {
     const stop = gateway.subscribe(observed);
     observed.mockClear();
     const publish = (usageUpdatedAt: number, usageRefreshFailed = false, agentId = "main") =>
-      current().opts.onEvent?.(
+      current().testOptions.onEvent?.(
         createGatewayEvent("chat.metadata.changed", {
           agentId,
           usageUpdatedAt,
@@ -433,9 +676,9 @@ describe("createApplicationGateway connection ownership", () => {
     publish(23);
     expect(gateway.snapshot.usagePublications?.main?.usageRefreshFailed).toBeUndefined();
     expect(failed).toMatchObject({ usageUpdatedAt: 21, usageRefreshFailed: true });
-    current().opts.onClose?.({ code: 1001, reason: "restart", willRetry: true });
+    current().testOptions.onClose?.({ code: 1001, reason: "restart", willRetry: true });
     expect(gateway.snapshot.usagePublications).toBeUndefined();
-    current().opts.onHello?.(HELLO);
+    current().testOptions.onHello?.(HELLO);
     publish(1);
     expect(gateway.snapshot.usagePublications?.main?.usageUpdatedAt).toBe(1);
     stop();
@@ -465,12 +708,12 @@ describe("createApplicationGateway connection ownership", () => {
       const unsubscribe = gateway.subscribeEvents(() => {
         pending = load();
       });
-      current().opts.onEvent?.({ type: "event", event, payload: {} });
+      current().testOptions.onEvent?.({ type: "event", event, payload: {} });
       await pending;
       unsubscribe();
     }
     expect(count()).toBe(3);
-    current().opts.onHello?.({ ...HELLO });
+    current().testOptions.onHello?.({ ...HELLO });
     await load();
     expect(count()).toBe(4);
   });
@@ -492,7 +735,7 @@ describe("createApplicationGateway connection ownership", () => {
       gateway.subscribeEventLog(logged);
       gateway.subscribeEvents(delivered);
       connect();
-      current().opts.onEvent?.(
+      current().testOptions.onEvent?.(
         stage === "event log"
           ? createGatewayEvent("chat", { text: "event-1" }, 1)
           : createGatewayEvent("chat.metadata.changed", { agentId: "main", usageUpdatedAt: 1 }),
@@ -519,9 +762,11 @@ describe("createApplicationGateway connection ownership", () => {
     await vi.advanceTimersByTimeAsync(2_000);
     expect(gateway.snapshot.offlineStable).toBe(true);
     expect(gateway.snapshot.suspensionPhase).toBe("prepared");
-    current().opts.onHello?.(HELLO);
+    current().testOptions.onHello?.(HELLO);
     expect(gateway.snapshot.suspensionPhase).toBeUndefined();
-    current().opts.onEvent?.(createGatewayEvent("gateway.suspension", { phase: "prepared" }));
+    current().testOptions.onEvent?.(
+      createGatewayEvent("gateway.suspension", { phase: "prepared" }),
+    );
     await vi.advanceTimersByTimeAsync(15_000);
     expect(gateway.snapshot.suspensionPhase).toBe("prepared");
   });
@@ -539,7 +784,7 @@ describe("createApplicationGateway connection ownership", () => {
         rejectUnavailable("gateway-suspending", "prepared");
       } else {
         connect();
-        current().opts.onEvent?.(
+        current().testOptions.onEvent?.(
           createGatewayEvent("shutdown", {
             reason: "gateway restart",
             restartExpectedMs: kind === "restart" ? 8_000 : 1_500,
@@ -551,7 +796,11 @@ describe("createApplicationGateway connection ownership", () => {
           expect(gateway.snapshot.restartPending).toBe(true);
           expect(gateway.snapshot.offlineStable).toBe(false);
         }
-        current().opts.onClose?.({ code: 1012, reason: "gateway restarting", willRetry: true });
+        current().testOptions.onClose?.({
+          code: 1012,
+          reason: "gateway restarting",
+          willRetry: true,
+        });
       }
       await vi.advanceTimersByTimeAsync(kind === "restart" ? 23_999 : 14_999);
       if (kind === "suspension") {
@@ -567,7 +816,7 @@ describe("createApplicationGateway connection ownership", () => {
         expect(gateway.snapshot.restartPending).toBe(false);
       }
       expect(gateway.snapshot.offlineStable).toBe(true);
-      current().opts.onHello?.(HELLO);
+      current().testOptions.onHello?.(HELLO);
       expect(gateway.snapshot.phase).toBe("connected");
       expect(gateway.snapshot.restartPending).toBe(false);
       expect(gateway.snapshot.suspensionPhase).toBeUndefined();

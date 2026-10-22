@@ -7,7 +7,6 @@ import {
   emptySqliteCounts,
   observeParentSqlite,
 } from "../../../../test/helpers/sqlite-parent-observer.js";
-import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { createDeferredCore as createDeferred } from "../../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../../state/openclaw-state-db.js";
@@ -19,6 +18,7 @@ import {
   announcementFixture,
   completeRegistered,
   currentRun,
+  holdAnnouncementCommand,
   installEndedHook,
   registerSuccessor,
   storedAnnouncement,
@@ -376,10 +376,6 @@ it("refuses an old registered wake after its descendant read outlives a successo
       registryState.clearSubagentRunsReadCacheForTest();
       return nativeWake.maybeWakeRequesterAfterAllChildrenSettled({
         ...params,
-        transitionBatch: async (...args) => {
-          mutations.push({ entry: params.settledEntry, kind: "transition" });
-          return params.transitionBatch(...args);
-        },
         completeBatch: async (...args) => {
           mutations.push({ entry: params.settledEntry, kind: "complete" });
           return params.completeBatch(...args);
@@ -455,9 +451,7 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
     }
     fixture.announce.mockImplementation(nativeAnnounce.runSubagentAnnounceFlow);
     const pluginEntered = createDeferred();
-    const mutationReady = createDeferred();
     const releaseHook = createDeferred();
-    const release = createDeferred();
     fixture.wake.mockImplementation(async (params) => {
       await pluginEntered.promise;
       return nativeWake.maybeWakeRequesterAfterAllChildrenSettled(params);
@@ -466,6 +460,16 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
       pluginEntered.resolve();
       await releaseHook.promise;
     });
+    const {
+      ready: mutationReady,
+      release,
+      worker,
+    } = holdAnnouncementCommand(
+      (command) =>
+        command.type === "sessionDelivery.mutateSubagentCompletion" &&
+        currentRun(run.runId)?.cleanupCompletedAt !== undefined,
+      true,
+    );
     const releaseCancelledTest = () => {
       pluginEntered.resolve();
       mutationReady.resolve();
@@ -474,25 +478,6 @@ it.for(["current", "successor", "revoked", "source switched"] as const)(
     };
     signal.addEventListener("abort", releaseCancelledTest, { once: true });
     installEndedHook(ended);
-    let held = false;
-    const worker = probe.command(
-      stateWorker,
-      async (command, executeOptions, scope) => {
-        const result = await scope.execute(command, executeOptions);
-        if (
-          !held &&
-          command.type === "sessionDelivery.mutateSubagentCompletion" &&
-          currentRun(run.runId)?.cleanupCompletedAt !== undefined
-        ) {
-          held = true;
-          // The actual wake has committed; row admission retains its ACK until publication.
-          mutationReady.resolve();
-          await release.promise;
-        }
-        return result;
-      },
-      { original: runWorker },
-    );
     try {
       completeRegistered(run);
       await mutationReady.promise;

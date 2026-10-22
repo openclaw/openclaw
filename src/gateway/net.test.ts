@@ -3,12 +3,10 @@
 import net from "node:net";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
-import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
+import * as containerEnvironment from "../infra/container-environment.js";
 import { makeNetworkInterfacesSnapshot } from "../test-helpers/network-interfaces.js";
-import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import {
   defaultGatewayBindMode,
-  isContainerEnvironment,
   isLocalishHost,
   isLoopbackGatewayUrl,
   isPrivateOrLoopbackAddress,
@@ -22,30 +20,6 @@ import {
   resolveGatewayListenHosts,
   resolveHostName,
 } from "./net.js";
-
-const flyMachineEnvKeys = ["FLY_MACHINE_ID", "FLY_APP_NAME"] as const;
-
-function clearFlyMachineEnvForTest(): () => void {
-  const envSnapshot = captureEnv([...flyMachineEnvKeys]);
-  for (const key of flyMachineEnvKeys) {
-    deleteTestEnvValue(key);
-  }
-
-  return () => envSnapshot.restore();
-}
-
-function useClearedFlyMachineEnv() {
-  let restoreFlyMachineEnv: (() => void) | undefined;
-
-  beforeEach(() => {
-    restoreFlyMachineEnv = clearFlyMachineEnvForTest();
-  });
-
-  afterEach(() => {
-    restoreFlyMachineEnv?.();
-    restoreFlyMachineEnv = undefined;
-  });
-}
 
 describe("resolveHostName", () => {
   it.each([
@@ -433,47 +407,8 @@ describe("isPrivateOrLoopbackHost", () => {
   });
 });
 
-function mockCgroup(contents: string) {
-  const fs = require("node:fs");
-  vi.spyOn(fs, "accessSync").mockImplementation(() => {
-    throw new Error("ENOENT");
-  });
-  vi.spyOn(fs, "readFileSync").mockReturnValue(contents);
-}
-
-describe("isContainerEnvironment", () => {
-  useClearedFlyMachineEnv();
-
-  afterEach(() => {
-    resetContainerEnvironmentCacheForTest();
-    vi.restoreAllMocks();
-  });
-
-  it("returns true when /run/.containerenv exists", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation((filePath: unknown) => {
-      if (filePath === "/run/.containerenv") {
-        return undefined;
-      }
-      throw new Error("ENOENT");
-    });
-    expect(isContainerEnvironment()).toBe(true);
-  });
-
-  it("returns true on Fly Machines without Docker sentinel files", () => {
-    mockCgroup("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
-
-    setTestEnvValue("FLY_MACHINE_ID", "3d8d5459a03038");
-    setTestEnvValue("FLY_APP_NAME", "openclaw-test");
-    expect(isContainerEnvironment()).toBe(true);
-  });
-});
-
 describe("resolveGatewayBindHost", () => {
-  useClearedFlyMachineEnv();
-
   afterEach(() => {
-    resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
   });
 
@@ -486,17 +421,17 @@ describe("resolveGatewayBindHost", () => {
   });
 
   it("returns 127.0.0.1 for auto mode on non-container host", async () => {
-    mockCgroup("12:memory:/user.slice\n");
+    vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
     expect(await resolveGatewayBindHost("auto")).toBe("127.0.0.1");
   });
 
   it("returns 0.0.0.0 for auto mode inside a container", async () => {
-    mockCgroup("12:memory:/docker/abc123def456\n");
+    vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(true);
     expect(await resolveGatewayBindHost("auto")).toBe("0.0.0.0");
   });
 
   it("defaults to loopback when bind is undefined (non-container)", async () => {
-    mockCgroup("12:memory:/user.slice\n");
+    vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
     const createServerSpy = vi.spyOn(net, "createServer");
     expect(await resolveGatewayBindHost(undefined)).toBe("127.0.0.1");
     expect(createServerSpy).not.toHaveBeenCalled();
@@ -504,33 +439,27 @@ describe("resolveGatewayBindHost", () => {
 });
 
 describe("defaultGatewayBindMode", () => {
-  useClearedFlyMachineEnv();
-
   afterEach(() => {
-    resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
   });
 
   it("returns loopback on non-container host", () => {
-    mockCgroup("12:memory:/user.slice\n");
+    vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(false);
     expect(defaultGatewayBindMode()).toBe("loopback");
   });
 
   it("returns auto inside a container", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(true);
     expect(defaultGatewayBindMode()).toBe("auto");
   });
 
   it("returns loopback inside a container when tailscale serve is active", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(true);
     expect(defaultGatewayBindMode("serve")).toBe("loopback");
   });
 
   it("returns auto inside a container when tailscale is off", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    vi.spyOn(containerEnvironment, "isContainerEnvironment").mockReturnValue(true);
     expect(defaultGatewayBindMode("off")).toBe("auto");
   });
 });

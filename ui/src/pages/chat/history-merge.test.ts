@@ -13,6 +13,7 @@ import {
   getChatRunOwner,
   getChatSessionProjection as projectionFor,
   readChatSessionProjectionScope as scopeFor,
+  reconcileChatInputCustody,
   reduceChatSessionProjection as reduceChat,
   setChatRunOwner,
   publishChatSessionProjection as publish,
@@ -111,12 +112,26 @@ function initialFixture(retain = true) {
   if (retain) {
     chatSubmissions.retain(initial);
   }
+  const deliver = (deliveredMessage = initial.message) =>
+    expectDefined(
+      chatSubmissions.retain({
+        kind: "delivered",
+        owner: client,
+        sessionKey,
+        sessionId: owner.currentSessionId,
+        deliveryKey: chatOutboxDeliveryKey(owner, { sessionKey, agentId: "main" }, "initial-run"),
+        pendingRunId: "initial-run",
+        message: deliveredMessage,
+      }),
+      "delivered source",
+    );
   return {
     client,
     chatSubmissions,
     owner,
     sessionKey,
     initial,
+    deliver,
     admit: () => admitChatSubmission(owner, undefined),
     reset: () => reduceChat(owner, { type: "sessionReset" }),
     read: () => chatSubmissions.readInitial(sessionKey, client),
@@ -268,19 +283,8 @@ it("uses one canonical identity for an explicitly unbranched pane", () => {
 });
 
 it("does not revive a consumed delivered copy from the cache or consume foreign provenance", () => {
-  const { client, chatSubmissions, owner, sessionKey, initial } = initialFixture(false);
-  const delivered = expectDefined(
-    chatSubmissions.retain({
-      kind: "delivered",
-      owner: client,
-      sessionKey,
-      sessionId: owner.currentSessionId,
-      deliveryKey: chatOutboxDeliveryKey(owner, { sessionKey, agentId: "main" }, "initial-run"),
-      pendingRunId: "initial-run",
-      message: initial.message,
-    }),
-    "delivered source",
-  );
+  const { owner, sessionKey, initial, deliver } = initialFixture(false);
+  const delivered = deliver();
   delivered.pending = false;
   const imported = {
     ...initial.message,
@@ -484,3 +488,39 @@ it("keeps a retained live prefix across a later empty snapshot", () => {
 
   expect(owner.chatMessages).toEqual([prefix, tail]);
 });
+
+it.each(["page", "receipt", "custody-first"] as const)(
+  "retires optimistic steering only for deferred %s custody",
+  (source) => {
+    const { owner, initial, deliver } = initialFixture(false);
+    const steeringMessage = {
+      ...initial.message,
+      __openclaw: { ...initial.message["__openclaw"], steerTargetRunId: "active-run" },
+    };
+    const delivered = deliver(steeringMessage);
+    const input = {
+      id: "deferred-input",
+      runId: "initial-run",
+      acceptedAt: 123,
+      state: "queued" as const,
+      message: steeringMessage,
+      queued: true as const,
+    };
+    if (source === "custody-first") {
+      expect(admitChatSubmission(owner, [input], delivered)).toBe(false);
+    } else {
+      expect(admitChatSubmission(owner, undefined, delivered)).toBe(true);
+      reconcileChatInputCustody(owner, { items: [{ ...input, queued: undefined }], total: 1 });
+      expect(owner.chatMessages).toEqual([steeringMessage]);
+      reconcileChatInputCustody(
+        owner,
+        source === "page" ? { items: [input], total: 1 } : undefined,
+        source === "receipt" ? [{ runId: "initial-run", state: "pending", queued: true }] : [],
+      );
+    }
+    expect(delivered.pending).toBe(false);
+    expect(delivered.message).toBe(steeringMessage);
+    expect(owner.chatMessages).toEqual([]);
+    expect(admitChatSubmission(owner, undefined, delivered)).toBe(false);
+  },
+);

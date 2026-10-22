@@ -7,6 +7,7 @@ import {
   markMigrationItemSkipped,
   MIGRATION_REASON_MISSING_SOURCE_OR_TARGET,
 } from "openclaw/plugin-sdk/migration";
+import { safeStat } from "openclaw/plugin-sdk/path-existence-runtime";
 import type { MigrationItem } from "openclaw/plugin-sdk/plugin-entry";
 import {
   appendRegularFile,
@@ -26,11 +27,7 @@ export function resolveHomePath(input: string): string {
 export { pathExists as exists };
 
 export async function isDirectory(dirPath: string): Promise<boolean> {
-  try {
-    return (await fs.stat(dirPath)).isDirectory();
-  } catch {
-    return false;
-  }
+  return (await safeStat(dirPath))?.isDirectory() === true;
 }
 
 export function sanitizeName(name: string): string {
@@ -44,11 +41,18 @@ export function sanitizeName(name: string): string {
 export async function readJsonObject(
   filePath: string | undefined,
 ): Promise<Record<string, unknown>> {
-  if (!filePath) {
+  const content = filePath ? await fs.readFile(filePath).catch(() => undefined) : undefined;
+  if (!content) {
     return {};
   }
+  // Check before replacement decoding can silently alter imported settings.
+  if (!isUtf8(content)) {
+    throw new Error(
+      `Claude configuration file is not valid UTF-8: ${filePath}. Re-save or re-encode it as UTF-8, then rerun the migration.`,
+    );
+  }
   try {
-    const parsed = JSON.parse(await fs.readFile(filePath, "utf8")) as unknown;
+    const parsed = JSON.parse(content.toString("utf8")) as unknown;
     return isRecord(parsed) ? parsed : {};
   } catch {
     return {};

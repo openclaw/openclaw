@@ -21,10 +21,6 @@ export async function raceWithTimeoutAndAbort<T>(
     return { status: "aborted" };
   }
 
-  if (options.timeoutMs === undefined && !options.abortSignal) {
-    return { status: "resolved", value: await promise };
-  }
-
   try {
     const result =
       options.timeoutMs === undefined

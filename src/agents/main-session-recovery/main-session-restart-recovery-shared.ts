@@ -21,6 +21,15 @@ export const mainSessionRecoveryLog = createSubsystemLogger("main-session-restar
 export const DEFAULT_RECOVERY_DELAY_MS = 5_000;
 export const MAX_RECOVERY_RETRIES = 3;
 export const RETRY_BACKOFF_MULTIPLIER = 2;
+/** Mailbox identity of one resend attempt; its dispatcher and foreground admission both derive it. */
+export function resolveRestartResendReservationId(attempt: {
+  sessionId: string;
+  cycleId: string;
+  attempt: number;
+}): string {
+  return `main-session-recovery:${attempt.sessionId}:${attempt.cycleId}:${attempt.attempt}`;
+}
+
 export function readInterruptedRunId(entry: SessionEntry): string | undefined {
   const runs = entry.restartRecoveryRuns;
   if (!runs?.length) {

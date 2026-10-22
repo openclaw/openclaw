@@ -1,4 +1,5 @@
 // Keep IndexedDB outside the startup graph; composers and session deletion load it on demand.
+import { listen } from "../reactive/listener.ts";
 import type {
   ChatGoalDraftMode,
   ChatReplyTarget,
@@ -179,7 +180,8 @@ async function sweepExpiredRecords(database: IDBDatabase): Promise<void> {
   const now = Date.now();
   const request = store.openCursor();
   let changed = false;
-  request.addEventListener("success", () => {
+  // Cursor continuation reuses this request until the owning transaction finishes.
+  listen(request, "success", () => {
     try {
       const cursor = request.result;
       if (!cursor) {

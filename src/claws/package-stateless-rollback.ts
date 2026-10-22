@@ -5,8 +5,7 @@ import { resolveInstalledClawHubPlugin } from "../plugins/plugin-install-preflig
 import { defaultRuntime } from "../runtime.js";
 import {
   acquireClawPackageLifecycleLease,
-  maintainClawPackageLifecycleLease,
-  type MaintainedClawPackageLifecycleLease,
+  type ClawPackageLifecycleLease,
 } from "../state/claw-package-lifecycle-lease.js";
 import { readClawPackageRefsForAdd } from "./add-state-write.js";
 import type { InstallClawPackagesOptions } from "./package-install-options.js";
@@ -33,7 +32,7 @@ export async function rollbackStatelessClawPackagesWithStamps(
     if (!stamp) {
       continue;
     }
-    let lease: MaintainedClawPackageLifecycleLease | null = null;
+    let lease: ClawPackageLifecycleLease | null = null;
     try {
       const acquired = await acquireClawPackageLifecycleLease(
         { kind: "plugin", source: "clawhub", ref: pkg.ref },
@@ -42,7 +41,7 @@ export async function rollbackStatelessClawPackagesWithStamps(
       if (!acquired) {
         throw new Error(`Could not acquire package lifecycle lease for ${pkg.ref}.`);
       }
-      lease = maintainClawPackageLifecycleLease(acquired);
+      lease = acquired;
       const owners = await readClawPackageRefsForAdd({
         ...options,
         kind: "plugin",

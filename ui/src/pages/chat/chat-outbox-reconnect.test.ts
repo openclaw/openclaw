@@ -1,23 +1,24 @@
 /* @vitest-environment jsdom */
 import { createComponent, createMemo, createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
+import { listStoredChatOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { makeChatHost, requestCalls } from "./chat-host.test-support.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { admitHostQueueItems, idleChatHistory } from "./chat-outbox-recovery.test-support.ts";
 import { keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { createChatViewFrame } from "./chat-view-frame.ts";
-import { resetChatViewState } from "./chat-view-state.ts";
+import { resetChatViewState } from "./chat-view-state.test-support.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
+import { createComposerQuestions } from "./components/chat-composer-questions.ts";
 import { ComposerQueue } from "./components/chat-composer-regions.tsx";
 import { ChatThread } from "./components/chat-thread-view.tsx";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
 } from "./components/chat-transcript.test-support.ts";
-import { listStoredChatOutboxes } from "./composer-persistence.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();
@@ -97,7 +98,10 @@ it("shows connected review waits without changing delivery versions or crossing 
   const [viewProps, setViewProps] = createSignal(currentProps());
   const view = mountSolid(
     () => {
-      const frame = createMemo(() => createChatViewFrame(viewProps()));
+      const questions = createComposerQuestions(props.paneId, viewProps);
+      const frame = createMemo(() =>
+        createChatViewFrame(viewProps(), () => undefined, questions.source()!.asyncQuestions),
+      );
       return [
         createComponent(ChatThread, {
           get props() {
@@ -131,10 +135,12 @@ it("shows connected review waits without changing delivery versions or crossing 
   await resumeStoredChatOutboxes(host);
   expect(host.chatQueue).toEqual(before);
   draw();
-  expect(container.textContent).toContain("Waiting for reconnect");
-  expect(container.querySelector(".chat-queue__badge")?.textContent).toContain(
-    "Waiting for reconnect",
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-queue__badge")?.textContent).toContain(
+      "Waiting for reconnect",
+    ),
   );
+  expect(container.textContent).toContain("Waiting for reconnect");
   expect(container.querySelector(".chat-send-status")?.textContent).toContain(
     "Waiting for reconnect",
   );

@@ -1,3 +1,4 @@
+import { asNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   isOffsetInProtectedRanges,
@@ -97,8 +98,7 @@ type SuppressingPendingState = {
 type PendingState = CandidatePendingState | SuppressingPendingState;
 
 function eventContentIndex(event: Record<string, unknown>): number {
-  const index = event.contentIndex;
-  return typeof index === "number" && Number.isInteger(index) && index >= 0 ? index : 0;
+  return asNonNegativeInteger(event.contentIndex) ?? 0;
 }
 
 function isTextStreamEvent(event: Record<string, unknown>): boolean {
@@ -107,34 +107,6 @@ function isTextStreamEvent(event: Record<string, unknown>): boolean {
 
 /** A confirmed preceding-context verdict, keyed by the partial's own reported length. */
 type PrecedingContextVerdict = { precedingLength: number; trusted: boolean };
-
-/**
- * Event order can differ from content-index order when providers interleave blocks
- * or omit earlier deltas. Trust the carried scan only when the partial's preceding
- * text agrees. Missing partials reuse the verdict, or trust the scan when uncached.
- * A changed preceding length invalidates the cache; fresh nonempty comparisons
- * check actual text, materializing only that bounded prefix.
- */
-function resolvePrecedingContextTrust(
-  partial: unknown,
-  contentIndex: number,
-  trackedLength: number,
-  trackedPrefix: () => string,
-  cached: PrecedingContextVerdict | undefined,
-): { cache: PrecedingContextVerdict | undefined; trusted: boolean } {
-  const candidate = extractStandaloneCandidate(partial);
-  const part = candidate?.parts.find((entry) => entry.contentIndex === contentIndex);
-  if (!candidate || !part) {
-    return { cache: cached, trusted: cached?.trusted ?? true };
-  }
-  if (cached && cached.precedingLength === part.start) {
-    return { cache: cached, trusted: cached.trusted };
-  }
-  const trusted =
-    part.start === trackedLength &&
-    (part.start === 0 || candidate.text.slice(0, part.start) === trackedPrefix());
-  return { cache: { precedingLength: part.start, trusted }, trusted };
-}
 
 function resolvePartialProtectionCheck(params: {
   authoritative: boolean;
@@ -212,39 +184,6 @@ function pendingQueueOverCap(pending: PendingState): boolean {
   return (
     pending.entryBytes > MAX_PAYLOAD_BYTES || (pending.entries?.length ?? 0) > MAX_PENDING_EVENTS
   );
-}
-
-function createPendingState(
-  record: Record<string, unknown>,
-  text: string,
-  heldStart?: Record<string, unknown>,
-  sequenceOverCap = false,
-  snapshotOffset = 0,
-): CandidatePendingState {
-  const entries = [...(heldStart ? [{ ...heldStart }] : []), { ...record }];
-  const pending: CandidatePendingState = {
-    buffer: text,
-    bufferBytes: cappedUtf8ByteLength(text),
-    entries,
-    entryBytes: entries.reduce((total, entry) => {
-      return Math.min(MAX_PAYLOAD_BYTES + 1, total + pendingEventBytes(entry));
-    }, 0),
-    kind: "candidate",
-    nextScanChars: 256,
-    parts: [
-      {
-        contentIndex: eventContentIndex(record),
-        start: 0,
-        end: text.length,
-      },
-    ],
-    sequenceOverCap,
-    snapshotOffset,
-    template: eventTemplate(record),
-    templates: new Map([[eventContentIndex(record), eventTemplate(record)]]),
-  };
-  rememberPendingEntryOffsets(pending, entries, 0);
-  return pending;
 }
 
 function rememberPendingEntryOffsets(
@@ -498,13 +437,8 @@ function orderByContentIndex(
 ): unknown[] {
   const contentLength = Array.isArray(message.content) ? message.content.length : 0;
   const order = (event: unknown) => {
-    const index = asOptionalObjectRecord(event)?.contentIndex;
-    return typeof index === "number" &&
-      Number.isInteger(index) &&
-      index >= 0 &&
-      index < contentLength
-      ? index
-      : contentLength;
+    const index = asNonNegativeInteger(asOptionalObjectRecord(event)?.contentIndex);
+    return index !== undefined && index < contentLength ? index : contentLength;
   };
   return events.toSorted((left, right) => order(left) - order(right));
 }
@@ -942,16 +876,25 @@ export async function* normalizePlainTextToolCallStreamEvents(
                 // Only opted-in CommonMark resolvers can use carried fence state.
                 // Otherwise the caller's full parse remains authoritative.
                 const carriedScan = authoritative ? protectionScanAtBlockStart : protectionScan;
-                // Compare content-order context before trusting event-order fence state.
-                const precedingContextTrust = resolvePrecedingContextTrust(
-                  incomingRecord.partial,
-                  eventContentIndex(incomingRecord),
-                  protectionBlockStart,
-                  () => materializeBoundedPrefix(protectionBlockStart),
-                  protectionBlockPrefixVerdict,
-                );
-                protectionBlockPrefixVerdict = precedingContextTrust.cache;
-                const untrackedPrecedingContext = !precedingContextTrust.trusted;
+                // Event order can differ from content-index order when providers interleave
+                // blocks or omit earlier deltas. Trust carried state only when the partial's
+                // preceding text agrees. Missing partials reuse the verdict, or trust an
+                // uncached scan. Changed lengths need a fresh, bounded prefix comparison.
+                const partial = incomingRecord.partial;
+                const contentIndex = eventContentIndex(incomingRecord);
+                const trackedLength = protectionBlockStart;
+                const cached = protectionBlockPrefixVerdict;
+                const candidate = extractStandaloneCandidate(partial);
+                const part = candidate?.parts.find((entry) => entry.contentIndex === contentIndex);
+                if (candidate && part && (!cached || cached.precedingLength !== part.start)) {
+                  const trusted =
+                    part.start === trackedLength &&
+                    (part.start === 0 ||
+                      candidate.text.slice(0, part.start) ===
+                        materializeBoundedPrefix(protectionBlockStart));
+                  protectionBlockPrefixVerdict = { precedingLength: part.start, trusted };
+                }
+                const untrackedPrecedingContext = !(protectionBlockPrefixVerdict?.trusted ?? true);
                 let isProtectedAt: ((offset: number) => boolean) | undefined =
                   !untrackedPrecedingContext && options.protectedRangesFenceCompatible
                     ? resolveProtectionFastPath(carriedScan, incoming)
@@ -1033,13 +976,31 @@ export async function* normalizePlainTextToolCallStreamEvents(
                   : { ...incomingRecord, content: candidateText };
             const held = heldTextStarts.get(key);
             heldTextStarts.delete(key);
-            pending = createPendingState(
-              candidateRecord,
-              candidateText,
-              held,
-              sequenceOverCap || overCapSequenceOpen,
-              authoritative ? callStart : blockLengthBefore + callStart,
-            );
+            const entries = [...(held ? [{ ...held }] : []), { ...candidateRecord }];
+            pending = {
+              buffer: candidateText,
+              bufferBytes: cappedUtf8ByteLength(candidateText),
+              entries,
+              entryBytes: entries.reduce((total, entry) => {
+                return Math.min(MAX_PAYLOAD_BYTES + 1, total + pendingEventBytes(entry));
+              }, 0),
+              kind: "candidate",
+              nextScanChars: 256,
+              parts: [
+                {
+                  contentIndex: eventContentIndex(candidateRecord),
+                  start: 0,
+                  end: candidateText.length,
+                },
+              ],
+              sequenceOverCap: sequenceOverCap || overCapSequenceOpen,
+              snapshotOffset: authoritative ? callStart : blockLengthBefore + callStart,
+              template: eventTemplate(candidateRecord),
+              templates: new Map([
+                [eventContentIndex(candidateRecord), eventTemplate(candidateRecord)],
+              ]),
+            };
+            rememberPendingEntryOffsets(pending, entries, 0);
             overCapSequenceOpen = false;
           } else if (pending.kind === "candidate") {
             if (authoritative) {

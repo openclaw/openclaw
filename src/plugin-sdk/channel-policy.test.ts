@@ -1,6 +1,3 @@
-/**
- * Tests channel policy helper exports and policy decisions.
- */
 import { describe, expect, it } from "vitest";
 import { formatPairingApproveHint } from "../channels/plugins/helpers.js";
 import type { GroupPolicy } from "../config/types.base.js";
@@ -18,102 +15,47 @@ import {
 
 describe("retained group policy helpers", () => {
   it.each([
-    {
-      name: "preserves disabled policy",
-      input: { groupPolicy: "disabled" as const, groupAllowFrom: ["a"] },
-      expected: "disabled",
-    },
-    {
-      name: "keeps allowlist policy when sender allowlist is present",
-      input: { groupPolicy: "allowlist" as const, groupAllowFrom: ["a"] },
-      expected: "allowlist",
-    },
-    {
-      name: "maps allowlist to open when sender allowlist is empty",
-      input: { groupPolicy: "allowlist" as const, groupAllowFrom: [] },
-      expected: "open",
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(resolveSenderScopedGroupPolicy(input)).toBe(expected);
+    ["disabled", ["a"], "disabled"],
+    ["allowlist", ["a"], "allowlist"],
+    ["allowlist", [], "open"],
+  ] as const)("resolves %s with senders %j to %s", (groupPolicy, groupAllowFrom, expected) => {
+    expect(
+      resolveSenderScopedGroupPolicy({ groupPolicy, groupAllowFrom: [...groupAllowFrom] }),
+    ).toBe(expected);
   });
 
   it.each([
-    {
-      name: "blocks disabled sender policy",
-      input: {
-        groupPolicy: "disabled" as const,
-        groupAllowFrom: ["123"],
+    ["disabled", ["123"], "disabled"],
+    ["allowlist", [], "empty_allowlist"],
+  ] as const)("blocks sender policy %s with %j", (groupPolicy, groupAllowFrom, reason) => {
+    expect(
+      evaluateSenderGroupAccessForPolicy({
+        groupPolicy,
+        groupAllowFrom: [...groupAllowFrom],
         senderId: "123",
-        isSenderAllowed: (): boolean => true,
-      },
-      expected: {
-        allowed: false,
-        reason: "disabled",
-        groupPolicy: "disabled",
-        providerMissingFallbackApplied: false,
-      },
-    },
-    {
-      name: "blocks sender allowlist with an empty list",
-      input: {
-        groupPolicy: "allowlist" as const,
-        groupAllowFrom: [],
-        senderId: "123",
-        isSenderAllowed: (): boolean => true,
-      },
-      expected: {
-        allowed: false,
-        reason: "empty_allowlist",
-        groupPolicy: "allowlist",
-        providerMissingFallbackApplied: false,
-      },
-    },
-  ])("$name", ({ input, expected }) => {
-    expect(evaluateSenderGroupAccessForPolicy(input)).toEqual(expected);
+        isSenderAllowed: () => true,
+      }),
+    ).toEqual({ allowed: false, reason, groupPolicy, providerMissingFallbackApplied: false });
   });
 
   it.each([
-    {
-      name: "blocks disabled route policy",
-      input: {
-        groupPolicy: "disabled" as const,
-        routeAllowlistConfigured: true,
-        routeMatched: true,
-        routeEnabled: true,
-      },
-      reason: "disabled",
+    ["disabled", true, true, true, "disabled"],
+    ["allowlist", false, false, undefined, "empty_allowlist"],
+    ["allowlist", true, false, undefined, "route_not_allowlisted"],
+    ["open", true, true, false, "route_disabled"],
+  ] as const)(
+    "blocks route %s (%s/%s/%s): %s",
+    (groupPolicy, routeAllowlistConfigured, routeMatched, routeEnabled, reason) => {
+      expect(
+        evaluateGroupRouteAccessForPolicy({
+          groupPolicy,
+          routeAllowlistConfigured,
+          routeMatched,
+          routeEnabled,
+        }),
+      ).toMatchObject({ allowed: false, reason });
     },
-    {
-      name: "blocks an empty route allowlist",
-      input: {
-        groupPolicy: "allowlist" as const,
-        routeAllowlistConfigured: false,
-        routeMatched: false,
-      },
-      reason: "empty_allowlist",
-    },
-    {
-      name: "blocks an unmatched allowlisted route",
-      input: {
-        groupPolicy: "allowlist" as const,
-        routeAllowlistConfigured: true,
-        routeMatched: false,
-      },
-      reason: "route_not_allowlisted",
-    },
-    {
-      name: "blocks a disabled matched route",
-      input: {
-        groupPolicy: "open" as const,
-        routeAllowlistConfigured: true,
-        routeMatched: true,
-        routeEnabled: false,
-      },
-      reason: "route_disabled",
-    },
-  ])("$name", ({ input, reason }) => {
-    expect(evaluateGroupRouteAccessForPolicy(input)).toMatchObject({ allowed: false, reason });
-  });
+  );
 });
 
 describe("mutable allowlist table helpers", () => {
@@ -151,84 +93,79 @@ describe("mutable allowlist table helpers", () => {
   });
 });
 
-describe("createRestrictSendersChannelSecurity", () => {
-  it("builds dm policy resolution and open-group warnings from one descriptor", () => {
-    const dmRouting = {
-      resolveDmScope: () => "per-peer" as const,
-      resolveDmRoute: () => ({ kind: "core" as const }),
-    };
-    const security = createRestrictSendersChannelSecurity<{
-      accountId: string;
-      allowFrom?: string[];
-      dmPolicy?: string;
-      groupPolicy?: GroupPolicy;
-    }>({
-      channelKey: "line",
-      resolveDmPolicy: (account) => account.dmPolicy,
-      resolveDmAllowFrom: (account) => account.allowFrom,
-      resolveGroupPolicy: (account) => account.groupPolicy,
-      surface: "LINE groups",
-      openScope: "any member in groups",
-      groupPolicyPath: "channels.line.groupPolicy",
-      groupAllowFromPath: "channels.line.groupAllowFrom",
-      mentionGated: false,
-      findingTitle: "LINE security warning",
-      policyPathSuffix: "dmPolicy",
-      classifyEntryAuthentication: () => "asserted",
-      dmRouting,
-    });
-
-    expect(security.dmRouting).toBe(dmRouting);
-
-    expect(
-      security.resolveDmPolicy?.({
-        cfg: { channels: {} } as never,
-        accountId: "default",
-        account: {
-          accountId: "default",
-          dmPolicy: "allowlist",
-          allowFrom: ["line:user:abc"],
-        },
-      }),
-    ).toEqual({
-      policy: "allowlist",
-      allowFrom: ["line:user:abc"],
-      policyPath: "channels.line.dmPolicy",
-      allowFromPath: "channels.line.",
-      approveHint: formatPairingApproveHint("line"),
-      normalizeEntry: undefined,
-      classifyEntryAuthentication: expect.any(Function),
-    });
-
-    expect(
-      security
-        .resolveDmPolicy?.({
-          cfg: {},
-          accountId: "default",
-          account: { accountId: "default" },
-        })
-        ?.classifyEntryAuthentication?.("line:user:abc"),
-    ).toBe("asserted");
-
-    expect(
-      security.collectWarnings?.({
-        cfg: { channels: { line: {} } } as never,
-        accountId: "default",
-        account: {
-          accountId: "default",
-          groupPolicy: "open",
-        },
-      }),
-    ).toEqual([
-      {
-        checkId: "channels.line.groups.open",
-        severity: "warn",
-        title: "LINE security warning",
-        detail:
-          'LINE groups: groupPolicy="open" allows any member in groups to trigger. Set channels.line.groupPolicy="allowlist" + channels.line.groupAllowFrom to restrict senders.',
-      },
-    ]);
+it("createRestrictSendersChannelSecurity builds DM policy and warnings from one descriptor", () => {
+  const dmRouting = {
+    resolveDmScope: () => "per-peer" as const,
+    resolveDmRoute: () => ({ kind: "core" as const }),
+  };
+  const security = createRestrictSendersChannelSecurity<{
+    accountId: string;
+    allowFrom?: string[];
+    dmPolicy?: string;
+    groupPolicy?: GroupPolicy;
+  }>({
+    channelKey: "line",
+    resolveDmPolicy: (account) => account.dmPolicy,
+    resolveDmAllowFrom: (account) => account.allowFrom,
+    resolveGroupPolicy: (account) => account.groupPolicy,
+    surface: "LINE groups",
+    openScope: "any member in groups",
+    groupPolicyPath: "channels.line.groupPolicy",
+    groupAllowFromPath: "channels.line.groupAllowFrom",
+    mentionGated: false,
+    findingTitle: "LINE security warning",
+    policyPathSuffix: "dmPolicy",
+    classifyEntryAuthentication: () => "asserted",
+    dmRouting,
   });
+
+  expect(security.dmRouting).toBe(dmRouting);
+
+  expect(
+    security.resolveDmPolicy?.({
+      cfg: { channels: {} },
+      accountId: "default",
+      account: {
+        accountId: "default",
+        dmPolicy: "allowlist",
+        allowFrom: ["line:user:abc"],
+      },
+    }),
+  ).toEqual({
+    policy: "allowlist",
+    allowFrom: ["line:user:abc"],
+    policyPath: "channels.line.dmPolicy",
+    allowFromPath: "channels.line.",
+    approveHint: formatPairingApproveHint("line"),
+    normalizeEntry: undefined,
+    classifyEntryAuthentication: expect.any(Function),
+  });
+
+  expect(
+    security
+      .resolveDmPolicy?.({
+        cfg: {},
+        accountId: "default",
+        account: { accountId: "default" },
+      })
+      ?.classifyEntryAuthentication?.("line:user:abc"),
+  ).toBe("asserted");
+
+  expect(
+    security.collectWarnings?.({
+      cfg: { channels: { line: {} } },
+      accountId: "default",
+      account: { accountId: "default", groupPolicy: "open" },
+    }),
+  ).toEqual([
+    {
+      checkId: "channels.line.groups.open",
+      severity: "warn",
+      title: "LINE security warning",
+      detail:
+        'LINE groups: groupPolicy="open" allows any member in groups to trigger. Set channels.line.groupPolicy="allowlist" + channels.line.groupAllowFrom to restrict senders.',
+    },
+  ]);
 });
 
 describe("createDangerousNameMatchingMutableAllowlistWarningCollector", () => {
@@ -246,13 +183,7 @@ describe("createDangerousNameMatchingMutableAllowlistWarningCollector", () => {
   it("collects mutable entries while dangerous matching is disabled", () => {
     expect(
       collectWarnings({
-        cfg: {
-          channels: {
-            irc: {
-              allowFrom: ["charlie"],
-            },
-          },
-        } as never,
+        cfg: { channels: { irc: { allowFrom: ["charlie"] } } } as never,
       }),
     ).toEqual([
       "- Found 1 mutable allowlist entry across irc while name matching is disabled by default.",
@@ -266,12 +197,7 @@ describe("createDangerousNameMatchingMutableAllowlistWarningCollector", () => {
     expect(
       collectWarnings({
         cfg: {
-          channels: {
-            irc: {
-              dangerouslyAllowNameMatching: true,
-              allowFrom: ["charlie"],
-            },
-          },
+          channels: { irc: { dangerouslyAllowNameMatching: true, allowFrom: ["charlie"] } },
         } as never,
       }),
     ).toStrictEqual([]);
@@ -289,16 +215,13 @@ describe("normalizeAllowFromList", () => {
   });
 });
 
-describe("coerceNativeSetting", () => {
-  it("keeps boolean and auto values", () => {
-    expect(coerceNativeSetting(true)).toBe(true);
-    expect(coerceNativeSetting(false)).toBe(false);
-    expect(coerceNativeSetting("auto")).toBe("auto");
-  });
-
-  it("drops unsupported values", () => {
-    expect(coerceNativeSetting("true")).toBeUndefined();
-    expect(coerceNativeSetting("on")).toBeUndefined();
-    expect(coerceNativeSetting(1)).toBeUndefined();
-  });
+it.each([
+  [true, true],
+  [false, false],
+  ["auto", "auto"],
+  ["true", undefined],
+  ["on", undefined],
+  [1, undefined],
+] as const)("coerceNativeSetting(%j) returns %j", (input, expected) => {
+  expect(coerceNativeSetting(input)).toBe(expected);
 });

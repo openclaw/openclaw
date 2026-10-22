@@ -9,6 +9,7 @@ import { applySessionEntryReplacements } from "../../config/sessions/session-acc
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import {
   isMainSessionRecoveryPending,
+  isMainSessionRecoveryReconciliationCandidate,
   transitionMainSessionRecovery,
   type MainSessionRecoveryCommand,
   type MainSessionRecoveryOwnerClaim,
@@ -60,6 +61,7 @@ function currentGenerationRequiredBy(command: MainSessionRecoveryCommand): strin
 }
 
 export async function commitMainSessionRecovery(params: {
+  assertCommitAllowed?: () => void;
   command: MainSessionRecoveryCommand;
   expectedSessionId?: string;
   requireWriteSuccess?: boolean;
@@ -93,6 +95,7 @@ export async function commitMainSessionRecovery(params: {
       params.expectedSessionId,
     storePath: params.target.storePath,
     assertCommitAllowed: () => {
+      params.assertCommitAllowed?.();
       if (
         yieldedContinuation &&
         (!yieldedContinuation() ||
@@ -187,6 +190,7 @@ export async function commitMainSessionRecovery(params: {
       ) {
         yieldedContinuation = captureYieldedMainSessionContinuation({
           entry,
+          purpose: "recovery",
           requester: resolveRestartRecoveryDispatchIdentity({
             storeAgentId: params.target.agentId,
             sessionKey: candidate.sessionKey,
@@ -296,6 +300,18 @@ export async function claimMainSessionRecoveryOwner(params: {
       !isMainRestartRecoveryCandidate(claim.entry, claim.sessionKey))
   ) {
     return { kind: "not_required", entry: claim.entry, sessionKey: claim.sessionKey } as const;
+  }
+  if (
+    claim.entry?.sessionId === params.sessionId &&
+    claim.sessionKey &&
+    isMainSessionRecoveryReconciliationCandidate(claim.entry)
+  ) {
+    return {
+      kind: "invalidated",
+      reason: "recovery_pending",
+      entry: claim.entry,
+      sessionKey: claim.sessionKey,
+    } as const;
   }
   const reason = claim.transition.kind === "rejected" ? claim.transition.reason : "state_changed";
   return { kind: "invalidated", reason } as const;

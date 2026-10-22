@@ -12,6 +12,7 @@ import {
   attachProviderAuthAuthority,
   getProviderAuthAuthority,
 } from "../plugins/provider-auth-authority.js";
+import { TLS_SECRET_FIELDS } from "../secrets/provider-request-secret-fields.js";
 import {
   type ProviderRequestCapabilities,
   type ProviderRequestCapability,
@@ -310,7 +311,6 @@ function resolveAuthOverride(params: {
         mode: "authorization-bearer",
         headerName: "Authorization",
         value,
-        injectAuthorizationHeader: true,
       } as const;
     }
   }
@@ -325,14 +325,12 @@ function resolveAuthOverride(params: {
         headerName,
         value,
         ...(prefix ? { prefix } : {}),
-        injectAuthorizationHeader: false,
       } as const;
     }
   }
   return {
     configured: false,
     mode: params.authHeader ? "authorization-bearer" : "provider-default",
-    injectAuthorizationHeader: params.authHeader === true,
   } as const;
 }
 
@@ -473,7 +471,7 @@ function toTlsConnectOptions(
     return undefined;
   }
   const next: Record<string, unknown> = {};
-  for (const key of ["ca", "cert", "key", "passphrase"] as const) {
+  for (const key of TLS_SECRET_FIELDS) {
     if (tls[key]) {
       next[key] = tls[key];
     }

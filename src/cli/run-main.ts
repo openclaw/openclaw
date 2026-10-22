@@ -34,7 +34,7 @@ import { tryRunGatewayServiceUpdateCapabilityProbe } from "./daemon-cli/update-c
 import { shouldStartLocalOnboarding } from "./fresh-install-config.js";
 import {
   isGatewayRunInvocationArgv,
-  resolveGatewayCatalogCommandPath,
+  resolveGatewayCommandPath,
   resolveGatewayRunPreBootstrapOptions,
 } from "./gateway-run-argv.js";
 import {
@@ -43,7 +43,6 @@ import {
   withConsoleLogsRoutedToStderr,
   withConsoleLogsRoutedToStderrForJson,
 } from "./json-output-mode.js";
-import { isMachineOutputStdoutTTY } from "./machine-output-argv.js";
 import { requestExitAfterOneShotOutput } from "./one-shot-exit.js";
 import { tryOutputPrecomputedCommandHelp } from "./precomputed-help.js";
 import { applyCliProfileEnv, parseCliProfileArgs } from "./profile.js";
@@ -123,7 +122,7 @@ async function tryRunGatewayRunFastPath(
       import("../runtime.js"),
     ]),
   );
-  const commandPath = resolveGatewayCatalogCommandPath(argv) ?? ["gateway"];
+  const commandPath = resolveGatewayCommandPath(argv) ?? ["gateway"];
   const startupPolicy = resolveCliStartupPolicyForArgv({
     argv,
     commandPath,
@@ -171,6 +170,9 @@ async function tryRunGatewayRunFastPath(
 }
 
 async function resolveBareRootLaunchTarget(): Promise<BareRootLaunchTarget> {
+  const { readConfigSnapshotForEngineSelection } =
+    await import("../commands/config-preflight-snapshot.js");
+  await readConfigSnapshotForEngineSelection();
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
   if (await shouldStartLocalOnboarding(snapshot)) {
@@ -254,14 +256,14 @@ async function resolveReachableGateway(
         ? { preauthHandshakeTimeoutMs: target.preauthHandshakeTimeoutMs }
         : {}),
     });
-    if (probe.kind === "configured") {
+    if (probe === "configured") {
       return { kind: "configured", gateway };
     }
-    if (probe.kind === "missing-configured-model") {
+    if (probe === "missing-configured-model") {
       missingModelGateway ??= gateway;
       continue;
     }
-    if (probe.kind === "reachable-unverified" && !reachableUnverifiedGateway) {
+    if (probe === "reachable-unverified" && !reachableUnverifiedGateway) {
       reachableUnverifiedGateway = gateway;
     }
   }
@@ -455,7 +457,7 @@ function resolvesMachineOutput(
   },
   argv: readonly string[],
 ): boolean {
-  return descriptor.machineOutput?.({ argv, stdoutIsTTY: isMachineOutputStdoutTTY() }) ?? false;
+  return descriptor.machineOutput?.({ argv, stdoutIsTTY: process.stdout.isTTY || false }) ?? false;
 }
 
 function resolveBuiltInMachineOutput({
@@ -528,7 +530,6 @@ async function resolveCliCommandSurfaceOwner(params: {
   const manifestOwner = resolveManifestCliCommandSurfaceOwner({
     command: params.primary,
     config: params.config,
-    env: process.env,
   });
   if (manifestOwner) {
     return manifestOwner;
@@ -831,8 +832,8 @@ async function runCliWithPreparedOutputMode(
           normalizedInvocation.commandPath[1] === "worker")))
   ) {
     // Gateway config selection and CLI bootstrap can create SQLite workers before the action.
-    const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
-    await initializeSqliteRuntimeCapabilities();
+    const { initializeSqliteRuntime } = await import("../infra/sqlite-runtime-initialize.js");
+    await initializeSqliteRuntime();
   }
 
   if (
@@ -844,12 +845,19 @@ async function runCliWithPreparedOutputMode(
     await startupTrace.measure("dotenv", async () => {
       if (isRemoteAgentDispatchInvocation(normalizedArgv, normalizedInvocation.primary)) {
         const { loadGatewayDispatchCliDotEnv } = await import("./gateway-dispatch-dotenv.js");
-        await loadGatewayDispatchCliDotEnv({ quiet: true });
+        await loadGatewayDispatchCliDotEnv();
       } else {
         const { loadCliDotEnv } = await import("./dotenv.js");
-        loadCliDotEnv({ loadGlobalEnv, quiet: true });
+        loadCliDotEnv({ loadGlobalEnv });
       }
     });
+  }
+  const { prepareCliDatabaseEngine } = await import("./database-engine-selection.js");
+  const selectionHandled = await startupTrace.measure("database-engine-selection", () =>
+    prepareCliDatabaseEngine(normalizedArgv),
+  );
+  if (selectionHandled) {
+    return;
   }
   let doctorDatabasePreflight: DoctorDatabasePreflight | undefined;
   if (!isHelpOrVersionInvocation && normalizedInvocation.primary === "doctor") {
@@ -865,10 +873,10 @@ async function runCliWithPreparedOutputMode(
   await configureStartupTraces();
   if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
     await startupTrace.measure("gateway-run-select-environment", async () => {
-      const [{ selectGatewayRunEnvironment }, { defaultRuntime }] = await Promise.all([
-        import("./gateway-cli/pre-bootstrap.js"),
-        import("../runtime.js"),
-      ]);
+      const [{ selectGatewayRunEnvironment }, { defaultRuntime }] = await startupTrace.measure(
+        "gateway-run-select-environment-imports",
+        () => Promise.all([import("./gateway-cli/pre-bootstrap.js"), import("../runtime.js")]),
+      );
       const opts = resolveGatewayRunPreBootstrapOptions(normalizedArgv) ?? {};
       await selectGatewayRunEnvironment({ opts, runtime: defaultRuntime });
     });
@@ -1264,7 +1272,7 @@ async function runCliWithPreparedOutputMode(
         for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
           console.error("[openclaw]", message);
         }
-        restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
+        restoreRuntimeTerminalState("uncaught exception");
         exitAfterSignalExitBarriers(1, "uncaught exception");
       });
 

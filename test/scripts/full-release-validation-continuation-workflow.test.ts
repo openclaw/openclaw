@@ -1,16 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import {
-  copyFileSync,
-  chmodSync,
-  cpSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { copyFileSync, chmodSync, cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { delimiter, dirname, join } from "node:path";
 import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it } from "vitest";
@@ -20,28 +10,21 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const source = readFileSync(".github/workflows/full-release-validation.yml", "utf8");
 type Workflow = {
-  jobs: Record<
-    string,
-    { if?: string; steps: Array<Record<string, unknown>>; "timeout-minutes"?: number }
-  >;
+  jobs: Record<string, { if?: string; steps: Array<Record<string, unknown>> }>;
   on: { workflow_dispatch: { inputs: Record<string, unknown> } };
 };
 const workflow = parse(source) as Workflow;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function step(job: string, name: string, owner = workflow) {
-  const match = owner.jobs[job]?.steps.find((entry) => entry.name === name);
-  if (!match) {
-    throw new Error(`missing workflow step: ${job}/${name}`);
-  }
+function step(job: string, name: string) {
+  const match = workflow.jobs[job]?.steps.find((entry) => entry.name === name);
+  assert(match, `missing workflow step: ${job}/${name}`);
   return match;
 }
 
 function sparsePaths(checkout: Record<string, unknown>) {
   const value = checkout["sparse-checkout"];
-  if (typeof value !== "string") {
-    throw new TypeError("sparse-checkout must be a string");
-  }
+  assert(typeof value === "string", "sparse-checkout must be a string");
   return value
     .split("\n")
     .map((path) => path.trim())
@@ -49,13 +32,26 @@ function sparsePaths(checkout: Record<string, unknown>) {
 }
 
 function checkoutPath(checkout: Record<string, unknown>) {
-  if (checkout.path === undefined) {
-    return "";
+  const path = checkout.path ?? "";
+  assert(typeof path === "string", "checkout path must be a string");
+  return path;
+}
+
+function runNode(args: string[], cwd: string) {
+  return execFileSync(process.execPath, args, {
+    cwd,
+    encoding: "utf8",
+    timeout: 10_000,
+    env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
+  });
+}
+
+function copyTooling(root: string, checkout: Record<string, unknown>, extraPath?: string) {
+  const destination = join(root, checkoutPath(checkout));
+  for (const path of ["scripts", ...(extraPath ? [extraPath] : [])]) {
+    cpSync(path, join(destination, path), { recursive: true });
   }
-  if (typeof checkout.path !== "string") {
-    throw new TypeError("checkout path must be a string");
-  }
-  return checkout.path;
+  return destination;
 }
 
 describe("full release metadata checkouts", () => {
@@ -95,119 +91,88 @@ describe("full release metadata checkouts", () => {
   ])(
     "runs $job tooling from the complete scripts tree",
     ({ job, checkout, entrypoint, extraPath, fullCheckout }) => {
-      const root = mkdtempSync(join(tmpdir(), "openclaw-release-sparse-"));
-      try {
-        const toolingCheckout = step(job, checkout).with as Record<string, unknown>;
-        if (fullCheckout) {
-          expect(toolingCheckout).not.toHaveProperty("sparse-checkout");
-          expect(toolingCheckout).not.toHaveProperty("sparse-checkout-cone-mode");
-          expect(toolingCheckout).toMatchObject({
-            ref: "${{ github.sha }}",
-            path: "workflow",
-            "fetch-depth": 1,
-            "persist-credentials": false,
-            submodules: false,
-          });
-        } else {
-          expect(toolingCheckout["sparse-checkout-cone-mode"]).toBe(false);
-          const paths = sparsePaths(toolingCheckout);
-          expect(paths).toEqual(extraPath ? ["scripts", extraPath] : ["scripts"]);
-        }
-
-        const checkoutRoot = join(root, checkoutPath(toolingCheckout));
-        cpSync("scripts", join(checkoutRoot, "scripts"), { recursive: true });
-        if (extraPath) {
-          cpSync(extraPath, join(checkoutRoot, extraPath), { recursive: true });
-        }
-
-        const runNode = (args: string[], cwd = root) =>
-          execFileSync(process.execPath, args, {
-            cwd,
-            encoding: "utf8",
-            timeout: 10_000,
-            env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
-          });
-        expect(
-          runNode(
-            ["--input-type=module", "-e", `await import("./scripts/${entrypoint}");`],
-            checkoutRoot,
-          ),
-        ).toBe("");
-      } finally {
-        rmSync(root, { recursive: true, force: true });
+      const root = tempDirs.make("openclaw-release-sparse-");
+      const toolingCheckout = step(job, checkout).with as Record<string, unknown>;
+      if (fullCheckout) {
+        expect(toolingCheckout).not.toHaveProperty("sparse-checkout");
+        expect(toolingCheckout).not.toHaveProperty("sparse-checkout-cone-mode");
+        expect(toolingCheckout).toMatchObject({
+          ref: "${{ github.sha }}",
+          path: "workflow",
+          "fetch-depth": 1,
+          "persist-credentials": false,
+          submodules: false,
+        });
+      } else {
+        expect(toolingCheckout["sparse-checkout-cone-mode"]).toBe(false);
+        const paths = sparsePaths(toolingCheckout);
+        expect(paths).toEqual(extraPath ? ["scripts", extraPath] : ["scripts"]);
       }
+
+      const checkoutRoot = copyTooling(root, toolingCheckout, extraPath);
+      expect(
+        runNode(
+          ["--input-type=module", "-e", `await import("./scripts/${entrypoint}");`],
+          checkoutRoot,
+        ),
+      ).toBe("");
     },
   );
 
   it("keeps target metadata narrow and runs the macOS preflight from the tooling tree", () => {
-    const root = mkdtempSync(join(tmpdir(), "openclaw-release-sparse-"));
-    try {
-      const targetCheckouts = [
-        ["resolve_target", "Checkout target package manifest"],
-        ["evidence_reuse", "Checkout target SHA"],
-      ] as const;
-      for (const [job, name] of targetCheckouts) {
-        const checkout = step(job, name).with as Record<string, unknown>;
-        expect(checkout["sparse-checkout-cone-mode"]).toBe(false);
-        const paths = sparsePaths(checkout);
-        expect(paths).not.toContain("scripts");
-        for (const path of paths) {
-          const destination = join(root, checkoutPath(checkout), path);
-          mkdirSync(dirname(destination), { recursive: true });
-          copyFileSync(path, destination);
-        }
+    const root = tempDirs.make("openclaw-release-sparse-");
+    const targetCheckouts = [
+      ["resolve_target", "Checkout target package manifest"],
+      ["evidence_reuse", "Checkout target SHA"],
+    ] as const;
+    for (const [job, name] of targetCheckouts) {
+      const checkout = step(job, name).with as Record<string, unknown>;
+      expect(checkout["sparse-checkout-cone-mode"]).toBe(false);
+      const paths = sparsePaths(checkout);
+      expect(paths).not.toContain("scripts");
+      for (const path of paths) {
+        const destination = join(root, checkoutPath(checkout), path);
+        mkdirSync(dirname(destination), { recursive: true });
+        copyFileSync(path, destination);
       }
-
-      const toolingCheckout = step("evidence_reuse", "Checkout trusted workflow helper")
-        .with as Record<string, unknown>;
-      cpSync("scripts", join(root, checkoutPath(toolingCheckout), "scripts"), { recursive: true });
-      cpSync(
-        ".github/actions/setup-pnpm-store-cache",
-        join(root, checkoutPath(toolingCheckout), ".github/actions/setup-pnpm-store-cache"),
-        { recursive: true },
-      );
-
-      const setup = step("evidence_reuse", "Setup Node.js");
-      const steps = workflow.jobs.evidence_reuse!.steps;
-      expect(steps.indexOf(setup)).toBeLessThan(
-        steps.indexOf(step("evidence_reuse", "Find reusable validation evidence")),
-      );
-      expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
-      const setupPath = `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`;
-      const activeNodeVersion = execFileSync("node", ["-p", "process.versions.node"], {
-        cwd: root,
-        encoding: "utf8",
-        env: { ...process.env, PATH: setupPath, NODE_OPTIONS: "", NODE_PATH: "" },
-      }).trim();
-      execFileSync("bash", ["-c", String(setup.run)], {
-        cwd: root,
-        encoding: "utf8",
-        timeout: 10_000,
-        env: {
-          ...process.env,
-          ...(setup.env as Record<string, string>),
-          // Keep this sparse-checkout proof offline on every supported test runtime.
-          REQUESTED_NODE_VERSION: activeNodeVersion,
-          PATH: setupPath,
-          NODE_OPTIONS: "",
-          GITHUB_PATH: join(root, "github-path"),
-        },
-      });
-      expect(
-        execFileSync(
-          process.execPath,
-          [join(root, "workflow/scripts/release-preflight.mjs"), "--macos-versions-only"],
-          {
-            cwd: join(root, "target"),
-            encoding: "utf8",
-            timeout: 10_000,
-            env: { ...process.env, NODE_OPTIONS: "", NODE_PATH: "" },
-          },
-        ),
-      ).toContain("macOS app version metadata OK");
-    } finally {
-      rmSync(root, { recursive: true, force: true });
     }
+
+    const toolingCheckout = step("evidence_reuse", "Checkout trusted workflow helper")
+      .with as Record<string, unknown>;
+    copyTooling(root, toolingCheckout, ".github/actions/setup-pnpm-store-cache");
+
+    const setup = step("evidence_reuse", "Setup Node.js");
+    const steps = workflow.jobs.evidence_reuse!.steps;
+    expect(steps.indexOf(setup)).toBeLessThan(
+      steps.indexOf(step("evidence_reuse", "Find reusable validation evidence")),
+    );
+    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.22.1" });
+    const setupPath = `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`;
+    const activeNodeVersion = execFileSync("node", ["-p", "process.versions.node"], {
+      cwd: root,
+      encoding: "utf8",
+      env: { ...process.env, PATH: setupPath, NODE_OPTIONS: "", NODE_PATH: "" },
+    }).trim();
+    execFileSync("bash", ["-c", String(setup.run)], {
+      cwd: root,
+      encoding: "utf8",
+      timeout: 10_000,
+      env: {
+        ...process.env,
+        ...(setup.env as Record<string, string>),
+        // Keep this sparse-checkout proof offline on every supported test runtime.
+        REQUESTED_NODE_VERSION: activeNodeVersion,
+        PATH: setupPath,
+        NODE_OPTIONS: "",
+        GITHUB_PATH: join(root, "github-path"),
+      },
+    });
+    expect(
+      runNode(
+        [join(root, "workflow/scripts/release-preflight.mjs"), "--macos-versions-only"],
+        join(root, "target"),
+      ),
+    ).toContain("macOS app version metadata OK");
   });
 });
 
@@ -338,21 +303,13 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
       const root = tempDirs.make("openclaw-release-locales-");
       const diagnosticPath = join(root, "diagnostics.json");
       const summaryPath = join(root, "summary.md");
+      const jobs = [
+        { name: "native-i18n", conclusion: "success" },
+        { name: "control-ui-i18n", conclusion },
+      ];
       const diagnostic = JSON.stringify({
         state: "blocked_complete",
-        children:
-          conclusion === "missing"
-            ? {}
-            : {
-                normalCi: {
-                  timing: {
-                    jobs: [
-                      { name: "native-i18n", conclusion: "success" },
-                      { name: "control-ui-i18n", conclusion },
-                    ],
-                  },
-                },
-              },
+        children: conclusion === "missing" ? {} : { normalCi: { timing: { jobs } } },
       });
       writeFileSync(diagnosticPath, diagnostic);
       const output = execFileSync("bash", ["-e", "-c", String(summaryStep.run)], {
@@ -425,6 +382,14 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
       "release_execution_plan",
       "Restore immutable release execution plan artifact",
     );
+    const inputsRestore = step(
+      "release_execution_plan",
+      "Restore immutable release execution plan inputs",
+    );
+    const inputsUpload = step(
+      "release_execution_plan",
+      "Upload immutable release execution plan inputs",
+    );
     const upload = step("release_execution_plan", "Upload immutable release execution plan");
     expect(cache).toMatchObject({
       id: "plan_cache",
@@ -436,6 +401,8 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
     });
     expect(cache.with).not.toHaveProperty("fail-on-cache-miss");
     expect(restore).toMatchObject({
+      id: "plan_restore",
+      "continue-on-error": true,
       if: "${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' }}",
       with: {
         "github-token": "${{ github.token }}",
@@ -444,8 +411,25 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
         "run-id": "${{ github.run_id }}",
       },
     });
+    expect(inputsRestore).toMatchObject({
+      id: "plan_inputs_restore",
+      if: "${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' && steps.plan_restore.outcome != 'success' }}",
+      with: {
+        name: "full-release-execution-plan-inputs-${{ github.run_id }}-1",
+        path: "${{ github.workspace }}/full-release-execution-plan-inputs",
+        "run-id": "${{ github.run_id }}",
+      },
+    });
+    expect(inputsUpload).toMatchObject({
+      id: "plan_inputs_upload",
+      if: "${{ github.run_attempt == 1 && steps.plan_inputs.outcome == 'success' }}",
+      with: {
+        name: "full-release-execution-plan-inputs-${{ github.run_id }}-1",
+        overwrite: false,
+      },
+    });
     expect(upload).toMatchObject({
-      if: "${{ always() && github.run_attempt == 1 && steps.plan.outputs.sha256 != '' && steps.plan.outputs.source_parent_attempt == '1' }}",
+      if: "${{ always() && steps.plan.outputs.sha256 != '' && steps.plan.outputs.source_parent_attempt == '1' && (steps.plan_inputs_upload.outcome == 'success' || steps.plan_inputs_restore.outcome == 'success') }}",
       with: {
         name: "full-release-execution-plan-${{ github.run_id }}",
         overwrite: false,
@@ -459,7 +443,9 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
       "resolve_target",
       "Upload restored immutable release execution plan",
     );
-    expect(restoredUpload.if).toBe("github.run_attempt != 1");
+    expect(restoredUpload.if).toBe(
+      "${{ github.run_attempt != 1 && steps.publication_plan_cache.outputs.cache-hit == 'true' }}",
+    );
     expect(restoredUpload.with).toEqual(upload.with);
     expect(step("resolve_target", "Upload immutable publication admission").if).toBeUndefined();
     const resolver = workflow.jobs.resolve_target;
@@ -477,9 +463,7 @@ else console.log(JSON.stringify({id:202,workflow_id:88,head_branch:'main',event:
       "release_execution_plan",
       "Record immutable release execution plan digest",
     );
-    expect(witness.if).toBe(
-      "${{ always() && github.run_attempt == 1 && steps.plan_upload.outcome == 'success' }}",
-    );
+    expect(witness.if).toBe("${{ always() && steps.plan_upload.outcome == 'success' }}");
     expect(
       execFileSync("bash", ["-c", String(witness.run)], {
         env: { PATH: process.env.PATH, EXECUTION_PLAN_SHA256: "a".repeat(64) },

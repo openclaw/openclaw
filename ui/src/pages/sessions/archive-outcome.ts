@@ -1,9 +1,12 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionPatchResult } from "../../lib/sessions/patch.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { showToast } from "../../lib/toast.ts";
+
+registerSessionOrganizationEnglish();
 
 export function prepareArchiveOutcome(
   sessions: SessionCapability,

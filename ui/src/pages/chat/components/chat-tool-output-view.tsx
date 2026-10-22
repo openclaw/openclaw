@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, runWithOwner, Show } from "solid-js";
+import { createMemo, createSignal, Errored, Loading, Show } from "solid-js";
 import { CHAT_MESSAGE_MAX_CHARS } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
@@ -9,7 +9,7 @@ import {
   formatToolOutput,
 } from "../../../lib/chat/tool-output.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
+import type { JSX } from "../../../types/solid-elements.d.ts";
 import type {
   SidebarFullMessageLoader,
   ToolOutputSidebarContent,
@@ -17,92 +17,33 @@ import type {
 import { RawOutputToggle } from "./chat-tool-content.solid.tsx";
 
 type OutputLoadState = "idle" | "loading" | "loaded" | "unavailable" | "error";
+type OutputResult = { state: OutputLoadState; card: ToolCard | null };
 type Props = {
-  content: ToolOutputSidebarContent | null;
-  loadFullMessage: SidebarFullMessageLoader | null;
-  connectionEpoch: number | undefined;
+  content?: ToolOutputSidebarContent | null;
+  loadFullMessage?: SidebarFullMessageLoader | null;
+  connectionEpoch?: number;
+  class?: JSX.HTMLAttributes<HTMLElement>["class"];
 };
 
-function ToolOutput(props: Props) {
-  const [resolved, setResolved] = createSignal<ToolCard | null>(null);
-  const [loadState, setLoadState] = createSignal<OutputLoadState>("idle");
-  const [downloadFailed, setDownloadFailed] = createSignal(false);
-  let requestVersion = 0;
-  let disposed = false;
-  onCleanup(() => {
-    disposed = true;
-    requestVersion += 1;
-  });
-
-  async function loadOutput(
-    content: Props["content"],
-    epoch: Props["connectionEpoch"],
-    loader: Props["loadFullMessage"],
-  ) {
-    const version = ++requestVersion;
-    const current = () =>
-      !disposed &&
-      version === requestVersion &&
-      props.content === content &&
-      props.connectionEpoch === epoch &&
-      props.loadFullMessage === loader;
-    setResolved(null);
-    setLoadState("idle");
-    setDownloadFailed(false);
-    if (!content) {
-      return;
-    }
-    const { card, sessionKey, agentId } = content;
-    if (isLegacyToolOutputUnavailable(card)) {
-      setLoadState("unavailable");
-      return;
-    }
-    if (!sessionKey || !card.resultMessageId || !card.callId || !loader) {
-      if (card.outputTruncated) {
-        setLoadState("unavailable");
-      }
-      return;
-    }
-    setLoadState("loading");
-    try {
-      const result = await loader({
-        sessionKey,
-        agentId,
-        messageId: card.resultMessageId,
-        maxChars: card.outputTruncated ? CHAT_MESSAGE_MAX_CHARS : 2_000_000,
-      });
-      if (!current()) {
-        return;
-      }
-      const matches =
-        result?.ok && result.message
-          ? extractToolCardsCached(result.message).filter(
-              (item) => item.callId === card.callId && item.completed,
-            )
-          : [];
-      const output = matches.length === 1 ? matches[0] : undefined;
-      if (!output || output.outputText === undefined) {
-        setLoadState("unavailable");
-        return;
-      }
-      setResolved({ ...card, ...output });
-      setLoadState(
-        output.outputTruncated || isLegacyToolOutputUnavailable(output) ? "unavailable" : "loaded",
-      );
-    } catch {
-      if (current()) {
-        setLoadState("error");
-      }
-    }
-  }
-  createEffect(
-    () => [props.content, props.connectionEpoch, props.loadFullMessage] as const,
-    (values) => {
-      // A nested bridge may flush while its parent is still rendering.
-      runWithOwner(null, () => void loadOutput(...values));
+export function ChatToolOutput(props: Props) {
+  const [retry, setRetry] = createSignal(0);
+  const target = createMemo(() => ({
+    content: props.content,
+    epoch: props.connectionEpoch,
+    loader: props.loadFullMessage,
+    retry: retry(),
+  }));
+  const lifetime = createMemo(
+    () => {
+      const { content, epoch, loader, retry: attempt } = target();
+      return [content?.sessionKey, content?.agentId, content?.card.id, epoch, loader, attempt];
     },
+    { equals: (a, b) => a.every((value, index) => value === b[index]) },
   );
-
+  const [downloadFailed, setDownloadFailed] = createSignal(() => {
+    target();
+    return false;
+  });
   function downloadOutput(card: ToolCard) {
     setDownloadFailed(false);
     let url: string | undefined;
@@ -122,66 +63,114 @@ function ToolOutput(props: Props) {
       }
     }
   }
-  const card = () => resolved() ?? props.content?.card;
-  const text = () => card()?.outputText ?? "";
-  const displayText = () => (card() ? (formatToolOutput(card()!) ?? "") : "");
-  return (
-    <Show when={card()}>
-      <section class="chat-tool-output" aria-busy={loadState() === "loading" ? "true" : "false"}>
-        <div class="sidebar-header">
-          <div class="sidebar-title">{toolOutputSourceLabel(card()!)}</div>
-        </div>
-        <Show when={loadState() === "loading"}>
-          <p role="status">{t("common.loading")}</p>
-        </Show>
-        <Show when={loadState() === "unavailable"}>
-          <p role="status">{t("chat.toolCards.fullOutputUnavailable")}</p>
-        </Show>
-        <Show when={loadState() === "error"}>
-          <p role="alert">
-            {t("chat.toolCards.outputLoadFailed")}{" "}
-            <button
-              class="btn btn--sm"
-              onClick={() =>
-                void loadOutput(props.content, props.connectionEpoch, props.loadFullMessage)
-              }
-            >
-              {t("common.retry")}
-            </button>
-          </p>
-        </Show>
-        <Show when={card()!.inputText !== undefined}>
-          <details>
-            <summary>{t("chat.toolCards.toolInput")}</summary>
-            <pre>{card()!.inputText}</pre>
-          </details>
-        </Show>
-        <Show when={loadState() !== "loading"}>
-          <div class="chat-tool-output__actions">
-            <CopyButton text={text()} idleLabel={t("chat.toolCards.copyOutput")} />
-            <button class="btn btn--sm" type="button" onClick={() => downloadOutput(card()!)}>
-              {t("chat.toolCards.downloadOutput")}
-            </button>
+  function Output(view: { result: OutputResult }) {
+    const card = () => view.result.card ?? props.content?.card;
+    const text = () => card()?.outputText ?? "";
+    const displayText = () => (card() ? (formatToolOutput(card()!) ?? "") : "");
+    return (
+      <Show when={card()}>
+        <section
+          class="chat-tool-output"
+          aria-busy={view.result.state === "loading" ? "true" : "false"}
+        >
+          <div class="sidebar-header">
+            <div class="sidebar-title">{toolOutputSourceLabel(card()!)}</div>
           </div>
-        </Show>
-        <Show when={downloadFailed()}>
-          <p role="alert">{t("chat.toolCards.outputDownloadFailed")}</p>
-        </Show>
-        <pre class="chat-tool-output__text">
-          <code>{displayText()}</code>
-        </pre>
-        <Show when={displayText() !== text()}>
-          <RawOutputToggle text={text()} />
-        </Show>
-      </section>
-    </Show>
+          <Show when={view.result.state === "loading"}>
+            <p role="status">{t("common.loading")}</p>
+          </Show>
+          <Show when={view.result.state === "unavailable"}>
+            <p role="status">{t("chat.toolCards.fullOutputUnavailable")}</p>
+          </Show>
+          <Show when={view.result.state === "error"}>
+            <p role="alert">
+              {t("chat.toolCards.outputLoadFailed")}{" "}
+              <button class="btn btn--sm" onClick={() => setRetry((value) => value + 1)}>
+                {t("common.retry")}
+              </button>
+            </p>
+          </Show>
+          <Show when={card()!.inputText !== undefined}>
+            <details>
+              <summary>{t("chat.toolCards.toolInput")}</summary>
+              <pre>{card()!.inputText}</pre>
+            </details>
+          </Show>
+          <Show when={view.result.state !== "loading"}>
+            <div class="chat-tool-output__actions">
+              <CopyButton text={text()} idleLabel={t("chat.toolCards.copyOutput")} />
+              <button class="btn btn--sm" type="button" onClick={() => downloadOutput(card()!)}>
+                {t("chat.toolCards.downloadOutput")}
+              </button>
+            </div>
+          </Show>
+          <Show when={downloadFailed()}>
+            <p role="alert">{t("chat.toolCards.outputDownloadFailed")}</p>
+          </Show>
+          <pre class="chat-tool-output__text">
+            <code>{displayText()}</code>
+          </pre>
+          <Show when={displayText() !== text()}>
+            <RawOutputToggle text={text()} />
+          </Show>
+        </section>
+      </Show>
+    );
+  }
+  function Read(resource: { target: ReturnType<typeof target> }) {
+    const output = createMemo(async (): Promise<OutputResult> => {
+      const { content, loader } = resource.target;
+      if (!content) {
+        return { state: "idle", card: null };
+      }
+      const { card, sessionKey, agentId } = content;
+      if (isLegacyToolOutputUnavailable(card)) {
+        return { state: "unavailable", card: null };
+      }
+      const messageId = card.resultMessageId;
+      if (!sessionKey || !messageId || !card.callId || !loader) {
+        return { state: card.outputTruncated ? "unavailable" : "idle", card: null };
+      }
+      const result = await loader({
+        sessionKey,
+        agentId,
+        messageId,
+        maxChars: card.outputTruncated ? CHAT_MESSAGE_MAX_CHARS : 2_000_000,
+      });
+      const matches =
+        result?.ok && result.message
+          ? extractToolCardsCached(result.message).filter(
+              (item) => item.callId === card.callId && item.completed,
+            )
+          : [];
+      const loadedCard = matches.length === 1 ? matches[0] : undefined;
+      if (!loadedCard || loadedCard.outputText === undefined) {
+        return { state: "unavailable", card: null };
+      }
+      return {
+        card: { ...card, ...loadedCard },
+        state:
+          loadedCard.outputTruncated || isLegacyToolOutputUnavailable(loadedCard)
+            ? "unavailable"
+            : "loaded",
+      };
+    });
+    return (
+      <Errored fallback={() => <Output result={{ state: "error", card: null }} />}>
+        <Loading
+          on={resource.target}
+          fallback={<Output result={{ state: "loading", card: null }} />}
+        >
+          <Output result={output()} />
+        </Loading>
+      </Errored>
+    );
+  }
+  return (
+    <openclaw-chat-tool-output class={props.class}>
+      <Show when={lifetime()} keyed>
+        {(_current) => <Read target={target()} />}
+      </Show>
+    </openclaw-chat-tool-output>
   );
 }
-
-export const ChatToolOutput = defineSolidBridge<Props>("openclaw-chat-tool-output", ToolOutput, {
-  properties: {
-    content: { default: null, attribute: false },
-    loadFullMessage: { default: null, attribute: false },
-    connectionEpoch: { default: undefined, type: Number },
-  },
-});

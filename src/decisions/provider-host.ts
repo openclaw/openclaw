@@ -12,6 +12,7 @@ import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginProviderRegistration } from "../plugins/provider-plugin.types.js";
 import type { PluginRecord, PluginRegistry } from "../plugins/registry-types.js";
 import { getActiveSecretsRuntimeSnapshotRevisionState } from "../secrets/runtime-state.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   decisionBatchV1ToV2,
   decisionBatchV2ToV1,
@@ -245,6 +246,7 @@ export class DecisionProviderHost {
     registry: PluginRegistry,
     consumerId?: string,
     isAdmissible?: () => boolean,
+    onPreparedBilling?: (facts: PreparedDecisionBilling) => void,
   ): Promise<DecisionOutcome> {
     return this.evaluateVersion(
       submitted,
@@ -255,6 +257,7 @@ export class DecisionProviderHost {
       1,
       consumerId,
       isAdmissible,
+      onPreparedBilling,
     ) as Promise<DecisionOutcome>; // SAFETY: Version 1 dispatch pairs this V1 batch with a V1 outcome.
   }
 
@@ -366,10 +369,7 @@ export class DecisionProviderHost {
     const budget = Math.min(options.timeoutMs, 30_000);
     const deadlineMonotonicMs = started + budget;
     const timer = setTimeout(() => controller.abort("decision-deadline"), budget);
-    let settle!: () => void;
-    const done = new Promise<void>((resolve) => {
-      settle = resolve;
-    });
+    const { promise: done, resolve: settle } = createDeferredCore();
     this.pending.set(controller, { consumerId, done });
     let observedInterruption: Outcome | undefined;
     let admissionError: { error: unknown } | undefined;
@@ -465,7 +465,9 @@ export class DecisionProviderHost {
                 ...(options.agentId ? { agentId: options.agentId } : {}),
                 signal,
                 deadlineMonotonicMs,
-                ...(isAdmissible ? { isAdmissible: admissible } : {}),
+                // Explicit callers may have no predicate; transports must still fence
+                // host secret/config generations after asynchronous preparation.
+                isAdmissible: admissible,
               });
             }
             if (!this.registration) {
@@ -581,14 +583,6 @@ export class DecisionProviderHost {
   }
 
   private fail(health: Health, reason: ProviderFailureReason, retryAfterMs?: number): void {
-    if (
-      this.health !== health ||
-      getActiveSecretsRuntimeSnapshotRevisionState() !== health.secretRevision ||
-      this.retired ||
-      this.reloadPause
-    ) {
-      return;
-    }
     // The provider resolves credentials per evaluation. Rejecting one credential
     // must not block other agents or a replacement credential at this shared host.
     if (

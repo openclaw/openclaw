@@ -5,8 +5,8 @@ import {
   resolveDaemonRuntimePinStorePath,
 } from "../daemon/runtime-pin-store.js";
 import type { OpenClawSchemaVersions } from "../state/openclaw-schema-versions.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import { CLIENT_CREDENTIAL_SCHEMA_VERSION } from "./client-credential-schema.js";
-import { resolveClientCredentialStorePath } from "./client-credential-store.js";
 import type { StateDatabaseDiscovery } from "./update-candidate-paths.js";
 import type { StateInput } from "./update-candidate-state.shared.js";
 
@@ -19,11 +19,14 @@ export const UpdateStateSchemaVersionsSchema = z.array(
   }),
 );
 export type UpdateStateSchemaVersion = z.infer<typeof UpdateStateSchemaVersionsSchema>[number];
-/** Publish exact aliases; released shared/agent callers opt out of local schema versions. */
+/** Released daemon-aware callers cannot classify the newer client credential family. */
 export function publishStateDatabaseVersions(
   files: Map<string, StateDatabaseDiscovery>,
   inspected: Map<string, Omit<UpdateStateSchemaVersion, "path">>,
-  input: Pick<StateInput, "stateDir" | "includeLocalStoreVersions">,
+  input: Pick<
+    StateInput,
+    "stateDir" | "includeLocalStoreVersions" | "includeClientCredentialStoreVersion"
+  >,
 ): UpdateStateSchemaVersion[] {
   const versions: UpdateStateSchemaVersion[] = [];
   for (const [identity, discovery] of files) {
@@ -35,17 +38,37 @@ export function publishStateDatabaseVersions(
       versions.push({ path: spelling, ...result });
     }
   }
-  return input.includeLocalStoreVersions === false
-    ? versions.filter(
-        ({ path: file }) =>
-          file !== resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: input.stateDir }) &&
-          file !== resolveDaemonRuntimePinStorePath({ OPENCLAW_STATE_DIR: input.stateDir }),
-      )
-    : versions;
+  const env = { OPENCLAW_STATE_DIR: input.stateDir };
+  const clientPath = resolveClientCredentialStorePath(env);
+  const daemonPath = resolveDaemonRuntimePinStorePath(env);
+  return versions.filter(({ path: file }) => {
+    if (file === clientPath) {
+      return (
+        input.includeLocalStoreVersions !== false &&
+        input.includeClientCredentialStoreVersion !== false
+      );
+    }
+    return input.includeLocalStoreVersions !== false || file !== daemonPath;
+  });
 }
 
 export function resolveUpdateStateContentVersion(entry: UpdateStateSchemaVersion): number | null {
   return entry.contentVersion ?? entry.userVersion;
+}
+
+/** Shared, agent, and local stores retain their own independently versioned contracts. */
+export function resolveUpdateStateTargetVersion(
+  databasePath: string,
+  params: { sharedPath: string; candidateSchemaVersions?: OpenClawSchemaVersions },
+): number | undefined {
+  const env = { OPENCLAW_STATE_DIR: path.dirname(path.dirname(params.sharedPath)) };
+  if (databasePath === resolveClientCredentialStorePath(env)) {
+    return CLIENT_CREDENTIAL_SCHEMA_VERSION;
+  }
+  if (databasePath === resolveDaemonRuntimePinStorePath(env)) {
+    return DAEMON_RUNTIME_PIN_SCHEMA_VERSION;
+  }
+  return params.candidateSchemaVersions?.[databasePath === params.sharedPath ? "state" : "agent"];
 }
 
 export function updateStateSchemaVersionsMatch(
@@ -87,14 +110,7 @@ export function updateStateSchemaVersionsMatch(
       if (version === null || baseline.get(entry.path) === version) {
         return true;
       }
-      const supported =
-        entry.path === params.sharedPath
-          ? candidate.state
-          : entry.path === clientPath
-            ? CLIENT_CREDENTIAL_SCHEMA_VERSION
-            : entry.path === daemonPath
-              ? DAEMON_RUNTIME_PIN_SCHEMA_VERSION
-              : candidate.agent;
+      const supported = resolveUpdateStateTargetVersion(entry.path, params);
       return baseline.get(entry.path) == null && version === supported;
     })
   );

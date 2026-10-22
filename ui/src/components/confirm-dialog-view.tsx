@@ -1,19 +1,40 @@
 import { createSignal, untrack } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import type { ConfirmDialogChoice, ConfirmDialogOptions } from "./confirm-dialog-types.ts";
+import { withPromiseModalHost } from "./promise-modal-host.ts";
 
-export function ConfirmDialogView(props: {
+let confirmationActive = false;
+
+export function presentConfirmDialog(
+  options: ConfirmDialogOptions & { alternativeLabel?: string },
+): Promise<ConfirmDialogChoice> {
+  if (confirmationActive) {
+    return Promise.resolve(null);
+  }
+  confirmationActive = true;
+  return withPromiseModalHost<ConfirmDialogChoice>(
+    { signal: options.signal, value: null },
+    ({ render, finish }) => render(() => <ConfirmDialogView options={options} finish={finish} />),
+  ).finally(() => {
+    confirmationActive = false;
+  });
+}
+
+function ConfirmDialogView(props: {
   options: ConfirmDialogOptions & { alternativeLabel?: string };
   finish(value: ConfirmDialogChoice): void;
 }) {
-  const options = untrack(() => props.options);
-  const title = () => options.title ?? t("common.confirm");
+  // A confirmation keeps the request it opened for until it settles.
+  const initialOptions = untrack(() => props.options);
+  const title = () => initialOptions.title ?? t("common.confirm");
   let skipRequested = false;
-  const [acknowledged, setAcknowledged] = createSignal(!options.requiredAcknowledgement);
+  let cancelButton!: HTMLButtonElement;
+  const [acknowledged, setAcknowledged] = createSignal(!initialOptions.requiredAcknowledgement);
   return (
     <openclaw-modal-dialog
+      prop:initialFocus={() => cancelButton}
       label={title()}
-      description={options.message}
+      description={initialOptions.message}
       onModal-cancel={() => props.finish(null)}
     >
       <div class="exec-approval-card">
@@ -21,24 +42,24 @@ export function ConfirmDialogView(props: {
           <div>
             <div class="exec-approval-title">{title()}</div>
             <div class="exec-approval-sub" style={{ "white-space": "pre-line" }}>
-              {options.message}
+              {initialOptions.message}
             </div>
           </div>
         </div>
-        {options.details ? (
-          <div class="exec-approval-command mono">{options.details}</div>
+        {initialOptions.details ? (
+          <div class="exec-approval-command mono">{initialOptions.details}</div>
         ) : undefined}
-        {options.requiredAcknowledgement ? (
+        {initialOptions.requiredAcknowledgement ? (
           <label class="field checkbox">
             <input
               type="checkbox"
               checked={acknowledged()}
               onChange={(event) => setAcknowledged(event.currentTarget.checked)}
             />
-            <span>{options.requiredAcknowledgement}</span>
+            <span>{initialOptions.requiredAcknowledgement}</span>
           </label>
         ) : undefined}
-        {options.skipPreference && !options.requiredAcknowledgement ? (
+        {initialOptions.skipPreference && !initialOptions.requiredAcknowledgement ? (
           <label class="field checkbox exec-approval-skip">
             <input
               type="checkbox"
@@ -51,37 +72,45 @@ export function ConfirmDialogView(props: {
         ) : undefined}
         <openclaw-modal-actions class="exec-approval-actions">
           <button
-            type="button"
-            class={["btn", options.danger ? "danger" : "primary"]}
-            disabled={!acknowledged()}
-            onClick={() => {
-              if (!acknowledged()) {
-                return;
-              }
-              if (skipRequested) {
-                options.skipPreference?.remember();
-              }
-              props.finish("confirm");
+            ref={(element) => {
+              cancelButton = element;
             }}
+            type="button"
+            class="btn"
+            autofocus
+            onClick={() => props.finish(null)}
           >
-            {options.confirmLabel ?? t("common.confirm")}
+            {initialOptions.cancelLabel ?? t("common.cancel")}
           </button>
-          {options.alternativeLabel ? (
+          {initialOptions.alternativeLabel ? (
             <button
               type="button"
               class="btn"
-              disabled={!acknowledged()}
+              disabled={!acknowledged() || initialOptions.canConfirm?.() === false}
               onClick={() => {
-                if (acknowledged()) {
+                if (acknowledged() && initialOptions.canConfirm?.() !== false) {
                   props.finish("alternative");
                 }
               }}
             >
-              {options.alternativeLabel}
+              {initialOptions.alternativeLabel}
             </button>
           ) : undefined}
-          <button type="button" class="btn" autofocus onClick={() => props.finish(null)}>
-            {options.cancelLabel ?? t("common.cancel")}
+          <button
+            type="button"
+            class={["btn", initialOptions.danger ? "danger" : "primary"]}
+            disabled={!acknowledged() || initialOptions.canConfirm?.() === false}
+            onClick={() => {
+              if (!acknowledged() || initialOptions.canConfirm?.() === false) {
+                return;
+              }
+              if (skipRequested) {
+                initialOptions.skipPreference?.remember();
+              }
+              props.finish("confirm");
+            }}
+          >
+            {initialOptions.confirmLabel ?? t("common.confirm")}
           </button>
         </openclaw-modal-actions>
       </div>

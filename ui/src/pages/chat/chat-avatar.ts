@@ -28,7 +28,6 @@ type ChatAvatarHost = {
   connectionEpoch?: number;
   hello: GatewayHelloOk | null;
   sessionKey: string;
-  requestUpdate?: () => void;
 };
 
 const chatAvatarRequestVersions = new WeakMap<object, number>();
@@ -218,7 +217,6 @@ export async function refreshSenderAgentAvatars(
     [...avatars].some(([id, url]) => previousAvatars?.get(id) !== url)
   ) {
     host.senderAgentAvatars = avatars;
-    host.requestUpdate?.();
   }
 }
 

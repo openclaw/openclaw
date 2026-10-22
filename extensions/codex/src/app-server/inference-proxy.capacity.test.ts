@@ -684,7 +684,8 @@ describe("inference relay capacity", () => {
   ])(
     "expires a stalled upstream $phase by $expiry and reclaims admission",
     async ({ phase, expiry }) => {
-      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
+      // The relay and ws both compare the elapsed deadline while timers advance.
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date", "performance"] });
       const handlers = server.listeners("upgrade");
       server.removeAllListeners("upgrade");
       const received = createDeferred<void>();

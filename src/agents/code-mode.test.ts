@@ -13,7 +13,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import { readLocalFileSafely } from "../infra/fs-safe.js";
 import * as diagnostics from "../logging/code-mode-diagnostic.js";
-import { setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { resolveSkillsPrompt } from "../skills/loading/workspace-skill-prompt.js";
 import { consumeRunSkillUsage } from "../skills/runtime/run-usage.js";
 import { createFixtureSkillEntry } from "../skills/test-support/test-helpers.js";
@@ -23,6 +23,7 @@ import { createOpenClawReadTool } from "./agent-tools.read.js";
 import { EMPTY_CODE_MODE_OUTPUT } from "./code-mode-json.js";
 import { bindCodeModeSessionStore } from "./code-mode-session-store.js";
 import { resolveCodeModeSkills } from "./code-mode-skills.js";
+import { controlledTool } from "./code-mode.controlled-tool.test-support.js";
 import {
   applyCodeModeCatalog,
   buildCodeModeCatalogPrompt,
@@ -39,11 +40,16 @@ import {
   testing,
   waitUntilCompleted,
   createHeadlessCodeModeHarness,
-  pluginToolWithExecute,
+  codeModeRunner,
+  expectCompleted,
+  expectToolCalls,
+  expectFailure,
+  createCatalogCodeModeHarness,
+  jsonTool,
 } from "./code-mode.test-support.js";
 import { createAgentHarnessToolSurfaceRuntimeCore } from "./harness/tool-surface-bridge.js";
 import { prepareInstalledSkillCatalog } from "./installed-skill-runtime.js";
-import { createReadTool, type ToolDefinition } from "./sessions/index.js";
+import { createReadTool } from "./sessions/index.js";
 import { SessionManager } from "./sessions/session-manager.js";
 import { readToolInputSchema } from "./sessions/tools/tool-schemas.js";
 import { filterToolsByPolicy } from "./tool-policy-match.js";
@@ -79,6 +85,38 @@ function catalog(targets: AnyAgentTool[], directToolNames?: string[]) {
   };
 }
 
+function complete(tools: AnyAgentTool[], code: string) {
+  return runUntilCompleted({
+    execTool: tools.find((tool) => tool.name === "exec")!,
+    waitTool: tools.find((tool) => tool.name === "wait")!,
+    code,
+  });
+}
+
+function markReplaySafe(tool: AnyAgentTool) {
+  setPluginToolMeta(tool, { ...getPluginToolMeta(tool)!, replaySafe: true });
+  return tool;
+}
+
+function contractedTool(name: string, pluginId?: string) {
+  return Object.assign(pluginTool(name, "Deferred", pluginId), {
+    outputSchema: Type.Object({ ok: Type.Boolean() }, { additionalProperties: false }),
+  });
+}
+
+function skillBody(location: string, content: string) {
+  return `Skill location: ${location}\nResolve relative resource paths from the directory containing this SKILL.md.\n\n${content}`;
+}
+
+function expectFragments(value: unknown, included: string[], excluded: string[] = []) {
+  for (const fragment of included) {
+    expect(value).toContain(fragment);
+  }
+  for (const fragment of excluded) {
+    expect(value).not.toContain(fragment);
+  }
+}
+
 describe("Code Mode catalog and model-visible surface", () => {
   it("refreshes guest metadata after catalog replacement and restriction", async () => {
     const { ctx, tools, exec } = catalog([fakeTool("lookup", "Original metadata")]);
@@ -105,9 +143,7 @@ describe("Code Mode catalog and model-visible surface", () => {
       ...ctx,
       tools: [
         {
-          name: "exec",
-          label: "Client request",
-          description: "Handle a client request",
+          ...fakeTool("exec", "Handle a client request"),
           parameters: Type.Object({ request: Type.String() }),
           execute: async () => jsonResult({ accepted: true }),
         },
@@ -119,118 +155,128 @@ describe("Code Mode catalog and model-visible surface", () => {
     expect(exec.description).toContain("10000 ms wall-clock budget");
   });
 
-  it("keeps direct-only tools model-visible and out of the guest catalog", () => {
-    const { tools, catalogRef } = catalog([
-      { ...fakeTool("computer", "Control a desktop"), catalogMode: "direct-only" },
-      pluginTool("fake_create_ticket", "Create a ticket"),
-    ]);
-    expect(tools.map((tool) => tool.name)).toEqual(["exec", "wait", "computer"]);
-    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_create_ticket"]);
-  });
-
-  it("keeps explicitly required native message delivery visible and searchable", () => {
+  it.each([
+    { kind: "direct-only", visible: ["computer"], indexed: ["fake_create_ticket"] },
+    { kind: "required native", visible: ["message"], indexed: ["message", "fake_create_ticket"] },
+    { kind: "MCP lookalike", visible: [], indexed: ["message"] },
+  ])("keeps $kind visibility separate from guest discovery", ({ kind, visible, indexed }) => {
+    const targets =
+      kind === "MCP lookalike"
+        ? [mcpTool({ name: "message", serverName: "spoofed", toolName: "message" })]
+        : [
+            kind === "direct-only"
+              ? {
+                  ...fakeTool("computer", "Control a desktop"),
+                  catalogMode: "direct-only" as const,
+                }
+              : fakeTool("message", "Deliver the visible response"),
+            pluginTool("fake_create_ticket", "Create a ticket"),
+          ];
     const { tools, catalogRef } = catalog(
-      [
-        fakeTool("message", "Deliver the visible response"),
-        pluginTool("fake_create_ticket", "Create a ticket"),
-      ],
-      ["message"],
+      targets,
+      kind === "direct-only" ? undefined : ["message"],
     );
-    expect(tools.map((tool) => tool.name)).toEqual(["exec", "wait", "message"]);
-    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual([
-      "message",
-      "fake_create_ticket",
-    ]);
+    expect(tools.map((tool) => tool.name)).toEqual(["exec", "wait", ...visible]);
+    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(indexed);
   });
 
-  it("never exposes an MCP lookalike as the required native message tool", () => {
-    const { tools, catalogRef } = catalog(
-      [mcpTool({ name: "message", serverName: "spoofed", toolName: "message" })],
-      ["message"],
-    );
-    expect(tools.map((tool) => tool.name)).toEqual(["exec", "wait"]);
-    expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["message"]);
-  });
-
-  it("includes resolvable callable contracts in the catalog prompt", () => {
+  it("includes resolvable callable contracts in the catalog prompt", async () => {
     const alpha = pluginTool("alpha_tool", "Another deferred description.");
     alpha.outputSchema = Type.Array(
       Type.Object({ id: Type.String(), score: Type.Number() }, { additionalProperties: false }),
     );
-    const { catalogPrompt } = catalog([
+    const incomplete = pluginTool("incomplete_tool", "Use schedule to start the source.");
+    incomplete.parameters = Type.Object({
+      job: Type.Object({
+        ...Object.fromEntries(
+          Array.from({ length: 16 }, (_, index) => [
+            `metadata_${String(index).padStart(2, "0")}`,
+            Type.Optional(Type.String()),
+          ]),
+        ),
+        schedule: Type.Optional(Type.Object({ kind: Type.Literal("stream") })),
+      }),
+    });
+    const { catalogPrompt, ctx } = catalog([
+      incomplete,
       pluginTool("zeta_tool", "Description stays deferred."),
       alpha,
       { ...fakeTool("read", "Read file"), parameters: readToolInputSchema },
     ]);
-    expect(catalogPrompt()).toContain(
-      "- alpha_tool { value?: string } -> Array<{ id: string; score: number }>",
+    const prompt = catalogPrompt();
+    expectFragments(
+      prompt,
+      [
+        "- alpha_tool { value?: string } -> Array<{ id: string; score: number }>",
+        "- zeta_tool { value?: string } -> ?",
+        "- read { path: string; cursor?: number /* integer, >= 0 */; limit?: number; offset?: number /* integer, >= 1 */; optional?: true } -> ?",
+        "If an input hint leaves needed arguments unclear (`...` or `unknown`), read `await callableName.describe()`",
+        "Call globals directly when their input contract is clear",
+      ],
+      [
+        "Description stays deferred.",
+        "openclaw:fake-code-mode",
+        "paired Gateway nodes",
+        "MCP tools use the `MCP` namespace",
+      ],
     );
-    expect(catalogPrompt()).toContain("- zeta_tool { value?: string } -> ?");
-    expect(catalogPrompt()).toContain(
-      "- read { path: string; cursor?: number /* integer, >= 0 */; limit?: number; offset?: number /* integer, >= 1 */; optional?: true } -> ?",
-    );
-    expect(catalogPrompt().indexOf("alpha_tool")).toBeLessThan(
-      catalogPrompt().indexOf("zeta_tool"),
-    );
-    expect(catalogPrompt()).not.toContain("Description stays deferred.");
-    expect(catalogPrompt()).not.toContain("openclaw:fake-code-mode");
-    expect(catalogPrompt()).not.toContain("paired Gateway nodes");
-    expect(catalogPrompt()).not.toContain("MCP tools use the `MCP` namespace");
+    expect(prompt.indexOf("alpha_tool")).toBeLessThan(prompt.indexOf("zeta_tool"));
+    const incompleteLine = prompt.split("\n").find((line) => line.startsWith("- incomplete_tool "));
+    expectFragments(incompleteLine, ["..."], ["schedule"]);
+    const described = await runCodeModeScriptHeadless({
+      ctx,
+      code: "return await incomplete_tool.describe();",
+    });
+    expect(described).toMatchObject({
+      status: "completed",
+      value: {
+        description: "Use schedule to start the source.",
+        parameters: {
+          properties: {
+            job: { properties: { schedule: { properties: { kind: { const: "stream" } } } } },
+          },
+        },
+      },
+    });
+    expect(incomplete.execute).not.toHaveBeenCalled();
   });
+
+  function catalogIndex(targets: AnyAgentTool[]) {
+    const prompt = catalog(targets).catalogPrompt();
+    const index = prompt.slice(prompt.indexOf("Enabled async tool globals"));
+    expect(index.length).toBeLessThanOrEqual(8_000);
+    return index;
+  }
 
   it("keeps declared-output tools indexed when truncation drops unknown-output lines", () => {
     const pluginId = `fake-${"x".repeat(120)}`;
-    const contracted = pluginTool("zzz_contracted_tool", "Deferred", pluginId);
-    contracted.outputSchema = Type.Object({ ok: Type.Boolean() }, { additionalProperties: false });
-    const { catalogPrompt } = catalog([
-      ...Array.from({ length: 500 }, (_, index) =>
-        pluginTool(`fake_${index.toString().padStart(3, "0")}`, "Deferred", pluginId),
+    const index = catalogIndex([
+      ...Array.from({ length: 500 }, (_, position) =>
+        pluginTool(`fake_${position.toString().padStart(3, "0")}`, "Deferred", pluginId),
       ),
-      contracted,
+      contractedTool("zzz_contracted_tool", pluginId),
     ]);
-    const prompt = catalogPrompt();
-    const index = prompt.slice(prompt.indexOf("Enabled async tool globals"));
-    expect(index).toContain("additional tools omitted");
-    expect(index).toContain("zzz_contracted_tool");
-    expect(index).toContain("-> { ok: boolean }");
-    expect(index.length).toBeLessThanOrEqual(8_000);
+    expectFragments(index, [
+      "additional tools omitted",
+      "zzz_contracted_tool",
+      "-> { ok: boolean }",
+    ]);
   });
 
   it("skips a single oversized entry instead of blanking the whole index", () => {
-    const names = [
-      `a_${"z".repeat(9_000)}`,
-      ...Array.from({ length: 4 }, (_, index) => `b_short_${index}`),
-    ];
-    const { catalogPrompt } = catalog(
-      names.map((name) => {
-        const tool = pluginTool(name, "Deferred");
-        tool.outputSchema = Type.Object({ ok: Type.Boolean() }, { additionalProperties: false });
-        return tool;
-      }),
+    const shortNames = Array.from({ length: 4 }, (_, index) => `b_short_${index}`);
+    const index = catalogIndex(
+      [`a_${"z".repeat(9_000)}`, ...shortNames].map((name) => contractedTool(name)),
     );
-    const prompt = catalogPrompt();
-    const index = prompt.slice(prompt.indexOf("Enabled async tool globals"));
-    expect(index.length).toBeLessThanOrEqual(8_000);
-    expect(index).not.toContain("z".repeat(9_000));
-    for (const name of names.slice(1)) {
-      expect(index).toContain(name);
-    }
+    expectFragments(index, shortNames, ["z".repeat(9_000)]);
   });
 });
 
 describe("Code Mode search", () => {
   it("round-trips exact plugin and client callable names that differ only in case", async () => {
-    const { config, catalogRef, ctx, tools } = createCodeModeHarness();
     const plugin = pluginTool("listURL", "List plugin URLs");
-    const clientExecute = vi.fn(async () => jsonResult({ name: "listUrl" }));
-    const client: ToolDefinition = {
-      name: "listUrl",
-      label: "Client URLs",
-      description: "List client URLs",
-      parameters: Type.Object({}),
-      execute: clientExecute,
-    };
-    applyCodeModeCatalog({ tools: [...tools, plugin], config, catalogRef });
+    const client = { ...jsonTool("listUrl", { name: "listUrl" }), parameters: Type.Object({}) };
+    const { ctx, catalogRef } = createCatalogCodeModeHarness([plugin]);
     addClientToolsToToolCatalog({ tools: [client], enabled: true, catalogRef });
     const code = `
       const found = [];
@@ -242,28 +288,26 @@ describe("Code Mode search", () => {
     `;
     const result = await runCodeModeScriptHeadless({ ctx, code });
 
-    expect(result).toMatchObject({
-      status: "completed",
-      value: expect.arrayContaining([
+    expectCompleted(
+      result,
+      expect.arrayContaining([
         { name: "listURL", sameHandle: true, called: { name: "listURL", input: {} } },
         { name: "listUrl", sameHandle: true, called: { name: "listUrl" } },
       ]),
-    });
-    expect(plugin.execute).toHaveBeenCalledOnce();
-    expect(clientExecute).toHaveBeenCalledOnce();
+    );
+    expectToolCalls(1, plugin, client);
   });
 
   function setup(maxSearchLimit = 50) {
-    const { ctx, tools } = createCodeModeHarness({
-      codeMode: { maxOutputBytes: 1024, maxSearchLimit },
-    });
     const targets = Array.from({ length: 50 }, (_, index) =>
       pluginTool(
         `shipment_${String(index).padStart(2, "0")}_${"long_name_".repeat(5)}`,
         "Find shipment",
       ),
     );
-    applyCodeModeCatalog({ ...ctx, tools: [...tools, ...targets] });
+    const { ctx } = createCatalogCodeModeHarness(targets, {
+      codeMode: { maxOutputBytes: 1024, maxSearchLimit },
+    });
     const run = (code: string) => runCodeModeScriptHeadless({ ctx, code });
     return { run, targets };
   }
@@ -273,27 +317,17 @@ describe("Code Mode search", () => {
     const overflow = await run(
       'const matches = await catalog.search("shipment", { limit: 50 }); return { count: matches.length, callable: matches.every(tool => typeof tool === "function") };',
     );
-    expect(overflow, JSON.stringify(overflow)).toMatchObject({
-      status: "completed",
-      value: { count: 50, callable: true },
-    });
-    for (const target of targets) {
-      expect(target.execute).not.toHaveBeenCalled();
-    }
+    expectCompleted(overflow, { count: 50, callable: true });
+    expectToolCalls(0, ...targets);
 
     const narrowed = await run(`
       const matches = await catalog.search("shipment", { limit: 1 });
       if (!Object.isFrozen(matches) || matches.length !== 1) throw new Error("invalid handles");
       return await matches[0]({ value: "ship" });
     `);
-    expect(narrowed).toMatchObject({
-      status: "completed",
-      value: { name: targets[0]?.name, input: { value: "ship" } },
-    });
+    expectCompleted(narrowed, { name: targets[0]?.name, input: { value: "ship" } });
     expect(targets[0]?.execute).toHaveBeenCalledOnce();
-    for (const target of targets.slice(1)) {
-      expect(target.execute).not.toHaveBeenCalled();
-    }
+    expectToolCalls(0, ...targets.slice(1));
     expect(testing.activeRuns.size).toBe(0);
     expect(testing.resumingRunIds.size).toBe(0);
   });
@@ -304,13 +338,8 @@ describe("Code Mode search", () => {
       const matches = await catalog.search("zzzz_missing_tool", { limit: 50 });
       return { count: matches.length, frozen: Object.isFrozen(matches), callable: matches.every(tool => typeof tool === "function") };
     `);
-    expect(result).toMatchObject({
-      status: "completed",
-      value: { count: 0, frozen: true, callable: true },
-    });
-    for (const target of targets) {
-      expect(target.execute).not.toHaveBeenCalled();
-    }
+    expectCompleted(result, { count: 0, frozen: true, callable: true });
+    expectToolCalls(0, ...targets);
   });
 });
 
@@ -319,8 +348,8 @@ it("records Code Mode skills.read of a workshop skill as run usage and skill.use
   const codeModeSkills = resolveCodeModeSkills({
     skillsPrompt: await resolveSkillsPrompt({ entries: [learned], workspaceDir: "/workspace" }),
     candidates: [learned.skill],
-    reader: async () => "# Learned instructions\n",
   });
+  codeModeSkills[0]!.reader = async () => "# Learned instructions\n";
   const used: Array<{ event: DiagnosticEventPayload; skillFile?: string }> = [];
   const stop = onTrustedInternalDiagnosticEvent(
     (event, _metadata, privateData) => {
@@ -329,7 +358,6 @@ it("records Code Mode skills.read of a workshop skill as run usage and skill.use
     { include: ["skill.used"] },
   );
   try {
-    const h = createCodeModeHarness({ agentId: "main", codeModeSkills });
     // Production catalogs hold hook-wrapped tools; the wrapper owns skill usage recording.
     const hookCtx = {
       agentId: "main",
@@ -341,27 +369,14 @@ it("records Code Mode skills.read of a workshop skill as run usage and skill.use
         resolvedSkills: [learned.skill],
       },
     };
-    applyCodeModeCatalog({
-      ...h.ctx,
-      tools: [
-        ...h.tools,
-        ...createInstalledSkillTools(codeModeSkills).map((tool) =>
-          wrapToolWithBeforeToolCallHook(tool, hookCtx),
-        ),
-      ],
-    });
-    const result = await runUntilCompleted({
-      execTool: h.tools[0]!,
-      waitTool: h.tools[1]!,
-      code: 'return await skills.read("learned");',
-    });
-    expect(result).toMatchObject({
-      status: "completed",
-      value:
-        "Skill location: /skills/learned/SKILL.md\n" +
-        "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
-        "# Learned instructions\n",
-    });
+    const h = createCatalogCodeModeHarness(
+      createInstalledSkillTools(codeModeSkills).map((tool) =>
+        wrapToolWithBeforeToolCallHook(tool, hookCtx),
+      ),
+      { agentId: "main", codeModeSkills },
+    );
+    const result = await h.complete('return await skills.read("learned");');
+    expectCompleted(result, skillBody("/skills/learned/SKILL.md", "# Learned instructions\n"));
     expect(consumeRunSkillUsage("run-code-mode")).toEqual([
       {
         name: "learned",
@@ -393,15 +408,14 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
     withTempDir("code-mode-skill-authority-", async (dir) => {
       const denied = scenario === "transported" ? undefined : scenario;
       const filePath = path.join(dir, "SKILL.md");
+      const identity = { name: "guide", description: "Guide", location: filePath };
       await writeFile(filePath, "Private instructions");
       const readStarted = createDeferred();
       const releaseRead = createDeferred();
       let reads = 0;
       const skills = [
         {
-          name: "guide",
-          description: "Guide",
-          location: filePath,
+          ...identity,
           source: { filePath },
           readSearchContent: async (maxBytes: number) => {
             reads += 1;
@@ -441,11 +455,7 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
                 ...createToolSurfacePresentationForTest({
                   tools: { codeMode: true, toolSearch: false },
                 }),
-                skills: skills.map(({ name, description, location }) => ({
-                  name,
-                  description,
-                  location,
-                })),
+                skills: [identity],
               }
             : undefined,
         modelToolsEnabled: true,
@@ -458,14 +468,14 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
         },
       });
       try {
-        const surface = runtime.compactTools(effectiveTools, {
-          prepared: {
-            codeModeSkills: scenario === "transported" ? undefined : skills,
-            preserveToolNames: [],
-          },
-        });
-        const exec = surface.tools.find((tool) => tool.name === "exec")!;
-        const wait = surface.tools.find((tool) => tool.name === "wait")!;
+        const compact = (transported = false) =>
+          runtime.compactTools(effectiveTools, {
+            prepared: {
+              codeModeSkills: transported ? undefined : skills,
+              preserveToolNames: [],
+            },
+          });
+        const surface = compact(scenario === "transported");
         const catalogPrompt = buildCodeModeCatalogPrompt(
           { config: runtime.config },
           runtime.toolSearchCatalogRef?.current?.entries ?? [],
@@ -473,10 +483,9 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
         expect(catalogPrompt.includes("skills.search(")).toBe(denied !== "skills_search");
         expect(catalogPrompt.includes("skills.list(")).toBe(denied !== "skills_search");
         expect(catalogPrompt.includes("skills.read(")).toBe(denied !== "skills_read");
-        const pending = runUntilCompleted({
-          execTool: exec,
-          waitTool: wait,
-          code: `
+        const pending = complete(
+          surface.tools,
+          `
         async function outcome(call) {
           try { return await call(); } catch (error) { return error.message; }
         }
@@ -487,7 +496,7 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
           body: await outcome(() => skills.read("guide")),
         };
       `,
-        });
+        );
         if (denied === "revoked") {
           await withinTest(
             awaitGateBeforeSettlement(
@@ -498,52 +507,36 @@ it.for(["transported", "skills_read", "skills_search", "shadowed", "revoked"] as
             testSignal,
           );
           effectiveTools = skillTools.filter((tool) => tool.name !== "skills_read");
-          runtime.compactTools(effectiveTools, {
-            prepared: { codeModeSkills: skills, preserveToolNames: [] },
-          });
+          compact();
           releaseRead.resolve();
         }
         const result = await pending;
         const unavailable = `${denied} is not available in this run.`;
-        expect(result).toMatchObject({
-          status: "completed",
-          value: {
-            listed:
-              denied === "skills_search"
-                ? unavailable
-                : [{ name: "guide", description: "Guide", location: filePath }],
-            found: denied === "skills_search" ? unavailable : { skills: [{ name: "guide" }] },
-            bodyMatch:
-              denied === "skills_search"
-                ? unavailable
-                : denied === "revoked"
-                  ? expect.stringContaining("permission changed")
-                  : { skills: denied === undefined ? [{ name: "guide" }] : [] },
-            body:
-              denied === "skills_read"
-                ? unavailable
-                : denied === "revoked"
-                  ? expect.stringContaining("Unknown tool id: skills_read.")
-                  : denied === "shadowed"
-                    ? expect.stringContaining("Shadowed reader")
-                    : `Skill location: ${filePath}\n` +
-                      "Resolve relative resource paths from the directory containing this SKILL.md.\n\n" +
-                      "Private instructions",
-          },
+        expectCompleted(result, {
+          listed: denied === "skills_search" ? unavailable : [identity],
+          found: denied === "skills_search" ? unavailable : { skills: [{ name: "guide" }] },
+          bodyMatch:
+            denied === "skills_search"
+              ? unavailable
+              : denied === "revoked"
+                ? expect.stringContaining("permission changed")
+                : { skills: denied === undefined ? [{ name: "guide" }] : [] },
+          body:
+            denied === "skills_read"
+              ? unavailable
+              : denied === "revoked"
+                ? expect.stringContaining("Unknown tool id: skills_read.")
+                : denied === "shadowed"
+                  ? expect.stringContaining("Shadowed reader")
+                  : skillBody(filePath, "Private instructions"),
         });
         expect(reads).toBe(denied === undefined || denied === "revoked" ? 1 : 0);
         if (denied === undefined) {
           effectiveTools = skillTools.filter((tool) => tool.name !== "skills_read");
-          const revoked = runtime.compactTools(effectiveTools, {
-            prepared: { codeModeSkills: skills, preserveToolNames: [] },
-          });
-          expect(
-            await runUntilCompleted({
-              execTool: revoked.tools.find((tool) => tool.name === "exec")!,
-              waitTool: revoked.tools.find((tool) => tool.name === "wait")!,
-              code: 'return await skills.search("private");',
-            }),
-          ).toMatchObject({ status: "completed", value: { skills: [] } });
+          expectCompleted(
+            await complete(compact().tools, 'return await skills.search("private");'),
+            { skills: [] },
+          );
           expect(reads).toBe(1);
         }
       } finally {
@@ -559,9 +552,6 @@ it.each([undefined, "read", "skills_read"])(
     const guide = createFixtureSkillEntry("guide");
     const hidden = createFixtureSkillEntry("hidden");
     const body = `${"x".repeat(256 * 1024)}complete tail`;
-    const context =
-      "Skill location: /skills/guide/SKILL.md\n" +
-      "Resolve relative resource paths from the directory containing this SKILL.md.\n\n";
     guide.skill.readContent = body;
     hidden.skill.readContent = body;
     const skills = prepareInstalledSkillCatalog({
@@ -572,21 +562,14 @@ it.each([undefined, "read", "skills_read"])(
         discoverySkills: [guide.skill, hidden.skill],
       },
     });
-    const h = createCodeModeHarness({ codeModeSkills: skills });
-    applyCodeModeCatalog({
-      ...h.ctx,
-      tools: [
-        ...h.tools,
-        ...filterToolsByPolicy(createInstalledSkillTools(skills), {
-          allow: ["read", "exec"],
-          deny: denied ? [denied] : [],
-        }),
-      ],
-    });
-    const result = await runUntilCompleted({
-      execTool: h.tools[0]!,
-      waitTool: h.tools[1]!,
-      code: `
+    const h = createCatalogCodeModeHarness(
+      filterToolsByPolicy(createInstalledSkillTools(skills), {
+        allow: ["read", "exec"],
+        deny: denied ? [denied] : [],
+      }),
+      { codeModeSkills: skills },
+    );
+    const result = await h.complete(`
         let body;
         let hidden;
         try {
@@ -595,24 +578,19 @@ it.each([undefined, "read", "skills_read"])(
         } catch (error) { body = error.message; }
         try { await skills.read("hidden"); } catch (error) { hidden = error.message; }
         return { body, hidden };
-      `,
-    });
-    expect(result).toMatchObject({
-      status: "completed",
-      value: {
-        body: denied
-          ? "skills_read is not available in this run."
-          : { length: context.length + body.length, tail: "complete tail" },
-        hidden: denied
-          ? "skills_read is not available in this run."
-          : 'Skill "hidden" exceeds the 262144-byte instruction limit.',
-      },
+      `);
+    expectCompleted(result, {
+      body: denied
+        ? "skills_read is not available in this run."
+        : { length: skillBody("/skills/guide/SKILL.md", body).length, tail: "complete tail" },
+      hidden: denied
+        ? "skills_read is not available in this run."
+        : 'Skill "hidden" exceeds the 262144-byte instruction limit.',
     });
   },
 );
 
 it("returns missing implicitly optional daily memory through Code Mode", async () => {
-  const h = createCodeModeHarness();
   const read = createOpenClawReadTool(
     createReadTool("/workspace", {
       operations: {
@@ -623,46 +601,29 @@ it("returns missing implicitly optional daily memory through Code Mode", async (
       },
     }),
   );
-  applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, read] });
-  const result = await runUntilCompleted({
-    execTool: h.tools[0]!,
-    waitTool: h.tools[1]!,
-    code: 'return await read({ path: "memory/2026-05-15.md" });',
-  });
-  expect(result).toMatchObject({
-    status: "completed",
-    value: {
-      kind: "not_found",
-      status: "not_found",
-      path: "memory/2026-05-15.md",
-      optional: true,
-    },
+  const result = await createCatalogCodeModeHarness([read]).complete(
+    'return await read({ path: "memory/2026-05-15.md" });',
+  );
+  expectCompleted(result, {
+    kind: "not_found",
+    status: "not_found",
+    path: "memory/2026-05-15.md",
+    optional: true,
   });
 });
 
 function replay(targets: AnyAgentTool[], options?: Parameters<typeof createCodeModeHarness>[0]) {
-  const { ctx, tools } = createCodeModeHarness(options);
-  applyCodeModeCatalog({ ...ctx, tools: [...tools, ...targets] });
-  const execTool = tools[0]!;
-  const waitTool = tools[1]!;
+  const { tools } = createCatalogCodeModeHarness(targets, options);
   return {
-    execTool,
-    waitTool,
+    execTool: tools[0]!,
+    waitTool: tools[1]!,
     run: (code: string, restartSafe = true) =>
-      runUntilCompleted({ execTool, waitTool, code, restartSafe }),
+      runUntilCompleted({ execTool: tools[0]!, waitTool: tools[1]!, code, restartSafe }),
   };
 }
 
 it("keeps restart safety when an audited read outlives the inline deadline", async () => {
-  const started = createDeferred();
-  const release = createDeferred();
-  const target = fakeTool("read", "Read");
-  const execute = target.execute;
-  target.execute = vi.fn(async (...args: Parameters<AnyAgentTool["execute"]>) => {
-    started.resolve();
-    await release.promise;
-    return await execute(...args);
-  });
+  const { tool: target, started, release } = controlledTool(fakeTool("read", "Read"));
   const { execTool, waitTool } = replay([target]);
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "Date"] });
   const running = execTool.execute("slow-replay", {
@@ -688,36 +649,33 @@ it("keeps restart safety when an audited read outlives the inline deadline", asy
   }
 });
 
-it("rejects MCP tools even when their metadata claims replay safety", async () => {
-  const target = mcpTool({
-    name: "mcp_github_read_file",
-    serverName: "github",
-    toolName: "read_file",
-  });
-  setPluginToolMeta(target, {
-    pluginId: "bundle-mcp",
-    optional: false,
-    replaySafe: true,
-    mcp: {
-      serverName: "github",
-      safeServerName: "github",
-      toolName: "read_file",
-      operation: "tool",
-    },
-  });
-  expect(
-    await replay([target]).run('return await MCP.github.readFile({ path: "README.md" });'),
-  ).toMatchObject({
+it.each([
+  { kind: "MCP replay-safe metadata", forced: false, error: "cannot call namespace tools" },
+  { kind: "model-cleared exec flag", forced: true, error: "not proven replay-safe" },
+])("enforces restart safety despite $kind", async ({ forced, error }) => {
+  const target = forced
+    ? pluginTool("fake_forced_write", "Write")
+    : markReplaySafe(
+        mcpTool({
+          name: "mcp_github_read_file",
+          serverName: "github",
+          toolName: "read_file",
+        }),
+      );
+  const { run } = replay([target], { forceRestartSafeTools: forced });
+  const code = forced
+    ? 'const [write] = await catalog.search("fake_forced_write"); return await write({});'
+    : 'return await MCP.github.readFile({ path: "README.md" });';
+  expect(await run(code, !forced)).toMatchObject({
     status: "failed",
     replaySafe: true,
-    error: expect.stringContaining("cannot call namespace tools"),
+    error: expect.stringContaining(error),
   });
   expect(target.execute).not.toHaveBeenCalled();
 });
 
 it("preserves bridge evidence when a later restart-safe call is rejected", async () => {
-  const read = pluginTool("catalog", "Read");
-  setPluginToolMeta(read, { pluginId: "fake-code-mode", optional: true, replaySafe: true });
+  const read = markReplaySafe(pluginTool("catalog", "Read"));
   const write = pluginTool("fake_unsafe_write", "Write");
   const result = await replay([read, write]).run(`
     const [read] = await catalog.search("catalog");
@@ -736,22 +694,6 @@ it("preserves bridge evidence when a later restart-safe call is rejected", async
   expect(write.execute).not.toHaveBeenCalled();
 });
 
-it("keeps host-forced restart safety when the model clears the exec flag", async () => {
-  const target = pluginTool("fake_forced_write", "Write");
-  const { run } = replay([target], { forceRestartSafeTools: true });
-  expect(
-    await run(
-      'const [write] = await catalog.search("fake_forced_write"); return await write({});',
-      false,
-    ),
-  ).toMatchObject({
-    status: "failed",
-    replaySafe: true,
-    error: expect.stringContaining("not proven replay-safe"),
-  });
-  expect(target.execute).not.toHaveBeenCalled();
-});
-
 const catalogs: Array<ReturnType<typeof createCodeModeHarness>["ctx"]> = [];
 
 function sessionStoreHarness(
@@ -764,20 +706,26 @@ function sessionStoreHarness(
   catalogs.push(h.ctx);
   applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, ...targets] });
   bindCodeModeSessionStore(h.catalogRef, manager);
+  const runner = codeModeRunner(h.tools);
+  const exec = (code: string, restartSafe = false) =>
+    runner.run(code, "store-cell", { restartSafe });
   return {
     ...h,
     manager,
-    exec: async (code: string, restartSafe = false) =>
-      h.tools[0]!.execute("store-cell", { code, restartSafe }),
-    wait: async (runId: unknown) => h.tools[1]!.execute("store-wait", { runId }),
+    execute: runner.execute,
+    exec,
+    check: async (code: string, value: unknown) => expectCompleted(await exec(code), value),
+    wait: (runId: unknown) => runner.resume({ runId }, "store-wait"),
   };
 }
 
-describe.each(["node", "quickjs"] as const)("%s session store bridge", (executor) => {
-  it("keeps detached JSON across cells, deletes keys, and rejects invalid keys", async () => {
+it.each(["node", "quickjs"] as const)(
+  "%s store keeps detached JSON across cells, deletes keys, and rejects invalid keys",
+  async (executor) => {
     const h = sessionStoreHarness(executor);
-    const saved = resultDetails(
-      await h.exec(`
+    const detached = JSON.parse('{"nested":[1],"__proto__":"data"}');
+    await h.check(
+      `
       const original = { nested: [1], ["__proto__"]: "data" };
       const saved = await store("key", original);
       original.nested.push(2);
@@ -790,47 +738,34 @@ describe.each(["node", "quickjs"] as const)("%s session store bridge", (executor
       }
       return { saved: saved === undefined, missing: (await load("missing")) === undefined,
         value: await load("key"), nullable: await load("nullable"), errors };
-    `),
-    );
-    expect(saved, JSON.stringify(saved)).toMatchObject({
-      status: "completed",
-      value: {
+    `,
+      {
         saved: true,
         missing: true,
-        value: JSON.parse('{"nested":[1],"__proto__":"data"}'),
+        value: detached,
         nullable: null,
         errors: Array(10).fill(true),
       },
-    });
-    expect(
-      resultDetails(
-        await h.exec(`
+    );
+    await h.check(
+      `
       const value = await load("key");
       await store("key", undefined);
       return { value, deleted: (await load("key")) === undefined };
-    `),
-      ),
-    ).toMatchObject({
-      status: "completed",
-      value: {
-        value: JSON.parse('{"nested":[1],"__proto__":"data"}'),
-        deleted: true,
-      },
-    });
-    expect(resultDetails(await h.exec('return (await load("key")) === undefined;'))).toMatchObject({
-      status: "completed",
-      value: true,
-    });
-  });
-});
+    `,
+      { value: detached, deleted: true },
+    );
+    await h.check('return (await load("key")) === undefined;', true);
+  },
+);
 
 describe("session store bridge", () => {
   const executor = "node";
 
   it("enforces encoded value and total limits atomically with guest RangeErrors", async () => {
     const h = sessionStoreHarness(executor);
-    const result = resultDetails(
-      await h.exec(`
+    await h.check(
+      `
       const max = "x".repeat(256 * 1024 - 2);
       for (const key of ["a", "b", "c", "d"]) await store(key, max);
       const errors = [];
@@ -841,17 +776,9 @@ describe("session store bridge", () => {
       await store("b", undefined);
       await store("e", 1);
       return { errors, unchanged, deleted: (await load("b")) === undefined, added: await load("e") };
-    `),
+    `,
+      { errors: [true, true, true], unchanged: 256 * 1024 - 2, deleted: true, added: 1 },
     );
-    expect(result).toMatchObject({
-      status: "completed",
-      value: {
-        errors: [true, true, true],
-        unchanged: 256 * 1024 - 2,
-        deleted: true,
-        added: 1,
-      },
-    });
   });
 
   it.each([
@@ -864,89 +791,62 @@ describe("session store bridge", () => {
       ),
       cause: RangeError,
     },
-  ])("keeps $name replay failures distinct from guest input", async ({ set, cause }) => {
+    { name: "uncaught guest RangeError", set: undefined, cause: RangeError },
+  ])("keeps bridge provenance for $name", async ({ set, cause }) => {
     const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
     const h = sessionStoreHarness(executor);
-    await h.manager.appendCustomEntryAsync("openclaw.code-mode-store", {
-      set,
-      delete: [],
-      networkContent: Object.fromEntries(Object.keys(set).map((key) => [key, false])),
-    });
-    const result = resultDetails(await h.exec('return await load("key");'));
-    expect(result).toMatchObject({
-      status: "failed",
-      code: "internal_error",
-      failurePhase: "bridge",
-      error: expect.stringContaining("repair the session"),
-    });
-    expect(log).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledWith(
-      expect.objectContaining({ cause: expect.any(cause) }),
-      expect.objectContaining({ failurePhase: "bridge", failureCode: "tool_error" }),
+    if (set) {
+      await h.manager.appendCustomEntryAsync("openclaw.code-mode-store", {
+        set,
+        delete: [],
+        networkContent: Object.fromEntries(Object.keys(set).map((key) => [key, false])),
+      });
+    }
+    const result = await h.exec(
+      set ? 'return await load("key");' : 'await store("a", "x".repeat(256 * 1024));',
     );
-  });
-
-  it("keeps bridge provenance for uncaught typed store errors", async () => {
-    const log = vi.spyOn(diagnostics, "logCodeModeFailure").mockImplementation(() => {});
-    const h = sessionStoreHarness(executor);
-    const result = resultDetails(await h.exec('await store("a", "x".repeat(256 * 1024));'));
-    expect(result).toMatchObject({
-      status: "failed",
-      code: "internal_error",
-      failurePhase: "bridge",
-      bridgeDispatchStarted: true,
-    });
-    expect(String(result.error)).toMatch(/^RangeError/);
-    expect(log).toHaveBeenCalledOnce();
-    expect(log).toHaveBeenCalledWith(
-      expect.any(RangeError),
-      expect.objectContaining({ failurePhase: "bridge", failureCode: "store_range" }),
+    expectFailure(
+      result,
+      "bridge",
+      "internal_error",
+      set
+        ? { error: expect.stringContaining("repair the session") }
+        : { bridgeDispatchStarted: true, error: expect.stringMatching(/^RangeError/) },
+    );
+    expect(log).toHaveBeenCalledExactlyOnceWith(
+      set ? expect.objectContaining({ cause: expect.any(cause) }) : expect.any(cause),
+      expect.objectContaining({
+        failurePhase: "bridge",
+        failureCode: set ? "tool_error" : "store_range",
+      }),
     );
   });
 
   it("retains writes across wait, hides them from sibling cells, and commits once", async () => {
     const h = sessionStoreHarness(executor);
-    const first = resultDetails(
-      await h.exec(`
+    const first = await h.exec(`
       await store("key", 7); await yield_control();
       const before = await load("key"); await store("key", before + 1); return before;
-    `),
-    );
+    `);
     expect(first.status).toBe("waiting");
     expect(h.manager.getBranch()).toEqual([]);
-    expect(resultDetails(await h.exec('return (await load("key")) === undefined;'))).toMatchObject({
-      status: "completed",
-      value: true,
-    });
-    expect(resultDetails(await h.wait(first.runId))).toMatchObject({
-      status: "completed",
-      value: 7,
-    });
+    await h.check('return (await load("key")) === undefined;', true);
+    expectCompleted(await h.wait(first.runId), 7);
     expect(h.manager.getBranch().filter((entry) => entry.type === "custom")).toHaveLength(1);
-    expect(resultDetails(await h.exec('return await load("key");'))).toMatchObject({
-      status: "completed",
-      value: 8,
-    });
+    await h.check('return await load("key");', 8);
   });
 
   it("carries network provenance through a persisted key into a later reply", async () => {
-    const network = pluginToolWithExecute("network_fixture", "Read network fixture", async () =>
-      jsonResult({ text: "untrusted fixture" }),
-    );
+    const network = jsonTool("network_fixture", { text: "untrusted fixture" });
     network.resultContentSource = "network";
     const h = sessionStoreHarness(executor, undefined, [network]);
-    expect(
-      resultDetails(
-        await h.exec('await store("network", await network_fixture({})); return true;'),
-      ),
-    ).toMatchObject({ status: "completed", value: true });
+    await h.check('await store("network", await network_fixture({})); return true;', true);
     clearToolSearchCatalog(h.ctx);
     const next = sessionStoreHarness(executor, h.manager);
-    const loaded = await next.exec('return (await load("network")).text;');
-    expect(resultDetails(loaded)).toMatchObject({
-      status: "completed",
-      value: "untrusted fixture",
+    const loaded = await next.execute('return (await load("network")).text;', "store-cell", {
+      restartSafe: false,
     });
+    expectCompleted(resultDetails(loaded), "untrusted fixture");
     expect(loaded.content[0]).toMatchObject({
       text: expect.stringContaining("EXTERNAL_UNTRUSTED_CONTENT"),
     });
@@ -957,23 +857,18 @@ describe("session store bridge", () => {
     vi.spyOn(h.manager, "appendCustomEntryAsync").mockRejectedValueOnce(
       new Error("fixture disk failure"),
     );
-    expect(
-      resultDetails(await h.exec('await store("key", 1); return { done: true };')),
-    ).toMatchObject({
+    expect(await h.exec('await store("key", 1); return { done: true };')).toMatchObject({
       status: "completed",
       value: { done: true },
       warnings: [expect.stringContaining("persistence could not be confirmed")],
     });
     expect(h.manager.getBranch()).toEqual([]);
-    expect(resultDetails(await h.exec('return (await load("key")) === undefined;'))).toMatchObject({
-      status: "completed",
-      value: true,
-    });
+    await h.check('return (await load("key")) === undefined;', true);
   });
 
   it("rejects unbound, restartSafe, and headless session-store access", async () => {
     const h = sessionStoreHarness(executor);
-    const safe = resultDetails(await h.exec('return await load("key");', true));
+    const safe = await h.exec('return await load("key");', true);
     expect(safe).toMatchObject({
       status: "failed",
       error: expect.stringContaining("restart-safe"),
@@ -998,9 +893,7 @@ it.each(["aborted", "timeout"] as const)(
   "discards a parked cell's writes when %s",
   async (outcome) => {
     const h = sessionStoreHarness("node");
-    const parked = resultDetails(
-      await h.exec('await store("key", 1); await yield_control(); return true;'),
-    );
+    const parked = await h.exec('await store("key", 1); await yield_control(); return true;');
     expect(parked.status).toBe("waiting");
     const state = testing.activeRuns.get(String(parked.runId))!;
     if (outcome === "timeout") {
@@ -1012,7 +905,7 @@ it.each(["aborted", "timeout"] as const)(
         bridgeDispatchStarted: false,
         output: EMPTY_CODE_MODE_OUTPUT,
       });
-      expect(resultDetails(await h.wait(parked.runId))).toMatchObject({
+      expect(await h.wait(parked.runId)).toMatchObject({
         status: "failed",
         code: "timeout",
       });
@@ -1028,8 +921,6 @@ it.each(["aborted", "timeout"] as const)(
     await resetCodeModeTestState();
     expect(h.manager.getBranch()).toEqual([]);
     const next = sessionStoreHarness("node", h.manager);
-    expect(
-      resultDetails(await next.exec('return (await load("key")) === undefined;')),
-    ).toMatchObject({ status: "completed", value: true });
+    await next.check('return (await load("key")) === undefined;', true);
   },
 );

@@ -29,6 +29,7 @@ const STORED_DEVICE_AUTH_FALLBACK_DETAIL_CODES = new Set([
   "AUTH_TOKEN_MISMATCH",
   "AUTH_DEVICE_TOKEN_MISMATCH",
   "AUTH_SCOPE_MISMATCH",
+  "AUTH_VERIFIED_USER_REQUIRED",
   "PAIRING_REQUIRED",
 ]);
 const NODE_PAIR_APPROVAL_GATEWAY_METHODS = new Set<string>(["node.pair.list", "node.pair.approve"]);
@@ -201,7 +202,6 @@ export function buildNodeInvokeParams(params: {
   return invokeParams;
 }
 
-/** Parse an optional integer node CLI flag. */
 export function parseOptionalNodeInteger(
   value: unknown,
   flag: string,
@@ -228,7 +228,6 @@ export function parseNodeDurationMs(value: string): number {
   }
 }
 
-/** Parse an optional finite number node CLI flag with optional bounds. */
 export function parseOptionalNodeFiniteNumber(
   value: unknown,
   flag: string,
@@ -275,7 +274,6 @@ export async function resolveNodeDiagnosticsId(opts: NodesRpcOpts, query: string
   }
 }
 
-/** Resolve a node query to the best available node record. */
 export async function resolveCliNode(opts: NodesRpcOpts, query: string): Promise<NodeListNode> {
   let nodes: NodeListNode[];
   try {

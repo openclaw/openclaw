@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   SessionGitHubPublicationFailedSchema,
   type SessionGitHubPublicationResult,
@@ -29,6 +29,7 @@ export function checkSharedWorktreeReceipt(row: GitHubPublicationRow): void {
       idempotencyKey: row.idempotency_key,
       title: row.title ?? undefined,
       body: row.body ?? undefined,
+      draft: row.draft == null ? undefined : row.draft === 1,
     })
   ) {
     throw new Error("GitHub publication receipt is corrupt.");
@@ -78,17 +79,17 @@ export function digestGitHubPublicationRequest(params: {
   idempotencyKey: string;
   title?: string;
   body?: string;
+  draft?: boolean;
 }): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify({
-        sessionId: params.sessionId,
-        idempotencyKey: params.idempotencyKey,
-        title: params.title ?? null,
-        body: params.body ?? null,
-      }),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify({
+      sessionId: params.sessionId,
+      idempotencyKey: params.idempotencyKey,
+      title: params.title ?? null,
+      body: params.body ?? null,
+      ...(params.draft !== undefined ? { draft: params.draft } : {}),
+    }),
+  );
 }
 
 export function projectGitHubPublicationResult(

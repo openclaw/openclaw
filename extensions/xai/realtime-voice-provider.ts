@@ -18,7 +18,6 @@ export function buildXaiRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin {
       assertXaiRealtimeVoiceRequestSupported(req);
       return new XaiRealtimeVoiceBridge({
         ...req,
-        apiKey: config.apiKey,
         baseUrl: normalizeXaiRealtimeBaseUrl(config.baseUrl),
         model: config.model,
         voice: config.voice,

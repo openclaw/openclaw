@@ -2,7 +2,7 @@ import type { AgentEvent } from "openclaw/plugin-sdk/agent-core";
 import { vi } from "vitest";
 import { handleToolExecutionEnd } from "./embedded-agent-subscribe.handlers.tools.completion.js";
 import type { ToolHandlerContext } from "./embedded-agent-subscribe.handlers.types.js";
-import { createEmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
+import { EmbeddedAgentSubscribeState } from "./embedded-agent-subscribe.run-state.js";
 import { prepareToolResult } from "./embedded-agent-tool-results.js";
 
 export type ToolExecutionEndEvent = Omit<
@@ -20,6 +20,27 @@ export function endTool(ctx: ToolHandlerContext, event: ToolExecutionEndEvent) {
 
 export function resultWithDetails(details: Record<string, unknown>) {
   return { details };
+}
+
+export type CapturedAgentEvent = { stream?: string; data?: Record<string, unknown> };
+
+export function requireEvent(
+  events: CapturedAgentEvent[],
+  predicate: (event: CapturedAgentEvent) => boolean,
+  label: string,
+): CapturedAgentEvent {
+  const event = events.find(predicate);
+  if (!event) {
+    throw new Error(`expected ${label} event`);
+  }
+  return event;
+}
+
+export function requireString(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new Error(`expected ${label}`);
+  }
+  return value;
 }
 
 export function createTestContext() {
@@ -45,7 +66,7 @@ export function createTestContext() {
       info: vi.fn(),
       warn,
     },
-    state: createEmbeddedAgentSubscribeState({}),
+    state: new EmbeddedAgentSubscribeState({}),
     shouldEmitToolResult: () => false,
     shouldEmitToolOutput: () => false,
     emitToolSummary: vi.fn(),

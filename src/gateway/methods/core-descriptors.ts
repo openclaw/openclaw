@@ -5,8 +5,11 @@ import { cronListShareKey, modelsListShareKey, operatorReadShareKey } from "./re
 const CONTROL_PLANE_WRITE = { controlPlaneWrite: true } as const;
 const SIDECAR_CONTROL_PLANE_WRITE = { startup: true, controlPlaneWrite: true } as const;
 const UNADVERTISED = { advertise: false } as const;
+const PROFILE_DEPENDENT = { profileAccess: "required" } as const;
+const PROFILE_STARTUP = { startup: true, ...PROFILE_DEPENDENT } as const;
 const OBSERVATION = { lifetime: "observation" } as const;
 const SESSION_WRITE = { sessionAccess: { mode: "write" } } as const;
+const OWN_SESSION_WRITE = { sessionAccess: { mode: "write", allowOwnSessionScope: true } } as const;
 const PORTAL_SESSION_WRITE = {
   sessionAccess: { mode: "write", allowOwnSessionScope: true, requiredTool: "portal" },
 } as const;
@@ -84,7 +87,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["wizard.status", "wizard", "operator.admin", "<=2026.7"],
   ["talk.catalog", "talk", "operator.read", "<=2026.7"],
   // Params-aware: reading redacted config needs read; includeSecrets also needs talk secrets.
-  ["talk.config", "talk", "dynamic", "<=2026.7"],
+  // Wait for caller identity before projecting the profile accent.
+  ["talk.config", "talk", "dynamic", "<=2026.7", PROFILE_DEPENDENT],
   ["talk.client.create", "talk", "operator.talk", "<=2026.7"],
   ["talk.client.transcript", "talk", "operator.talk", "<=2026.7"],
   ["talk.client.close", "talk", "operator.talk", "<=2026.7"],
@@ -100,13 +104,14 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["talk.speak", "talk", "operator.talk", "<=2026.7"],
   ["talk.mode", "talk-mode", "operator.talk", "<=2026.7"],
   ["commands.list", "commands", "operator.read", "<=2026.7"],
+  // Wait for identity hydration before caching the caller's personal model catalog.
   [
     "models.list",
     "models",
     "operator.read",
     "<=2026.7",
     {
-      startup: true,
+      ...PROFILE_STARTUP,
       shareKey: modelsListShareKey,
       shareMaxAgeMs: 1_000,
       shareInvalidationEvents: ["chat.metadata.changed", "sessions.changed"],
@@ -133,16 +138,17 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["audit.list", "audit", "operator.read", "2026.7"],
   ["audit.activity.list", "audit", "operator.read", "2026.7"],
   ["users.list", "users", "operator.read", "<=2026.7"],
-  ["users.self", "users", "operator.read", "<=2026.7"],
-  ["users.linkEmail", "users", "operator.admin", "<=2026.7"],
-  ["users.setDisplayName", "users", "operator.write", "<=2026.7"],
-  ["users.setAvatar", "users", "operator.write", "<=2026.7"],
-  ["users.setRole", "users", "operator.admin", "2026.8"],
-  ["users.listAuthLinks", "users", "operator.read", "2026.8"],
-  ["users.listModelAccounts", "users", "operator.read", "2026.8"],
-  ["users.selectModelAccount", "users", "operator.write", "2026.8"],
-  ["users.linkAuthProfile", "users", "operator.admin", "2026.8"],
-  ["users.unlinkAuthProfile", "users", "operator.write", "2026.8"],
+  // Resolve identity before the router captures the caller's profile guard.
+  ["users.self", "users", "operator.read", "<=2026.7", PROFILE_DEPENDENT],
+  ["users.linkEmail", "users", "operator.admin", "<=2026.7", PROFILE_DEPENDENT],
+  ["users.setDisplayName", "users", "operator.write", "<=2026.7", PROFILE_DEPENDENT],
+  ["users.setAvatar", "users", "operator.write", "<=2026.7", PROFILE_DEPENDENT],
+  ["users.setRole", "users", "operator.admin", "2026.8", PROFILE_DEPENDENT],
+  ["users.listAuthLinks", "users", "operator.read", "2026.8", PROFILE_DEPENDENT],
+  ["users.listModelAccounts", "users", "operator.read", "2026.8", PROFILE_DEPENDENT],
+  ["users.selectModelAccount", "users", "operator.write", "2026.8", PROFILE_DEPENDENT],
+  ["users.linkAuthProfile", "users", "operator.admin", "2026.8", PROFILE_DEPENDENT],
+  ["users.unlinkAuthProfile", "users", "operator.write", "2026.8", PROFILE_DEPENDENT],
   ["users.authConnect.start", "users", "operator.write", "2026.8"],
   ["users.authConnect.answer", "users", "operator.write", "2026.8"],
   ["users.authConnect.status", "users", "operator.write", "2026.8"],
@@ -352,7 +358,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   // Params-aware: ordinary turns need write; /new and /reset mutate lifecycle state as admin.
   ["agent", "agent", "dynamic", "<=2026.7", { startup: true }],
   ["agent.identity.get", "agent-identity", "operator.read", "<=2026.7"],
-  ["agent.wait", "agent", "operator.write", "<=2026.7", { startup: true, lifetime: "observation" }],
+  ["agent.wait", "agent", "operator.write", "<=2026.7", { ...PROFILE_STARTUP, ...OBSERVATION }],
   ["chat.history", "chat", "operator.read", "<=2026.7", { startup: true }],
   ["chat.startup", "chat", "operator.read", "<=2026.7", { startup: true }],
   [
@@ -476,7 +482,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   // Memory migration reads host assistant state and writes agent workspaces.
   ["migrations.memory.plan", "migrations", "operator.admin", "2026.7"],
   ["migrations.memory.apply", "migrations", "operator.admin", "2026.7", CONTROL_PLANE_WRITE],
-  ["ui.command", "ui-command", "operator.write", "2026.7"],
+  ["ui.command", "ui-command", "operator.write", "2026.7", PROFILE_DEPENDENT],
   ["approval.history", null, "operator.approvals", "2026.7"],
   ["plugin.surface.refresh", "nodes", "operator.read", "<=2026.7"],
   ["conversations.list", "conversations", "operator.admin", "<=2026.7"],
@@ -597,7 +603,7 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     SIDECAR_CONTROL_PLANE_WRITE,
   ],
   ["sessions.title.prepare", "sessions-title", "operator.write", "2026.8", CONTROL_PLANE_WRITE],
-  ["users.mentionable", "users-mentionable", "operator.read", "2026.8", { startup: true }],
+  ["users.mentionable", "users-mentionable", "operator.read", "2026.8", PROFILE_STARTUP],
   ["mentions.list", "mentions", "operator.read", "2026.8", { startup: true }],
   // Dismissal only changes the caller's temporary Inbox, not session or shared state.
   ["mentions.dismiss", "mentions", "operator.read", "2026.8", { startup: true }],
@@ -641,7 +647,8 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["sessions.activitySummary.ensure", "session-activity-summary", "operator.write", "2026.9"],
   ["controlUi.sessionPullRequests.checks", "control-ui", "operator.read", "2026.9"],
   ["diagnostics.cpuProfile", "diagnostics", "operator.admin", "2026.9"],
-  ["talk.voice.get", "talk", "operator.talk", "2026.9"],
+  // Voice catalogs authorize participation in the call's chat.
+  ["talk.voice.get", "talk", "operator.talk", "2026.9", PROFILE_DEPENDENT],
   ["talk.voice.set", "talk", "operator.talk", "2026.9"],
   ["talk.voice.complete", "talk", "operator.talk", "2026.9"],
   ["plugins.credentials.inspect", "plugins", "operator.admin", "2026.9"],
@@ -662,12 +669,12 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["themes.import", "themes", "operator.write", "2026.9"],
   ["controlUi.githubDetail", "control-ui", "operator.read", "2026.9"],
   ["progressCard.refresh", "progress-card", "operator.write", "2026.9"],
-  ["webSearch.status", "web-search", "operator.read", "2026.9"],
-  ["webSearch.test", "web-search", "operator.admin", "2026.9"],
+  ["webSearch.status", "web-search", "operator.read", "2026.9", PROFILE_DEPENDENT],
+  ["webSearch.test", "web-search", "operator.admin", "2026.9", PROFILE_DEPENDENT],
   ["sessions.providerReview.continue", "sessions-provider-review", "operator.write", "2026.9"],
-  ["users.linkChannelIdentity", "users", "operator.admin", "2026.9"],
-  ["users.unlinkChannelIdentity", "users", "operator.admin", "2026.9"],
-  ["users.listChannelIdentities", "users", "operator.admin", "2026.9"],
+  ["users.linkChannelIdentity", "users", "operator.admin", "2026.9", PROFILE_DEPENDENT],
+  ["users.unlinkChannelIdentity", "users", "operator.admin", "2026.9", PROFILE_DEPENDENT],
+  ["users.listChannelIdentities", "users", "operator.admin", "2026.9", PROFILE_DEPENDENT],
   // Self-service personal instructions never authorize shared workspace writes.
   ["users.personalFile.get", "users", "operator.read", "2026.9"],
   ["users.personalFile.set", "users", "operator.read", "2026.9"],
@@ -675,9 +682,10 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["portal.session.open", "portals", "operator.write", "2026.9", PORTAL_SESSION_WRITE],
   ["portal.session.close", "portals", "operator.write", "2026.9", PORTAL_SESSION_WRITE],
   ["cron.history", "cron", "operator.read", "2026.9"],
-  ["presence.activity", "system", "operator.read", "2026.9"],
-  ["presence.query", "presence", "operator.read", "2026.9"],
-  ["users.merge", "users", "operator.admin", "2026.9"],
+  // The first UI interaction may precede post-hello identity hydration.
+  ["presence.activity", "system", "operator.read", "2026.9", PROFILE_DEPENDENT],
+  ["presence.query", "presence", "operator.read", "2026.9", PROFILE_DEPENDENT],
+  ["users.merge", "users", "operator.admin", "2026.9", PROFILE_DEPENDENT],
   ["gateway.stop.request", "restart", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
   ["diagnostics.heapSnapshot", "diagnostics", "operator.admin", "2026.9"],
   ["sessions.catalog.import", "session-catalog", "operator.write", "2026.9"],
@@ -704,6 +712,11 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["claws.catalog.search", "claws", "operator.read", "2026.10"],
   ["claws.catalog.detail", "claws", "operator.read", "2026.10"],
   ["claws.catalog.preview", "claws", "operator.read", "2026.10"],
+  ["claws.drafts.create", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["claws.drafts.read", "claws-drafts", "operator.admin", "2026.10"],
+  ["claws.drafts.save", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["claws.drafts.review", "claws-drafts", "operator.admin", "2026.10"],
+  ["claws.drafts.publish", "claws-drafts", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["claws.add.plan", "claws-add", "operator.read", "2026.10"],
   ["claws.add.apply", "claws-add", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
   ["worktrees.recoverRemoval", "worktrees", "operator.admin", "2026.9", CONTROL_PLANE_WRITE],
@@ -732,21 +745,17 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     "2026.10",
     CONTROL_PLANE_WRITE,
   ],
-  ["ui.command.result", "ui-command", "operator.read", "2026.10"],
-  ["mcp.events.list", "mcp-events", "operator.read", "2026.10"],
+  ["ui.command.result", "ui-command", "operator.read", "2026.10", PROFILE_DEPENDENT],
+  ["mcp.events.list", "mcp-events", "operator.read", "2026.10", PROFILE_DEPENDENT],
   ["projects.checkoutOptions", "projects", "operator.read", "2026.10"],
   // Inference spends tokens, even though its result never changes the conversation.
-  [
-    "chat.predict",
-    "chat",
-    "operator.write",
-    "2026.10",
-    { sessionAccess: { mode: "write", allowOwnSessionScope: true } },
-  ],
+  ["chat.predict", "chat", "operator.write", "2026.10", OWN_SESSION_WRITE],
   ["tools.github.read", "tools-github", "operator.sessions.read", "2026.10", UNADVERTISED],
   ["tools.github.search", "tools-github", "operator.sessions.read", "2026.10", UNADVERTISED],
   ["openclaw.setup.runtime.start", "system-agent", "operator.admin", "2026.10"],
   ["sessions.github.action", "sessions-github", "dynamic", "2026.10", CONTROL_PLANE_WRITE],
   ["update.handoffSentinel", "update-handoff-sentinel", "operator.admin", "2026.10", UNADVERTISED],
   ["skills.files.get", "skills", "operator.read", "2026.10"],
+  ["agents.avatar.generate", "agents", "operator.admin", "2026.10", CONTROL_PLANE_WRITE],
+  ["exec.approvals.native.commit", "exec-approvals", "operator.admin", "2026.10"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];

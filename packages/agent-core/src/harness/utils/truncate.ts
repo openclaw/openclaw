@@ -127,8 +127,17 @@ function buildTruncationResult(
     firstLineExceedsLimit?: boolean;
   },
 ): TruncationResult {
-  const truncatedBy = params.truncatedBy ?? null;
+  let truncatedBy = params.truncatedBy ?? null;
   const outputLines = params.outputLines ?? input.totalLines;
+  const outputBytes = params.outputBytes ?? input.totalBytes;
+  if (
+    !params.firstLineExceedsLimit &&
+    input.totalLines > input.maxLines &&
+    outputLines >= input.maxLines &&
+    outputBytes <= input.maxBytes
+  ) {
+    truncatedBy = "lines";
+  }
   const truncated = truncatedBy !== null;
   return {
     // One-element joins can retain a source slice; multiline joins build their own text.
@@ -138,7 +147,7 @@ function buildTruncationResult(
     totalLines: input.totalLines,
     totalBytes: input.totalBytes,
     outputLines,
-    outputBytes: params.outputBytes ?? input.totalBytes,
+    outputBytes,
     lastLinePartial: params.lastLinePartial ?? false,
     firstLineExceedsLimit: params.firstLineExceedsLimit ?? false,
     maxLines: input.maxLines,
@@ -196,14 +205,6 @@ export function truncateHead(content: string, options: TruncationOptions = {}): 
     outputBytesCount += lineBytes;
   }
 
-  if (
-    input.totalLines > input.maxLines &&
-    outputLines.length >= input.maxLines &&
-    outputBytesCount <= input.maxBytes
-  ) {
-    truncatedBy = "lines";
-  }
-
   return buildTruncationResult(input, {
     content: outputLines.join("\n"),
     truncatedBy,
@@ -251,14 +252,6 @@ export function truncateTail(content: string, options: TruncationOptions = {}): 
     outputLines.push(line);
     end = start - 1;
     outputBytesCount += lineBytes;
-  }
-
-  if (
-    input.totalLines > input.maxLines &&
-    outputLines.length >= input.maxLines &&
-    outputBytesCount <= input.maxBytes
-  ) {
-    truncatedBy = "lines";
   }
 
   return buildTruncationResult(input, {

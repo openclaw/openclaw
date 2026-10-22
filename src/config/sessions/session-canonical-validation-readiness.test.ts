@@ -3,6 +3,7 @@ import { renameSync } from "node:fs";
 import { backup, DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -59,9 +60,9 @@ function seedPendingRows(count: number, textBytes = 0, agentId = "main") {
         JSON.stringify({ sessionId, updatedAt: 1, lastRunError: "x".repeat(textBytes) }),
       );
     }
-    database.db.exec(
-      "INSERT INTO session_canonical_validation_pending SELECT session_key FROM session_nodes",
-    );
+    if (count > 0) {
+      markCanonicalSessionValidationPending(database);
+    }
     database.db.exec("COMMIT");
   } catch (error) {
     database.db.exec("ROLLBACK");
@@ -79,13 +80,11 @@ it("refuses replacement schema drift before reusing a warm canonical readiness r
     const replacement = `${database.path}.replacement`;
     await backup(requireNativeSqliteDatabase(database.db), replacement);
     await closeOpenClawAgentDatabaseByPathAsync(database.path);
-    const peer = new DatabaseSync(replacement);
-    try {
+    {
+      using peer = new DatabaseSync(replacement);
       peer.exec(
         "CREATE TRIGGER unexpected_session_trigger AFTER INSERT ON session_nodes BEGIN SELECT 1; END",
       );
-    } finally {
-      peer.close();
     }
     renameSync(replacement, database.path);
     await expect(certifySessionCanonicalValidationPending(options)).rejects.toThrow(
@@ -288,16 +287,12 @@ it.each([false, true])(
       const copiedPath = state.statePath("copied-agent.sqlite");
       database.db.prepare("VACUUM INTO ?").run(copiedPath);
       if (invalid) {
-        const imported = new DatabaseSync(copiedPath);
-        try {
-          // Untrusted copied derived state cannot certify its own source contents.
-          imported.exec(
-            "UPDATE session_nodes SET parent_session_key = 'agent:main:changed' WHERE session_key = 'agent:main:pending-0'",
-          );
-          imported.exec("DELETE FROM session_canonical_validation_pending");
-        } finally {
-          imported.close();
-        }
+        using imported = new DatabaseSync(copiedPath);
+        // Untrusted copied derived state cannot certify its own source contents.
+        imported.exec(
+          "UPDATE session_nodes SET parent_session_key = 'agent:main:changed' WHERE session_key = 'agent:main:pending-0'",
+        );
+        imported.exec("DELETE FROM session_canonical_validation_pending");
       }
       const copiedOptions = { ...options, path: copiedPath };
       const copied = openOpenClawAgentDatabase(copiedOptions);
@@ -361,6 +356,16 @@ it("shares active runtime certification without retaining success or failure", a
     });
     await certifySessionCanonicalValidationPending(options);
     jobs.mockClear();
+    const observed = observeHostDataSql();
+    try {
+      await certifySessionCanonicalValidationPending(options);
+      expect(
+        observed.queries.filter((query) => /session_canonical_validation_pending/i.test(query)),
+      ).toEqual([]);
+      expect(jobs).not.toHaveBeenCalled();
+    } finally {
+      observed.restore();
+    }
     const dirty = () => {
       markCanonicalSessionValidationPending(database);
       database.db.exec("UPDATE session_nodes SET entry_json = entry_json || ' '");

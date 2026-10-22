@@ -154,6 +154,10 @@ export default definePluginEntry({
     const lazyBindingStateStore: Parameters<typeof createLazyCodexAppServerBindingStore>[0] = {
       // Final effect guards retain raw SDK revocations through 2026-12-31.
       lookup: (key) => openBindingStateStore().lookup(key),
+      prepareRead: async (key) => {
+        const { preparePluginStateRead } = await import("openclaw/plugin-sdk/plugin-state-runtime");
+        return await preparePluginStateRead(openBindingMutationStore(), key);
+      },
       asyncReads: {
         lookup: (key) => openBindingMutationStore().lookup(key),
         lookupMany: (keys) => openBindingMutationStore().lookupMany(keys),
@@ -228,7 +232,7 @@ export default definePluginEntry({
     if (registrationConfig.supervision?.enabled === true) {
       const {
         resolveCodexAppServerAuthProfileIdForAgent,
-        resolveCodexAppServerAuthProfileIdAtEffect,
+        withCodexAppServerAuthProfileIdAtEffect,
       } = createCodexAuthProfileSelection(api.runtime.modelAuth);
       api.registerTool(
         {
@@ -246,7 +250,7 @@ export default definePluginEntry({
               getPluginConfig: () => resolvePluginConfig(resolveToolRuntimeConfig),
               getRuntimeConfig: resolveToolRuntimeConfig,
               resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
-              resolveAuthProfileIdAtEffect: resolveCodexAppServerAuthProfileIdAtEffect,
+              withAuthProfileIdAtEffect: withCodexAppServerAuthProfileIdAtEffect,
               resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
               senderIsOwner: context.senderIsOwner,
               assertInvocationCurrent: context.assertInvocationCurrent,

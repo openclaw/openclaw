@@ -17,15 +17,17 @@ import {
   readSessionTranscriptMessageEvents,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
-import { enqueueCommandInLane, resetCommandLane } from "../../../process/command-queue.js";
+import { enqueueCommandInLane } from "../../../process/command-queue.js";
 import {
   GatewayDrainingError,
+  beginGatewayRestartSignalAdmission,
+  markGatewayRestartDraining,
   getActiveGatewayRootWorkCount,
-  isGatewayWorkAdmissionClosed,
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../../../process/gateway-work-admission.js";
-import { getActiveSessionWorkAdmissionCount } from "../../../sessions/session-lifecycle-admission.js";
+import { getSessionControllerWorkCount } from "../../../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import {
   createOrResumeClientVoiceSession,
   resolveClientVoiceRunBinding,
@@ -183,10 +185,14 @@ async function createBrowserConsult(publicOnly = false) {
   voiceMocks.consultRealtimeVoiceAgent.mockImplementation(actual.consultRealtimeVoiceAgent);
   voiceMocks.runEmbeddedAgent.mockImplementation(async (params) => {
     params.abortSignal?.throwIfAborted();
-    return await enqueueCommandInLane("talk-admission-test", async () => ({
-      payloads: [{ text: "fixture status" }],
-      meta: { durationMs: 0 },
-    }));
+    return await enqueueCommandInLane(
+      "talk-admission-test",
+      async () => ({
+        payloads: [{ text: "fixture status" }],
+        meta: { durationMs: 0 },
+      }),
+      { abortSignal: params.abortSignal },
+    );
   });
   const fixture = browserFixture(publicOnly);
   await fixture.create({ model: "gpt-live-test" });
@@ -298,7 +304,6 @@ afterEach(async () => {
   const remainingRootWork = getActiveGatewayRootWorkCount();
   resetGatewayWorkAdmission();
   disposeResources();
-  resetCommandLane("talk-admission-test");
   if (ownedVoiceSessionId) {
     await closeVoice("conn-close");
   }
@@ -371,28 +376,19 @@ it("acknowledges close before creating the voice replacement requested by an act
   }
 });
 
-it("admits a later sideband consult after its HTTP offer has released admission", async () => {
+it("releases accepted work when agent runtime loading fails", async () => {
   const { consult } = await createBrowserConsult();
   const resource = await completeOffer();
-  expect(getActiveGatewayRootWorkCount()).toBe(0);
-  expect(isGatewayWorkAdmissionClosed()).toBe(false);
-  const enqueue = voiceMocks.runEmbeddedAgent.getMockImplementation()!;
-  voiceMocks.runEmbeddedAgent.mockImplementationOnce(async (params) => {
-    expect(resolveClientVoiceRunBinding(params.runId)).toMatchObject({
-      agentId: "main",
-      sessionKey,
-      voiceSessionId: ownedVoiceSessionId,
-    });
-    return await enqueue(params);
-  });
+  voiceMocks.executionReady.mockRejectedValueOnce(new Error("Synthetic runtime load failure"));
 
   await expect(
     resource.runInAsyncScope(() => consult({ prompt: "Return the fixture status" })),
-  ).resolves.toEqual({ text: "fixture status" });
-  const [run] = voiceMocks.runEmbeddedAgent.mock.calls[0]!;
-  expect(resolveClientVoiceRunBinding(run.runId)).toBeUndefined();
+  ).rejects.toThrow("Synthetic runtime load failure");
+
+  expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
+  expect(rpcSourceTesting.size).toBe(0);
+  expect(getSessionControllerWorkCount()).toBe(0);
   expect(getActiveGatewayRootWorkCount()).toBe(0);
-  expect(getActiveSessionWorkAdmissionCount()).toBe(0);
 });
 
 it("keeps an accepted consult admitted through offer completion and suspension", async ({
@@ -403,7 +399,12 @@ it("keeps an accepted consult admitted through offer completion and suspension",
   const beforeEnqueue = createDeferred();
   const enqueue = voiceMocks.runEmbeddedAgent.getMockImplementation()!;
   voiceMocks.runEmbeddedAgent.mockImplementationOnce(async (params) => {
-    expect(getActiveSessionWorkAdmissionCount()).toBe(1);
+    expect(getSessionControllerWorkCount()).toBe(1);
+    expect(resolveClientVoiceRunBinding(params.runId)).toMatchObject({
+      agentId: "main",
+      sessionKey,
+      voiceSessionId: ownedVoiceSessionId,
+    });
     embeddedEntered.resolve();
     await beforeEnqueue.promise;
     return await enqueue(params);
@@ -425,12 +426,14 @@ it("keeps an accepted consult admitted through offer completion and suspension",
       );
       expect(voiceMocks.runEmbeddedAgent).toHaveBeenCalledOnce();
     });
-    expect(getActiveSessionWorkAdmissionCount()).toBe(1);
+    expect(getSessionControllerWorkCount()).toBe(1);
     suspension = tryBeginGatewaySuspendAdmission(() => {});
     expect(suspension).not.toBeNull();
     beforeEnqueue.resolve();
     await expect(work).resolves.toEqual({ text: "fixture status" });
-    expect(getActiveSessionWorkAdmissionCount()).toBe(0);
+    expect(getSessionControllerWorkCount()).toBe(0);
+    const [run] = voiceMocks.runEmbeddedAgent.mock.calls[0]!;
+    expect(resolveClientVoiceRunBinding(run.runId)).toBeUndefined();
   } finally {
     beforeEnqueue.resolve();
     await work?.catch(() => undefined);
@@ -438,16 +441,25 @@ it("keeps an accepted consult admitted through offer completion and suspension",
   }
 });
 
-it("does not admit a new sideband consult during suspension", async () => {
-  const { consult } = await createBrowserConsult();
-  const resource = await completeOffer();
-  expect(tryBeginGatewaySuspendAdmission(() => {})).not.toBeNull();
-  await expect(
-    resource.runInAsyncScope(() => consult({ prompt: "Must not start" })),
-  ).rejects.toThrow(GatewayDrainingError);
-  expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
-  expect(getActiveSessionWorkAdmissionCount()).toBe(0);
-});
+it.each(["suspend", "restart-signal", "restart-drain"] as const)(
+  "does not admit a new sideband consult during %s",
+  async (fence) => {
+    const { consult } = await createBrowserConsult();
+    const resource = await completeOffer();
+    if (fence === "suspend") {
+      expect(tryBeginGatewaySuspendAdmission(() => {})).not.toBeNull();
+    } else if (fence === "restart-signal") {
+      expect(beginGatewayRestartSignalAdmission()).not.toBeNull();
+    } else {
+      markGatewayRestartDraining();
+    }
+    await expect(
+      resource.runInAsyncScope(() => consult({ prompt: "Must not start" })),
+    ).rejects.toThrow(GatewayDrainingError);
+    expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(getSessionControllerWorkCount()).toBe(0);
+  },
+);
 
 it("appends finalized messages once by event id", async () => {
   const voiceSessionId = await createVoice();
@@ -504,7 +516,7 @@ it.each([
     );
     try {
       await awaitGateBeforeSettlement(loading.promise, accepted, "Consult settled before loading");
-      expect(context.chatAbortControllers.size).toBe(1);
+      expect(rpcSourceTesting.size).toBe(1);
       expect(voiceMocks.runEmbeddedAgent).not.toHaveBeenCalled();
       if (ending === "close") {
         expectOk(await invokeClient("close", { sessionKey, voiceSessionId: ownedVoiceSessionId }));
@@ -518,7 +530,7 @@ it.each([
     }
     expect(await settled).toEqual({ result: { text: "fixture status" } });
     expect(voiceMocks.runEmbeddedAgent).toHaveBeenCalledOnce();
-    expect(context.chatAbortControllers.size).toBe(0);
+    expect(rpcSourceTesting.size).toBe(0);
     expect(cancelBrowserSession).toHaveBeenCalledTimes(publicOnly ? 0 : 1);
     await closeVoice(client.connId);
     expect(readLegacyVoiceBinding(client.connId, sessionKey)).toBeUndefined();

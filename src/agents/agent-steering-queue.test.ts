@@ -22,7 +22,10 @@ const readResult = async (entry: SubagentRunRecord) => ({
 });
 
 const requesterSessionKey = "agent:main:main";
-afterEach(() => publishSystemEventStoreResolver(undefined));
+afterEach(() => {
+  publishSystemEventStoreResolver(undefined);
+  vi.restoreAllMocks();
+});
 
 function payload(runId: string, overrides: Partial<PendingFinalDeliveryPayload> = {}) {
   return {
@@ -214,7 +217,6 @@ describe("agent steering queue", () => {
       runs,
       requesterSessionKey,
       leaseId: "lease-exact-prompt",
-      now: 50,
     });
 
     const section = (runId: string, position: number) =>
@@ -300,6 +302,7 @@ describe("agent steering queue", () => {
   });
 
   it("leases, acks, and releases queued items without delivery retries", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(3_000);
     const runs = runMap([
       makeRun({ runId: "run-1" }),
       makeRun({ runId: "done", delivery: { status: "delivered", announcedAt: 1 } }),
@@ -310,7 +313,6 @@ describe("agent steering queue", () => {
       runs,
       requesterSessionKey,
       leaseId: "lease-1",
-      now: 3_000,
     });
     expect(leased).toMatchObject({ runIds: ["run-1"] });
     expect(runs.get("run-1")?.delivery).toMatchObject({
@@ -321,12 +323,12 @@ describe("agent steering queue", () => {
     });
     expect(runs.get("run-1")?.cleanupHandled).toBe(true);
 
+    now.mockReturnValue(4_000);
     expect(
       ackItems({
         runs,
         runIds: ["run-1"],
         leaseId: "lease-1",
-        now: 4_000,
       }),
     ).toBe(1);
     expect(runs.get("run-1")?.delivery).toMatchObject({
@@ -341,7 +343,7 @@ describe("agent steering queue", () => {
       "retry",
       makeRun({
         runId: "retry",
-        delivery: { status: "pending", attemptCount: 2, payload: payload("retry") },
+        delivery: { status: "pending", payload: payload("retry") },
       }),
     );
     await leaseItems({
@@ -349,7 +351,6 @@ describe("agent steering queue", () => {
       runs,
       requesterSessionKey,
       leaseId: "lease-2",
-      now: 5_000,
     });
     expect(
       releaseItems({
@@ -361,7 +362,6 @@ describe("agent steering queue", () => {
     ).toBe(1);
     expect(runs.get("retry")?.delivery).toMatchObject({
       status: "pending",
-      attemptCount: 2,
       lastError: "hook blocked prompt submission",
     });
     expect(runs.get("retry")?.cleanupHandled).toBe(false);
@@ -389,7 +389,6 @@ describe("agent steering queue", () => {
           runs,
           requesterSessionKey,
           leaseId: "selected-lease",
-          now: 400_000,
         });
         expect(leased?.runIds).toEqual(["selected"]);
         expect(leased?.prompt).toContain("result for selected");
@@ -501,7 +500,6 @@ describe("agent steering queue", () => {
       runs,
       requesterSessionKey,
       leaseId: "lease-1",
-      now: 3_000,
     });
     const omitted = [...runs.keys()].filter((runId) => !leased?.runIds.includes(runId));
 
@@ -561,6 +559,7 @@ describe("agent steering queue", () => {
   });
 
   it("skips active cleanup, sanitizes metadata, and reclaims stale leases", async () => {
+    const now = vi.spyOn(Date, "now").mockReturnValue(3_000);
     const runs = runMap([
       makeRun({ runId: "handled", cleanupHandled: true }),
       makeRun({
@@ -585,16 +584,15 @@ describe("agent steering queue", () => {
         runs,
         requesterSessionKey,
         leaseId: "too-early",
-        now: 3_000,
       }),
     ).toBeUndefined();
 
+    now.mockReturnValue(1_000 + 6 * 60 * 1_000);
     const leased = await leaseItems({
       readResult,
       runs,
       requesterSessionKey,
       leaseId: "new-lease",
-      now: 1_000 + 6 * 60 * 1_000,
     });
     expect(leased?.runIds).toEqual(["stale"]);
     expect(runs.get("stale")?.delivery?.steeringLeaseId).toBe("new-lease");
@@ -633,7 +631,6 @@ describe("agent steering queue", () => {
       runs: runMap([run]),
       requesterSessionKey,
       leaseId: "lease-emoji",
-      now: 200,
     });
 
     const title = leased?.prompt.split("\n").find((line) => line.startsWith("1. "));

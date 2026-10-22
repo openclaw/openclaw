@@ -1,3 +1,8 @@
+import "./discussions/session-authority.test-support.js";
+import {
+  hasControlCommand,
+  shouldComputeCommandAuthorized,
+} from "openclaw/plugin-sdk/command-detection";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +32,7 @@ import type {
 let runtime: PluginRuntime;
 beforeEach(() => {
   runtime = createInboundRuntime(false);
+  vi.mocked(runtime.channel.text.hasControlCommand).mockImplementation(hasControlCommand);
   setClickClackRuntime(runtime);
 });
 
@@ -96,6 +102,84 @@ function handleCurrent(
 }
 
 describe("ClickClack inbound mention gating", () => {
+  it.each([
+    { body: "! poll", allowed: false },
+    { body: "hello ! poll", allowed: false },
+    { body: "@blackbird ! poll", allowed: true },
+    { body: "/bash poll", allowed: true },
+  ])(
+    "keeps command authorization separate from mention bypass: $body",
+    async ({ body, allowed }) => {
+      vi.mocked(runtime.channel.commands.shouldComputeCommandAuthorized).mockImplementation(
+        shouldComputeCommandAuthorized,
+      );
+      vi.mocked(runtime.channel.commands.shouldHandleTextCommands).mockReturnValue(true);
+      await dispatchPublished(
+        makeAccount({ requireMention: true, allowFrom: ["usr_owner"] }),
+        { body },
+        { commands: { bash: true } },
+      );
+      const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
+      expect(dispatch).toHaveBeenCalledTimes(allowed ? 1 : 0);
+      if (allowed) {
+        expect(dispatch.mock.calls[0]?.[0].ctxPayload.CommandAuthorized).toBe(true);
+      }
+    },
+  );
+
+  it.each([
+    { name: "direct message", body: "hello", direct: true, allowed: true },
+    { name: "empty group body", body: "", allowed: false },
+    {
+      name: "email address is not a handle mention",
+      body: "email alice@example.com",
+      botHandle: "example",
+      allowed: false,
+    },
+    {
+      name: "plain display name is not a mention",
+      body: "Blackbird can you help?",
+      allowed: false,
+    },
+    {
+      name: "one matching local pattern",
+      body: "@secondbot please",
+      mentionPatterns: ["@firstbot", "@secondbot"],
+      allowed: true,
+    },
+    {
+      name: "unsafe local pattern",
+      body: `${"a".repeat(20_000)}!`,
+      mentionPatterns: ["(a+)+$"],
+      allowed: false,
+    },
+    {
+      name: "unsafe shared pattern",
+      body: `${"a".repeat(20_000)}!`,
+      sharedPatterns: ["(a+)+$"],
+      allowed: false,
+    },
+  ])("mention recognition through inbound dispatch: $name", async (sample) => {
+    const account = makeAccount({
+      requireMention: true,
+      mentionPatterns: sample.mentionPatterns ?? [],
+      ...(sample.botHandle ? { botHandle: sample.botHandle } : {}),
+    });
+    await dispatchPublished(
+      account,
+      {
+        body: sample.body,
+        ...(sample.direct ? { channel_id: undefined, direct_conversation_id: "dm_1" } : {}),
+      },
+      { messages: { groupChat: { mentionPatterns: sample.sharedPatterns ?? [] } } },
+    );
+    const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
+    expect(dispatch).toHaveBeenCalledTimes(sample.allowed ? 1 : 0);
+    if (sample.allowed) {
+      expect(dispatch.mock.calls[0]?.[0].ctxPayload.WasMentioned).toBe(!sample.direct);
+    }
+  });
+
   it("records attachment persistence failures before dropping inbound delivery", async () => {
     const mainSessionKey = "agent:research:main";
     const bindingStore = getClickClackDiscussionBindingStore(runtime);
@@ -176,33 +260,64 @@ describe("ClickClack inbound mention gating", () => {
     expect(runtime.llm.complete).not.toHaveBeenCalled();
   });
 
-  it("dispatches an allowed bot-authored message through the shared loop guard", async () => {
-    const account = makeAccount({ allowFrom: ["usr_sender"], allowBots: true });
-    const config = {
-      channels: { defaults: { botLoopProtection: { maxEventsPerWindow: 7 } } },
-    } satisfies CoreConfig;
-    await dispatchPublished(
-      account,
-      {
-        author_id: "usr_sender",
-        author: author({ id: "usr_sender", kind: "bot", handle: "sender" }),
+  it.each([
+    { name: "channel", message: {}, conversationId: "chn_1" },
+    {
+      name: "first channel thread",
+      message: { parent_message_id: "msg_root_a", thread_root_id: "msg_root_a" },
+      conversationId: "msg_root_a",
+    },
+    {
+      name: "second channel thread",
+      message: { parent_message_id: "msg_root_b", thread_root_id: "msg_root_b" },
+      conversationId: "msg_root_b",
+    },
+    {
+      name: "direct conversation",
+      message: { channel_id: undefined, direct_conversation_id: "dcn_1" },
+      conversationId: "dcn_1",
+    },
+    {
+      name: "direct thread",
+      message: {
+        channel_id: undefined,
+        direct_conversation_id: "dcn_1",
+        parent_message_id: "msg_direct_root",
+        thread_root_id: "msg_direct_root",
       },
-      config,
-    );
+      conversationId: "msg_direct_root",
+    },
+  ])(
+    "dispatches an allowed bot in a $name through its loop scope",
+    async ({ message, conversationId }) => {
+      const account = makeAccount({ allowFrom: ["usr_sender"], allowBots: true });
+      const config = {
+        channels: { defaults: { botLoopProtection: { maxEventsPerWindow: 7 } } },
+      } satisfies CoreConfig;
+      await dispatchPublished(
+        account,
+        {
+          author_id: "usr_sender",
+          author: author({ id: "usr_sender", kind: "bot", handle: "sender" }),
+          ...message,
+        },
+        config,
+      );
 
-    const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
-    expect(dispatch).toHaveBeenCalledTimes(1);
-    expect(dispatch.mock.calls[0]?.[0].botLoopProtection).toMatchObject({
-      scopeId: "wsp_1",
-      conversationId: "chn_1",
-      senderId: "usr_sender",
-      receiverId: "usr_receiver",
-      eventId: "msg_1",
-      nowMs: Date.parse("2026-05-09T12:00:00.000Z"),
-      defaultsConfig: { maxEventsPerWindow: 7 },
-      defaultEnabled: true,
-    });
-  });
+      const dispatch = vi.mocked(runtime.channel.inbound.dispatch);
+      expect(dispatch).toHaveBeenCalledTimes(1);
+      expect(dispatch.mock.calls[0]?.[0].botLoopProtection).toMatchObject({
+        scopeId: "wsp_1",
+        conversationId,
+        senderId: "usr_sender",
+        receiverId: "usr_receiver",
+        eventId: "msg_1",
+        nowMs: Date.parse("2026-05-09T12:00:00.000Z"),
+        defaultsConfig: { maxEventsPerWindow: 7 },
+        defaultEnabled: true,
+      });
+    },
+  );
 
   it.each<{
     name: string;
@@ -379,6 +494,11 @@ describe("ClickClack inbound mention gating", () => {
       },
       true,
     ),
+    scenario("spaced bash still needs a mention", {
+      patch: { requireMentionInBotThreads: true },
+      body: "! poll",
+      command: true,
+    }),
   ])(
     "rechecks admission when $name while ingress settles",
     async ({

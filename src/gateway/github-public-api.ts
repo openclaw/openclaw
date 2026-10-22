@@ -54,6 +54,16 @@ type GitHubDetailTarget =
   | ControlUiGitHubPreviewTarget
   | { owner: string; repo: string; kind: "commit"; sha: string };
 
+type GitHubReadTarget =
+  | GitHubDetailTarget
+  | {
+      kind: "job";
+      owner: string;
+      repo: string;
+      runId: number;
+      jobId: number;
+    };
+
 type GitHubSearchParams = {
   repository: string;
   query: string;
@@ -127,6 +137,7 @@ type GitHubPublicApi = {
   ) => Promise<unknown>;
   parseControlUiGitHubPreviewTarget: (params: unknown) => ControlUiGitHubPreviewTarget | null;
   parseGitHubTarget: (params: unknown) => GitHubDetailTarget | null;
+  parseGitHubReadTarget: (params: unknown) => GitHubReadTarget | null;
   parseGitHubSearchParams: (params: unknown) => GitHubSearchParams | null;
   searchPublicGitHubItems: (
     params: GitHubSearchParams,
@@ -135,7 +146,7 @@ type GitHubPublicApi = {
     request?: GitHubReadRequest,
   ) => Promise<unknown>;
   loadGitHubDetail: (
-    target: GitHubDetailTarget,
+    target: GitHubReadTarget,
     identity?: ControlUiGitHubPreviewIdentity,
     fetchImpl?: typeof fetch,
     refresh?: boolean,
@@ -220,7 +231,7 @@ type GitHubTransportApi = Omit<
   "resolveGitHubApiCredentialScope" | "loadGitHubDetail"
 > & {
   loadGitHubDetail: (
-    target: GitHubDetailTarget,
+    target: GitHubReadTarget,
     identity?: ControlUiGitHubPreviewIdentity,
     fetchImpl?: typeof fetch,
     refresh?: boolean,

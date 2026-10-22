@@ -10,7 +10,6 @@ import type { GatewaySessionRow } from "./session-utils.js";
 export function buildGatewaySessionSnapshot(params: {
   sessionRow: GatewaySessionRow | null | undefined;
   agentId?: string;
-  includeSession?: boolean;
   lifecycle?: boolean;
   event?: AgentEventRuntimePayload;
   lifecycleRunId?: string;
@@ -135,6 +134,7 @@ export function buildGatewaySessionSnapshot(params: {
     boardPresentation: sessionRow.boardPresentation ?? null,
     displayName: params.displayName ?? sessionRow.displayName ?? null,
     titlePending: sessionRow.titlePending ?? false,
+    lastAssistantMessage: sessionRow.lastAssistantMessage ?? null,
     deliveryContext: sessionRow.deliveryContext,
     parentSessionKey: params.parentSessionKey ?? sessionRow.parentSessionKey,
     childSessions: sessionRow.childSessions,
@@ -209,25 +209,21 @@ export function buildGatewaySessionSnapshot(params: {
       delete eventFields[field];
     }
   }
-  const session: Record<string, unknown> | undefined = params.includeSession
-    ? sessionRow
-    : undefined;
-  if (session) {
-    for (const key in eventFields) {
-      const value = eventFields[key];
-      if (value !== undefined) {
-        session[key] = value;
-      }
+  const session: Record<string, unknown> = sessionRow;
+  for (const key in eventFields) {
+    const value = eventFields[key];
+    if (value !== undefined) {
+      session[key] = value;
     }
   }
-  if (session && sessionRow.key === "global" && !params.agentId) {
+  if (sessionRow.key === "global" && !params.agentId) {
     delete session.goal;
   }
-  if (session && (sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId) {
+  if ((sessionRow.key === "global" || sessionRow.key === "unknown") && !params.agentId) {
     delete session.swarm;
   }
   return {
-    ...(session ? { session } : {}),
+    session,
     ...eventFields,
     subagentRunState: sessionRow.subagentRunState,
     hasActiveSubagentRun: sessionRow.hasActiveSubagentRun,

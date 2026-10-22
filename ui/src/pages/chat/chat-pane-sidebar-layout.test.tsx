@@ -1,22 +1,21 @@
 /* @vitest-environment jsdom */
 
-import { createSignal, type Setter } from "solid-js";
+import { Show, createSignal, type Setter } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
+import { createMountedPanes } from "./chat-pane-mounted.test-support.ts";
 import type { ResolvedBoardView } from "./chat-pane-shared.ts";
-import {
-  resolveSidebarLayoutForBoard,
-  sidebarRegionCallbacks,
-} from "./chat-pane-sidebar-layout.ts";
+import { resolveSidebarLayoutForBoard } from "./chat-pane-sidebar-layout.ts";
 import { SidebarRegionView } from "./chat-pane-sidebar-view.tsx";
-import type { ChatPageHost } from "./chat-state-host.ts";
+import { getPaneTestRuntime } from "./chat-pane.test-support.ts";
 import "./components/chat-sidebar-region.runtime.tsx";
 import {
   closeSlot,
+  isSidebarSlotVisible,
   openSlot,
   promoteSidebarPanel,
   setSidebarDock,
@@ -37,12 +36,12 @@ function board(face: ResolvedBoardView["face"] = "dashboard") {
 }
 
 const containers: HTMLElement[] = [];
-const requestUpdate = vi.fn();
 
 function callbacks() {
   return {
     activatePanel: vi.fn(),
     togglePanelExpanded: vi.fn(),
+    setDock: vi.fn(),
     closeSlot: vi.fn(),
     openSlot: vi.fn(),
     reorderPanel: vi.fn(),
@@ -106,7 +105,6 @@ function nativeCloseLayoutFixture() {
         narrow={false}
         panelDefinitions={panelDefinitions}
         primary={<main>Conversation</main>}
-        requestUpdate={() => undefined}
         regionError={undefined}
       />
     );
@@ -151,7 +149,6 @@ async function renderLayout(
                 <textarea />
               </main>
             }
-            requestUpdate={requestUpdate}
             regionError={undefined}
           />
         );
@@ -171,6 +168,145 @@ afterEach(() => {
 });
 
 describe("chat pane sidebar layout", () => {
+  it.each(["surviving opener", "removed opener", "outside focus"] as const)(
+    "restores side-panel focus with a %s",
+    async (scenario) => {
+      const layout = openSlot({ columns: [] }, "detail");
+      let update!: Setter<{ locked: boolean; showOpener: boolean; open: boolean }>;
+      const { container } = mountSolid(() => {
+        const [state, setState] = createSignal({ locked: false, showOpener: true, open: true });
+        update = setState;
+        return (
+          <>
+            <button data-outside>Outside</button>
+            <SidebarRegionView
+              panelIdPrefix="chat-panel-focus-return"
+              presentationId="focus-return"
+              availableWidth={1_400}
+              callbacks={callbacks()}
+              layout={setSidebarOpen(layout, state().open)}
+              narrow={false}
+              sideFocusLocked={state().locked}
+              sideFocusManaged={true}
+              panelDefinitions={sidebarPanelDefinitions().map((definition) =>
+                Object.assign(definition, {
+                  available: definition.slot === "detail",
+                  content: definition.slot === "detail" ? <DetailContent /> : null,
+                }),
+              )}
+              header={
+                <>
+                  <Show when={state().showOpener}>
+                    <button data-opener>Open panel</button>
+                  </Show>
+                  <button>Actions</button>
+                </>
+              }
+              primary={<main>Conversation</main>}
+              regionError={undefined}
+            />
+          </>
+        );
+      });
+      containers.push(container);
+      const region = container.querySelector("openclaw-chat-sidebar-region")!;
+      await region.updateComplete;
+      const opener = container.querySelector<HTMLButtonElement>("[data-opener]")!;
+      opener.focus();
+      update((state) => ({ ...state, locked: true }));
+      flush();
+      await region.updateComplete;
+      container.querySelector<HTMLInputElement>("[data-detail] input")!.focus();
+      if (scenario !== "surviving opener") {
+        update((state) => ({ ...state, showOpener: false }));
+        flush();
+      }
+      const outside = container.querySelector<HTMLButtonElement>("[data-outside]")!;
+      if (scenario === "outside focus") {
+        outside.focus();
+      }
+      update((state) => ({ ...state, locked: false, open: false }));
+      flush();
+      await region.updateComplete;
+      expect(document.activeElement).toBe(
+        scenario === "surviving opener"
+          ? opener
+          : scenario === "outside focus"
+            ? outside
+            : container.querySelector(".sidebar-region__header"),
+      );
+    },
+  );
+
+  it.each(["subagents", "processes"] as const)(
+    "keeps the selected %s after the native launcher closes and the owner refreshes",
+    async (slot) => {
+      const { pane, state } = createMountedPanes([]);
+      getPaneTestRuntime(pane).mergedChrome = false;
+      state.updateSidebarLayout(openSlot({ columns: [] }, "workspace"));
+      const [layout, setLayout] = createSignal(state.sidebarLayout);
+      const mounted = mountSolid(() => {
+        const definitions = sidebarPanelDefinitions().map((definition) =>
+          Object.assign(definition, {
+            available: ["workspace", "subagents", "processes"].includes(definition.slot),
+            content: <div data-native-slot={definition.slot}>{definition.label}</div>,
+          }),
+        );
+        const controls = () => {
+          layout();
+          return pane.render().layout!.region.callbacks;
+        };
+        return (
+          <SidebarRegionView
+            panelIdPrefix="chat-panel-launcher-intent"
+            presentationId="launcher-intent"
+            presentation="desktop"
+            availableWidth={1400}
+            callbacks={controls()}
+            layout={layout()}
+            narrow={false}
+            panelDefinitions={definitions}
+            primary={<main>Conversation</main>}
+            regionError={undefined}
+          />
+        );
+      });
+      const draw = async () => {
+        setLayout(state.sidebarLayout);
+        flush();
+        await mounted.container.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
+      };
+      await draw();
+      const newTab = mounted.container.querySelector<HTMLButtonElement>(
+        'button[aria-label="New tab"]',
+      );
+      expect(newTab).not.toBeNull();
+      newTab!.click();
+      await draw();
+      const option = [
+        ...mounted.container.querySelectorAll<HTMLButtonElement>(".side-panel-launcher button"),
+      ].find(
+        (button) =>
+          button.querySelector(".side-panel-type-option__label")?.textContent ===
+          (slot === "subagents" ? "Subagents" : "Processes"),
+      );
+      expect(option).toBeDefined();
+      option!.click();
+      // The user action must open the panel; a later owner update must not manufacture success.
+      expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(true);
+      await draw();
+      expect(mounted.container.querySelector(".side-panel-launcher")).toBeNull();
+      const content = mounted.container.querySelector('[data-native-slot="' + slot + '"]');
+      expect(content).not.toBeNull();
+      expect(content!.closest("[data-region]")?.hasAttribute("hidden")).toBe(false);
+
+      state.updateSidebarLayout({ ...state.sidebarLayout });
+      await draw();
+      expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(true);
+      expect(mounted.container.querySelector('[data-native-slot="' + slot + '"]')).toBe(content);
+    },
+  );
+
   it("keeps native content and the parent layout writable when the DOM provider changes", async () => {
     // SAFETY: the region transports application context; this fixture's panel reads no capabilities.
     const container = createApplicationContextProvider({} as ApplicationContext);
@@ -392,70 +528,23 @@ describe("chat pane sidebar layout", () => {
     expect(layout.columns[0]?.activePanelId).toBe("companion");
   });
 
-  it("persists tab selection without changing the chosen main content", () => {
-    const stored = promoteSidebarPanel(
-      openSlot(openSlot({ columns: [] }, "terminal"), "dashboard"),
-      "dashboard",
-    );
-    const rendered = resolveSidebarLayoutForBoard({
-      board: board(),
-      layout: stored,
-      paneWidth: 1_400,
+  it("routes container expansion and docking without changing the selected tab", () => {
+    const { pane, state } = createMountedPanes([]);
+    getPaneTestRuntime(pane).mergedChrome = false;
+    state.updateSidebarLayout(openSlot({ columns: [] }, "detail"));
+    const selectedPanel = state.sidebarLayout.columns[0]?.activePanelId;
+    const controls = () => pane.render().layout!.region.callbacks;
+
+    controls().togglePanelExpanded();
+    expect(state.sidebarLayout).toMatchObject({
+      open: true,
+      expanded: true,
+      expandedSide: true,
     });
-    const updateSidebarLayout = vi.fn();
-    const updateSidebarActivePanel = vi.fn();
-    const state = {
-      sidebarLayout: stored,
-      updateSidebarLayout,
-      updateSidebarActivePanel,
-    } as unknown as ChatPageHost;
-
-    sidebarRegionCallbacks({
-      state,
-      layout: rendered,
-      closePanelSlot: vi.fn(),
-      openPanelSlot: vi.fn(),
-      forgetDiscussionUrl: vi.fn(),
-      resizePanel: vi.fn(),
-      setPanelOpen: vi.fn(),
-    }).activatePanel("terminal");
-
-    expect(updateSidebarLayout).toHaveBeenCalledWith(
-      expect.objectContaining({
-        mainPanelId: "dashboard",
-        columns: [expect.objectContaining({ activePanelId: "terminal" })],
-      }),
-    );
-    expect(updateSidebarActivePanel).toHaveBeenCalledWith("terminal");
-  });
-
-  it("closes dashboard presentation through its owner without minimizing unrelated tabs", () => {
-    const layout = resolveSidebarLayoutForBoard({
-      board: board(),
-      layout: { columns: [] },
-      paneWidth: 1_400,
-    });
-    const setPanelOpen = vi.fn();
-    const closePanelSlot = vi.fn();
-    const state = {
-      sidebarLayout: layout,
-      updateSidebarLayout: vi.fn(),
-      updateSidebarActivePanel: vi.fn(),
-    } as unknown as ChatPageHost;
-
-    sidebarRegionCallbacks({
-      state,
-      layout,
-      closePanelSlot,
-      openPanelSlot: vi.fn(),
-      forgetDiscussionUrl: vi.fn(),
-      resizePanel: vi.fn(),
-      setPanelOpen,
-    }).closeSlot("dashboard");
-
-    expect(closePanelSlot).toHaveBeenCalledWith("dashboard");
-    expect(setPanelOpen).not.toHaveBeenCalled();
-    expect(state.updateSidebarLayout).not.toHaveBeenCalled();
+    expect(state.sidebarLayout.columns[0]?.activePanelId).toBe(selectedPanel);
+    controls().setDock("bottom");
+    expect(state.sidebarLayout.dock).toBe("bottom");
+    expect(state.sidebarLayout.columns[0]?.activePanelId).toBe(selectedPanel);
   });
 
   it("keeps an empty dashboard open and only removes it when dashboard support is unavailable", () => {

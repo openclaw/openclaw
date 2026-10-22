@@ -2,17 +2,19 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { findStartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
-import { resolveGlobalSet } from "../shared/global-singleton.js";
 import {
   executeExistingOpenClawStateRead,
+  getActiveOpenClawStateDatabaseReadSnapshotAsync,
   withExistingOpenClawStateDatabaseReadOnly,
 } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-store.js";
 import {
   prepareConfigHealthPatch,
+  readConfigHealthReceipt,
   readConfigHealthStateInDatabase,
   writeConfigHealthPatchInDatabase,
 } from "./io.health-state.kernel.js";
@@ -23,59 +25,15 @@ import type {
 } from "./io.health-state.types.js";
 import { setBoundedConfigIoWarningEntry } from "./io.state.js";
 
-type HealthObservation = {
-  databasePath: string;
-  configPath: string;
-  identity: () => string | undefined;
-};
-const observations = resolveGlobalSet<HealthObservation>(
-  Symbol.for("openclaw.configHealthObservations"),
-  "close-and-restart",
-);
-const supersededObservation = new Error("Config health observation was superseded");
-// Supersession uses identity; a process-lived import stack would retain its first caller.
-supersededObservation.stack = undefined;
-
-function matchingObservations(next: HealthObservation): HealthObservation[] {
-  return [...observations].filter(
-    (current) =>
-      current.configPath === next.configPath &&
-      (current.databasePath === next.databasePath ||
-        (next.identity() !== undefined && current.identity() === next.identity())),
-  );
-}
-
-function supersedeMatchingObservations(next: HealthObservation): void {
-  for (const current of matchingObservations(next)) {
-    observations.delete(current);
-  }
-}
-
-/** Synchronous producers invalidate in-flight observations without retaining a scope. */
-export function supersedeConfigHealthObservations(
-  deps: ConfigHealthStateDeps,
-  configPath: string,
-): void {
-  if (observations.size === 0) {
-    return;
-  }
-  const env = resolveConfigHealthStateEnv(deps);
-  const databasePath = resolveOpenClawStateSqlitePath(env);
-  let context: ReturnType<typeof captureOpenClawStateWorkerContext> | undefined;
-  try {
-    context = captureOpenClawStateWorkerContext({ path: databasePath, env });
-  } catch {
-    // Native admission still owns synchronous diagnostics; a sealed read scope is already invalid.
-  }
-  supersedeMatchingObservations({
-    databasePath,
-    configPath,
-    identity: () => context?.admission.identity.key,
-  });
-}
-
 // Fresh config snapshots share a database; retain failures until a write recovers.
 const loggedHealthWriteFailures = new Map<string, string>();
+const healthSnapshots = new WeakMap<
+  OpenClawStateWorkerContext["admission"],
+  Map<
+    OpenClawStateWorkerContext["databaseEngineSelection"],
+    { receipt: object; snapshot: ConfigHealthSnapshot }
+  >
+>();
 
 type ConfigHealthStateDeps = {
   env: NodeJS.ProcessEnv;
@@ -140,25 +98,8 @@ export function patchConfigHealthEntryToStore(
     const updatedAtMs = Date.now();
     runOpenClawStateWriteTransaction(
       ({ db }) => {
-        let pending: HealthObservation[] = [];
-        if (observations.size > 0) {
-          let context: ReturnType<typeof captureOpenClawStateWorkerContext> | undefined;
-          try {
-            context = captureOpenClawStateWorkerContext({ path: databasePath, env });
-          } catch {
-            // Maintenance may seal read admission while retaining the native writer.
-          }
-          pending = matchingObservations({
-            databasePath,
-            configPath,
-            identity: () => context?.admission.identity.key,
-          });
-        }
         writeConfigHealthPatchInDatabase(db, configPath, patch, updatedAtMs);
         const publish = () => {
-          for (const observation of pending) {
-            observations.delete(observation);
-          }
           loggedHealthWriteFailures.delete(databasePath);
         };
         if (!deferSqlitePostCommitPublication(db, publish)) {
@@ -172,10 +113,9 @@ export function patchConfigHealthEntryToStore(
   }
 }
 
-type ConfigHealthStateStore = Disposable & {
-  isCurrent(): boolean;
-  captureContinuation(): ConfigHealthStateStore;
-  read(): Promise<ConfigHealthSnapshot | null>;
+type ConfigHealthStateStore = {
+  assertCurrent: () => void;
+  read(): Promise<ConfigHealthSnapshot>;
   update(changes: ConfigHealthEntryChanges, previous: ConfigHealthSnapshot): Promise<void>;
   updateAfterFileCommit(
     changes: ConfigHealthEntryChanges,
@@ -200,132 +140,96 @@ export function captureConfigHealthStateStore(
     // Capture is eager, but failures retain the health owner's read/write policy.
     captured = { error };
   }
-  const captureScope = (continuation = false): ConfigHealthStateStore => {
+  assertAdmissionCurrent?.();
+  const assertCurrent = () => {
     assertAdmissionCurrent?.();
-    const observation: HealthObservation = {
-      databasePath,
-      configPath,
-      identity: () => ("context" in captured ? captured.context.admission.identity.key : undefined),
-    };
-    if (!continuation) {
-      supersedeMatchingObservations(observation);
+    if ("context" in captured) {
+      captured.context.admission.assertCurrent();
     }
-    if (matchingObservations(observation).length === 0) {
-      observations.add(observation);
-    }
-    const isCurrent = () => {
-      assertAdmissionCurrent?.();
-      if ("context" in captured) {
-        captured.context.admission.assertCurrent();
-      }
-      return observations.has(observation);
-    };
-    const assertCurrent = () => {
-      if (!isCurrent()) {
-        throw supersededObservation;
-      }
-    };
-    const createOperationGuard = () => {
-      let guardFailed = false;
-      return {
-        rethrowIfInvalid: (error: unknown) => {
-          if (guardFailed && error !== supersededObservation) {
-            throw error;
-          }
-          try {
-            isCurrent();
-          } catch {
-            throw error;
-          }
-        },
-        assertCurrent: () => {
-          try {
-            assertCurrent();
-          } catch (error) {
-            guardFailed = true;
-            throw error;
-          }
-        },
-      };
-    };
-    const store: ConfigHealthStateStore = {
-      isCurrent,
-      captureContinuation: () => captureScope(true),
-      [Symbol.dispose]() {
-        observations.delete(observation);
-      },
-      async read(): Promise<ConfigHealthSnapshot | null> {
-        const guard = createOperationGuard();
-        try {
-          if ("error" in captured) {
-            throw captured.error;
-          }
-          guard.assertCurrent();
-          const reply = await executeExistingOpenClawStateRead(
-            { path: databasePath, env: captured.context.environment },
-            { type: "config.health.read", input: undefined },
-            { context: captured.context },
-          );
-          guard.assertCurrent();
-          if (reply && (!reply.ok || reply.type !== "config.health.read")) {
-            throw new Error("Unexpected config health read reply");
-          }
-          return reply?.snapshot ?? { state: {}, basis: {} };
-        } catch (error) {
-          guard.rethrowIfInvalid(error);
-          if (error === supersededObservation) {
-            return null;
-          }
-          const state = handleHealthReadFailure(error);
-          return isCurrent() ? { state, basis: null } : null;
-        }
-      },
-      async update(
-        changes: ConfigHealthEntryChanges,
-        previous: ConfigHealthSnapshot,
-      ): Promise<void> {
-        const guard = createOperationGuard();
-        try {
-          const patch = prepareConfigHealthPatch(changes);
-          if (Object.keys(patch).length === 0) {
-            return;
-          }
-          if ("error" in captured) {
-            throw captured.error;
-          }
-          const prior = previous.basis?.[configPath];
-          const expected = previous.basis === null ? undefined : prior ? { ...prior } : null;
-          const updatedAtMs = Date.now();
-          const applied = await runOpenClawStateWorkerOperation(
-            captured.context,
-            (scope) =>
-              scope.execute({
-                type: "config.health.patch",
-                input: { configPath, patch, expected, updatedAtMs },
-              }),
-            { assertCurrent: guard.assertCurrent },
-          );
-          if (applied && observations.has(observation)) {
-            loggedHealthWriteFailures.delete(databasePath);
-          }
-        } catch (error) {
-          guard.rethrowIfInvalid(error);
-          if (error === supersededObservation) {
-            return;
-          }
-          handleHealthWriteFailure(deps, databasePath, error);
-        }
-      },
-      async updateAfterFileCommit(changes, previous): Promise<void> {
-        try {
-          await store.update(changes, previous);
-        } catch (error) {
-          // Ownership and maintenance refusals still propagate after the file commits.
-          handleHealthWriteFailure(deps, databasePath, error);
-        }
-      },
-    };
-    return store;
   };
-  return captureScope();
+  const store: ConfigHealthStateStore = {
+    assertCurrent,
+    async read(): Promise<ConfigHealthSnapshot> {
+      try {
+        if ("error" in captured) {
+          throw captured.error;
+        }
+        assertCurrent();
+        const context = captured.context;
+        const options = { path: databasePath, env: context.environment };
+        const receipt =
+          !context.maintenanceScope &&
+          !context.existingSchemaPath &&
+          !(await getActiveOpenClawStateDatabaseReadSnapshotAsync(options))
+            ? readConfigHealthReceipt(databasePath)
+            : undefined;
+        const snapshots = healthSnapshots.get(context.admission) ?? new Map();
+        const cached = snapshots.get(context.databaseEngineSelection);
+        if (receipt && cached?.receipt === receipt) {
+          return cached.snapshot;
+        }
+        const reply = await executeExistingOpenClawStateRead(
+          options,
+          { type: "config.health.read", input: undefined },
+          { context: captured.context },
+        );
+        assertCurrent();
+        const snapshot = reply?.snapshot ?? { state: {}, basis: {} };
+        if (receipt) {
+          // A concurrent committed write replaces the receipt, retiring this observation.
+          snapshots.set(context.databaseEngineSelection, { receipt, snapshot });
+          healthSnapshots.set(context.admission, snapshots);
+        }
+        return snapshot;
+      } catch (error) {
+        assertCurrent();
+        const state = handleHealthReadFailure(error);
+        return { state, basis: null };
+      }
+    },
+    async update(changes: ConfigHealthEntryChanges, previous: ConfigHealthSnapshot): Promise<void> {
+      try {
+        const patch = prepareConfigHealthPatch(changes);
+        if (Object.keys(patch).length === 0) {
+          return;
+        }
+        if ("error" in captured) {
+          throw captured.error;
+        }
+        const prior = previous.basis?.[configPath];
+        const expected = previous.basis === null ? undefined : (prior ?? null);
+        const updatedAtMs = Date.now();
+        const applied = await runOpenClawStateWorkerOperation(
+          captured.context,
+          (scope) =>
+            scope.execute({
+              type: "config.health.patch",
+              input: { configPath, patch, expected, updatedAtMs },
+            }),
+          { assertCurrent },
+        );
+        if (applied) {
+          loggedHealthWriteFailures.delete(databasePath);
+        }
+      } catch (error) {
+        if (
+          error instanceof OpenClawStateOwnershipError ||
+          findStartupMaintenanceRequiredError(error)
+        ) {
+          throw error;
+        }
+        assertCurrent();
+        handleHealthWriteFailure(deps, databasePath, error);
+      }
+    },
+    async updateAfterFileCommit(changes, previous): Promise<void> {
+      try {
+        await store.update(changes, previous);
+      } catch (error) {
+        // Ownership and maintenance refusals still propagate after the file commits.
+        handleHealthWriteFailure(deps, databasePath, error);
+      }
+    },
+  };
+  return store;
 }

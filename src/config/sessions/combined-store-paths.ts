@@ -130,7 +130,7 @@ export function resolveCombinedDatabasePath(
   return paths.length === 1 ? expectDefined(paths[0], "database path at 0") : "(multiple)";
 }
 
-export function discoveryReadOptions(discovery?: GatewaySessionStoreDiscovery) {
+function discoveryReadOptions(discovery?: GatewaySessionStoreDiscovery) {
   return discovery
     ? {
         env: discovery.env,

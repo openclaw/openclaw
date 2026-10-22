@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import type { HealthFinding } from "../flows/health-checks.js";
 import { resolvePathViaExistingAncestorSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveUpdateCaptureRoot } from "../infra/update-capture-paths.js";
@@ -11,6 +12,7 @@ import {
   type UpdateDoctorWriteAuthority,
 } from "../infra/update-doctor-result.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
@@ -50,7 +52,13 @@ export async function preserveDoctorOriginalState(params: {
   signal: AbortSignal;
   assertCurrent: () => void;
   writeAuthority?: UpdateDoctorWriteAuthority;
-}): Promise<void> {
+  fullIntegrityCheck?: boolean;
+}): Promise<{ findings: readonly HealthFinding[]; warnings: readonly string[] }> {
+  const log = createSubsystemLogger("doctor");
+  const findings: HealthFinding[] = [];
+  const warnings: string[] = [];
+  const docsUrl =
+    "https://docs.openclaw.ai/cli/doctor/state-migrations#plugin-migration-recovery-coverage";
   const original = params.writeAuthority?.originalRecoveryCapture;
   const runId = original?.runId ?? params.env[UPDATE_RUN_ID_ENV]?.trim();
   const updateInProgress = original !== undefined || params.env.OPENCLAW_UPDATE_IN_PROGRESS === "1";
@@ -61,10 +69,10 @@ export async function preserveDoctorOriginalState(params: {
   };
   assertCallerCurrent();
   if (updateInProgress && !runId) {
-    params.runtime.log(
-      "Original update capture is unavailable. Doctor will repair current state without replacing the retained originals.",
+    log.debug(
+      "Original update recovery copy is unavailable. Doctor will continue without creating another copy or replacing retained originals.",
     );
-    return;
+    return { findings, warnings };
   }
   let admission: ReturnType<typeof resolveDoctorUpdateAdmission> | undefined;
   const assertCurrent = () => {
@@ -73,9 +81,10 @@ export async function preserveDoctorOriginalState(params: {
   };
   try {
     // Older drivers may lack capture lineage; repair keeps its live maintenance and write authority.
-    admission = updateInProgress
-      ? resolveDoctorUpdateAdmission(params.env, original?.runId)
-      : undefined;
+    admission =
+      updateInProgress && runId
+        ? resolveDoctorUpdateAdmission(params.env, original?.runId)
+        : undefined;
     if (admission && runId) {
       const { readUpdateRecoveryBaselineIdentity } =
         await import("../infra/update-recovery-backup-reader.js");
@@ -88,12 +97,12 @@ export async function preserveDoctorOriginalState(params: {
         assertCurrent,
       });
       assertCurrent();
-      params.runtime.log(
+      log.debug(
         retained
-          ? `Original update capture retained at ${retained.ref.manifestPath}.`
-          : "Original update capture is unavailable. Doctor will repair current state without replacing the retained originals.",
+          ? `Original update recovery copy retained. For manual recovery: ${retained.ref.manifestPath}.`
+          : "Original update recovery copy is unavailable. Doctor will continue without creating another copy or replacing retained originals.",
       );
-      return;
+      return { findings, warnings };
     }
     const { captureUpdateRecoveryBaseline } =
       await import("../infra/update-recovery-baseline-capture.js");
@@ -109,17 +118,24 @@ export async function preserveDoctorOriginalState(params: {
           assertCurrent,
         });
         for (const directory of retirement.retired) {
-          params.runtime.log(
+          log.debug(
             `Retired superseded or expired standalone Doctor capture: ${directory}. Take a verified backup before an upgrade when you need a long-term recovery copy.`,
           );
         }
         for (const warning of retirement.warnings) {
-          params.runtime.log(warning);
+          warnings.push(warning);
+          findings.push({
+            checkId: "core/doctor/recovery-retirement",
+            severity: "warning",
+            category: "historical",
+            message: warning,
+            docsUrl,
+            fixHint:
+              "Keep the retained recovery data. Inspect the named directory and its permissions before manual recovery.",
+          });
         }
       } catch (error) {
-        params.runtime.log(
-          `Standalone Doctor capture retirement unavailable: ${formatErrorMessage(error)}`,
-        );
+        log.debug(`Standalone Doctor capture retirement unavailable: ${formatErrorMessage(error)}`);
       }
     };
     const activationMarker = params.env[IMAGE_ACTIVATION_MARKER_ENV]?.trim() || undefined;
@@ -128,11 +144,11 @@ export async function preserveDoctorOriginalState(params: {
       : undefined;
     if (activationCapture) {
       assertCurrent();
-      params.runtime.log(
+      log.debug(
         `This container already retained a pre-repair capture (${activationCapture}); Doctor skipped a repeated full capture. Repair-specific backups still apply.`,
       );
       await retireExpiredCaptures(activationCapture);
-      return;
+      return { findings, warnings };
     }
     const installRoot = params.root;
     if (!installRoot) {
@@ -152,10 +168,28 @@ export async function preserveDoctorOriginalState(params: {
       assertCurrent,
       signal: params.signal,
       acquisition: { mode: "maintenance-owner" },
+      fullIntegrityCheck: params.fullIntegrityCheck,
     });
     assertCurrent();
-    params.runtime.log(
-      `Pre-repair state retained for manual recovery at ${captured.ref.manifestPath}.`,
+    warnings.push(...captured.warnings.map((warning) => warning.message));
+    findings.push(
+      ...captured.warnings.map((warning): HealthFinding => ({
+        checkId: "core/doctor/migration-recovery",
+        severity: "warning",
+        category: "recommended",
+        message:
+          warning.kind === "undeclared-migration-resources"
+            ? `${warning.pluginId} migration recovery coverage is unknown because no backup inventory was declared.`
+            : warning.message,
+        target: warning.pluginId,
+        errorCode: warning.kind,
+        fixHint:
+          "Update the plugin to a version with migration backup support. Until then, keep a separate backup of its configured data before relying on rollback; ask its maintainer to add backup support.",
+        docsUrl,
+      })),
+    );
+    log.debug(
+      `Recovery copy saved before repair. No action needed. For manual recovery: ${captured.ref.manifestPath}.`,
     );
     if (activationMarker) {
       try {
@@ -163,17 +197,23 @@ export async function preserveDoctorOriginalState(params: {
         await fs.writeFile(activationMarker, standaloneRunId, { flag: "wx", mode: 0o600 });
       } catch (error) {
         params.runtime.log(
-          `Container activation marker unavailable: ${formatErrorMessage(error)}. The next container start takes another full capture.`,
+          `Container activation marker unavailable: ${formatErrorMessage(error)}. The next container start takes another full capture. Check write permissions for the container activation marker before restarting.`,
         );
       }
     }
     await retireExpiredCaptures(standaloneRunId);
-    for (const warning of captured.warnings) {
-      params.runtime.log(warning.message);
-    }
-    for (const warning of captured.diagnostics.databaseWarnings) {
-      params.runtime.log(warning);
-    }
+    warnings.push(...captured.diagnostics.databaseWarnings);
+    findings.push(
+      ...captured.diagnostics.databaseWarnings.map((message): HealthFinding => ({
+        checkId: "core/doctor/recovery-database-verification",
+        severity: "warning",
+        category: "recommended",
+        message,
+        docsUrl: "https://docs.openclaw.ai/cli/update/repair-and-recovery#original-state-captures",
+        fixHint:
+          "Keep the saved recovery copy. Check disk space and stop other OpenClaw processes before creating another verified backup; inspect the named database snapshot before manual restoration.",
+      })),
+    );
   } catch (error) {
     assertCurrent();
     if (
@@ -186,13 +226,23 @@ export async function preserveDoctorOriginalState(params: {
       // An admitted baseline is part of this repair's contract, not optional
       // diagnostics. Never replace lost evidence with a capture of changed state.
       throw new DoctorMaintenanceRefusalError(
-        `Doctor cannot verify its admitted original update capture: ${formatErrorMessage(error)}. State repair has not started. Inspect retained evidence with openclaw update status --json before retrying Doctor.`,
+        `Doctor could not verify its admitted original recovery copy: ${formatErrorMessage(error)}. State repair has not started. Keep the original recovery copy, check the named paths and disk space, then inspect openclaw update status --json before retrying Doctor.`,
         { kind: "data-at-risk", reason: "unreadable-state" },
         { cause: error },
       );
     }
-    params.runtime.log(
-      `Original state capture was unavailable: ${formatErrorMessage(error)}. Doctor will continue; inspect retained evidence manually before restoring state.`,
-    );
+    const message = `Pre-repair recovery copy was unavailable: ${formatErrorMessage(error)}.`;
+    const fixHint =
+      "Save a verified backup of your OpenClaw state and configured plugin data before further repairs. Check installation access and disk space, then rerun openclaw doctor --fix; inspect retained evidence before restoring state.";
+    warnings.push(`${message} ${fixHint}`);
+    findings.push({
+      checkId: "core/doctor/recovery-capture",
+      severity: "warning",
+      category: "fix-now",
+      message,
+      fixHint,
+      docsUrl,
+    });
   }
+  return { findings, warnings };
 }

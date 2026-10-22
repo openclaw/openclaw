@@ -13,7 +13,6 @@ import {
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
-import { buildExecEventPrompt } from "../infra/heartbeat-events-filter.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../state/openclaw-agent-db-readonly-scope.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
@@ -22,7 +21,11 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { prepareCliSessionHistoryReader, type CliHistoryReaders } from "./cli-session-history.js";
-import { cliMeta, withClaudeProjectsDir } from "./cli-session-history.test-support.js";
+import {
+  cliMeta,
+  LEGACY_EXEC_COMPLETION_PROMPT,
+  withClaudeProjectsDir,
+} from "./cli-session-history.test-support.js";
 import { readChatHistoryPageKernel } from "./server-methods/chat-history-page-kernel.js";
 import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import { readChatHistoryMessageId, readChatHistoryMessageSeq } from "./session-history-tail.js";
@@ -362,11 +365,7 @@ it.each([
         ),
         nativeUser("native-question", `${prefix}${events}real question`, 3_001),
         nativeUser("native-unmatched", `${prefix}${events}only in the native file`, 4_000),
-        nativeUser(
-          "native-exec",
-          `${events}${buildExecEventPrompt(["Exec completed (example, code 0) :: done"])}`,
-          5_000,
-        ),
+        nativeUser("native-exec", `${events}${LEGACY_EXEC_COMPLETION_PROMPT}`, 5_000),
       ].join("\n"),
     );
     await fixture.owner.run(fixture.target.database, async () => {

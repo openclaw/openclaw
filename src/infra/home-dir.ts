@@ -1,4 +1,3 @@
-// Resolves OpenClaw home and platform-specific config directories.
 import { AsyncLocalStorage } from "node:async_hooks";
 import os from "node:os";
 import path from "node:path";

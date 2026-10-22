@@ -213,16 +213,16 @@ suite.define(() => {
       expect(await header.isVisible()).toBe(true);
       expect(await pane.locator(".chat-thread").isVisible()).toBe(true);
       expect(await headerLeadingInset(page)).toBe(12);
-      expect(await header.boundingBox()).toMatchObject({ y: 0, height: 52 });
-      expect(await pane.locator(".chat-thread").boundingBox()).toMatchObject({ y: 52 });
+      expect(await header.boundingBox()).toMatchObject({ y: 0, height: 48 });
+      expect(await pane.locator(".chat-thread").boundingBox()).toMatchObject({ y: 48 });
       const leadingBox = await header.locator(".chat-pane__header-leading").boundingBox();
-      expect(leadingBox!.y + leadingBox!.height / 2).toBe(26);
+      expect(leadingBox!.y + leadingBox!.height / 2).toBe(24);
       if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "conversation-titlebar.png") });
       }
       const dragMessages = () =>
         page.evaluate(() => (window as ConversationTestWindow).windowDragMessages);
-      await header.hover({ position: { x: viewport.width / 2, y: 26 } });
+      await header.hover({ position: { x: viewport.width / 2, y: 24 } });
       await page.mouse.down();
       expect(await dragMessages()).toEqual([{ type: "window-drag" }]);
       await page.mouse.up();
@@ -232,9 +232,11 @@ suite.define(() => {
       expect(await dragMessages()).toEqual([{ type: "window-drag" }]);
       await page.keyboard.press("Escape");
       await page.setViewportSize({ width: 700, height: viewport.height });
+      // Narrow desktop breadcrumbs stack two 32px rows. A taller host band
+      // expands the compact header; clearing it restores that intrinsic floor.
       for (const [height, expected] of [
-        ["64px", 64],
-        ["", 52],
+        ["80px", 76],
+        ["", 64],
       ] as const) {
         await page.evaluate((value) => {
           document.documentElement.style.setProperty("--openclaw-native-titlebar-height", value);
@@ -632,7 +634,7 @@ suite.define(() => {
           }
           expect(await page.locator(".chat-pane__header").boundingBox()).toMatchObject({
             y: 0,
-            height: mode === "dashboard" ? 52 : 48,
+            height: mode === "dashboard" ? 52 : 44,
           });
           expect(await page.locator("openclaw-app-sidebar").isVisible()).toBe(true);
         }

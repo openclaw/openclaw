@@ -27,13 +27,17 @@ import {
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions/types.js";
 import { SessionWorkStartChangedError } from "../config/sessions/work-start-error.js";
+import type { AgentEventRuntimePayload } from "../infra/agent-events.js";
 import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { captureAgentRunTerminalPersistence } from "../infra/agent-run-terminal-writes.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
+import {
+  createAgentEventTestHarness,
+  type AgentEventTestHarnessOptions,
+} from "./server-chat.agent-events.test-harness.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import {
   bindGatewayRequestHandlerMutationAuthority,
@@ -42,6 +46,7 @@ import {
 } from "./server-methods/session-mutation-guards.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { createSessionLifecyclePersistenceOwner } from "./session-lifecycle-persistence-owner.js";
+import { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 
 let state: OpenClawTestState;
 beforeAll(async () => {
@@ -112,11 +117,12 @@ async function recoveryFixture(name: string) {
     getAgentRunContext(runId)?.delegatedAuthority,
     "The recovery must hold its admitted source authority",
   );
-  const scheduler = createTestGatewayScheduler();
-  const owner = createSessionLifecyclePersistenceOwner(scheduler);
+  const owner = createSessionLifecyclePersistenceOwner();
   return {
     target,
     entry,
+    runId,
+    writeContext,
     source,
     admittedRunContext,
     authority,
@@ -152,7 +158,6 @@ async function recoveryFixture(name: string) {
     async close() {
       await owner.drain();
       admission.close();
-      await scheduler.stop();
     },
   };
 }
@@ -178,6 +183,53 @@ it("settles a recovered source's start and terminal lifecycle without caller-thr
       runtimeMs: 1_000,
     });
   } finally {
+    await fixture.close();
+  }
+});
+
+it("reuses the eager write through chat while persisting the remapped terminal run", async () => {
+  const fixture = await recoveryFixture("chat-handoff");
+  const clientRunId = "client-terminal-handoff";
+  const track =
+    vi.fn<NonNullable<AgentEventTestHarnessOptions["trackTrackedRunTerminalPersistence"]>>();
+  const h = createAgentEventTestHarness({
+    persistGatewaySessionLifecycleEventForEvent: fixture.owner.persist,
+    trackTrackedRunTerminalPersistence: track,
+  });
+  try {
+    await fixture.start();
+    h.register(fixture.runId, fixture.target.sessionKey, clientRunId);
+    const event: AgentEventRuntimePayload = {
+      runId: fixture.runId,
+      sessionId: fixture.entry.sessionId,
+      seq: 2,
+      stream: "lifecycle",
+      ts: 3_000,
+      data: { phase: "end", startedAt: 2_000, endedAt: 3_000 },
+    };
+    Object.defineProperty(event, "lifecycleGeneration", {
+      value: fixture.authority.lifecycleGeneration,
+      enumerable: false,
+    });
+    const persistence = fixture.owner.observe({
+      ...fixture.target,
+      event,
+      clientRunId,
+      writeContext: fixture.writeContext,
+    });
+    await h.handler(event);
+    await persistence;
+    expect(fixture.owner.persist({ ...fixture.target, event })).toBe(persistence);
+    expect(loadSessionEntry(fixture.target)).toMatchObject({
+      status: "done",
+      lastRunId: clientRunId,
+      startedAt: 2_000,
+      endedAt: 3_000,
+    });
+    expect(track).toHaveBeenCalledOnce();
+    expect(track.mock.calls[0]?.[0].persistence).toBe(persistence);
+  } finally {
+    await h.handler.dispose();
     await fixture.close();
   }
 });
@@ -324,7 +376,7 @@ it("keeps a recovered tool caller's source preparation through in-process Stop a
       const assertAbortCurrent = composeSessionSourceAssertion([authority.assertCurrent]);
       const sql = observeHostDataSql();
       try {
-        await fixture.owner.persist({
+        await persistGatewaySessionLifecycleEvent({
           sessionKey: target.sessionKey,
           agentId: "main",
           assertCommitAllowed: assertAbortCurrent,

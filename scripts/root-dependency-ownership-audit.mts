@@ -25,6 +25,10 @@ const DYNAMIC_CONSTANT_IMPORT_PATTERNS = [
 ];
 const ROOT_OWNED_EXTENSION_RUNTIME_DEPENDENCIES = new Map([
   [
+    "@opentelemetry/semantic-conventions",
+    "keep at root; the bundled Mistral runtime in @openclaw/ai imports these constants even though only the diagnostics plugin imports them directly in repository source",
+  ],
+  [
     "@homebridge/ciao",
     "keep at root; the Bonjour runtime is shipped with packaged startup surfaces even though the bundled plugin also declares it",
   ],

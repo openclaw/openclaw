@@ -1,11 +1,15 @@
 import type { SessionRowTranscriptProjection } from "../../gateway/session-row-transcript-preview.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import type { createTranscriptIdentityReader } from "./session-accessor.sqlite-read.js";
-import type { createTranscriptIdentityInserter } from "./session-accessor.sqlite-transcript-identity.js";
+import type {
+  createTranscriptIdentityInserter,
+  TranscriptIdentityInsertRow,
+} from "./session-accessor.sqlite-transcript-identity.js";
 import type { createTranscriptIndexAppenderInTransaction } from "./session-transcript-index.js";
 import type {
   createTranscriptEventInserter,
   PreparedTranscriptPayload,
+  TranscriptEventInsertRow,
 } from "./transcript-payload.js";
 
 export type TranscriptInsertRow = {
@@ -26,6 +30,8 @@ export type TranscriptAppendOptions = {
   onProjectionReconcileNeeded?: () => void;
   scheduleProjectionReconcile?: boolean;
   touchMutation?: boolean;
+  /** Keep logical actor snapshots while a later required append persists the watermark. */
+  persistActorMutation?: boolean;
 };
 
 export type TranscriptAppendCursor = {
@@ -39,4 +45,12 @@ export type TranscriptAppendCursor = {
   updateWindow?: (createdAt: number) => unknown;
   insertEvent?: ReturnType<typeof createTranscriptEventInserter>;
   insertIdentity?: ReturnType<typeof createTranscriptIdentityInserter>;
+  batch?: {
+    events: TranscriptEventInsertRow[];
+    identities: Map<string, TranscriptIdentityInsertRow>;
+    knownEventIds: Set<string>;
+    keyOwners: Map<string, { eventId: string; seq: number } | undefined>;
+    preparedArray: boolean;
+    bytes: number;
+  };
 };

@@ -45,12 +45,24 @@ const admittedRunContext = {
   operationalRunInstance: createOperationalRunInstanceRef("test-run"),
 };
 
-function createTransportFixture(testCase: {
-  compaction?: boolean;
-  pruning: boolean;
-  apiKey: string;
-  baseUrl?: string;
-}) {
+function transportEnvironment() {
+  return {
+    settingsManager: { getGlobalSettings: () => ({}) },
+    workspaceOnly: false,
+    abortSignal: new AbortController().signal,
+    codeModeControlsEnabled: false,
+    providerPromptState: { state: {}, effectiveContextTokenBudget: 128_000 },
+  };
+}
+
+function createTransportFixture(
+  testCase: {
+    compaction?: boolean;
+    pruning?: boolean;
+    apiKey?: string;
+    baseUrl?: string;
+  } = {},
+) {
   const streamFn = vi.fn<StreamFn>();
   bindStreamLlmRuntime(streamFn, {
     streamSimple: streamFn,
@@ -79,7 +91,7 @@ function createTransportFixture(testCase: {
       provider: "anthropic",
       promptCacheKey: undefined,
       resolvedApiKey: undefined,
-      authStorage: { getApiKey: async () => testCase.apiKey },
+      authStorage: { getApiKey: async () => testCase.apiKey ?? "test-api-key" },
       runId: "run-transport-1",
       admittedRunContext,
       runtimePlan: {
@@ -99,26 +111,16 @@ function createTransportFixture(testCase: {
       sessionId: "sess-transport-1",
     },
     session,
-    settingsManager: {
-      getGlobalSettings: () => ({}),
-      getProjectSettings: () => ({}),
-    },
+    ...transportEnvironment(),
     providerThinkingLevel: undefined,
     sessionAgentId: "main",
     workspaceDir: "/workspace",
-    workspaceOnly: false,
     agentDir: "/agent",
-    abortSignal: new AbortController().signal,
     getProviderRuntimeHandle: () => ({
       provider: "anthropic",
       modelId: "claude-sonnet-4-6",
     }),
     sandboxSessionKey: "agent:main:test",
-    codeModeControlsEnabled: false,
-    providerPromptState: {
-      state: {},
-      effectiveContextTokenBudget: 128_000,
-    },
   } as unknown as PrepareTransportInput;
   return { input, session, streamFn };
 }
@@ -137,33 +139,26 @@ function createMediaTransportFixture(modelId: string, workspaceDir = "/tmp", age
   const model = { api: "test-api", provider: "test-provider", id: modelId };
   registerProviderStreamForModel.mockReturnValue(providerStream);
   const input = {
+    ...transportEnvironment(),
     attempt: {
       config: {},
       model,
       modelId,
       provider: model.provider,
       runId: `run-${modelId}`,
+      sessionId: `session-${modelId}`,
       admittedRunContext,
       runtimePlan: {
         auth: { forwardedAuthProfileId: undefined },
         transport: { resolveExtraParams: () => ({}) },
       },
-      sessionId: `session-${modelId}`,
     },
     session,
-    settingsManager: {
-      getGlobalSettings: () => ({}),
-      getProjectSettings: () => ({}),
-    },
     sessionAgentId: agentId,
     workspaceDir,
-    workspaceOnly: false,
     agentDir: workspaceDir,
-    abortSignal: new AbortController().signal,
     getProviderRuntimeHandle: () => ({ provider: model.provider, modelId }),
     sandboxSessionKey: `agent:${agentId}:test`,
-    codeModeControlsEnabled: false,
-    providerPromptState: { state: {}, effectiveContextTokenBudget: 128_000 },
   } as unknown as PrepareTransportInput;
   return { input, session, model, getProviderOptions: () => providerOptions };
 }
@@ -182,7 +177,6 @@ describe("prepareEmbeddedAttemptTransport", () => {
     const authFlow = "test-subscription";
     const { input, session, streamFn } = createTransportFixture({
       compaction: false,
-      pruning: false,
       apiKey: "test-access-token",
     });
     streamFn.mockReturnValue(createAssistantMessageEventStream());
@@ -240,46 +234,6 @@ describe("prepareEmbeddedAttemptTransport", () => {
     expect(result.serverToolClearingEnabled).toBe(testCase.clearing);
   });
 
-  it("disables OpenAI inline compaction only for memory flushes", async () => {
-    const payloads: Record<string, unknown>[] = [];
-    for (const trigger of [undefined, "memory"] as const) {
-      const { input, session, streamFn } = createTransportFixture({
-        pruning: false,
-        apiKey: "sk-openai-synthetic",
-      });
-      input.attempt.model = {
-        ...anthropicModel,
-        api: "openai-responses",
-        provider: "openai",
-        id: "gpt-5.4",
-        baseUrl: "https://api.openai.com/v1",
-      };
-      input.attempt.provider = input.attempt.model.provider;
-      input.attempt.modelId = input.attempt.model.id;
-      input.attempt.trigger = trigger;
-      input.attempt.runtimePlan!.transport.resolveExtraParams = (params = {}) => ({
-        responsesServerCompaction: true,
-        ...params.extraParamsOverride,
-      });
-      streamFn.mockImplementation(async (model, _context, options) => {
-        const payload: Record<string, unknown> = { input: [] };
-        await options?.onPayload?.(payload, model);
-        payloads.push(payload);
-        return createAssistantMessageEventStream();
-      });
-      registerProviderStreamForModel.mockReturnValue(streamFn);
-
-      await prepareEmbeddedAttemptTransport(input);
-      await session.agent.streamFn(input.attempt.model, { messages: [] }, {});
-    }
-
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.context_management).toEqual([
-      { type: "compaction", compact_threshold: 140_000 },
-    ]);
-    expect(payloads[1]).not.toHaveProperty("context_management");
-  });
-
   it.each(
     (["openai-responses", "anthropic-messages"] as const).flatMap((api) =>
       [
@@ -298,10 +252,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
         ),
     ),
   )("respects OpenAI compaction ownership without changing Anthropic: %j", async (scenario) => {
-    const { input, session, streamFn } = createTransportFixture({
-      pruning: false,
-      apiKey: "sk-synthetic",
-    });
+    const { input, session, streamFn } = createTransportFixture({ apiKey: "sk-synthetic" });
     const responses = scenario.api === "openai-responses";
     input.attempt.model = {
       ...anthropicModel,
@@ -335,7 +286,11 @@ describe("prepareEmbeddedAttemptTransport", () => {
       },
     });
     const messages = [checkpoint];
-    streamFn.mockReturnValue(createAssistantMessageEventStream());
+    const payload: Record<string, unknown> = { input: [] };
+    streamFn.mockImplementation(async (model, _context, options) => {
+      await options?.onPayload?.(payload, model);
+      return createAssistantMessageEventStream();
+    });
     registerProviderStreamForModel.mockReturnValue(streamFn);
 
     const prepared = await prepareEmbeddedAttemptTransport(input);
@@ -356,6 +311,15 @@ describe("prepareEmbeddedAttemptTransport", () => {
       scenario.suppressed ? undefined : checkpoint.providerReplay,
     );
     expect(checkpoint.providerReplay).toBeDefined();
+    if (responses && scenario.configured === true) {
+      if (scenario.suppressed) {
+        expect(payload).not.toHaveProperty("context_management");
+      } else {
+        expect(payload.context_management).toEqual([
+          { type: "compaction", compact_threshold: 140_000 },
+        ]);
+      }
+    }
   });
 
   it.each([{ source: "resolved run", resolvedApiKey: "sk-ant-oat01-synthetic-run" }])(
@@ -399,7 +363,6 @@ describe("prepareEmbeddedAttemptTransport", () => {
       extraParamsTesting.setProviderRuntimeDepsForTest({ wrapProviderStreamFn });
       const { input, session } = createTransportFixture({
         compaction: false,
-        pruning: false,
         apiKey: "sk-ant-oat01-synthetic-profile",
       });
       input.attempt.model = anthropicModel;
@@ -436,7 +399,6 @@ describe("prepareEmbeddedAttemptTransport", () => {
     } as never);
     const { input, session } = createTransportFixture({
       compaction: false,
-      pruning: false,
       apiKey: "stored-profile-key",
     });
     session.agent.streamFn = sessionStream;
@@ -459,11 +421,7 @@ describe("prepareEmbeddedAttemptTransport", () => {
     },
     { label: "no execution", toolExecutionAllow: [], expectedSearch: false, codeMode: true },
   ])("keeps $label authority on the provider payload (code mode=$codeMode)", async (testCase) => {
-    const { input, streamFn } = createTransportFixture({
-      compaction: false,
-      pruning: false,
-      apiKey: "test-api-key",
-    });
+    const { input, streamFn } = createTransportFixture({ compaction: false });
     input.attempt.model = {
       ...input.attempt.model,
       api: "openai-chatgpt-responses",
@@ -483,14 +441,12 @@ describe("prepareEmbeddedAttemptTransport", () => {
       wrapProviderStreamFn: ({ context }) =>
         createCodexNativeWebSearchWrapper(context.streamFn, context),
     });
-    const functionTools = (testCase.codeMode ? ["exec", "wait"] : ["read", "skill_workshop"]).map(
-      (name) => ({
-        type: "function",
-        name,
-        description: name,
-        parameters: Type.Object({}),
-      }),
-    );
+    const functionTools = ["exec", "wait"].map((name) => ({
+      type: "function",
+      name,
+      description: name,
+      parameters: Type.Object({}),
+    }));
     const payload: { tools: Array<Record<string, unknown>> } = { tools: [...functionTools] };
     const foregroundFunctionSchemas = JSON.stringify(functionTools);
     streamFn.mockImplementation(async (model, _context, options) => {

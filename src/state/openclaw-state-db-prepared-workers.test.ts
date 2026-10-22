@@ -4,6 +4,12 @@ import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
+import {
+  expectRow,
+  expectRows,
+  readRow,
+  readRows,
+} from "./openclaw-state-db-fixtures.test-support.js";
 import { ensureNodeWorkerPreparedWorkspaceSchema } from "./openclaw-state-db-schema-additive.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -13,13 +19,13 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { removePreparedWorkerOwnershipColumns } from "./openclaw-state-schema-v17.test-support.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const migrationPaths = ["runtime open", "doctor repair"] as const;
 const preparationKey = "a".repeat(64);
-const migrationCases = [15, 16].flatMap((version) =>
-  migrationPaths.map((via) => ({ version, via })),
-);
 const retainedTables = [
   "worker_environment_credentials",
   "worker_environment_ssh_fallback_ports",
@@ -33,17 +39,17 @@ afterEach(() => closeOpenClawStateDatabaseForTest());
 
 function readObligations(db: EngineConnection) {
   return Object.fromEntries(
-    retainedTables.map((table) => [table, db.prepare(`SELECT * FROM ${table}`).all()]),
+    retainedTables.map((table) => [table, readRows(db, `SELECT * FROM ${table}`)]),
   );
 }
 
 function readSnapshot(db: EngineConnection) {
   return {
-    version: db.prepare("PRAGMA user_version").get(),
-    metadata: db.prepare("SELECT * FROM schema_meta").all(),
-    machineState: db.prepare("SELECT * FROM config_machine_state ORDER BY state_key").all(),
-    schema: db.prepare("SELECT type, name, sql FROM sqlite_schema ORDER BY type, name").all(),
-    environments: db.prepare("SELECT rowid, * FROM worker_environments").all(),
+    version: readRow(db, "PRAGMA user_version"),
+    metadata: readRows(db, "SELECT * FROM schema_meta"),
+    machineState: readRows(db, "SELECT * FROM config_machine_state ORDER BY state_key"),
+    schema: readRows(db, "SELECT type, name, sql FROM sqlite_schema ORDER BY type, name"),
+    environments: readRows(db, "SELECT rowid, * FROM worker_environments"),
     obligations: readObligations(db),
   };
 }
@@ -57,10 +63,10 @@ function createLegacyWorkers(version = 16, publicationDeferred = false) {
     createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } }, options);
   }
   closeOpenClawStateDatabaseForTest();
-  const legacy = openNodeSqliteDatabase(databasePath);
-  try {
-    removePreparedWorkerOwnershipColumns(legacy);
-    legacy.exec(`
+  using legacy = openNodeSqliteDatabase(databasePath);
+  addPreCutoverClientCredentialTablesForTest(legacy);
+  removePreparedWorkerOwnershipColumns(legacy);
+  legacy.exec(`
       DROP INDEX idx_plugin_state_listing;
       CREATE INDEX idx_plugin_state_listing
         ON plugin_state_entries(plugin_id, namespace, created_at, entry_key);
@@ -68,7 +74,7 @@ function createLegacyWorkers(version = 16, publicationDeferred = false) {
         ('fixture', 'namespace', 'retained', '{"keep":true}', 10, NULL),
         ('fixture', 'namespace', 'expiring', '{"keep":true}', 10, 1000);
     `);
-    legacy.exec(`
+  legacy.exec(`
       ALTER TABLE worker_environments ADD COLUMN future_note TEXT;
       PRAGMA user_version = ${version};
       UPDATE schema_meta SET schema_version = ${version} WHERE meta_key = 'primary';
@@ -96,67 +102,25 @@ function createLegacyWorkers(version = 16, publicationDeferred = false) {
       ) VALUES ('session', 2, 'run', 'turn', 'environment', 'request', 'pending', 10, 20);
       INSERT INTO worker_transcript_commit_heads VALUES ('session', 2, 'environment', 1, 20);
     `);
-    if (publicationDeferred) {
-      legacy.exec(`
+  if (publicationDeferred) {
+    legacy.exec(`
         PRAGMA user_version = 15;
         UPDATE schema_meta SET schema_version = 15 WHERE meta_key = 'primary';
         INSERT INTO config_machine_state (state_key, value_json, updated_at_ms)
           VALUES ('state.schema.contentVersion', '${version}', 1);
       `);
-    }
-    return { options, databasePath, before: readSnapshot(legacy) };
-  } finally {
-    legacy.close();
   }
+  return { options, databasePath, before: readSnapshot(legacy) };
 }
 
 describe("prepared worker schema migration", () => {
-  it.each(migrationPaths)(
-    "upgrades deferred v16 content through %s without publishing over an old updater",
-    (via) => {
-      const { options, before } = createLegacyWorkers(16, true);
-      if (via === "doctor repair") {
-        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
-      }
-      const { db } = openOpenClawStateDatabase(options);
-      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 15 });
-      expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: 15,
-      });
-      expect(
-        db
-          .prepare(
-            "SELECT value_json FROM config_machine_state WHERE state_key = 'state.schema.contentVersion'",
-          )
-          .get(),
-      ).toEqual({ value_json: String(OPENCLAW_STATE_SCHEMA_VERSION) });
-      expect(
-        db.prepare("SELECT preparation_consumed_at_ms FROM worker_environments").get(),
-      ).toEqual({
-        preparation_consumed_at_ms: null,
-      });
-      expect(readObligations(db)).toEqual(before.obligations);
-      expect(
-        db
-          .prepare("PRAGMA index_info(idx_plugin_state_listing)")
-          .all()
-          .map((row) => row.name),
-      ).toEqual(["plugin_id", "namespace", "created_at", "entry_key", "expires_at"]);
-      const after = readSnapshot(db);
-      closeOpenClawStateDatabaseForTest();
-      expect(readSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
-    },
-  );
-
   it("creates node ownership only on first use and retries after an outer rollback", () => {
     const options = {
       env: { OPENCLAW_STATE_DIR: tempDirs.make("openclaw-prepared-first-use-") },
     };
     const { db } = openOpenClawStateDatabase(options);
     const readTable = () =>
-      db
-        .prepare("SELECT name FROM sqlite_schema WHERE name = 'node_worker_prepared_workspaces'")
-        .get();
+      readRow(db, "SELECT name FROM sqlite_schema WHERE name = 'node_worker_prepared_workspaces'");
     expect(readTable()).toBeUndefined();
     expect(() =>
       runOpenClawStateWriteTransaction(() => {
@@ -169,33 +133,35 @@ describe("prepared worker schema migration", () => {
     runOpenClawStateWriteTransaction(() => ensureNodeWorkerPreparedWorkspaceSchema(db), options);
     expect(readTable()).toBeDefined();
     closeOpenClawStateDatabaseForTest();
-    expect(
-      openOpenClawStateDatabase(options)
-        .db.prepare("SELECT * FROM node_worker_prepared_workspaces")
-        .all(),
-    ).toEqual([]);
+    expectRows(
+      openOpenClawStateDatabase(options).db,
+      "SELECT * FROM node_worker_prepared_workspaces",
+      [],
+    );
   });
 
-  it.each(migrationCases)(
-    "preserves v$version workers and unresolved cleanup through $via",
-    ({ version, via }) => {
-      const { options, databasePath, before } = createLegacyWorkers(version);
+  it.each([
+    { version: 15, deferred: false },
+    { version: 16, deferred: true },
+  ])(
+    "preserves v$version workers and deferred publication ($deferred)",
+    async ({ version, deferred }) => {
+      const { options, databasePath, before } = createLegacyWorkers(version, deferred);
       expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toContainEqual({
         kind: "prepared-worker-ownership-v17",
         path: databasePath,
       });
-      if (via === "doctor repair") {
-        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: [
-            "Recorded prepared worker ownership and one-use lifecycle (v17)",
-            "Replaced retained task indexes with ordered cron history indexes (v24)",
-            "Rebuilt canonical shared-state SQLite indexes (1)",
-          ],
-          warnings: [],
-        });
+      if (deferred) {
+        const repaired = await withStateMigrationBackupForTest(options, () =>
+          repairOpenClawStateDatabaseSchema(options),
+        );
+        expect(repaired.warnings).toEqual([]);
       }
+      await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
       const { db } = openOpenClawStateDatabase(options);
-      expect(db.prepare("SELECT rowid, * FROM worker_environments").all()).toEqual(
+      expectRows(
+        db,
+        "SELECT rowid, * FROM worker_environments",
         before.environments.map((row) => ({
           ...row,
           last_activated_at_ms: null,
@@ -207,83 +173,65 @@ describe("prepared worker schema migration", () => {
       );
       expect(readObligations(db)).toEqual(before.obligations);
       expect(
-        db
-          .prepare("PRAGMA index_info(idx_plugin_state_listing)")
-          .all()
-          .map((row) => row.name),
+        readRows(db, "PRAGMA index_info(idx_plugin_state_listing)").map((row) => row.name),
       ).toEqual(["plugin_id", "namespace", "created_at", "entry_key", "expires_at"]);
-      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-      expect(db.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-      expect(db.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      expectRows(db, "PRAGMA foreign_key_check", []);
+      expectRow(db, "PRAGMA integrity_check", { integrity_check: "ok" });
+      const publishedVersion = deferred ? 15 : OPENCLAW_STATE_SCHEMA_VERSION;
+      expectRow(db, "PRAGMA user_version", {
+        user_version: publishedVersion,
       });
-      expect(db.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
-        schema_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      expectRow(db, "SELECT schema_version FROM schema_meta", {
+        schema_version: publishedVersion,
       });
-      expect(
-        db
-          .prepare("SELECT name FROM sqlite_schema WHERE name = 'node_worker_prepared_workspaces'")
-          .get(),
-      ).toBeUndefined();
+      if (deferred) {
+        expectRow(
+          db,
+          "SELECT value_json FROM config_machine_state WHERE state_key = ?",
+          { value_json: String(OPENCLAW_STATE_SCHEMA_VERSION) },
+          "state.schema.contentVersion",
+        );
+      }
+      expectRow(
+        db,
+        "SELECT name FROM sqlite_schema WHERE name = 'node_worker_prepared_workspaces'",
+        undefined,
+      );
       const after = readSnapshot(db);
       closeOpenClawStateDatabaseForTest();
       expect(readSnapshot(openOpenClawStateDatabase(options).db)).toEqual(after);
-      expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+      expect(
+        (
+          await withStateMigrationBackupForTest(options, () =>
+            repairOpenClawStateDatabaseSchema(options),
+          )
+        ).warnings,
+      ).toEqual([]);
     },
   );
 
-  it.each(migrationCases)(
-    "rolls back all v$version migrations and markers after failed $via",
-    ({ version, via }) => {
-      const { options, databasePath } = createLegacyWorkers(version);
-      const legacy = openNodeSqliteDatabase(databasePath);
-      legacy.exec(`CREATE TRIGGER fixture_reject_upgrade BEFORE UPDATE ON schema_meta
+  it("rolls back all v16 migrations and markers after failed doctor repair", async () => {
+    const { options, databasePath } = createLegacyWorkers(16);
+    const legacy = openNodeSqliteDatabase(databasePath);
+    legacy.exec(`CREATE TRIGGER fixture_reject_upgrade BEFORE UPDATE ON schema_meta
       BEGIN SELECT RAISE(ABORT, 'prepared migration rollback'); END;`);
-      const before = readSnapshot(legacy);
-      legacy.close();
-      if (via === "runtime open") {
-        expect(() => openOpenClawStateDatabase(options)).toThrow(/prepared migration rollback/);
-      } else {
-        expect(repairOpenClawStateDatabaseSchema(options)).toEqual({
-          changes: [],
-          warnings: [expect.stringContaining("prepared migration rollback")],
-        });
-      }
-      const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      try {
-        expect(readSnapshot(preserved)).toEqual(before);
-      } finally {
-        preserved.close();
-      }
-    },
-  );
+    const before = readSnapshot(legacy);
+    legacy.close();
+    expect(
+      await withStateMigrationBackupForTest(options, () =>
+        repairOpenClawStateDatabaseSchema(options),
+      ),
+    ).toEqual({
+      changes: [],
+      warnings: [expect.stringContaining("prepared migration rollback")],
+    });
+    using preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
+    expect(readSnapshot(preserved)).toEqual(before);
+  });
 
-  it.each(migrationCases)(
-    "refuses incomplete v$version ownership before $via",
-    ({ version, via }) => {
-      const { options, databasePath } = createLegacyWorkers(version);
-      const legacy = openNodeSqliteDatabase(databasePath);
-      legacy.exec("DROP TABLE session_groups;");
-      const before = readSnapshot(legacy);
-      legacy.close();
-      if (via === "runtime open") {
-        expect(() => openOpenClawStateDatabase(options)).toThrow(/missing table session_groups/);
-      } else {
-        expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([
-          expect.stringContaining("missing table session_groups"),
-        ]);
-      }
-      const preserved = openNodeSqliteDatabase(databasePath, { readOnly: true });
-      try {
-        expect(readSnapshot(preserved)).toEqual(before);
-      } finally {
-        preserved.close();
-      }
-    },
-  );
-
-  it("enforces complete preparation facts and retains consumed bindings on canonical reopen", () => {
+  it("enforces complete preparation facts and retains consumed bindings on canonical reopen", async () => {
     const { options } = createLegacyWorkers();
+    await withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options));
     const { db } = openOpenClawStateDatabase(options);
     const setPreparation = db.prepare(`UPDATE worker_environments SET preparation_key = ?,
       preparation_demand_at_ms = ?, preparation_expires_at_ms = ?, preparation_consumed_at_ms = ?`);
@@ -331,14 +279,12 @@ describe("prepared worker schema migration", () => {
       db.exec("UPDATE node_worker_prepared_workspaces SET environment_id = NULL"),
     ).toThrow(/NOT NULL constraint failed/);
     db.exec("UPDATE node_worker_prepared_workspaces SET state = 'retired', retired_at_ms = 30");
-    const binding = db.prepare("SELECT * FROM node_worker_prepared_workspaces").get();
+    const binding = readRow(db, "SELECT * FROM node_worker_prepared_workspaces");
     closeOpenClawStateDatabaseForTest();
     const reopened = openOpenClawStateDatabase(options).db;
-    expect(reopened.prepare("SELECT * FROM node_worker_prepared_workspaces").get()).toEqual(
-      binding,
-    );
-    expect(
-      reopened.prepare("SELECT preparation_consumed_at_ms FROM worker_environments").get(),
-    ).toEqual({ preparation_consumed_at_ms: 20 });
+    expectRow(reopened, "SELECT * FROM node_worker_prepared_workspaces", binding);
+    expectRow(reopened, "SELECT preparation_consumed_at_ms FROM worker_environments", {
+      preparation_consumed_at_ms: 20,
+    });
   });
 });

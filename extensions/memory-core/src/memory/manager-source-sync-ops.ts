@@ -137,7 +137,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     const existingRows = await this.database.readSourceState({
       source: "memory",
     });
-    const existingHashes = new Map(existingRows.map((row) => [row.path, row.hash]));
+    const existingByPath = new Map(existingRows.map((row) => [row.path, row]));
     const activePaths = new Set(fileEntries.map((entry) => entry.path));
     if (params.progress) {
       params.progress.total += fileEntries.length;
@@ -152,7 +152,13 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
 
     const indexItems: MemoryIndexWorkItem[] = [];
     for (const entry of fileEntries) {
-      if (!params.needsFullReindex && existingHashes.get(entry.path) === entry.hash) {
+      const existing = existingByPath.get(entry.path);
+      if (
+        !params.needsFullReindex &&
+        existing?.hash === entry.hash &&
+        existing.mtime === entry.mtimeMs &&
+        existing.size === entry.size
+      ) {
         this.advanceSyncProgress(params.progress);
         continue;
       }
@@ -182,7 +188,35 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     progress?: MemorySyncProgressState;
     prefixIndexItems?: MemoryIndexWorkItem[];
   }): Promise<void> {
-    const corpusEntries = params.corpusEntries ?? (await this.listSessionCorpusEntries());
+    const rebuild = this.reindexProgress;
+    if (rebuild && (rebuild.changedSessionFiles.size || rebuild.changedSessionTargets.size)) {
+      const priorCorpus = rebuild.corpusEntries ?? [];
+      const changedFiles = [
+        ...(this.normalizeTargetArchiveFiles([...rebuild.changedSessionFiles], priorCorpus, true) ??
+          []),
+        ...this.resolveArchiveFilesForSyncTargets(
+          rebuild.changedSessionTargets.values(),
+          priorCorpus,
+        ),
+      ];
+      for (const file of changedFiles) {
+        rebuild.completedSessionFiles.delete(file);
+      }
+      rebuild.corpusEntries = undefined;
+      for (const file of rebuild.changedSessionFiles) {
+        this.sessionPendingFiles.delete(file);
+      }
+      for (const key of rebuild.changedSessionTargets.keys()) {
+        this.sessionPendingTargets.delete(key);
+      }
+      rebuild.changedSessionFiles.clear();
+      rebuild.changedSessionTargets.clear();
+    }
+    const corpusEntries =
+      params.corpusEntries ?? rebuild?.corpusEntries ?? (await this.listSessionCorpusEntries());
+    if (rebuild) {
+      rebuild.corpusEntries = corpusEntries;
+    }
     const targetArchiveFiles = params.needsFullReindex
       ? null
       : this.normalizeTargetArchiveFiles(params.targetArchiveFiles, corpusEntries, true);
@@ -196,12 +230,15 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       }
       return entry;
     };
-    const files = targetArchiveFiles
+    const allFiles = targetArchiveFiles
       ? Array.from(targetArchiveFiles)
       : corpusEntries.map((entry) => entry.sessionFile);
+    const files = rebuild
+      ? allFiles.filter((file) => !rebuild.completedSessionFiles.has(file))
+      : allFiles;
     const sessionPlan = resolveMemorySessionSyncPlan({
       needsFullReindex: params.needsFullReindex,
-      files,
+      files: allFiles,
       targetSessionFiles: targetArchiveFiles,
       existingRows: targetArchiveFiles
         ? null
@@ -210,17 +247,16 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           }),
       sessionPathForFile: (file) => this.sessionPathForCorpusEntry(corpusEntryForPath(file)),
     });
-    const { activePaths, existingRows, existingHashes, indexAll } = sessionPlan;
-    const sourceHashes =
-      existingHashes ??
-      new Map(
-        (
-          await this.database.readSourceState({
-            source: "sessions",
-            paths: files.map((file) => this.sessionPathForCorpusEntry(corpusEntryForPath(file))),
-          })
-        ).map((row) => [row.path, row.hash]),
-      );
+    const { activePaths, existingRows, indexAll } = sessionPlan;
+    const sourceRows = new Map(
+      (
+        existingRows ??
+        (await this.database.readSourceState({
+          source: "sessions",
+          paths: files.map((file) => this.sessionPathForCorpusEntry(corpusEntryForPath(file))),
+        }))
+      ).map((row) => [row.path, row]),
+    );
     log.debug("memory sync: indexing session files", {
       files: files.length,
       indexAll,
@@ -289,8 +325,10 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       }
       if (!isMemorySessionIndexable(entry)) {
         // Archived runs may reveal their internal origin only while parsing.
-        // Remove earlier index artifacts before excluding that transcript.
-        await this.deleteIndexedFile(entry.path, "sessions");
+        // Fresh rebuilds have no earlier artifacts; published indexes may have orphan chunks.
+        if (!this.database.isShadow || sourceRows.has(entry.path)) {
+          await this.deleteIndexedFile(entry.path, "sessions", sourceRows.get(entry.path)?.hash);
+        }
         this.advanceSyncProgress(params.progress);
         return null;
       }
@@ -300,7 +338,8 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
           throw new Error("Memory source owner changed during hash lookup");
         }
       };
-      const existingHash = sourceHashes.get(entry.path);
+      const existing = sourceRows.get(entry.path);
+      const existingHash = existing?.hash;
       const hash =
         entry.revisionMs === undefined ? entry.hash : `sqlite:${entry.revisionMs}:${entry.hash}`;
       const existingContentHash = existingHash?.startsWith("sqlite:")
@@ -308,19 +347,21 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
         : existingHash;
       if (
         !params.needsFullReindex &&
-        existingHash !== undefined &&
+        existing !== undefined &&
         existingContentHash === entry.hash
       ) {
         // Converge restored source fingerprints without replacing unchanged chunks.
         if (
-          (this.sessionsDirtyFiles.has(absPath) || existingHash !== hash) &&
+          (existing.hash !== hash ||
+            existing.mtime !== entry.mtimeMs ||
+            existing.size !== entry.size) &&
           !(await database.refreshSourceState(
             {
               path: entry.path,
               hash,
               mtime: entry.mtimeMs,
               size: entry.size,
-              expectedHash: existingHash,
+              expectedHash: existing.hash,
             },
             assertCurrent,
           ))
@@ -352,7 +393,11 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
       return await runWithConcurrency(
         selected.map((absPath, index) => async () => {
           try {
-            return await resolveSessionIndexEntry(absPath, entries[index] ?? null);
+            const entry = await resolveSessionIndexEntry(absPath, entries[index] ?? null);
+            if (!entry) {
+              rebuild?.completedSessionFiles.add(absPath);
+            }
+            return entry;
           } finally {
             await yieldAfterSessionFile();
           }
@@ -392,7 +437,7 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
 
       // Session entries carry flattened transcript content; flush bounded groups
       // so source-wide batching cannot retain the whole dirty transcript corpus.
-      const groupSize = this.sessionBackgroundIndexing ? 8 : SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES;
+      const groupSize = this.syncIsBackground ? 8 : SOURCE_WIDE_SESSION_INDEX_FLUSH_FILES;
       for (let start = 0; start < files.length; start += groupSize) {
         if (this.shouldYieldSessionIndexing()) {
           deferItems(pendingIndexItems);

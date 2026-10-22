@@ -1,5 +1,5 @@
 import {
-  ensureAuthProfileStore,
+  ensureAuthProfileStoreAsync,
   resolveApiKeyForProfile,
   resolveAuthProfileOrder,
 } from "../../agents/auth-profiles.js";
@@ -13,20 +13,12 @@ import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input
 import { rejectOnboardingOption } from "../onboard-options.js";
 import type { SecretInputMode } from "../onboard-types.js";
 
-function parseEnvVarNameFromSourceLabel(source: string | undefined): string | undefined {
-  if (!source) {
-    return undefined;
-  }
-  const match = /^(?:shell env: |env: )([A-Z][A-Z0-9_]*)$/.exec(source.trim());
-  return match?.[1];
-}
-
 async function resolveApiKeyFromProfiles(params: {
   provider: string;
   cfg: OpenClawConfig;
   agentDir?: string;
 }): Promise<string | null> {
-  const store = ensureAuthProfileStore(params.agentDir);
+  const store = await ensureAuthProfileStoreAsync(params.agentDir);
   const order = resolveAuthProfileOrder({
     cfg: params.cfg,
     store,
@@ -73,19 +65,6 @@ export async function resolveNonInteractiveApiKey(params: {
   };
   const flagKey = normalizeOptionalSecretInput(params.flagValue);
   const explicitEnvVar = params.envVarName?.trim() || params.envVar.trim();
-  const resolveEnvKey = () => {
-    const envResolved = resolveEnvApiKey(params.provider, process.env, {
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-    });
-    const explicitEnvKey = explicitEnvVar
-      ? normalizeOptionalSecretInput(process.env[explicitEnvVar])
-      : undefined;
-    return {
-      key: envResolved?.apiKey ?? explicitEnvKey,
-      envVarName: parseEnvVarNameFromSourceLabel(envResolved?.source) ?? explicitEnvVar,
-    };
-  };
   const returnOperatorKey = (key: string, source: "flag" | "env", envVarName?: string) => {
     if (!isMalformedApiKeyInput(key)) {
       return envVarName ? { key, source, envVarName } : { key, source };
@@ -114,7 +93,19 @@ export async function resolveNonInteractiveApiKey(params: {
     return returnOperatorKey(flagKey, "flag");
   }
 
-  const resolvedEnv = resolveEnvKey();
+  const envResolved = resolveEnvApiKey(params.provider, process.env, {
+    config: params.cfg,
+    workspaceDir: params.workspaceDir,
+  });
+  const explicitEnvKey = explicitEnvVar
+    ? normalizeOptionalSecretInput(process.env[explicitEnvVar])
+    : undefined;
+  const resolvedEnv = {
+    key: envResolved?.apiKey ?? explicitEnvKey,
+    envVarName:
+      /^(?:shell env: |env: )([A-Z][A-Z0-9_]*)$/.exec(envResolved?.source?.trim() ?? "")?.[1] ??
+      explicitEnvVar,
+  };
   if (resolvedEnv.key) {
     if (useSecretRefMode && !resolvedEnv.envVarName) {
       // Ref mode needs a concrete env var name for the stored reference.

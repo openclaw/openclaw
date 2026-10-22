@@ -21,7 +21,10 @@ import {
   createOpenAIResponsesContextManagementWrapper,
   createOpenAIStringContentWrapper,
 } from "../../llm/providers/stream-wrappers/openai.js";
-import { createOpenRouterSystemCacheWrapper } from "../../llm/providers/stream-wrappers/proxy.js";
+import {
+  createOpenRouterSystemCacheWrapper,
+  OPENROUTER_RESPONSE_CACHE_TTL_KEYS,
+} from "../../llm/providers/stream-wrappers/proxy.js";
 import { streamWithPayloadPatch } from "../../llm/providers/stream-wrappers/stream-payload-utils.js";
 import type { SimpleStreamOptions } from "../../llm/types.js";
 import {
@@ -240,24 +243,22 @@ function applyDefaultOpenAIGptRuntimeParams(
 }
 
 export function resolveAgentTransportOverride(params: {
-  settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
+  settingsManager: Pick<SettingsManager, "getGlobalSettings">;
   effectiveExtraParams: Record<string, unknown> | undefined;
 }): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
-  const projectSettings = params.settingsManager.getProjectSettings();
-  if (Object.hasOwn(globalSettings, "transport") || Object.hasOwn(projectSettings, "transport")) {
+  if (Object.hasOwn(globalSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.effectiveExtraParams?.transport);
 }
 
 export function resolveExplicitSettingsTransport(params: {
-  settingsManager: Pick<SettingsManager, "getGlobalSettings" | "getProjectSettings">;
+  settingsManager: Pick<SettingsManager, "getGlobalSettings">;
   sessionTransport: unknown;
 }): AgentRuntimeTransport | undefined {
   const globalSettings = params.settingsManager.getGlobalSettings();
-  const projectSettings = params.settingsManager.getProjectSettings();
-  if (!Object.hasOwn(globalSettings, "transport") && !Object.hasOwn(projectSettings, "transport")) {
+  if (!Object.hasOwn(globalSettings, "transport")) {
     return undefined;
   }
   return resolveSupportedTransport(params.sessionTransport);
@@ -293,6 +294,11 @@ function createStreamFnWithExtraParams(
   }
 
   const streamParams: CacheRetentionStreamOptions = {};
+  if (extraParams.promptCacheTtl === "30m" || extraParams.promptCacheTtl === "12h") {
+    streamParams.promptCacheTtl = extraParams.promptCacheTtl;
+  } else if (extraParams.promptCacheTtl !== undefined) {
+    log.warn('ignoring invalid promptCacheTtl param; expected "30m" or "12h"');
+  }
   if (typeof extraParams.temperature === "number") {
     streamParams.temperature = extraParams.temperature;
   }
@@ -368,11 +374,13 @@ function createStreamFnWithExtraParams(
       return underlying(callModel, context, options);
     }
     const effectiveCacheRetention = options?.cacheRetention ?? cacheRetention;
+    const promptCacheTtl = options?.promptCacheTtl ?? streamParams.promptCacheTtl;
     return underlying(callModel, context, {
       ...streamParams,
       ...options,
       // Own undefined means no request override; explicit none/short/long still wins.
       ...(effectiveCacheRetention ? { cacheRetention: effectiveCacheRetention } : {}),
+      ...(promptCacheTtl ? { promptCacheTtl } : {}),
     });
   };
 }
@@ -392,12 +400,7 @@ function canonicalizeExtraParamAlias(
 
 const OPENROUTER_RESPONSE_CACHE_PARAM_ALIASES = [
   ["responseCache", "response_cache"],
-  [
-    "responseCacheTtlSeconds",
-    "response_cache_ttl_seconds",
-    "responseCacheTtl",
-    "response_cache_ttl",
-  ],
+  OPENROUTER_RESPONSE_CACHE_TTL_KEYS,
   ["responseCacheClear", "response_cache_clear"],
 ] as const;
 

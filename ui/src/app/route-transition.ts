@@ -7,6 +7,7 @@ import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 
 type RouteTransitionOptions = {
   document: Document;
+  getOutlet: () => ControlUiReadinessOutlet | undefined;
   from: RouteId | undefined;
   navigate: () => Promise<void>;
   prefersReducedMotion: boolean;
@@ -24,8 +25,13 @@ const SESSION_ROUTE_ENTER_OPTIONS: KeyframeAnimationOptions = {
   easing: "cubic-bezier(0.16, 1, 0.3, 1)",
 };
 
-function waitForChatRouteReady(document: Document) {
-  if (document.querySelector(".agent-chat__composer-combobox")) {
+// Route transitions observe Chat's nodes across page lifetimes; they do not render those nodes.
+function waitForChatRouteReady(document: Document, outlet: ControlUiReadinessOutlet | undefined) {
+  if (
+    outlet
+      ?.renderedElements?.("openclaw-chat-pane")
+      .some((pane) => pane.active && pane.composerReady)
+  ) {
     return { cancel: () => undefined, ready: Promise.resolve() };
   }
   const { promise: ready, resolve } = createDeferredCore();
@@ -37,8 +43,8 @@ function waitForChatRouteReady(document: Document) {
 
 async function navigateAndAnimate(options: RouteTransitionOptions) {
   const { document, navigate, prefersReducedMotion, router, signal, to } = options;
-  const outlet = document.querySelector<ControlUiReadinessOutlet>("openclaw-router-outlet");
-  const chatReady = waitForChatRouteReady(document);
+  const outlet = options.getOutlet();
+  const chatReady = waitForChatRouteReady(document, outlet);
   let canceled = false;
   let animation: Animation | undefined;
   const { promise: cancellation, resolve: resolveCanceled } = createDeferredCore();

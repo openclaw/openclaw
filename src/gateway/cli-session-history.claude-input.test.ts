@@ -3,7 +3,6 @@ import { expect, it } from "vitest";
 import { buildCliSessionDriftNote } from "../agents/cli-session.js";
 import { HEARTBEAT_PROMPT } from "../auto-reply/heartbeat.js";
 import { applySessionHints } from "../auto-reply/reply/body.js";
-import { buildExecEventPrompt } from "../infra/heartbeat-events-filter.js";
 import { buildInterSessionPromptContext } from "../sessions/input-provenance.js";
 import { formatSystemTurnPrompt } from "../sessions/system-turn-prompt.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.js";
@@ -16,6 +15,7 @@ import {
 import {
   buildLegacyReseedPrompt,
   claudeUser,
+  LEGACY_EXEC_COMPLETION_PROMPT,
   mergeImportedChatHistoryMessages,
   user,
   withClaudeProjectsDir,
@@ -36,7 +36,7 @@ const REQUESTER_HINT =
   'requester_profile is the verified linked requester. For "assign to me", use sessions assign_owner with ownerType="human" and ownerId=requester_profile.id, if available.';
 const frame = (json: string) =>
   `Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n${json}\n\`\`\`\n\n`;
-const execPrompt = buildExecEventPrompt(["Exec completed (example, code 0) :: done"]);
+const execPrompt = LEGACY_EXEC_COMPLETION_PROMPT;
 
 function merge(localMessages: unknown[], importedMessages: unknown[]) {
   return mergeImportedChatHistoryMessages({ localMessages, importedMessages });

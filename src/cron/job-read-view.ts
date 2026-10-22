@@ -62,6 +62,7 @@ export function cronJobDefinitionFromReadView(
   const {
     effectiveAgentId: _effectiveAgentId,
     configRevision: _configRevision,
+    streamExecutionHost: _streamExecutionHost,
     nextRunAtMs: _nextRunAtMs,
     lastRunAtMs: _lastRunAtMs,
     lastRunStatus: _lastRunStatus,

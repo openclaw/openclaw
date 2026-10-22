@@ -29,7 +29,7 @@ export function TerminalPage(props: { location: RouteLocation | null }) {
   const target = createMemo(() =>
     props.location ? resolveTerminalRouteLocation(props.location, context.basePath) : null,
   );
-  const route = createMemo(() => {
+  const route = () => {
     const current = target();
     const key = current
       ? "sessionId" in current
@@ -37,7 +37,7 @@ export function TerminalPage(props: { location: RouteLocation | null }) {
         : buildCatalogSessionKey(current.catalog)
       : "";
     return [{ target: current, key }];
-  });
+  };
   const themeMode = () => {
     theme.appliedPalette.read();
     return context.theme.resolvedMode;
@@ -53,7 +53,8 @@ export function TerminalPage(props: { location: RouteLocation | null }) {
               fullscreen
               page={true}
               routeTarget={entry().target}
-              client={snapshot().phase === "connected" ? snapshot().client : null}
+              client={snapshot().client}
+              gatewayConnected={snapshot().phase === "connected"}
               available={available()}
               agentId={owner() ? normalizeAgentId(owner()!) : null}
               basePath={context.basePath}

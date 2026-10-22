@@ -1,5 +1,4 @@
 /**
- * Runtime apply_patch tool and parser.
  * Parses OpenAI-style patch envelopes and applies add/update/delete/move hunks
  * through guarded host or sandbox filesystem operations.
  */
@@ -86,7 +85,6 @@ const ApplyPatchToolOutputSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Create the agent tool wrapper for applying patch-envelope input. */
 export function createApplyPatchTool(
   options: {
     cwd?: string;
@@ -149,7 +147,6 @@ export function createApplyPatchTool(
   };
 }
 
-/** Parse and apply a patch envelope to the configured filesystem target. */
 async function applyPatch(input: string, options: ApplyPatchOptions): Promise<ApplyPatchResult> {
   const parsedHunks = parsePatchText(input);
   if (parsedHunks.length === 0) {

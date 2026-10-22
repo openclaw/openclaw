@@ -8,7 +8,6 @@ describe("preflightPluginInstall", () => {
   it("reuses an exact installed version", async () => {
     const result = await preflightPluginInstall({
       clawhubPackage: "@acme/audit",
-      rawSpec: "clawhub:@acme/audit@1.2.3",
       expectedVersion: "1.2.3",
       loadInstallRecords: vi.fn().mockResolvedValue({
         audit: {
@@ -22,7 +21,6 @@ describe("preflightPluginInstall", () => {
     expect(result).toMatchObject({
       ok: true,
       action: "reuse",
-      installedVersion: "1.2.3",
       installedAt: "2026-07-17T00:00:00.000Z",
     });
   });
@@ -30,7 +28,6 @@ describe("preflightPluginInstall", () => {
   it("rejects a different installed version", async () => {
     const result = await preflightPluginInstall({
       clawhubPackage: "@acme/audit",
-      rawSpec: "clawhub:@acme/audit@1.2.3",
       expectedVersion: "1.2.3",
       loadInstallRecords: vi.fn().mockResolvedValue({
         audit: { source: "clawhub", clawhubPackage: "@acme/audit", resolvedVersion: "1.1.0" },

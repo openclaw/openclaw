@@ -31,7 +31,7 @@ type Projection = NonNullable<Parameters<typeof startGitHubPublicationDiscovery>
 type SelectionListener = Parameters<Projection["onSelectionChange"]>[0];
 
 type WorkspaceBinding = Pick<
-  ReturnType<Projection["selectEntries"]>[number]["entry"],
+  NonNullable<Extract<Parameters<SelectionListener>[0], { kind: "row" }>["row"]>["entry"],
   "repositoryWorkspaceId" | "worktree"
 >;
 
@@ -51,6 +51,7 @@ function projectionFixture(binding: WorkspaceBinding = { repositoryWorkspaceId: 
   };
   return {
     projection,
+    observe: (observed: typeof row) => listener?.({ kind: "row", row: observed }),
     rebind: (next: WorkspaceBinding = { repositoryWorkspaceId: "workspace-2" }) => {
       row.entry = { sessionId: session.sessionId, updatedAt: 1, ...next };
       listener?.({ kind: "row", row });
@@ -87,13 +88,33 @@ describe("GitHub publication discovery", () => {
     await scheduler.stop();
   });
 
+  it("does no discovery for a hydrated corpus until a session requests its publication hint", async () => {
+    const { projection, observe } = projectionFixture();
+    owner = startGitHubPublicationDiscovery({ scheduler, projection });
+    for (let index = 0; index < 300; index++) {
+      observe({
+        key: `agent:main:idle-${index}`,
+        agentId: "main",
+        entry: { sessionId: `idle-${index}`, updatedAt: 1, repositoryWorkspaceId: "workspace-1" },
+      });
+      await clock.wake();
+    }
+    expect(vi.mocked(prepareGitHubPublicationFact).mock.calls.length).toBe(0);
+    expect(clock.armedAtMs).toBeNull();
+
+    expect(readGitHubPublicationFact(session)).toEqual({ available: false });
+    await clock.wake();
+    expect(prepareGitHubPublicationFact).toHaveBeenCalledOnce();
+    expect(readGitHubPublicationFact(session)).toEqual(published);
+  });
+
   it.each([
     { kind: "repository", binding: { repositoryWorkspaceId: "workspace-1" } },
     {
       kind: "worktree",
       binding: { worktree: { id: "worktree-1", repoRoot: "/synthetic/repo", branch: "session-1" } },
     },
-  ])("prewarms only after a targetless row acquires a $kind binding", async ({ binding }) => {
+  ])("waits for demand after an unobserved row acquires a $kind binding", async ({ binding }) => {
     const { projection, rebind } = projectionFixture({});
     owner = startGitHubPublicationDiscovery({ scheduler, projection });
     await clock.wake();
@@ -107,8 +128,12 @@ describe("GitHub publication discovery", () => {
     expect(prepareGitHubPublicationFact).not.toHaveBeenCalled();
     expect(clock.armedAtMs).toBeNull();
 
-    const gate = holdPreparation();
     rebind(binding);
+    await clock.wake();
+    expect(prepareGitHubPublicationFact).not.toHaveBeenCalled();
+
+    const gate = holdPreparation();
+    expect(readGitHubPublicationFact(session)).toEqual({ available: false });
     const preparing = clock.wake();
     expect(prepareGitHubPublicationFact).toHaveBeenCalledOnce();
     expect(readGitHubPublicationFact(session)).toEqual({ available: false });
@@ -120,7 +145,7 @@ describe("GitHub publication discovery", () => {
   it("revokes a removed binding before its queued preparation starts", async () => {
     const { projection, rebind } = projectionFixture();
     owner = startGitHubPublicationDiscovery({ scheduler, projection });
-    await clock.wake();
+    readGitHubPublicationFact(session);
     expect(prepareGitHubPublicationFact).not.toHaveBeenCalled();
 
     rebind({});
@@ -140,7 +165,7 @@ describe("GitHub publication discovery", () => {
   it("retires removed bindings without reviving them on identity or config changes", async () => {
     const { projection, rebind } = projectionFixture();
     owner = startGitHubPublicationDiscovery({ scheduler, projection });
-    await clock.wake();
+    readGitHubPublicationFact(session);
     await clock.wake();
     expect(readGitHubPublicationFact(session)).toEqual(published);
 
@@ -242,7 +267,7 @@ describe("GitHub publication discovery", () => {
     const { projection, rebind } = projectionFixture();
     const stale = holdPreparation();
     owner = startGitHubPublicationDiscovery({ scheduler, projection });
-    await clock.wake();
+    readGitHubPublicationFact(session);
     const oldRefresh = clock.wake();
     const oldPreparation = vi.mocked(prepareGitHubPublicationFact).mock.calls[0]![0];
     expect(oldPreparation.assertCurrent?.()).toBe(true);

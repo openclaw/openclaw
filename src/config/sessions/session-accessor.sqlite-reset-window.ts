@@ -2,6 +2,7 @@
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { sql } from "kysely";
 import { selectResetKeptEntries } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { jsonArrayElements, jsonValid } from "../../infra/database-engine/json-values.js";
 import { registerNodeSqliteDisposeCallback } from "../../infra/kysely-sync-cache-state.js";
 import {
   executeSqliteQuerySync,
@@ -37,6 +38,7 @@ import {
   transcriptEventModelNavigationSql,
   transcriptEventNavigationSql,
   transcriptEventResetNavigationSql,
+  transcriptPredicateSql,
 } from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 
@@ -68,7 +70,9 @@ type ResetMessageWindowCacheEntry = {
 // History readers span compactions (their window closes only at a reset). The preflight
 // fuse must measure the transcript the model will actually see, which a compaction rewrites
 // too; measuring it on the history scope keeps the fuse latched after the first compaction.
-type BoundaryWindowScope = "history" | "context";
+// Reset-window cursors close only at a reset, like history, but keep every retained message
+// role, like context, so context engines receive retained tool calls with their results.
+type BoundaryWindowScope = "history" | "context" | "reset";
 
 function isWindowBoundary(eventType: unknown, scope: BoundaryWindowScope): boolean {
   return eventType === "reset" || (scope === "context" && eventType === "compaction");
@@ -162,7 +166,9 @@ export function readUnindexedHistoryControls(
           getActiveTranscriptKysely(projection.database)
             .selectFrom(
               /* kysely-allow-raw: drive indexed lookups from the requested set, not a full active-path scan to satisfy ordering. */
-              sql<{ value: number }>`json_each(${JSON.stringify([...eligible.keys()])})`.as(
+              sql<{
+                value: number;
+              }>`(SELECT CAST(value AS BIGINT) AS value FROM ${jsonArrayElements(projection.database.db, sql.val(JSON.stringify([...eligible.keys()])))})`.as(
                 "requested",
               ),
             )
@@ -215,7 +221,12 @@ function readLatestActiveBoundaryMetadataByType(
                 .onRef("identity.session_id", "=", "active.session_id")
                 .onRef("identity.seq", "=", "active.event_seq"),
             )
-            .select(["active.active_position", "identity.event_type", "identity.seq"])
+            .select([
+              "active.active_position",
+              "identity.event_id",
+              "identity.event_type",
+              "identity.seq",
+            ])
             .where("active.session_id", "=", projection.resolved.sessionId)
             .where("identity.event_type", "=", eventType)
             .$if(beforeRawSeq !== undefined, (query) =>
@@ -237,10 +248,19 @@ function readLatestActiveBoundaryMetadataByType(
   return unindexed && (!indexed || unindexed.event_seq > indexed.seq)
     ? {
         active_position: unindexed.active_position,
+        ...(typeof unindexed.event.id === "string" ? { event_id: unindexed.event.id } : {}),
         event_type: eventType,
         seq: unindexed.event_seq,
       }
     : indexed;
+}
+
+/** Reads the latest active-path reset row without resolving its retained tail. */
+export function readLatestActiveResetBoundary(
+  projection: CurrentTranscriptProjection,
+  beforeRawSeq?: number,
+): { active_position: number; event_id?: string; seq: number } | undefined {
+  return readLatestActiveBoundaryMetadataByType(projection, "reset", beforeRawSeq);
 }
 
 function readLatestActiveBoundaryMetadata(
@@ -249,7 +269,7 @@ function readLatestActiveBoundaryMetadata(
   beforeRawSeq?: number,
 ) {
   const reset = readLatestActiveBoundaryMetadataByType(projection, "reset", beforeRawSeq);
-  if (scope === "history") {
+  if (scope !== "context") {
     return reset;
   }
   const compaction = readLatestActiveBoundaryMetadataByType(projection, "compaction", beforeRawSeq);
@@ -354,12 +374,15 @@ function findLatestResetMessageWindow(
           )
           .select([
             "active.message_position",
-            /* kysely-allow-raw: preserve JS-readable overdepth rows for existing tool-pairing validation. */
-            sql<string>`CASE WHEN json_valid(${transcriptEventNavigationSql(projection.database.db, "event")})
-              THEN ${transcriptEventModelNavigationSql(projection.database.db, "event")}
-              ELSE ${transcriptEventNavigationSql(projection.database.db, "event")} END`.as(
-              "event_json",
-            ),
+            // Compaction keeps the entire tail and needs no tool-pairing metadata.
+            (includesBoundary
+              ? transcriptEventResetNavigationSql(projection.database.db, "event")
+              : // Preserve JS-readable overdepth rows for reset tool-pairing validation.
+                /* kysely-allow-raw: guarded model-navigation projection. */
+                sql<string>`CASE WHEN ${jsonValid(projection.database.db, transcriptEventNavigationSql(projection.database.db, "event"))}
+                  THEN ${transcriptEventModelNavigationSql(projection.database.db, "event")}
+                  ELSE ${transcriptEventNavigationSql(projection.database.db, "event")} END`
+            ).as("event_json"),
             /* kysely-allow-raw: raw-byte accounting stays independent of the transient projection. */
             sql<number>`${transcriptEventReadBytesSql("event")} + 1`.as("serialized_bytes"),
           ])
@@ -399,7 +422,7 @@ function findLatestResetMessageWindow(
           continue;
         }
         const role = row.event.message.role;
-        if (scope === "context" || role === "user" || role === "assistant") {
+        if (scope !== "history" || role === "user" || role === "assistant") {
           keptMessagePositions.push(row.message_position);
         }
       }
@@ -447,78 +470,6 @@ export function resolveTranscriptBoundaryWindow(
     window,
   });
   return window;
-}
-
-export type ClosedResetInterval = {
-  startExclusiveActivePosition: number;
-  endInclusiveActivePosition: number;
-};
-
-function selectActiveResetRows(projection: CurrentTranscriptProjection) {
-  return getActiveTranscriptKysely(projection.database)
-    .selectFrom("session_transcript_active_events as active")
-    .innerJoin("transcript_event_identities as identity", (join) =>
-      join
-        .onRef("identity.session_id", "=", "active.session_id")
-        .onRef("identity.seq", "=", "active.event_seq"),
-    )
-    .select("active.active_position")
-    .where("active.session_id", "=", projection.resolved.sessionId)
-    .where("identity.event_type", "=", "reset");
-}
-
-/** Closed interval (previous reset, this reset] for an active-path event outside the latest window. */
-export function resolveClosedResetInterval(
-  projection: CurrentTranscriptProjection,
-  target: { activePosition: number; eventType: string },
-): ClosedResetInterval | undefined {
-  let closing =
-    target.eventType === "reset"
-      ? { active_position: target.activePosition }
-      : executeSqliteQueryTakeFirstSync(
-          projection.database.db,
-          selectActiveResetRows(projection)
-            .where("active.active_position", ">", target.activePosition)
-            .orderBy("active.active_position", "asc")
-            .limit(1),
-        );
-  const unindexedResets = readUnindexedHistoryControls(projection).filter(
-    (row) => row.event.type === "reset",
-  );
-  if (target.eventType !== "reset") {
-    const unindexedClosing = unindexedResets.find(
-      (row) => row.active_position > target.activePosition,
-    );
-    if (
-      unindexedClosing &&
-      (!closing || unindexedClosing.active_position < closing.active_position)
-    ) {
-      closing = unindexedClosing;
-    }
-  }
-  if (!closing) {
-    return undefined;
-  }
-  let opening = executeSqliteQueryTakeFirstSync(
-    projection.database.db,
-    selectActiveResetRows(projection)
-      .where("active.active_position", "<", closing.active_position)
-      .orderBy("active.active_position", "desc")
-      .limit(1),
-  );
-  const unindexedOpening = unindexedResets.findLast(
-    (row) => row.active_position < closing.active_position,
-  );
-  if (
-    unindexedOpening &&
-    (!opening || unindexedOpening.active_position > opening.active_position)
-  ) {
-    opening = unindexedOpening;
-  }
-  return {
-    startExclusiveActivePosition: opening?.active_position ?? -1,
-    endInclusiveActivePosition: closing.active_position,
-  };
 }
 
 export function resolveVisibleMessagePositions(
@@ -635,15 +586,15 @@ export function hasOversizedVisibleMessages(
   maxBytes: number,
   roles: readonly string[],
 ): boolean {
+  const validity = transcriptPredicateSql(projection.database.db, "navigation_valid", "event");
+  const role = transcriptPredicateSql(projection.database.db, "message_role", "event");
   return selectVisibleMessageRanges(projection, start, endExclusive).some((range) => {
     const row = executeSqliteQueryTakeFirstSync(
       projection.database.db,
       selectMessageRows(projection.database, projection.resolved.sessionId, range)
-        .select(["active.event_seq", "event.navigation_valid"])
+        .select(validity.as("navigation_valid"))
         .where((eb) => eb(transcriptEventReadBytesSql("event"), ">=", maxBytes))
-        .where((eb) =>
-          eb.or([eb("event.message_role", "in", roles), eb("event.navigation_valid", "=", 0)]),
-        )
+        .where((eb) => eb.or([eb(role, "in", roles), eb(validity, "=", 0)]))
         .limit(1),
     );
     assertTranscriptNavigationValid(row?.navigation_valid);
@@ -718,10 +669,10 @@ export function readVisibleTranscriptStats(
         .onRef("event.seq", "=", "active.event_seq"),
     )
     .select((eb) => [
-      eb.fn.count<number>("active.event_seq").as("event_count"),
+      eb.fn.countAll<number>().as("event_count"),
       /* kysely-allow-raw: JSONL size includes one terminating newline per event. */
-      sql<number>`COALESCE(SUM(${transcriptEventReadBytesSql("event")} ), 0)
-        + COUNT(*)`.as("size_bytes"),
+      sql<number>`CAST(COALESCE(SUM(${transcriptEventReadBytesSql("event")} ), 0)
+        + COUNT(*) AS BIGINT)`.as("size_bytes"),
     ])
     .where("active.session_id", "=", projection.resolved.sessionId)
     .where("active.context_eligible", "=", 1);

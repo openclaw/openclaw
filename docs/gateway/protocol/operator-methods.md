@@ -158,15 +158,15 @@ connections retain the previous row shape. Generic client libraries do not opt
 in: a proxy forwarding a capable connection must support its negotiated row
 shape, or use a capless context for an older closed-schema consumer.
 
-Ordinary requests read the published catalog without starting provider discovery.
-Views select rows; they do not decide whether discovery runs. If the owner is not
+Ordinary requests read the published catalog while the owner acquires native
+inventory in the background. If the owner is not
 published yet, the request reports that the model catalog is not ready. A result
 whose owner becomes stale during projection is rejected with `UNAVAILABLE`,
 `retryable: true`, and `retryAfterMs: 0`. The Control UI shares one retry across
 catalog consumers, retaining cancellation and any explicit request deadline.
 
-- `preparedOnly: true` remains supported for automatic clients. Ordinary reads
-  are passive with or without this flag.
+- `preparedOnly: true` and the `"provider-config"` view do not request native
+  inventory acquisition.
 - `refresh: true` requests provider acquisition before reading the new published
   generation. Concurrent refreshes share the owner build. A failed acquisition
   retains compatible rows and reports its `providerOutcomes`; successful empty
@@ -178,6 +178,22 @@ catalog consumers, retaining cancellation and any explicit request deadline.
 - `includeDetails: true` includes available input modalities, effective
   `contextTokens`, and a `local` endpoint classification. It does not expose
   endpoint URLs, headers, credentials, costs or runtime request parameters.
+
+An unchanged catalog renewal emits `chat.metadata.changed` with
+`modelCatalogChanged: false` and `modelCatalogStatusChanged: true`. The Control UI
+refreshes only cached receipts that still contain `pendingProviders`; settled
+catalogs remain reusable. Inventory, availability, and account changes still
+invalidate affected catalogs.
+
+The Control UI shares the initial `models.snapshot` with matching configured
+catalog readers. If bootstrap does not deliver it within one second, readers
+fall back to `models.list`. A late bootstrap snapshot can still settle a pending
+read, but cannot overwrite a completed fallback result. This wait precedes
+the ordinary per-RPC timeout; explicit refreshes and sub-second timeout budgets
+bypass it. Cached catalogs, including pending discovery results,
+remain reusable until a catalog or session-model change invalidates their scope
+or a reported cooldown expires. A different session or account requires its own
+projection; returning to a cached scope does not fetch it again.
 
 For a conversation picker, pass `sessionKey` to read the session's saved
 agent and saved account selection. A conflicting `agentId` is rejected. The

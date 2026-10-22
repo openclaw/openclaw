@@ -75,9 +75,10 @@ export function isPreviewAnchor(anchor: HTMLAnchorElement): boolean {
   ) {
     return false;
   }
+  // Preview opt-out is independent of click routing (unlike link-reader-external).
   if (
     anchor.matches(
-      "[download], [data-file-path], [data-session-href], .markdown-session-link, [data-link-reader-external]",
+      '[download], [data-file-path], [data-session-href], .markdown-session-link, [data-link-reader-external], [data-link-reader-preview="off"]',
     )
   ) {
     return false;
@@ -99,9 +100,11 @@ export function canPreviewPages(owner: HoverPreviewOwner): boolean {
   return Boolean(
     context?.config.current.automaticallyFetchFavicons &&
     context.gateway.snapshot.client === owner.client &&
-    canCallGatewayMethod(context.gateway.snapshot, "controlUi.linkPreview", "operator.read", {
-      requireAdvertisement: false,
-    }),
+    !owner.client?.offlineRecoveryRetired &&
+    (context.gateway.snapshot.phase !== "connected" ||
+      canCallGatewayMethod(context.gateway.snapshot, "controlUi.linkPreview", "operator.read", {
+        requireAdvertisement: false,
+      })),
   );
 }
 

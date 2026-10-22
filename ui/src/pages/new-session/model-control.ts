@@ -31,7 +31,6 @@ import {
   createEmptyDraftModelMetadata,
   isDraftAccountModelAvailable,
   resolveDraftModelControls,
-  resolveDraftModelUnavailableReason,
   resolveDraftModelSelectionBlockedReason,
   type NewSessionModelMetadata,
 } from "./model-target.ts";
@@ -54,6 +53,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
   private agentId = "";
   private metadataState = createEmptyDraftModelMetadata();
   private readonly metadataReader: ModelCatalogReader;
+  metadataRead: Promise<ModelCatalogResult | undefined> | undefined;
   private metadataClient: NewSessionMetadataClient | undefined;
   private metadataScope: ModelCatalogReadScope | undefined;
   private metadataIdentityId: string | undefined;
@@ -115,6 +115,9 @@ export class NewSessionModelControl extends NewSessionModelSelection {
       },
       {
         timeoutMs: DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS,
+        onRead: (read) => {
+          this.metadataRead = read;
+        },
         onResult: (result) => {
           if (this.ownsMetadata()) {
             this.publishMetadataCatalog(result);
@@ -141,6 +144,7 @@ export class NewSessionModelControl extends NewSessionModelSelection {
 
   private clearMetadataSubscription() {
     this.metadataReader.clear();
+    this.metadataRead = undefined;
     this.metadataScope = undefined;
     this.metadataGateway = undefined;
   }
@@ -422,15 +426,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
     });
   }
 
-  modelUnavailableReason(agent: GatewayAgentRow | undefined) {
-    return resolveDraftModelUnavailableReason({
-      model: this.effectiveModel,
-      agentRuntime: this.agentRuntime,
-      metadata: this.metadataState,
-      agent,
-    });
-  }
-
   modelSelectionBlockedReason(
     agent: GatewayAgentRow | undefined,
     inference?: "worker",
@@ -626,6 +621,10 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         );
   }
 
+  get metadataReadScope() {
+    return this.metadataScope;
+  }
+
   renderProps(options: NewSessionModelRenderOptions): ChatModelControlsProps {
     const snapshot = options.context?.gateway.snapshot;
     const sessionKey = `new-session:${normalizeAgentId(options.agentId)}`;
@@ -671,7 +670,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
               }
             : undefined,
           onManage: () => options.context?.navigate("profile"),
-          onRequestUpdate: this.notify,
         }),
       activeRunId: null,
       connected: snapshot?.phase === "connected",
@@ -734,7 +732,6 @@ export class NewSessionModelControl extends NewSessionModelSelection {
         }
         this.catalogTargets.retry(metadataClient, this.agentId);
       },
-      onRequestUpdate: this.notify,
     };
   }
 }

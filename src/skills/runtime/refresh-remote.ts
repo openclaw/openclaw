@@ -10,7 +10,6 @@ const runInSkillsWatcherContext = AsyncLocalStorage.snapshot();
 const MAX_REMOTE_WATCHERS = 128;
 type RemoteSkillsWatch = {
   access: AgentWorkspaceAccess;
-  workspaceDir: string;
   agentIds: Set<string>;
   unowned: boolean;
   signature: string;
@@ -76,7 +75,6 @@ export function ensureRemoteSkillsWatcher(params: {
     }
     const state: RemoteSkillsWatch = {
       access,
-      workspaceDir,
       agentIds: new Set(params.agentId ? [params.agentId] : []),
       unowned: params.agentId === undefined,
       signature,

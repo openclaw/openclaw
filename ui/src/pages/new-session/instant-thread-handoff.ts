@@ -48,15 +48,15 @@ export function prepareInstantThreadHandoff(options: {
           options.message,
           options.composer,
           params.displayName,
+          params.category,
         )
       : undefined;
   };
 }
 
 /**
- * A transient route owns the original draft element, not a copy of its controllers.
- * Its attachment custody, selection flags and frozen startup intent survive rollback.
- * No draft bytes are persisted here, including incognito drafts.
+ * Retain the original draft element, attachments, selections and startup intent for rollback.
+ * Never persist draft bytes, including incognito drafts.
  */
 export class InstantThreadHandoff {
   private readonly creation;
@@ -84,6 +84,7 @@ export class InstantThreadHandoff {
     message: Parameters<ApplicationContext["chatSubmissions"]["beginCreate"]>[0]["message"],
     composer?: CreationComposer,
     displayName?: string,
+    category?: string,
   ) {
     this.creation = { sessionKey: key, admitted: false };
     this.client = context.gateway.snapshot.client;
@@ -120,6 +121,7 @@ export class InstantThreadHandoff {
       message,
       composer,
       displayName,
+      category,
       // This transaction owns live identity/navigation authority. The display store
       // consumes that decision instead of maintaining a second authentication snapshot.
       canDisplay: () => this.canDisplay(),
@@ -129,6 +131,7 @@ export class InstantThreadHandoff {
       once: true,
       signal: this.lifetime.signal,
     });
+    // Connection receipts retire preview authority and start the retained draft's rollback.
     this.stopGateway = context.gateway.subscribe(() => {
       const snapshot = context.gateway.snapshot;
       if (

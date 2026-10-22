@@ -71,10 +71,7 @@ if (parentPort && workerData?.managedHandoffEngine === true) {
     import("./worker-task-server.js"),
   ]);
   // Snapshot inspection may copy a large SQLite file; keep it off the calling thread.
-  serveWorkerTasks((pathname) => {
-    if (typeof pathname !== "string") {
-      throw new Error("Invalid managed handoff state path");
-    }
+  serveWorkerTasks<"sqlite" | "postgres" | undefined, string>((pathname) => {
     return existsSync(pathname) ? readBackupEngine(pathname).engine : undefined;
   });
 }

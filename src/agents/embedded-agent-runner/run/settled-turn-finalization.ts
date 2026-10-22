@@ -9,7 +9,6 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { classifyAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { runAgentHarnessSettledTurnFinalization } from "../../harness/selection.js";
-import type { PreparedSettledTurnFinalizationResult } from "../../harness/settled-turn-finalization-outcome.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { observeReplyDelivery, resolveReplyExpectation } from "../../reply-completion.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
@@ -87,7 +86,6 @@ async function prepareSettledTurnFinalization(
     };
   };
   const delivery = await observeSourceDelivery();
-  const { replyDeliveryState } = delivery;
   const prepared = prepareEmbeddedRunTerminal({
     ...input,
     ...delivery,
@@ -103,7 +101,9 @@ async function prepareSettledTurnFinalization(
       prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout,
     hasTerminalToolPresentation: options.hasTerminalToolPresentation,
     terminalState: input.terminalState,
-    replyDeliveryState,
+    // Terminal preparation reconciles committed tool delivery with the observer.
+    // An absent observer must not generate another answer after a confirmed send.
+    replyDeliveryState: prepared.replyDeliveryState,
     settledTurnFinalizationAvailable:
       !input.runParams.providerReviewAcknowledgment &&
       typeof options.harness.finalizeSettledTurn === "function",
@@ -411,6 +411,7 @@ async function runPreparedSettledTurnFinalization(input: {
         {
           ...input.attempt,
           abortSignal: controls.abortSignal,
+          bindWatchdogAttempt: controls.bindWatchdogAttempt,
           onAttemptDeadlineChanged: controls.onAttemptDeadlineChanged,
           onAttemptTimeout: controls.onAttemptTimeout,
           onAttemptAbort: controls.onAttemptAbort,
@@ -426,70 +427,59 @@ async function runPreparedSettledTurnFinalization(input: {
         input.harness,
       ),
     );
+    const outcome = finalization.outcome;
+    const result = finalization.result;
+    const settledAttempt = input.settledAttempt;
+    const prompt = input.prompt;
+    const agentHarnessId = input.attempt.agentHarnessId;
+    const runtimePlan = input.attempt.runtimePlan;
+    const { preparedTerminalReply } = result;
+    const text = preparedTerminalReply.text;
+    // Finalization replaces terminal ownership, not host-private facts from settled tools.
+    // Its response model does not replace the original runtime-owned selection.
+    // Replay, abort, and lifecycle state remain finalizer-local.
     return {
-      outcome: finalization.outcome,
-      attempt: buildSettledTurnFinalizationAttemptResult({
-        result: finalization.result,
-        settledAttempt: input.settledAttempt,
-        prompt: input.prompt,
-        agentHarnessId: input.attempt.agentHarnessId,
-        runtimePlan: input.attempt.runtimePlan,
-      }),
+      outcome,
+      attempt: {
+        terminal: { kind: "ok" },
+        preparedTerminalReply,
+        sessionIdUsed: settledAttempt.sessionIdUsed,
+        sessionFileUsed: settledAttempt.sessionFileUsed,
+        ...(agentHarnessId ? { agentHarnessId } : {}),
+        modelAttempt: resolveRuntimeModelAttempt(runtimePlan),
+        ...(settledAttempt.runtimeModelSelection
+          ? { runtimeModelSelection: settledAttempt.runtimeModelSelection }
+          : {}),
+        contextTokens: settledAttempt.contextTokens,
+        contextTokensSource: settledAttempt.contextTokensSource,
+        authBindingFingerprint: settledAttempt.authBindingFingerprint,
+        runtimeArtifact: settledAttempt.runtimeArtifact,
+        systemPromptReport: settledAttempt.systemPromptReport,
+        finalPromptText: prompt,
+        ...copyAttemptDeliveryState(settledAttempt),
+        messagesSnapshot: [...settledAttempt.messagesSnapshot, result.assistant],
+        assistantTexts: text ? [text] : [],
+        assistantTranscriptOwned: result.assistantTranscriptOwned,
+        assistantTranscriptIdempotencyKey: result.assistantTranscriptIdempotencyKey,
+        lastAssistantTextMessageIndex: result.assistantMessageIndex,
+        lastAssistant: result.assistant,
+        currentAttemptAssistant: result.assistant,
+        currentAttemptCompletedAssistant: result.assistant,
+        toolMetas: settledAttempt.toolMetas,
+        lastToolError: settledAttempt.lastToolError,
+        successfulNestedToolNames: settledAttempt.successfulNestedToolNames,
+        hasToolMediaBlockReply: false,
+        cloudCodeAssistFormatError: false,
+        attemptUsage: result.usage,
+        codeModeEngaged: settledAttempt.codeModeEngaged,
+        assistantTurns: 1,
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
+        diagnosticTrace: result.diagnosticTrace,
+      },
     };
   } finally {
     controls.close();
   }
-}
-
-function buildSettledTurnFinalizationAttemptResult(input: {
-  result: PreparedSettledTurnFinalizationResult;
-  settledAttempt: EmbeddedRunAttemptWithReceiptEvidence;
-  prompt: string;
-  agentHarnessId?: string;
-  runtimePlan?: EmbeddedRunAttemptParams["runtimePlan"];
-}): EmbeddedRunAttemptWithReceiptEvidence {
-  const { result, settledAttempt } = input;
-  const { preparedTerminalReply } = result;
-  const text = preparedTerminalReply.text;
-  // Finalization replaces terminal ownership, not host-private facts from settled tools.
-  // Its response model does not replace the original runtime-owned selection.
-  // Replay, abort, and lifecycle state remain finalizer-local.
-  return {
-    terminal: { kind: "ok" },
-    preparedTerminalReply,
-    sessionIdUsed: settledAttempt.sessionIdUsed,
-    sessionFileUsed: settledAttempt.sessionFileUsed,
-    ...(input.agentHarnessId ? { agentHarnessId: input.agentHarnessId } : {}),
-    modelAttempt: resolveRuntimeModelAttempt(input.runtimePlan),
-    ...(settledAttempt.runtimeModelSelection
-      ? { runtimeModelSelection: settledAttempt.runtimeModelSelection }
-      : {}),
-    contextTokens: settledAttempt.contextTokens,
-    contextTokensSource: settledAttempt.contextTokensSource,
-    authBindingFingerprint: settledAttempt.authBindingFingerprint,
-    runtimeArtifact: settledAttempt.runtimeArtifact,
-    systemPromptReport: settledAttempt.systemPromptReport,
-    finalPromptText: input.prompt,
-    ...copyAttemptDeliveryState(settledAttempt),
-    messagesSnapshot: [...settledAttempt.messagesSnapshot, result.assistant],
-    assistantTexts: text ? [text] : [],
-    assistantTranscriptOwned: result.assistantTranscriptOwned,
-    assistantTranscriptIdempotencyKey: result.assistantTranscriptIdempotencyKey,
-    lastAssistantTextMessageIndex: result.assistantMessageIndex,
-    lastAssistant: result.assistant,
-    currentAttemptAssistant: result.assistant,
-    currentAttemptCompletedAssistant: result.assistant,
-    toolMetas: settledAttempt.toolMetas,
-    lastToolError: settledAttempt.lastToolError,
-    successfulNestedToolNames: settledAttempt.successfulNestedToolNames,
-    hasToolMediaBlockReply: false,
-    cloudCodeAssistFormatError: false,
-    attemptUsage: result.usage,
-    codeModeEngaged: settledAttempt.codeModeEngaged,
-    assistantTurns: 1,
-    replayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
-    diagnosticTrace: result.diagnosticTrace,
-  };
 }

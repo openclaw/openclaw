@@ -446,7 +446,7 @@ export function buildInboundMetaSystemPrompt(
     surface: normalizePromptMetadataString(ctx.Surface),
     chat_type: chatType ?? "direct",
   };
-  // Heartbeats and system events use the same prepared context, including their delivery channel.
+  // System events use the same prepared context, including their delivery channel.
   const deliveryFormat =
     options?.includeFormattingHints === false
       ? undefined

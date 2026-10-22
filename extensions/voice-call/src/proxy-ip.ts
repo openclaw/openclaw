@@ -1,4 +1,3 @@
-// Voice Call plugin module normalizes proxy IP representations.
 export function normalizeProxyIp(value: string | undefined): string | undefined {
   const trimmed = value?.trim();
   if (!trimmed) {

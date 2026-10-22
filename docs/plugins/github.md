@@ -87,10 +87,21 @@ or app widgets.
 
 ## Ask the agent to read an item
 
-Give the agent a public GitHub issue, pull request, or commit URL. The
+Give the agent a public GitHub issue, pull request, commit, or Actions workflow-job URL. The
 `github_read` tool reads it through the Gateway and returns the title, description,
 applicable discussion and review comments, file changes, and pull request checks.
 It accepts `url` and optional `refresh: true` to fetch current content.
+
+For an Actions URL such as
+`https://github.com/OWNER/REPO/actions/runs/RUN_ID/job/JOB_ID`, the reader returns
+the completed job's name, run/job IDs, conclusion, commit SHA, and complete lines
+from the last 64 KiB of its log. Earlier output is explicitly marked omitted with
+`partial` and `bodyTruncated`. Logs are fetched fresh, redacted, and treated as
+untrusted content; they do not establish that omitted output was read. Running,
+expired, deleted, or inaccessible logs return an error. GitHub may require the
+selected identity to have Actions read access even for a public job. The Gateway
+keeps download URLs and credentials private. Job links in the UI continue to open
+on GitHub; this tool does not rerun jobs or download log archives.
 
 This tool works for permitted sandboxed agents without GitHub credentials or
 outbound network access inside the sandbox. The Gateway selects the invoking
@@ -177,14 +188,19 @@ hovercard, and GitHub links open externally.
 - Hover previews are shared for one minute across readers using the same GitHub
   identity. Concurrent requests share a fetch, but each reader must still have
   access when the result arrives. Expired previews can appear with a stale marker
-  while one background refresh runs. Cached delivery checks the current credential
+  while one background refresh runs. The hovercard displays that cached response
+  immediately; reopening or prefetching it after the 30-second stale-cache backoff
+  reads the refreshed metadata. An already-open card does not poll for updates.
+  Cached delivery checks the current credential
   once; each upstream dispatch also checks it. **Refresh** waits for current metadata.
   Refreshes use GitHub ETags for unchanged item and commit responses; identity
   changes, eviction, or a failed refresh retire those cached responses. Repository
   visibility is checked again for every authenticated refresh.
-  Anonymous author and coauthor avatars are shared across previews for up to five
-  minutes, including concurrent reads and previews of different items. Metadata
-  and repository access checks remain scoped to the selected GitHub identity.
+  Anonymous author and coauthor avatars are shared across previews for five minutes,
+  including concurrent reads and previews of different items. Expired images remain
+  visible while one background refresh runs; updated images appear with a subsequent
+  preview load. Metadata and repository access checks remain scoped to the selected
+  GitHub identity.
 - Slow preview reads (500 ms or longer) log phase durations for identity preparation,
   cache/load wait, delivery credential checks, metadata rendering, optional decoration,
   and upstream authentication/network waits. Network timings cover response headers;

@@ -1,13 +1,18 @@
 import {
   CLAW_PACKAGE_REF_SCHEMA_VERSION,
-  type persistClawPackageRef,
   type PersistedClawPackageRef,
-} from "./provenance.js";
+} from "./package-extension-provenance.js";
+import type { ClawAddPlan, ResolvedClawPackage } from "./types.js";
+
+type ClawPackageReceiptOptions = Pick<
+  PersistedClawPackageRef,
+  "status" | "relationship" | "origin" | "independentOwner"
+> & { nowMs?: number };
 
 export function createStatelessClawPackageReceipt(
-  plan: Parameters<typeof persistClawPackageRef>[0],
-  pkg: Parameters<typeof persistClawPackageRef>[1],
-  options: Parameters<typeof persistClawPackageRef>[2] = {},
+  plan: ClawAddPlan,
+  pkg: ResolvedClawPackage,
+  options: ClawPackageReceiptOptions,
 ): PersistedClawPackageRef {
   const nowMs = options.nowMs ?? Date.now();
   return {
@@ -19,10 +24,10 @@ export function createStatelessClawPackageReceipt(
     ref: pkg.ref,
     version: pkg.version,
     integrity: pkg.integrity,
-    status: options.status ?? "complete",
-    relationship: options.relationship ?? (pkg.kind === "skill" ? "managed" : "referenced"),
-    origin: options.origin ?? "claw-introduced",
-    independentOwner: options.independentOwner ?? false,
+    status: options.status,
+    relationship: options.relationship,
+    origin: options.origin,
+    independentOwner: options.independentOwner,
     ...(pkg.extension ? { extension: pkg.extension } : {}),
     installedAtMs: nowMs,
     updatedAtMs: nowMs,

@@ -63,8 +63,8 @@ vi.mock("../internal/gateway.js", () => ({
 }));
 
 const webSocketConstructor = vi.hoisted(() => vi.fn());
-vi.mock("../internal/ws-runtime.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../internal/ws-runtime.js")>()),
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
   WebSocket: webSocketConstructor,
 }));
 

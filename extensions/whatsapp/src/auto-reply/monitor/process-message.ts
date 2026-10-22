@@ -45,7 +45,6 @@ import {
   createWhatsAppReplyPlan,
   prepareWhatsAppInboundContext,
   resolveWhatsAppDmRouteTarget,
-  resolveWhatsAppResponsePrefix,
   updateWhatsAppMainLastRoute,
 } from "./inbound-dispatch.js";
 import { trackBackgroundTask, updateLastRouteInBackground } from "./last-route.js";
@@ -58,6 +57,7 @@ import {
   normalizeE164,
   resolveChannelContextVisibilityMode,
   resolveInboundSessionEnvelopeContextAsync,
+  resolveIdentityNamePrefix,
   resolvePinnedMainDmOwnerFromAllowlist,
   isControlCommandMessage,
   shouldComputeCommandAuthorized,
@@ -340,12 +340,15 @@ export async function processMessage(params: {
     channel: "whatsapp",
     accountId: params.route.accountId,
   });
-  const responsePrefix = resolveWhatsAppResponsePrefix({
-    cfg: params.cfg,
-    agentId: params.route.agentId,
-    isSelfChat: conversationKind !== "group" && inboundPolicy.isSelfChat,
-    pipelineResponsePrefix: replyPipeline.responsePrefix,
-  });
+  const configuredResponsePrefix = params.cfg.messages?.responsePrefix;
+  const responsePrefix =
+    replyPipeline.responsePrefix ??
+    (configuredResponsePrefix === "auto"
+      ? resolveIdentityNamePrefix(params.cfg, params.route.agentId)
+      : configuredResponsePrefix) ??
+    (conversationKind !== "group" && inboundPolicy.isSelfChat
+      ? resolveIdentityNamePrefix(params.cfg, params.route.agentId)
+      : undefined);
   const replyThreading = resolveBatchedReplyThreadingPolicy(
     account.replyToMode ?? "off",
     params.msg.event.isBatched === true,

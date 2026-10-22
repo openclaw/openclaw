@@ -50,7 +50,7 @@ import { resolveMatrixMonitorConfig } from "./config.js";
 import { createDirectRoomTracker } from "./direct.js";
 import { registerMatrixMonitorEvents } from "./events.js";
 import { createMatrixRoomMessageHandler } from "./handler.js";
-import { createMatrixInboundEventDeduper } from "./inbound-dedupe.js";
+import { createMatrixIngressMonitor } from "./ingress.js";
 import { shouldPromoteRecentInviteRoom } from "./recent-invite.js";
 import { createMatrixRoomInfoResolver } from "./room-info.js";
 import { resolveMatrixRoomConfig } from "./rooms.js";
@@ -212,6 +212,8 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
   });
   let disposeAutoJoin = () => {};
   let disposeMonitorEvents = () => {};
+  let disposeSyncIngress = () => {};
+  let ingress: ReturnType<typeof createMatrixIngressMonitor> | undefined;
   let syncLifecycle: ReturnType<typeof createMatrixMonitorSyncLifecycle> | null = null;
   let monitorSetupClosed = false;
   const cleanup = (mode: "persist" | "stop" = "persist"): Promise<void> => {
@@ -297,10 +299,14 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     detachListeners: () => {
       disposeAutoJoin();
       disposeMonitorEvents();
+      disposeSyncIngress();
       client?.off("sync.state", onSyncState);
       syncLifecycle?.dispose();
     },
-    waitForTasks: monitorTaskRunner.waitForIdle,
+    waitForTasks: async () => {
+      await ingress?.stop();
+      await monitorTaskRunner.waitForIdle();
+    },
     cleanup: () => threadBindingManager?.stop(),
   };
 
@@ -308,7 +314,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
     clientLease = await acquireSharedMatrixClient({
       cfg,
       auth: authWithLimit,
-      startClient: false,
       accountId: auth.accountId,
       abortSignal: opts.abortSignal,
       role: "monitor",
@@ -318,20 +323,13 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       ? AbortSignal.any([opts.abortSignal, clientLease.abortSignal])
       : clientLease.abortSignal;
     clientLease.registerMonitorRetirement(monitorRetirement);
-    const inboundDeduper = createMatrixInboundEventDeduper({
-      auth,
-      env: process.env,
-    });
     syncLifecycle = createMatrixMonitorSyncLifecycle({
       client,
       statusController,
       isStopping: () => cleanedUp || monitorLifecycleSignal?.aborted === true,
     });
     client.on("sync.state", onSyncState);
-    // Cold starts should ignore old room history, but once we have a persisted
-    // /sync cursor we want restart backlogs to replay just like other channels.
-    const dropPreStartupMessages = !client.hasPersistedSyncState();
-    const { getRoomInfo, getMemberDisplayName, invalidateMemberDisplayName } =
+    const { getRoomInfo, getMemberDisplayName, invalidateMemberDisplayName, invalidateRoomName } =
       createMatrixRoomInfoResolver(client);
     const isExplicitlyConfiguredRoom = async (roomId: string): Promise<boolean> => {
       const roomInfoForConfig = needsRoomAliasesForConfig
@@ -413,9 +411,6 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       dmPolicy,
       mediaMaxBytes,
       historyLimit,
-      startupMs,
-      dropPreStartupMessages,
-      inboundDeduper,
       directTracker,
       getRoomInfo,
       getMemberDisplayName,
@@ -462,15 +457,25 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       needsRoomAliasesForConfig,
       getRoomInfo,
       invalidateMemberDisplayName,
+      invalidateRoomName,
       logVerboseMessage,
       warnedEncryptedRooms,
       warnedCryptoMissingRooms,
       logger,
       getHealthySyncSinceMs: () => healthySyncSinceMs,
       formatNativeDependencyHint: core.system.formatNativeDependencyHint,
-      onRoomMessage: handleRoomMessage,
       runDetachedTask: monitorTaskRunner.runDetachedTask,
     });
+
+    ingress = createMatrixIngressMonitor({
+      accountId: effectiveAccountId,
+      client,
+      startupMs,
+      dispatch: (roomId, event, lifecycle) =>
+        monitorTaskRunner.runTask(() => handleRoomMessage(roomId, event, lifecycle)),
+      onError: (error) => logger.warn("matrix ingress failed", { error: String(error) }),
+    });
+    disposeSyncIngress = await client.bindSyncIngress(ingress.admitSync);
 
     // Register Matrix thread bindings before the client starts syncing so threaded
     // commands during startup never observe Matrix as "unavailable".
@@ -480,6 +485,7 @@ export async function monitorMatrixProvider(opts: MonitorMatrixOpts = {}): Promi
       await cleanup("stop");
       return;
     }
+    ingress.start();
     logVerboseMessage("matrix: client started");
 
     logger.info(`matrix: logged in as ${auth.userId}`);

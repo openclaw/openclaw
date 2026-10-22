@@ -43,7 +43,13 @@ export const deviceDesktopEnvironments: EnvironmentSummary[] = [
 
 export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): DevicesProps {
   return {
+    connected: true,
     loading: false,
+    configRead: { scope: () => undefined, value: () => undefined },
+    execApprovalsRead: { scope: () => undefined, value: () => undefined },
+    inventoryRead: () => undefined,
+    inventoryScope: {},
+    onReloadInventory: () => undefined,
     nodes: [],
     presence: [],
     gatewayVersion: null,
@@ -55,6 +61,7 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
       pending: [],
       paired: [],
     },
+    devicesDeciding: [],
     canPairDevice: true,
     canManagePairing: true,
     canAdmin: true,

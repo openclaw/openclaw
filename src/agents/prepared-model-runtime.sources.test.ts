@@ -12,7 +12,6 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createConfigIO } from "../config/io.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import * as sqliteReads from "../infra/sqlite-readonly-worker.js";
 import { bindPluginMetadataSnapshotCache, createPluginCache } from "../plugins/plugin-cache.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
@@ -28,6 +27,7 @@ import { ensureOpenClawModelsJson, planOpenClawModelsJsonSource } from "./models
 import * as modelsPlan from "./models-config.plan.js";
 import * as implicitCatalog from "./models-config.providers.implicit.js";
 import * as catalogAuth from "./plugin-model-catalog-auth.js";
+import * as catalogReads from "./plugin-model-catalog-read.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -247,64 +247,56 @@ describe("prepared catalog source composition", () => {
     const authCapture = vi
       .spyOn(catalogAuth, "capturePluginModelCatalogAuth")
       .mockResolvedValue([]);
-    const workerRead = vi.spyOn(sqliteReads, "runSqliteReadOnlyOperation");
+    const workerRead = vi.spyOn(catalogReads, "readPluginModelCatalogsInWorker");
     const sql = observeMainThreadSql({ includeClose: true });
-    const scope = sqliteReads.createSqliteReadOnlyWorkerScope();
     resetModelsJsonReadyCacheForTest();
     try {
       sql.calibrate();
-      await scope.run(async () => {
-        const batch = await prepareConfiguredRuntimeFactsBatch({
-          agentFacts: [facts],
-          pluginGeneration: generation,
-        });
-        expect(
-          batch.catalogs.get(facts.input)?.templateModelRegistry.find(providerId, "persisted-only"),
-        ).toMatchObject({ id: "persisted-only", provider: providerId });
-        const source = await prepareAgentCatalogSource(facts, generation, "static");
-        expect(source).toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
-        planner.mockResolvedValueOnce({
-          action: "noop",
-          pluginCatalogWrites: {
-            [encodePluginModelCatalogRelativePath(pluginId)]: catalogs[0]!.contents,
-          },
-        });
-        const writableSource = await prepareAgentCatalogSource(
-          { ...facts, input: { ...facts.input, readOnly: false } },
-          generation,
-          "static",
-        );
-        expect(writableSource).toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
-        const options = {
-          env: facts.env,
-          pluginMetadataSnapshot: generation.pluginMetadataSnapshot,
-        };
-        await expect(
-          ensureOpenClawModelsJson(facts.input.config, facts.input.agentDir, options),
-        ).resolves.toEqual({ agentDir: facts.input.agentDir, wrote: false });
-        expect(planner).toHaveBeenLastCalledWith(
-          expect.objectContaining({ pluginCatalogs: catalogs }),
-        );
-        await expect(
-          planOpenClawModelsJsonSource(facts.input.config, facts.input.agentDir, options),
-        ).resolves.toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
-        expect(planner).toHaveBeenLastCalledWith(
-          expect.objectContaining({ pluginCatalogs: catalogs }),
-        );
+      const batch = await prepareConfiguredRuntimeFactsBatch({
+        agentFacts: [facts],
+        pluginGeneration: generation,
       });
-      await scope.close();
+      expect(
+        batch.catalogs.get(facts.input)?.templateModelRegistry.find(providerId, "persisted-only"),
+      ).toMatchObject({ id: "persisted-only", provider: providerId });
+      const source = await prepareAgentCatalogSource(facts, generation, "static");
+      expect(source).toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
+      planner.mockResolvedValueOnce({
+        action: "noop",
+        pluginCatalogWrites: {
+          [encodePluginModelCatalogRelativePath(pluginId)]: catalogs[0]!.contents,
+        },
+      });
+      const writableSource = await prepareAgentCatalogSource(
+        { ...facts, input: { ...facts.input, readOnly: false } },
+        generation,
+        "static",
+      );
+      expect(writableSource).toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
+      const options = {
+        env: facts.env,
+        pluginMetadataSnapshot: generation.pluginMetadataSnapshot,
+      };
+      await expect(
+        ensureOpenClawModelsJson(facts.input.config, facts.input.agentDir, options),
+      ).resolves.toEqual({});
+      expect(planner).toHaveBeenLastCalledWith(
+        expect.objectContaining({ pluginCatalogs: catalogs }),
+      );
+      await expect(
+        planOpenClawModelsJsonSource(facts.input.config, facts.input.agentDir, options),
+      ).resolves.toMatchObject({ modelsJsonContents, pluginCatalogs: catalogs });
+      expect(planner).toHaveBeenLastCalledWith(
+        expect.objectContaining({ pluginCatalogs: catalogs }),
+      );
       expect(workerRead).toHaveBeenCalled();
       sql.expectIdle();
     } finally {
-      try {
-        await scope.close();
-      } finally {
-        sql.restore();
-        workerRead.mockRestore();
-        planner.mockRestore();
-        authCapture.mockRestore();
-        resetModelsJsonReadyCacheForTest();
-      }
+      sql.restore();
+      workerRead.mockRestore();
+      planner.mockRestore();
+      authCapture.mockRestore();
+      resetModelsJsonReadyCacheForTest();
     }
   });
 
@@ -316,7 +308,7 @@ describe("prepared catalog source composition", () => {
       const reply = createDeferred<typeof catalogs>();
       const failure = new Error(`catalog preparation ${outcome}`);
       const workerRead = vi
-        .spyOn(sqliteReads, "runSqliteReadOnlyOperation")
+        .spyOn(catalogReads, "readPluginModelCatalogsInWorker")
         .mockImplementationOnce(async () => {
           started.resolve();
           return await reply.promise;

@@ -3,65 +3,35 @@
  * Message, tool, compaction, and liveness handlers all mutate this single
  * state shape while keeping their implementation files decoupled.
  */
-import type { AgentRunTimeoutPhase } from "@openclaw/normalization-core/agent-run-terminal-outcome";
-import type { InlineCodeState } from "../../packages/markdown-core/src/code-spans.js";
-import type { FenceScanState } from "../../packages/markdown-core/src/fences.js";
-import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
-import type { ReplyMediaAttachment } from "../auto-reply/reply-payload.js";
 import type { ReplyDirectiveParseResult } from "../auto-reply/reply/reply-directives.js";
-import type { ReasoningLevel } from "../auto-reply/thinking.js";
-import type { AgentItemEventData } from "../infra/agent-activity-events.js";
-import type { AssistantMessage, ThinkingContent } from "../llm/types.js";
+import type { ThinkingContent } from "../llm/types.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import type { AssistantPhase } from "../shared/chat-message-content.js";
-import type { AcceptedSessionSpawn } from "./accepted-session-spawn.js";
 import type { BlockChunkMetadata, EmbeddedBlockChunker } from "./embedded-agent-block-chunker.js";
-import type { LiveEditDiffProgressState } from "./embedded-agent-live-edit-diff.js";
-import type {
-  MessagingToolSend,
-  MessagingToolSourceReplyPayload,
-} from "./embedded-agent-messaging.types.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
-import type { EmbeddedRunReplayState } from "./embedded-agent-runner/replay-state.js";
-import type { EmbeddedRunAttemptResult } from "./embedded-agent-runner/run/types.js";
-import type { EmbeddedRunLivenessState } from "./embedded-agent-runner/types.js";
+import type {
+  EmbeddedAgentSubscribeState,
+  StreamBlockState,
+} from "./embedded-agent-subscribe.run-state.js";
 import type {
   BlockReplyChunking,
   SubscribeEmbeddedAgentSessionParams,
 } from "./embedded-agent-subscribe.types.js";
-import type {
-  createAssistantVisibleStreamText,
-  ThinkingTagStreamState,
-} from "./embedded-agent-utils.js";
-import type { McpConnectAction } from "./mcp-connect-action.js";
-import type { McpAppChannelView } from "./mcp-ui-resource.js";
-import type { ReplyDeliveryState } from "./reply-completion.js";
 import type { AgentMessage } from "./runtime/index.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
-import type { ToolErrorSummary } from "./tool-error-summary.js";
-import type { NormalizedUsage } from "./usage.js";
+export type {
+  CompletedAssistantAnswer,
+  EmbeddedAgentSubscribeState,
+  ExecLiveItemMetadata,
+  StreamBlockState,
+  StreamingReplyResolver,
+  ToolCallSummary,
+} from "./embedded-agent-subscribe.run-state.js";
 
 type EmbeddedSubscribeLogger = {
   debug: (message: string, meta?: Record<string, unknown>) => void;
   info: (message: string, meta?: Record<string, unknown>) => void;
   warn: (message: string, meta?: Record<string, unknown>) => void;
-};
-
-/** Per-tool metadata tracked between tool start/update/end events. */
-export type ToolCallSummary = {
-  meta?: string;
-  commandBearing: boolean;
-  instanceReplaySafe: boolean;
-  replaySafe: boolean;
-  mutatingAction: boolean;
-  ownerKey?: string;
-};
-
-export type ExecLiveItemMetadata = {
-  name: string;
-  meta?: string;
-  commandBearing?: boolean;
-  hideFromChannelProgress: boolean;
 };
 
 /** User-visible assistant stream payload emitted to subscribers. */
@@ -75,194 +45,6 @@ export type AssistantStreamData = {
   itemId?: string;
 };
 
-export type StreamingReplyResolver = (params: {
-  evtType: "text_delta" | "text_start" | "text_end";
-  next: string;
-  previousText: string;
-  previousCleaned: string;
-  visibleDelta: string;
-  appendDelta: string | null;
-  parsedStreamDirectives: ReplyDirectiveParseResult | null;
-  previousAudioDirectiveCount: number;
-  rawDirectiveSource?: string;
-  rawDirectiveDelta?: string;
-}) => {
-  text: string;
-  delta: string;
-  replace: boolean;
-  hasText: boolean;
-  replyDirectives: ReplyDirectiveParseResult | null;
-  audioDirectiveCount: number;
-};
-
-/** Incremental tag and Markdown parsing state, owned by one stream lane. */
-export type StreamBlockState = {
-  thinking: boolean;
-  final: boolean;
-  inlineCode?: InlineCodeState;
-  fence?: FenceScanState;
-  reasoningInlineCode?: InlineCodeState;
-  reasoningFence?: FenceScanState;
-  reasoningPendingFenceFragment?: string;
-  finalInlineCode?: InlineCodeState;
-  finalFence?: FenceScanState;
-  pendingFenceFragment?: string;
-  pendingTagFragment?: string;
-};
-
-/** A response-ending answer and the message index its reply payload belongs to. */
-export type CompletedAssistantAnswer = { assistant: AssistantMessage; messageIndex: number };
-
-/** Mutable subscription state shared by embedded-agent event handlers. */
-export type EmbeddedAgentSubscribeState = {
-  assistantTexts: string[];
-  answerSegments: Array<{
-    textEnd: number;
-    messageEnd: number;
-    finalMessageStart: number;
-    lastAssistant: AssistantMessage;
-    keptAnswer?: CompletedAssistantAnswer;
-    sourceReplyDeliveryState?: ReplyDeliveryState;
-  }>;
-  /** Latest response-ending answer to the current input. */
-  inputAnswer?: CompletedAssistantAnswer;
-  /** That answer while the latest assistant message added no reply of its own: the turn's reply. */
-  keptAnswer?: CompletedAssistantAnswer;
-  toolMetas: Array<
-    EmbeddedRunAttemptResult["toolMetas"][number] & {
-      parentToolCallId?: string;
-      activity?: AgentItemEventData;
-    }
-  >;
-  acceptedSessionSpawns: AcceptedSessionSpawn[];
-  toolMetaById: Map<string, ToolCallSummary>;
-  toolSummaryById: Set<string>;
-  execLiveUpdateStateById?: Map<
-    string,
-    { lastEmittedAtMs: number; itemMetadata: ExecLiveItemMetadata }
-  >;
-  liveEditDiffStateById: Map<string, LiveEditDiffProgressState>;
-  itemActiveIds: Set<string>;
-  itemStartedCount: number;
-  itemCompletedCount: number;
-  /**
-   * Completed assistant round trips in this attempt. Survives compaction-retry
-   * presentation resets, matching how usage totals keep counting model calls.
-   */
-  assistantTurnCount: number;
-  lastToolError?: ToolErrorSummary;
-  latestMcpAppChannelView?: McpAppChannelView;
-  latestMcpConnectAction?: McpConnectAction;
-
-  blockReplyBreak: "text_end" | "message_end";
-  reasoningMode: ReasoningLevel;
-  includeReasoning: boolean;
-  shouldEmitPartialReplies: boolean;
-  streamReasoning: boolean;
-
-  deltaBuffer: string;
-  /** Raw text received for the current native block, independent of snapshot separators. */
-  streamBlockText: string;
-  streamBlockFinal: boolean;
-  /** Native source boundary from which the prepared block chunker's frame begins. */
-  blockReplyScopeStart: { contentIndex: number; itemId?: string; after?: boolean } | undefined;
-  /** Scanner state shares deltaBuffer's lifecycle so each provider byte is parsed once. */
-  thinkingTagStream: ThinkingTagStreamState;
-  /**
-   * True while the buffered stream text belongs to an explicit commentary
-   * item (e.g. the Responses API "commentary" phase). Commentary is routed to
-   * a separate lane by the normal stream path, so the run-budget timeout
-   * flush must skip it too: flushing the raw deltaBuffer without this marker
-   * would publish reasoning/commentary bytes as assistant text.
-   */
-  deltaBufferIsCommentary: boolean;
-  nextCommentaryAt?: number;
-  /** Whether timeout settlement committed visible text for this message. */
-  hasFlushedPartialText: boolean;
-  partialBlockState: StreamBlockState & { inlineCode: InlineCodeState };
-  /** Accepted audio occurrences in the current partial-directive snapshot. */
-  lastAssistantAudioDirectiveCount: number;
-  assistantStream?: {
-    raw: string;
-    text: string;
-    projection?: {
-      kind: "raw" | "delivery" | "final";
-      projector: ReturnType<typeof createAssistantVisibleStreamText>;
-      resolveReply: StreamingReplyResolver;
-    };
-  };
-  lastStreamedReasoning?: string;
-  lastBlockReplyText?: string;
-  lastDeliveredBlockReplyText?: string;
-  deferBlockReplyDelivery: boolean;
-  deferredBlockReplies: BlockReplyPayload[];
-  toolExecutionSinceLastBlockReply: boolean;
-  reasoningStreamOpen: boolean;
-  assistantMessageIndex: number;
-  /** Physical message boundary; assistantMessageIndex also advances between content blocks. */
-  assistantMessageStartIndex: number;
-  lastAssistantStreamContentIndex?: number;
-  lastAssistantStreamItemId?: string;
-  lastAssistantTextMessageIndex: number;
-  lastAssistantTextContentIndex?: number;
-  lastAssistantTextItemId?: string;
-  lastAssistantTextNormalized?: string;
-  lastAssistantTextTrimmed?: string;
-  assistantTextBaseline: number;
-  suppressBlockChunks: boolean;
-  lastReasoningSent?: string;
-
-  compactionInFlight: boolean;
-  lastCompactionTokensAfter?: number;
-  pendingCompactionRetry: number;
-  unsubscribed: boolean;
-  replayState: EmbeddedRunReplayState;
-  livenessState?: EmbeddedRunLivenessState;
-  terminalStopReason?: string;
-  yielded?: boolean;
-  timeoutPhase?: AgentRunTimeoutPhase;
-  providerStarted?: boolean;
-  terminalAborted?: boolean;
-  hadDeterministicSideEffect?: boolean;
-  pendingEventChain: Promise<void> | null;
-
-  messagingToolSentTexts: string[];
-  messagingToolSentTextsNormalized: string[];
-  currentSourceMessagingToolSentTextsNormalized: string[];
-  currentSourceMessagingToolHeldPartial?: string;
-  messagingToolSentTargets: MessagingToolSend[];
-  heartbeatToolResponse?: HeartbeatToolResponse;
-  messagingToolSentMediaUrls: string[];
-  messagingToolSourceReplyPayloads: MessagingToolSourceReplyPayload[];
-  messageToolOnlySourceReplyDelivered: boolean;
-  sourceReplyDelivered?: true;
-  sourceReplyDeliveryState?: ReplyDeliveryState;
-  /** Whether the current provider turn's finished tools were only complete source progress. */
-  turnToolsOnlySourceProgress?: boolean;
-  /** The same fact for the latest provider turn that finished any tool. */
-  lastToolTurnOnlySourceProgress?: boolean;
-  successfulCronAdds: number;
-  pendingToolMediaUrls: string[];
-  pendingToolMediaAttachments?: ReplyMediaAttachment[];
-  /** Per-URL local-media trust; keys are normalized pending media URLs. */
-  pendingToolMediaTrustByUrl: Map<string, boolean>;
-  /** Exact media URLs whose owning built-in tool contract requires source delivery. */
-  toolAutoDeliveryMediaUrls: Set<string>;
-  pendingToolAudioAsVoice: boolean;
-  pendingToolMediaDeliveryFailed: boolean;
-  hasToolMediaBlockReply: boolean;
-  visibleBlockReplyCount: number;
-  /** Media selection belongs to message_end; only voice/reply intent waits for a block. */
-  pendingAssistantReplyDirectives?: Pick<
-    BlockReplyPayload,
-    "audioAsVoice" | "replyToId" | "replyToTag" | "replyToCurrent"
-  > & { audioDirectiveStart?: number };
-  deterministicApprovalPromptPending: boolean;
-  deterministicApprovalPromptSent: boolean;
-  lastAssistant?: AssistantMessage;
-};
-
-/** Handler context bundling params, mutable state, emitters, and helper hooks. */
 export type EmbeddedAgentSubscribeContext = {
   params: SubscribeEmbeddedAgentSessionParams;
   state: EmbeddedAgentSubscribeState;
@@ -319,10 +101,7 @@ export type EmbeddedAgentSubscribeContext = {
   captureModelEvent: (evt: AgentSessionEvent) => void;
   incrementCompactionCount: () => void;
   noteCompactionTokensAfter: (value: unknown) => void;
-  getUsageTotals: () => NormalizedUsage | undefined;
-  getLastAssistantUsage: () => NormalizedUsage | undefined;
   getCompactionCount: () => number;
-  getLastCompactionTokensAfter: () => number | undefined;
   emitAssistantStreamData: (
     data: AssistantStreamData,
     options?: { emitPartialReply?: boolean; finalMessage?: boolean },

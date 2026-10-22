@@ -25,6 +25,7 @@ export type IdentitySectionProps = {
   config?: ApplicationConfigCapability;
   profile: UserProfile;
   canWrite?: boolean;
+  connected: boolean;
   avatarUrl: string | null;
   displayName: string;
   gitCoauthorEnabled: boolean;
@@ -50,7 +51,7 @@ export function IdentitySection(props: IdentitySectionProps) {
         title={t("profilePage.identity.title")}
         description={t("profilePage.identity.description")}
       >
-        <Show when={!canWrite()}>
+        <Show when={!canWrite() && props.connected}>
           <SettingsRow title={t("profilePage.identity.writeRequired")} />
         </Show>
         <SettingsRow

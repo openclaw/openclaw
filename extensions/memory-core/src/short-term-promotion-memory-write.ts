@@ -1,5 +1,4 @@
 import { isUtf8 } from "node:buffer";
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
@@ -8,6 +7,7 @@ import {
   writeFileWindowFully,
 } from "openclaw/plugin-sdk/file-access-runtime";
 import type { MemoryWorkspaceFiles } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { sha256Hex as hashMemoryContent } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { getMemoryWorkspaceMaintenance, readWorkspaceFile } from "./memory-workspace-files.js";
 
@@ -142,9 +142,7 @@ async function writeExistingMemoryInPlace(params: {
   }
 }
 
-export function hashMemoryContent(content: string): string {
-  return createHash("sha256").update(content).digest("hex");
-}
+export { hashMemoryContent };
 
 export async function commitMemoryContent(
   params: MemoryFileCommit & { workspaceDir?: string },

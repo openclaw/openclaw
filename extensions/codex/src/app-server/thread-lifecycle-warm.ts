@@ -26,7 +26,7 @@ import {
   buildCodexPluginAppsConfigPatchFromPolicyContext,
   type CodexPluginThreadConfig,
 } from "./plugin-thread-config.js";
-import type { CodexThread } from "./protocol.js";
+import { isJsonObject, type CodexThread } from "./protocol.js";
 import type { CodexAppServerThreadBinding } from "./session-binding.js";
 import { retainSharedCodexAppServerClientByInstanceId } from "./shared-client.js";
 import {
@@ -183,6 +183,23 @@ export async function releaseCodexBoundLiveThread(
     return false;
   }
   const client = previous?.client ?? options.client;
+  let threadClosed: Promise<void> | undefined;
+  let stopWatching: (() => void) | undefined;
+  if (previous) {
+    // Unsubscribe acknowledges detachment, not shutdown. Observe this physical
+    // owner's stopped runtime before release can trigger its idle unload.
+    threadClosed = new Promise<void>((resolve) => {
+      stopWatching = client.addNotificationHandler((notification) => {
+        if (
+          notification.method === "thread/closed" &&
+          isJsonObject(notification.params) &&
+          notification.params.threadId === options.threadId
+        ) {
+          resolve();
+        }
+      });
+    });
+  }
   try {
     if (
       isCodexAppServerLiveThreadClaimed(client, options.threadId) ||
@@ -205,16 +222,26 @@ export async function releaseCodexBoundLiveThread(
         : undefined,
     });
   } finally {
-    // Rejection must free the lane so the claimed run can still be stopped.
-    const retiredExit = previous?.release(
-      !isCodexAppServerLiveThreadClaimed(client, options.threadId) &&
-        !isCodexAppServerLiveThreadProtected(client, options.threadId),
-    );
-    // Writer handoff waits for the retired owner to exit, but other leases can
-    // keep it alive indefinitely. This runs under the thread queue and binding
-    // lease, so cancellation must end the wait without proceeding to a write.
-    if (retiredExit) {
-      await racePromiseWithAbortSignal(retiredExit, options.signal, exitWaitAbortError);
+    try {
+      // Rejection must free the lane so the claimed run can still be stopped.
+      const retiredExit = previous?.release(
+        !isCodexAppServerLiveThreadClaimed(client, options.threadId) &&
+          !isCodexAppServerLiveThreadProtected(client, options.threadId),
+      );
+      if (retiredExit) {
+        // A sibling lease can retain the retired process indefinitely. Exact
+        // thread closure confirms runtime shutdown; native resume independently
+        // enforces its exclusive persistence writer lock, including shutdown errors.
+        await options.lifecycleTiming.measure("retired-thread-runtime-release", () =>
+          racePromiseWithAbortSignal(
+            threadClosed ? Promise.race([retiredExit, threadClosed]) : retiredExit,
+            options.signal,
+            exitWaitAbortError,
+          ),
+        );
+      }
+    } finally {
+      stopWatching?.();
     }
   }
 }
@@ -458,6 +485,7 @@ export async function tryReuseCodexLiveThread(
             params.params,
             options.hostSystemAgentActive,
             binding,
+            params,
           ))
     ) {
       // Refusal must leave the original ephemeral or protected owner available.
@@ -474,6 +502,7 @@ export async function tryReuseCodexLiveThread(
           resumeAuthProfileId,
           dynamicToolsFingerprint,
           binding,
+          params,
         );
     if (!incognito && retainedThread.configFingerprint !== liveThreadConfigFingerprint) {
       // Return the same owner first: cold-resume preparation must observe native teardown

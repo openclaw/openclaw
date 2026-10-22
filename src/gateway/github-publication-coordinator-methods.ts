@@ -51,6 +51,7 @@ export type GitHubPublicationClaimRequest = {
   idempotencyKey: string;
   title?: string;
   body?: string;
+  draft?: boolean;
   requester: GitHubPublicationRequester;
   expectedPublisher?: GitHubPublicationPublisher;
 };
@@ -101,6 +102,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
   sameWorktree: (
     row: PublicationRow,
     worktree: Awaited<ReturnType<typeof readGitHubPublicationWorktreeOwner>>["worktree"],
+    publicationBranch?: string,
   ) => boolean;
   processRow: (
     initial: PublicationRow,
@@ -125,16 +127,42 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     assertRequester();
     // Inline processing completes during the requesting run's tool call; its
     // transcript notice belongs to that run rather than splitting the turn.
-    const processDuringRun = (row: PublicationRow, validateExecution: () => boolean) => {
+    const processDuringRun = async (row: PublicationRow, validateExecution: () => boolean) => {
       if (input.expectedRunId) {
         params.recordRequestingRun(row.request_id, input.expectedRunId);
       }
-      return processRow(
-        row,
-        validateExecution,
-        input.requester.assertInvocationCurrent,
-        input.requester.signal,
-      );
+      try {
+        return await processRow(
+          row,
+          validateExecution,
+          input.requester.assertInvocationCurrent,
+          input.requester.signal,
+        );
+      } catch (error) {
+        if (
+          !(error instanceof GitHubPublicationRecoveryPendingError) ||
+          !initialAuthority.loaded.entry.worktree?.githubPullRequest
+        ) {
+          throw error;
+        }
+        // Native recovery retains this accepted request; a new tool call has a different key.
+        params.assertCurrent();
+        assertRequester();
+        const retained = await readSharedGitHubPublication(session, { requestId: row.request_id });
+        params.assertCurrent();
+        assertRequester();
+        if (!retained) {
+          throw error;
+        }
+        const result = publicationResult(retained);
+        return result.status === "requested" || result.status === "publishing"
+          ? {
+              ...result,
+              message:
+                "The original PR publication is awaiting confirmation. Finish the turn and wait for this request's result in the conversation; do not submit another publication to recover it.",
+            }
+          : result;
+      }
     };
     using selectedSession = await prepareGitHubPublicationSession(input.sessionKey, {
       cfg: params.getCommittedRuntimeConfig(),
@@ -147,6 +175,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
       throw new Error("GitHub publication session changed.");
     }
     const initialAuthority = await readGitHubPublicationWorktreeOwner({
+      allowExistingPullRequest: true,
       sessionId,
       sessionKey: input.sessionKey,
       agentId: input.agentId,
@@ -199,6 +228,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
         requester: input.requester,
         ...(input.title ? { title: input.title } : {}),
         ...(input.body ? { body: input.body } : {}),
+        ...(input.draft !== undefined ? { draft: input.draft } : {}),
       };
       const accepted = await params.requestForClaimV2(claimRequest);
       assertRequester();
@@ -222,18 +252,25 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     const worktreeOwner = initialAuthority;
     const { worktree } = worktreeOwner;
     assertRequester();
+    const existing = await readGitHubPublicationRequestAsync({
+      sessionId,
+      idempotencyKey: input.idempotencyKey,
+    });
     const requestDigest = digestRequest({
       sessionId,
       idempotencyKey: input.idempotencyKey,
       title: input.title,
       body: input.body,
-    });
-    const existing = await readGitHubPublicationRequestAsync({
-      sessionId,
-      idempotencyKey: input.idempotencyKey,
+      draft:
+        existing && existing.draft == null && input.draft === undefined
+          ? undefined
+          : (input.draft ?? false),
     });
     if (existing) {
-      if (existing.request_digest !== requestDigest || !sameWorktree(existing, worktree)) {
+      if (
+        existing.request_digest !== requestDigest ||
+        !sameWorktree(existing, worktree, worktreeOwner.publicationBranch)
+      ) {
         throw new Error("GitHub publication idempotency key was reused.");
       }
       if (existing.status === "published" || existing.status === "failed") {
@@ -300,6 +337,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
                 idempotencyKey: input.idempotencyKey,
                 title: input.title,
                 body: input.body,
+                draft: input.draft ?? false,
               },
               requestId,
               requestDigest,
@@ -312,7 +350,7 @@ export function createGitHubPublicationCoordinatorMethods(params: {
               worktree: {
                 id: worktree.id,
                 repoFingerprint: worktree.repoFingerprint,
-                branch: worktree.branch,
+                branch: worktreeOwner.publicationBranch,
               },
               sessionId,
               lifecycleRevision,
@@ -342,7 +380,6 @@ export function createGitHubPublicationCoordinatorMethods(params: {
             assertCurrent: assertCaptureAuthority,
           });
     assertCaptureAuthority();
-    worktreeOwner.assertCurrent();
     const row = await insertSessionRequest(snapshot);
     return await processDuringRun(row, validateLocalExecution);
   };
@@ -465,6 +502,14 @@ export function createGitHubPublicationCoordinatorMethods(params: {
     ): Promise<SessionGitHubStatusResult | undefined> {
       const row = await readSharedGitHubPublication(session, { requestId });
       return row ? { result: publicationResult(row), confirmation: null } : undefined;
+    },
+
+    async latestPublishedShared(
+      session: PublicationSessionIdentity,
+      preparedRead: Parameters<typeof readSharedGitHubPublication>[2],
+    ): Promise<SessionGitHubStatusResult | null> {
+      const row = await readSharedGitHubPublication(session, { status: "published" }, preparedRead);
+      return row ? { result: publicationResult(row), confirmation: null } : null;
     },
 
     async latestShared(

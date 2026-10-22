@@ -51,6 +51,7 @@ import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
   buildReplyRunStateParams,
   resolveModelFallbackOptions,
+  resolveReplyScheduledToolPolicy,
   resolveRunModelHasVision,
 } from "./agent-runner-run-params.js";
 import { hasInboundAudio } from "./inbound-media.js";
@@ -343,10 +344,7 @@ export function buildModelResolveContext(
 
 /** Bind either runtime to the same trusted source turn and requester. */
 export function mintReplyMessageActionTurnCapability(
-  turn: Pick<
-    AgentTurnParams,
-    "followupRun" | "sessionCtx" | "opts" | "isHeartbeat" | "runtimePolicySessionKey"
-  >,
+  turn: Pick<AgentTurnParams, "followupRun" | "sessionCtx" | "opts" | "runtimePolicySessionKey">,
   runId: string,
 ): string | undefined {
   // An event's captured delivery route is not a new trusted channel turn.
@@ -355,7 +353,7 @@ export function mintReplyMessageActionTurnCapability(
   }
   const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
   const dashboardAdmission = turn.opts?.dashboardReadAdmission;
-  if (turn.isHeartbeat || (!channelIngress && turn.sessionCtx.Provider !== "webchat")) {
+  if (!channelIngress && turn.sessionCtx.Provider !== "webchat") {
     return undefined;
   }
   const context = buildEmbeddedContextFromTemplate({
@@ -448,6 +446,10 @@ export async function buildEmbeddedRunExecutionParams(params: {
   const embeddedContext = buildEmbeddedContextFromTemplate(params);
   const senderContext = buildTemplateSenderContext(params.sessionCtx);
   const config = params.run.config;
+  const automation = params.run.scheduledAutomation;
+  automation?.assertCurrent();
+  const job = automation?.job;
+  const scheduledToolPolicy = resolveReplyScheduledToolPolicy(params.run);
   const { modelFallbackAvailability, fallbacksOverride: modelFallbacksOverride } =
     resolveModelFallbackOptions(params.run);
   let modelThinkingCapability: PreparedModelThinkingCapability | undefined;
@@ -482,6 +484,8 @@ export async function buildEmbeddedRunExecutionParams(params: {
         workspaceDir: params.run.workspaceDir,
         modelId: params.model,
       }));
+  const modelHasVision = await resolveRunModelHasVision(params);
+  automation?.assertCurrent();
   // Runtime policy keys may differ from session keys for direct-message scoped policy.
   return {
     ...embeddedContext,
@@ -493,7 +497,14 @@ export async function buildEmbeddedRunExecutionParams(params: {
     agentDir: params.run.agentDir,
     config,
     trustedInternalHandoff: params.run.trustedInternalHandoff,
-    scheduledToolPolicy: params.run.scheduledToolPolicy,
+    scheduledToolPolicy,
+    ...(job
+      ? {
+          jobId: job.id,
+          scheduledRuntimeAuthority: job.runtimeAuthority,
+          scheduledRuntimeAuthorityRecoveryRequired: job.runtimeAuthorityRecoveryRequired === true,
+        }
+      : {}),
     runtimePluginToolGrant: params.run.runtimePluginToolGrant,
     enforceFinalTag,
     silentExpected: params.run.silentExpected,
@@ -503,7 +514,7 @@ export async function buildEmbeddedRunExecutionParams(params: {
     skillLibraryAuthoring: params.run.skillLibraryAuthoring,
     provider: params.provider,
     model: params.model,
-    modelHasVision: await resolveRunModelHasVision(params),
+    modelHasVision,
     ...(modelThinkingCapability ? { modelThinkingCapability } : {}),
     requestedRouteResolution: "resolved" as const,
     modelSelectionLocked: params.run.modelSelectionLocked,

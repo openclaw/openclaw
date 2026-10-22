@@ -3,20 +3,19 @@ import type { SessionObserverDigest } from "../../../packages/gateway-protocol/s
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
+import type { CatalogOpenTarget } from "../app/settings.ts";
 import type { PresenceActivity } from "../lib/presence-users.ts";
 import type {
   SessionMethodAccess,
   SessionMethodAccessRequest,
 } from "../lib/session-method-access.ts";
 import type { SessionOwnerOption } from "../lib/session-owner.ts";
-import type { CatalogSessionKey } from "../lib/sessions/catalog-key.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
 import type { SidebarSessionsGrouping } from "../lib/sessions/grouping.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
 import type { ContributionsElement } from "../plugins/control-ui-contributions.solid.tsx";
 import type {
-  CatalogBackingSessionDisplay,
   CatalogSessionMenuRequest,
   SidebarSessionCatalog,
 } from "./app-sidebar-session-catalogs.ts";
@@ -25,7 +24,6 @@ import type {
   SidebarSessionProjection,
   SidebarVisibleSections,
 } from "./app-sidebar-session-projection.ts";
-import "./mcp-app-catalog.tsx";
 import "./menu-surface.ts";
 import type {
   SidebarRecentSession,
@@ -33,13 +31,14 @@ import type {
   SidebarSessionStatusFilter,
 } from "./app-sidebar-session-types.ts";
 import type { SessionDataOwner } from "./session-data.ts";
-import type { SessionOrganizerController } from "./session-organizer-controller.ts";
-import type { SidebarMenusController } from "./sidebar-menus-controller.tsx";
+import type { SessionOrganizer } from "./session-organizer.ts";
+import type { SidebarMenus } from "./sidebar-menus.tsx";
 import type { AgentAvatarProps } from "./solid/agent-avatar.tsx";
 import type { ChannelAvatarProps } from "./solid/channel-avatar.tsx";
 import "./tooltip.ts";
 
 export interface SessionListHost {
+  readonly presencePeople?: Map<string, HTMLElement>;
   readonly sidebarSnapshot?: import("./sidebar-snapshot-model.ts").SidebarSnapshotModel | null;
   readonly sidebarAgentsMode?: "chip" | "roster";
   readonly basePath: string;
@@ -53,7 +52,7 @@ export interface SessionListHost {
   readonly sidebarNarrationLines: ReadonlyMap<string, string>;
   readonly sidebarTools: ReadonlyMap<string, SidebarToolActivity>;
   readonly sidebarObserverDigests: ReadonlyMap<string, SessionObserverDigest>;
-  readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle">;
+  readonly sessionProjection: Pick<SidebarSessionProjection, "resolveSubtitle" | "mountCatalogRow">;
   readonly selectedSessionKeys: ReadonlySet<string>;
   readonly connected: boolean;
   readonly sessionData: Pick<
@@ -73,7 +72,7 @@ export interface SessionListHost {
   readonly sessionsGrouping: SidebarSessionsGrouping;
   readonly collapsedSessionSections: ReadonlySet<string>;
   readonly sessionOrganizer: Pick<
-    SessionOrganizerController,
+    SessionOrganizer,
     | "draggingSidebarSection"
     | "draggingSessionKey"
     | "isDraggingChildSession"
@@ -94,10 +93,10 @@ export interface SessionListHost {
     | "archiveSessionWithUndo"
     | "patchSession"
     | "isPersonalSessionPin"
-    | "reorderSidebarSection"
+    | "sectionHeaders"
   >;
   readonly sidebarMenus: Pick<
-    SidebarMenusController,
+    SidebarMenus,
     | "catalogMenu"
     | "catalogMenuView"
     | "catalogViewMenuPosition"
@@ -124,7 +123,7 @@ export interface SessionListHost {
     routeId: NavigationRouteId,
     options?: ApplicationNavigationOptions,
   ) => void;
-  readonly sessionPullRequests: Pick<SessionPullRequestIndicators, "summary">;
+  readonly sessionPullRequests: Pick<SessionPullRequestIndicators, "summary" | "count">;
   mainSessionRow(): GatewaySessionRow | null;
   setSessionOwnerFilter(ownerId: string | null, involvingMe?: boolean): void;
   isSessionChildrenExpanded(session: SidebarRecentSession): boolean;
@@ -143,7 +142,11 @@ export interface SessionListHost {
   expandedAgentId(): string;
   /** Unadmitted New session handoff; presentation only, never a saved selection. */
   pendingSessionCreate():
-    | Readonly<{ creation: Readonly<{ sessionKey: string }>; displayName?: string }>
+    | Readonly<{
+        creation: Readonly<{ sessionKey: string }>;
+        displayName?: string;
+        category?: string;
+      }>
     | undefined;
   readNewSessionAccess(): SessionMethodAccess;
   readSessionMutationAccess(request: SessionMethodAccessRequest): SessionMethodAccess;
@@ -152,61 +155,23 @@ export interface SessionListHost {
   clearSessionSelection(): void;
 }
 
-export type SessionCatalogGroupsParams = {
+export type SessionCatalogRenderSnapshot = {
   catalogs: readonly SidebarSessionCatalog[];
   basePath: string;
   routeSessionKey: string;
   newSessionAgentId: string;
   mainKey: string;
-  collapsedSections: ReadonlySet<string>;
   loadingMoreCatalogIds: ReadonlySet<string>;
-  visibleSessionLimits: ReadonlyMap<string, number>;
   projectGrouping: CatalogProjectGrouping;
   liveRows: readonly GatewaySessionRow[];
-  isRunVisuallyActive: (row: GatewaySessionRow) => boolean;
-  renderLiveRow: (
-    row: () => GatewaySessionRow,
-    display: CatalogBackingSessionDisplay,
-  ) => SolidJSX.Element;
-  onToggleSection: (sectionId: string) => void;
-  draggingSectionId: string | null;
-  sectionDropTarget: {
-    sectionId: string;
-    position: "before" | "after";
-  } | null;
-  onSectionDragOver: (event: DragEvent, sectionId: string) => void;
-  onSectionDragLeave: (event: DragEvent, sectionId: string) => void;
-  onSectionDrop: (event: DragEvent, sectionId: string) => void;
-  onStartSectionDrag: (sectionId: string) => void;
-  onFinishSectionDrag: () => void;
-  onReorderSection: (source: string, target: string, position: "before" | "after") => Promise<void>;
-  viewMenuOpenCatalogId: string | null;
-  ownerFilterActive: boolean;
-  onOpenViewMenu: (
-    catalogId: string,
-    trigger: HTMLElement,
-    position?: {
-      x: number;
-      y: number;
-    },
-  ) => void;
-  onLoadMore: (catalogId: string) => void;
-  onSetVisibleSessionLimit: (sectionId: string, limit: number) => void;
-  onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
-  newSessionDisabledReason?: string;
-  sectionDragDisabledReason?: string;
-  onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
-  catalogOpenTarget: "viewer" | "terminal";
+  toSidebarSession: (row: GatewaySessionRow) => SidebarRecentSession;
+  catalogOpenTarget: CatalogOpenTarget;
   terminalAvailable: boolean;
-  onOpenTerminal: (key: CatalogSessionKey, agentId: string) => void;
-  onOpenMenu: (
-    request: CatalogSessionMenuRequest,
-    x: number,
-    y: number,
-    trigger?: HTMLElement,
-  ) => void;
-  onCatalogMenuTriggerRendered: (key: CatalogSessionKey, element: Element | undefined) => void;
-  isMenuOpen: (key: CatalogSessionKey) => boolean;
+};
+export type SessionCatalogGroupsParams = {
+  host: SessionListHost;
+  snapshot: SessionCatalogRenderSnapshot;
+  catalog: SidebarSessionCatalog;
 };
 
 export type RenderableSessionSection = SidebarVisibleSections["sections"][number];
@@ -240,9 +205,7 @@ declare module "@solidjs/web" {
   namespace JSX {
     interface IntrinsicElements {
       "openclaw-sidebar-session-filter-popover": HTMLAttributes<HTMLElement>;
-      "openclaw-sidebar-collapse-toggle": HTMLAttributes<HTMLElement> & {
-        "prop:onToggle"?: () => void;
-      };
+      "openclaw-sidebar-collapse-toggle": HTMLAttributes<HTMLElement>;
       "openclaw-agent-avatar": BridgeAttributes<AgentAvatarProps>;
       "openclaw-catalog-session-menu": HTMLAttributes<
         HTMLElementTagNameMap["openclaw-catalog-session-menu"]
@@ -252,23 +215,12 @@ declare module "@solidjs/web" {
           "prop:onClose"?: HTMLElementTagNameMap["openclaw-catalog-session-menu"]["onClose"];
         };
       "openclaw-channel-avatar": BridgeAttributes<ChannelAvatarProps>;
-      "openclaw-mcp-app-catalog": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-mcp-app-catalog"]
-      > &
-        Properties<HTMLElementTagNameMap["openclaw-mcp-app-catalog"]> &
-        Partial<Pick<HTMLElementTagNameMap["openclaw-mcp-app-catalog"], "surface">>;
       "openclaw-menu-surface": HTMLAttributes<HTMLElementTagNameMap["openclaw-menu-surface"]> &
         Properties<HTMLElementTagNameMap["openclaw-menu-surface"]>;
       "openclaw-plugin-contributions": HTMLAttributes<ContributionsElement> &
         Properties<ContributionsElement> & {
           "prop:agentId"?: ContributionsElement["agentId"];
           "prop:navigationMenus"?: ContributionsElement["navigationMenus"];
-        };
-      "openclaw-theme-mode-toggle": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-theme-mode-toggle"]
-      > &
-        Properties<HTMLElementTagNameMap["openclaw-theme-mode-toggle"]> & {
-          "prop:menuAttributes"?: HTMLElementTagNameMap["openclaw-theme-mode-toggle"]["menuAttributes"];
         };
     }
   }

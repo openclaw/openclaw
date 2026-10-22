@@ -7,6 +7,8 @@ export const SQLITE_PRIMITIVE_OWNERS: readonly string[] = [
   "src/infra/sqlite-user-version.ts",
   // SQLite archive-format owner: catalog capture and offline restoration of migration table scopes.
   "src/infra/sqlite-migration-scoped-snapshot.ts",
+  // SQLite artifact owner: native admission, journal normalization, and verified publication.
+  "src/infra/sqlite-snapshot.ts",
   // SQLite admission catalogs own native schema/PRAGMA facts; PostgreSQL has its own catalog owner.
   "src/infra/sqlite-schema-catalog.ts",
   // SQLite planner-statistics owner: bounded optimization under existing writer admission.

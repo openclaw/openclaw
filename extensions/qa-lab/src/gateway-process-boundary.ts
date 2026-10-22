@@ -1,11 +1,13 @@
 import type { ChildProcess } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { isPathInside } from "openclaw/plugin-sdk/file-access-runtime";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { replaceFileAtomic } from "openclaw/plugin-sdk/security-runtime";
 import { QA_CHILD_STDOUT_MAX_BYTES } from "./child-output.js";
 import { runQaScenarioCommandLifecycle } from "./test-file-scenario-command-lifecycle.js";
@@ -82,10 +84,6 @@ type QaGatewayProcessBoundaryEvidenceLaunch = {
   terminalState?: "failed-before-ready" | "ready-exited";
 };
 
-function sha256(value: Buffer | string) {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function compareStrings(left: readonly string[], right: readonly string[]) {
   return left.length === right.length && left.every((value, index) => value === right[index]);
 }
@@ -153,8 +151,7 @@ function parseQaGatewayProcessSandboxProof(value: unknown) {
     !isRecord(value) ||
     value.version !== PROCESS_BOUNDARY_VERSION ||
     value.status !== "pass" ||
-    !Array.isArray(value.envKeys) ||
-    !value.envKeys.every((key) => typeof key === "string")
+    !isStringArray(value.envKeys)
   ) {
     throw new Error("invalid process-boundary sandbox proof");
   }
@@ -420,7 +417,7 @@ export async function createQaGatewayProcessBoundaryController(params: {
       envKeys,
     };
     const commandBytes = Buffer.from(`${JSON.stringify(command)}\n`);
-    const commandSha256 = sha256(commandBytes);
+    const commandSha256 = sha256Hex(commandBytes);
     await writeAtomicFile(commandFilePath, commandBytes);
     await retainCredentialLease();
     return {
@@ -491,7 +488,7 @@ export async function createQaGatewayProcessBoundaryController(params: {
     if (
       handoff.commandFile.path !== commandPath ||
       handoff.commandFile.sha256 !== acceptParams.prepared.commandSha256 ||
-      sha256(await fs.readFile(commandPath)) !== acceptParams.prepared.commandSha256
+      sha256Hex(await fs.readFile(commandPath)) !== acceptParams.prepared.commandSha256
     ) {
       throw new Error("process-boundary command digest mismatch");
     }
@@ -505,7 +502,7 @@ export async function createQaGatewayProcessBoundaryController(params: {
     );
     const expectedCwd = path.resolve(tempRoot, acceptParams.prepared.command.cwdRelative);
     const expectedExecutablePath = await fs.realpath(acceptParams.prepared.command.executable);
-    const expectedCmdlineSha256 = sha256(
+    const expectedCmdlineSha256 = sha256Hex(
       commandLineBytes(
         acceptParams.prepared.command.executable,
         acceptParams.prepared.command.argv,

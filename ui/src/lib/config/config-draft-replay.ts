@@ -26,8 +26,13 @@ export function replayConfigDraftEdits(
       const nextPath = [...path, key];
       if (!Object.hasOwn(after, key)) {
         removePathValue(draft, nextPath);
-      } else if (isRecord(before[key]) && isRecord(after[key]) && isRecord(canonical[key])) {
-        replay(before[key], after[key], canonical[key], nextPath);
+      } else if (
+        (isRecord(before[key]) || !Object.hasOwn(before, key)) &&
+        isRecord(after[key]) &&
+        isRecord(canonical[key])
+      ) {
+        // Separate fields can be added under the same previously absent object.
+        replay(isRecord(before[key]) ? before[key] : {}, after[key], canonical[key], nextPath);
       } else if (stableStringify(before[key]) !== stableStringify(after[key])) {
         setPathValue(draft, nextPath, after[key]);
       }

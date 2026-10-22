@@ -5,7 +5,7 @@ import {
 import {
   isMessagingToolDuplicate,
   normalizeTextForComparison,
-} from "../../agents/embedded-agent-helpers.js";
+} from "../../agents/embedded-agent-helpers/messaging-dedupe.js";
 import type { MessagingToolSend } from "../../agents/embedded-agent-messaging.types.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";

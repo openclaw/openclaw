@@ -1,7 +1,8 @@
 // Imessage tests cover reaction system event plugin behavior.
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import * as runtimeEnv from "openclaw/plugin-sdk/runtime-env";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { enqueueIMessageReactionSystemEvent } from "./reaction-system-event.js";
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
@@ -14,7 +15,8 @@ describe("enqueueIMessageReactionSystemEvent", () => {
     { targetGuid: undefined, target: 'message "private tapback quotation"' },
   ])("enqueues reactions without logging their content ($target)", ({ targetGuid, target }) => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } satisfies RuntimeEnv;
-    const logVerbose = vi.fn();
+    const logVerbose = vi.spyOn(runtimeEnv, "logVerbose").mockImplementation(() => {});
+    onTestFinished(() => logVerbose.mockRestore());
     const text = `iMessage reaction added: 👎 by +15555550123 on ${target}`;
 
     const queued = enqueueIMessageReactionSystemEvent({
@@ -29,7 +31,6 @@ describe("enqueueIMessageReactionSystemEvent", () => {
         },
       },
       runtime,
-      logVerbose,
     });
 
     expect(queued).toBe(true);

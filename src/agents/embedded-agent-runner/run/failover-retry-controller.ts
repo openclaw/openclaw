@@ -33,6 +33,7 @@ function resolveTransientRetryDelayMs(params: {
   retryNumber: number;
   retryAfterMs?: number;
   elapsedMs?: number;
+  rateLimit: boolean;
 }): number | undefined {
   const remainingMs =
     params.elapsedMs === undefined
@@ -50,10 +51,12 @@ function resolveTransientRetryDelayMs(params: {
     TRANSIENT_RETRY_MAX_DELAY_MS,
     Math.round(exponentialMs * (0.5 + Math.random())),
   );
-  const retryAfterMs = Number.isFinite(params.retryAfterMs)
-    ? Math.max(0, Math.ceil(params.retryAfterMs ?? 0))
-    : 0;
-  const delayMs = Math.max(jitteredMs, retryAfterMs);
+  const providerTiming = Number.isFinite(params.retryAfterMs);
+  const retryAfterMs = providerTiming ? Math.max(0, Math.ceil(params.retryAfterMs ?? 0)) : 0;
+  // Like the provider SDKs, a rate limit waits exactly the provider's timing;
+  // jittered exponential backoff applies only when the provider gives none.
+  const delayMs =
+    params.rateLimit && providerTiming ? retryAfterMs : Math.max(jitteredMs, retryAfterMs);
   return delayMs <= remainingMs ? delayMs : undefined;
 }
 
@@ -122,6 +125,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
     profileId?: string;
     reason?: AuthProfileFailureReason | null;
     modelId?: string;
+    retryAfterMs?: number;
   }) => {
     const { profileId, reason } = failure;
     if (
@@ -147,6 +151,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
       agentDir,
       runId: params.runId,
       modelId: failure.modelId,
+      retryAfterMs: failure.retryAfterMs,
     };
     if (profileId) {
       await markAuthProfileFailure({
@@ -390,6 +395,7 @@ export function createEmbeddedRunFailoverRetryController(input: {
       const delayMs = resolveTransientRetryDelayMs({
         retryNumber: retryCount + 1,
         retryAfterMs: retry.retryAfterMs,
+        rateLimit,
         // Reaching an output ceiling can take minutes of useful generation.
         // Keep its count budget and timeout controls without the outage time window.
         elapsedMs:
@@ -402,6 +408,18 @@ export function createEmbeddedRunFailoverRetryController(input: {
           `transient retry ${retry.retryAfterMs === Infinity ? "floor exceeds representable time" : "window elapsed"} for ${sanitizeForLog(provider)}/${sanitizeForLog(modelId)} after ${transientRetryCount}/${retryBudget} retries; stopping same-model retries`,
         );
         return false;
+      }
+      if (rateLimit) {
+        try {
+          await maybeMarkAuthProfileFailure({
+            profileId: preparedRuntime.snapshot().lastProfileId,
+            reason: resolveProfileFailureReason("rate_limit", { transientRateLimit: true }),
+            modelId,
+            retryAfterMs: retry.retryAfterMs,
+          });
+        } catch (error) {
+          log.warn(`profile failure mark failed: ${String(error)}`);
+        }
       }
       const outputLimit = retry.reason === "output_limit";
       const attempt = (outputLimit ? outputLimitRetryCount : retryCount) + 1;
@@ -428,7 +446,12 @@ export function createEmbeddedRunFailoverRetryController(input: {
         let remainingMs = delayMs;
         while (remainingMs > 0) {
           const chunkMs = Math.min(remainingMs, RETRY_SLEEP_CHUNK_MS);
-          await sleepWithAbort(chunkMs, params.abortSignal);
+          try {
+            await sleepWithAbort(chunkMs, params.abortSignal);
+          } catch (error) {
+            params.abortSignal?.throwIfAborted();
+            throw error;
+          }
           remainingMs -= chunkMs;
         }
         completed = true;

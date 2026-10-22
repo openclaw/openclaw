@@ -30,7 +30,131 @@ type PointerTraceEntry = {
 let server: ControlUiE2eServer;
 let browser: Browser;
 
-async function installPointerTrace(page: Page, button: Locator): Promise<void> {
+type Gateway = Awaited<ReturnType<typeof installMockGateway>>;
+
+async function withComposer(
+  mobile: boolean,
+  wide: boolean,
+  run: (page: Page, gateway: Gateway) => Promise<void>,
+  deferred = true,
+): Promise<void> {
+  const context = await browser.newContext({
+    hasTouch: mobile,
+    isMobile: mobile,
+    serviceWorkers: "block",
+    viewport: wide ? { width: 1280, height: 900 } : { width: 393, height: 852 },
+  });
+  try {
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      assistantName: "OpenClaw",
+      ...(deferred ? { deferredMethods: ["chat.send"] } : {}),
+    });
+    await page.goto(`${server.baseUrl}chat`);
+    await gateway.waitForRequest("chat.startup");
+    if (!wide) {
+      const protocol = await context.newCDPSession(page);
+      await protocol.send("Emulation.setSafeAreaInsetsOverride", { insets: { bottom: 34 } });
+    }
+    await run(page, gateway);
+  } finally {
+    await context.close();
+  }
+}
+
+async function expectComposerFocus(page: Page): Promise<void> {
+  await expect
+    .poll(() =>
+      page
+        .locator(".agent-chat__input textarea")
+        .evaluate((node) => document.activeElement === node),
+    )
+    .toBe(true);
+}
+
+async function expectSafeArea(page: Page): Promise<void> {
+  // The injected 34px safe area plus the native composer's 10px bottom gap.
+  await expect
+    .poll(() =>
+      page
+        .locator(".agent-chat__composer-shell")
+        .evaluate((node) => window.innerHeight - node.getBoundingClientRect().bottom),
+    )
+    .toBe(44);
+}
+
+async function streamReply(gateway: Gateway, afterRequest?: () => Promise<void>): Promise<string> {
+  const sendRequest = await gateway.waitForRequest("chat.send");
+  const runId =
+    typeof sendRequest.params === "object" &&
+    sendRequest.params !== null &&
+    "idempotencyKey" in sendRequest.params
+      ? String(sendRequest.params.idempotencyKey)
+      : "";
+  expect(runId).not.toBe("");
+  expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+  await afterRequest?.();
+  await gateway.resolveDeferred("chat.send");
+  await gateway.emitGatewayEvent("chat", {
+    deltaText: "Working on it.",
+    message: {
+      content: [{ text: "Working on it.", type: "text" }],
+      role: "assistant",
+      timestamp: Date.now(),
+    },
+    runId,
+    sessionKey: "agent:main:main",
+    state: "delta",
+  });
+  return runId;
+}
+
+async function activate(page: Page, button: Locator, touch: boolean): Promise<void> {
+  await installPointerTrace(button);
+  if (touch) {
+    await button.tap();
+  } else {
+    await clickMouseAtCurrentCenter(page, button);
+  }
+  expectStablePointerActivation(await readPointerTrace(page));
+}
+
+async function narrowSendAndStop(touch: boolean): Promise<void> {
+  await withComposer(touch, false, async (page, gateway) => {
+    const textarea = page.locator(".agent-chat__input textarea");
+    await textarea.fill(
+      touch ? "Verify mobile safe-area touch controls" : "Verify narrow desktop pointer controls",
+    );
+    await textarea.focus();
+    await expectSafeArea(page);
+    const send = page.getByRole("button", { name: "Send message" });
+    await expect.poll(() => send.isVisible()).toBe(true);
+    await activate(page, send, touch);
+    if (touch) {
+      await expectComposerFocus(page);
+    }
+    const runId = await streamReply(gateway, touch ? undefined : () => expectComposerFocus(page));
+    const stop = page.getByRole("button", { name: "Stop generating" });
+    await expect.poll(() => stop.isVisible()).toBe(true);
+    await textarea.focus();
+    if (touch) {
+      await expectSafeArea(page);
+    }
+    await activate(page, stop, touch);
+    if (touch) {
+      await expectComposerFocus(page);
+    }
+    const abortRequest = await gateway.waitForRequest("chat.abort");
+    expect(abortRequest.params).toMatchObject({ runId, sessionKey: "agent:main:main" });
+    if (touch) {
+      await expect.poll(() => stop.count()).toBe(0);
+    } else {
+      await expectComposerFocus(page);
+    }
+  });
+}
+
+async function installPointerTrace(button: Locator): Promise<void> {
   await button.evaluate((element) => {
     const target = element as HTMLButtonElement;
     const trace: PointerTraceEntry[] = [];
@@ -129,220 +253,23 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
   });
 
   it("sends and stops without moving the action out from under an Android-like tap", async () => {
-    const context = await browser.newContext({
-      hasTouch: true,
-      isMobile: true,
-      serviceWorkers: "block",
-      viewport: { width: 393, height: 852 },
-    });
-    try {
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page, {
-        assistantName: "OpenClaw",
-        deferredMethods: ["chat.send"],
-      });
-      await page.goto(`${server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      const protocol = await context.newCDPSession(page);
-      await protocol.send("Emulation.setSafeAreaInsetsOverride", {
-        insets: { bottom: 34 },
-      });
-
-      const composerShell = page.locator(".agent-chat__composer-shell");
-      const textarea = page.locator(".agent-chat__input textarea");
-      await textarea.fill("Verify mobile safe-area touch controls");
-      await textarea.focus();
-      await expect
-        .poll(() =>
-          composerShell.evaluate(
-            (node) => window.innerHeight - node.getBoundingClientRect().bottom,
-          ),
-        )
-        .toBe(40);
-
-      const send = page.getByRole("button", { name: "Send message" });
-      await expect.poll(() => send.isVisible()).toBe(true);
-      await installPointerTrace(page, send);
-      await send.tap();
-      expectStablePointerActivation(await readPointerTrace(page));
-      await expect
-        .poll(() => textarea.evaluate((node) => document.activeElement === node))
-        .toBe(true);
-
-      const sendRequest = await gateway.waitForRequest("chat.send");
-      const runId =
-        typeof sendRequest.params === "object" &&
-        sendRequest.params !== null &&
-        "idempotencyKey" in sendRequest.params
-          ? String(sendRequest.params.idempotencyKey)
-          : "";
-      expect(runId).not.toBe("");
-      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-
-      await gateway.resolveDeferred("chat.send");
-      await gateway.emitGatewayEvent("chat", {
-        deltaText: "Working on it.",
-        message: {
-          content: [{ text: "Working on it.", type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-        runId,
-        sessionKey: "agent:main:main",
-        state: "delta",
-      });
-
-      const stop = page.getByRole("button", { name: "Stop generating" });
-      await expect.poll(() => stop.isVisible()).toBe(true);
-      await textarea.focus();
-      await expect
-        .poll(() =>
-          composerShell.evaluate(
-            (node) => window.innerHeight - node.getBoundingClientRect().bottom,
-          ),
-        )
-        .toBe(40);
-      await installPointerTrace(page, stop);
-      await stop.tap();
-      expectStablePointerActivation(await readPointerTrace(page));
-      await expect
-        .poll(() => textarea.evaluate((node) => document.activeElement === node))
-        .toBe(true);
-
-      const abortRequest = await gateway.waitForRequest("chat.abort");
-      expect(abortRequest.params).toMatchObject({
-        runId,
-        sessionKey: "agent:main:main",
-      });
-      await expect.poll(() => stop.count()).toBe(0);
-    } finally {
-      await context.close();
-    }
+    await narrowSendAndStop(true);
   });
 
   it("sends and stops in a narrow desktop viewport without moving under the mouse", async () => {
-    const context = await browser.newContext({
-      hasTouch: false,
-      isMobile: false,
-      serviceWorkers: "block",
-      viewport: { width: 393, height: 852 },
-    });
-    try {
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page, {
-        assistantName: "OpenClaw",
-        deferredMethods: ["chat.send"],
-      });
-      await page.goto(`${server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      const protocol = await context.newCDPSession(page);
-      await protocol.send("Emulation.setSafeAreaInsetsOverride", {
-        insets: { bottom: 34 },
-      });
-
-      const composerShell = page.locator(".agent-chat__composer-shell");
-      const textarea = page.locator(".agent-chat__input textarea");
-      await textarea.fill("Verify narrow desktop pointer controls");
-      await textarea.focus();
-      await expect
-        .poll(() =>
-          composerShell.evaluate(
-            (node) => window.innerHeight - node.getBoundingClientRect().bottom,
-          ),
-        )
-        .toBe(40);
-
-      const send = page.getByRole("button", { name: "Send message" });
-      await expect.poll(() => send.isVisible()).toBe(true);
-      await installPointerTrace(page, send);
-      await clickMouseAtCurrentCenter(page, send);
-
-      expectStablePointerActivation(await readPointerTrace(page));
-      const sendRequest = await gateway.waitForRequest("chat.send");
-      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      await expect
-        .poll(() => textarea.evaluate((node) => document.activeElement === node))
-        .toBe(true);
-
-      const runId =
-        typeof sendRequest.params === "object" &&
-        sendRequest.params !== null &&
-        "idempotencyKey" in sendRequest.params
-          ? String(sendRequest.params.idempotencyKey)
-          : "";
-      expect(runId).not.toBe("");
-      await gateway.resolveDeferred("chat.send");
-      await gateway.emitGatewayEvent("chat", {
-        deltaText: "Working on it.",
-        message: {
-          content: [{ text: "Working on it.", type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-        runId,
-        sessionKey: "agent:main:main",
-        state: "delta",
-      });
-
-      const stop = page.getByRole("button", { name: "Stop generating" });
-      await expect.poll(() => stop.isVisible()).toBe(true);
-      await textarea.focus();
-      await installPointerTrace(page, stop);
-      await clickMouseAtCurrentCenter(page, stop);
-      expectStablePointerActivation(await readPointerTrace(page));
-      const abortRequest = await gateway.waitForRequest("chat.abort");
-      expect(abortRequest.params).toMatchObject({ runId, sessionKey: "agent:main:main" });
-      await expect
-        .poll(() => textarea.evaluate((node) => document.activeElement === node))
-        .toBe(true);
-    } finally {
-      await context.close();
-    }
+    await narrowSendAndStop(false);
   });
 
   it("keeps wide desktop mouse activation and keyboard activation working", async () => {
-    const context = await browser.newContext({
-      hasTouch: false,
-      isMobile: false,
-      serviceWorkers: "block",
-      viewport: { width: 1280, height: 900 },
-    });
-    try {
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page, {
-        assistantName: "OpenClaw",
-        deferredMethods: ["chat.send"],
-      });
-      await page.goto(`${server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
+    await withComposer(false, true, async (page, gateway) => {
       const textarea = page.locator(".agent-chat__input textarea");
       await textarea.fill("Verify wide desktop pointer controls");
       await textarea.focus();
       const send = page.getByRole("button", { name: "Send message" });
-      await installPointerTrace(page, send);
+      await installPointerTrace(send);
       await clickMouseAtCurrentCenter(page, send);
       expectStablePointerActivation(await readPointerTrace(page));
-      const sendRequest = await gateway.waitForRequest("chat.send");
-      expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-
-      const runId =
-        typeof sendRequest.params === "object" &&
-        sendRequest.params !== null &&
-        "idempotencyKey" in sendRequest.params
-          ? String(sendRequest.params.idempotencyKey)
-          : "";
-      await gateway.resolveDeferred("chat.send");
-      await gateway.emitGatewayEvent("chat", {
-        deltaText: "Working on it.",
-        message: {
-          content: [{ text: "Working on it.", type: "text" }],
-          role: "assistant",
-          timestamp: Date.now(),
-        },
-        runId,
-        sessionKey: "agent:main:main",
-        state: "delta",
-      });
+      const runId = await streamReply(gateway);
 
       const stop = page.getByRole("button", { name: "Stop generating" });
       await stop.focus();
@@ -374,50 +301,37 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
         .toBe(true);
       await keyboardSend.press("Enter");
       await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(2);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("does not send when a mouse gesture leaves the button before release", async () => {
-    const context = await browser.newContext({
-      hasTouch: false,
-      isMobile: false,
-      serviceWorkers: "block",
-      viewport: { width: 393, height: 852 },
-    });
-    try {
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page, { assistantName: "OpenClaw" });
-      await page.goto(`${server.baseUrl}chat`);
-      await gateway.waitForRequest("chat.startup");
-      const protocol = await context.newCDPSession(page);
-      await protocol.send("Emulation.setSafeAreaInsetsOverride", {
-        insets: { bottom: 34 },
-      });
-      const textarea = page.locator(".agent-chat__input textarea");
-      await textarea.fill("Do not send this draft");
-      await textarea.focus();
-      const send = page.getByRole("button", { name: "Send message" });
-      const bounds = await send.boundingBox();
-      expect(bounds).not.toBeNull();
-      if (!bounds) {
-        return;
-      }
-      await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
-      await page.mouse.down();
-      await page.mouse.move(bounds.x - 20, bounds.y - 20);
-      await page.mouse.up();
-      await page.evaluate(
-        () =>
-          new Promise<void>((resolve) => {
-            requestAnimationFrame(() => resolve());
-          }),
-      );
-      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await expect.poll(() => textarea.inputValue()).toBe("Do not send this draft");
-    } finally {
-      await context.close();
-    }
+    await withComposer(
+      false,
+      false,
+      async (page, gateway) => {
+        const textarea = page.locator(".agent-chat__input textarea");
+        await textarea.fill("Do not send this draft");
+        await textarea.focus();
+        const send = page.getByRole("button", { name: "Send message" });
+        const bounds = await send.boundingBox();
+        expect(bounds).not.toBeNull();
+        if (!bounds) {
+          return;
+        }
+        await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+        await page.mouse.down();
+        await page.mouse.move(bounds.x - 20, bounds.y - 20);
+        await page.mouse.up();
+        await page.evaluate(
+          () =>
+            new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            }),
+        );
+        expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        await expect.poll(() => textarea.inputValue()).toBe("Do not send this draft");
+      },
+      false,
+    );
   });
 });

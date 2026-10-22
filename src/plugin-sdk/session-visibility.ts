@@ -1,5 +1,4 @@
 import type { Result } from "@openclaw/normalization-core/result";
-// Session visibility helpers decide which plugin sessions appear in user-facing lists.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,

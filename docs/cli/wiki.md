@@ -109,6 +109,10 @@ Source files must be valid UTF-8. Malformed input is rejected without replacing 
 
 Imported source pages carry provenance frontmatter (`sourceType: local-file`, `sourcePath`, `ingestedAt`). Ingest always recompiles the vault afterward.
 
+Concurrent `wiki ingest` and Gateway bridge imports targeting the same vault wait
+for each other's source writes and compilation to finish. Ingest waits up to five
+minutes for a busy vault before reporting a lock timeout.
+
 Flags: `--title <title>` overrides the source title (default: derived from the filename).
 
 ### `wiki okf import <path>`
@@ -116,6 +120,14 @@ Flags: `--title <title>` overrides the source title (default: derived from the f
 Import an unpacked Open Knowledge Format bundle into wiki concept pages.
 
 The importer reads every non-reserved `.md` concept document in the OKF directory tree, requires a non-empty `type` field, and treats unknown OKF `type` values as generic concepts. Reserved OKF `index.md` and `log.md` files are not imported as concepts.
+
+OKF documents, including the bundle's `index.md`, must contain valid UTF-8.
+Malformed concept documents are skipped with an `unreadable-entry` warning;
+other valid concepts still import. Any import warning also prevents stale-page
+pruning, so a damaged source cannot remove its previously imported concept.
+An unreadable root `index.md` stops the import before concept pages are changed,
+because that file determines the bundle identity. Convert the affected source
+to UTF-8 and retry the import.
 
 Imported pages are flattened under `concepts/` so existing wiki compile, search, get, digest, and dashboard flows see them immediately. The original OKF concept ID, `type`, `resource`, `tags`, timestamp, source path, and full frontmatter are preserved in the page frontmatter. Internal OKF markdown links are rewritten to the generated wiki pages; broken or external links are left unchanged. Import always recompiles the vault afterward.
 

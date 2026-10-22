@@ -1,86 +1,131 @@
 /* @vitest-environment jsdom */
 
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { flush } from "../../../test-helpers/solid-settle.ts";
 import { messageRecoveryKey } from "../chat-message-recovery.ts";
 import * as chatThreadBuild from "../chat-thread-build.ts";
+import { persistedMessageEntryId } from "../chat-thread-items.ts";
 import { setExpansionState } from "../chat-thread.ts";
-import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-helpers.ts";
+import {
+  createTestTranscript as createTranscript,
+  stubAnimationFrames,
+} from "../chat-view.test-helpers.ts";
 import { saveChatSessionScrollPosition } from "../scroll.ts";
 import { render, renderChatThread } from "../test-helpers/chat-transcript-native.tsx";
-import { getTranscriptState } from "./chat-thread-interactions.ts";
+import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import { projectChatTranscript } from "./chat-transcript-projection.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
+  transcriptMessage as msg,
   threadProps,
 } from "./chat-transcript.test-support.ts";
 
-beforeEach(() => {
-  stubAnimationFrames();
-  vi.useFakeTimers({ toNotFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
-  vi.setSystemTime(10_000);
-  installTranscriptDomMocks();
-});
+const cleanups: (() => void)[] = [];
+function createTestTranscript(...args: Parameters<typeof createTranscript>) {
+  const transcript = createTranscript(...args);
+  cleanups.push(() => transcript.dispose());
+  return transcript;
+}
 
-afterEach(() => {
-  resetTranscriptTestDom();
-  vi.useRealTimers();
-});
+function personMessage(id: string, name: string, timestamp: number) {
+  return {
+    role: "user",
+    content: `Message from ${name}`,
+    timestamp,
+    __openclaw: {
+      id: `message-${timestamp}`,
+      senderId: id,
+      senderName: name,
+      senderIdentity: { type: "profile" as const, id },
+    },
+  };
+}
 
-it.each(["answer", "reasoning"] as const)(
-  "projects %s deltas without rereading 3,000 retained messages",
-  (kind) => {
-    let reads = 0;
-    const messages = Array.from(
-      { length: 3_000 },
-      (_, index) =>
-        new Proxy(
-          {
-            role: index % 2 ? "assistant" : "user",
-            content: `Message ${index}`,
-            timestamp: index + 1,
-            __openclaw: { id: `message-${index}`, runId: `finished-${index >> 1}` },
-          },
-          {
-            get(target, property, receiver) {
-              reads += 1;
-              return Reflect.get(target, property, receiver);
+function drawThread(props: ReturnType<typeof threadProps>) {
+  const transcript = createTestTranscript(props.paneId);
+  const container = document.body.appendChild(document.createElement("div"));
+  cleanups.push(() => render(null, container));
+  return {
+    container,
+    draw: () => {
+      render(renderChatThread(props, transcript), container);
+      flush();
+      transcript.start();
+      transcript.update();
+      flush();
+    },
+  };
+}
+
+describe("transcript projection", () => {
+  beforeEach(() => {
+    stubAnimationFrames();
+    vi.useFakeTimers({ toNotFake: ["requestAnimationFrame", "cancelAnimationFrame"] });
+    vi.setSystemTime(10_000);
+    installTranscriptDomMocks();
+  });
+
+  afterEach(() => {
+    for (const cleanup of cleanups.splice(0).toReversed()) {
+      cleanup();
+    }
+    resetTranscriptTestDom();
+    vi.useRealTimers();
+  });
+
+  it.each(["answer", "reasoning"] as const)(
+    "projects %s deltas without rereading 3,000 retained messages",
+    (kind) => {
+      let reads = 0;
+      const messages = Array.from(
+        { length: 3_000 },
+        (_, index) =>
+          new Proxy(
+            {
+              role: index % 2 ? "assistant" : "user",
+              content: `Message ${index}`,
+              timestamp: index + 1,
+              __openclaw: { id: `message-${index}`, runId: `finished-${index >> 1}` },
             },
-          },
-        ),
-    );
-    const earlierReasoning = { itemId: "earlier", text: "Earlier thought", startedAt: 3_500 };
-    const props = {
-      ...threadProps("projection-scale", "agent:main:projection-scale", messages),
-      runId: "active",
-      runActive: true,
-      stream: kind === "answer" ? "Reply" : "",
-      streamStartedAt: 4_000,
-      showThinking: true,
-      selectedSession: {
-        key: "agent:main:projection-scale",
-        kind: "direct" as const,
-        updatedAt: 1,
-        reasoningLevel: "on",
-      },
-      reasoning:
-        kind === "reasoning"
-          ? {
-              runId: "active",
-              items: [earlierReasoning, { itemId: "thinking", text: "Reply", startedAt: 4_000 }],
-            }
-          : null,
-    };
-    const transcript = createTestTranscript(props.paneId);
-    const build = vi.spyOn(chatThreadBuild, "buildChatItems");
-    const project = () =>
-      transcript.renderSession(props.sessionKey, (session) => {
-        projectChatTranscript(props, session);
-        return null;
-      });
-    try {
+            {
+              get(target, property, receiver) {
+                reads += 1;
+                return Reflect.get(target, property, receiver);
+              },
+            },
+          ),
+      );
+      const earlierReasoning = { itemId: "earlier", text: "Earlier thought", startedAt: 3_500 };
+      const props = {
+        ...threadProps("projection-scale", "agent:main:projection-scale", messages),
+        runId: "active",
+        runActive: true,
+        stream: kind === "answer" ? "Reply" : "",
+        streamStartedAt: 4_000,
+        showThinking: true,
+        selectedSession: {
+          key: "agent:main:projection-scale",
+          kind: "direct" as const,
+          updatedAt: 1,
+          reasoningLevel: "on",
+        },
+        reasoning:
+          kind === "reasoning"
+            ? {
+                runId: "active",
+                items: [earlierReasoning, { itemId: "thinking", text: "Reply", startedAt: 4_000 }],
+              }
+            : null,
+      };
+      const transcript = createTestTranscript(props.paneId);
+      const build = vi.spyOn(chatThreadBuild, "buildChatItems");
+      const project = () =>
+        transcript.renderSession(props.sessionKey, (session) => {
+          projectChatTranscript(props, session);
+          return null;
+        });
       project();
       expect(reads).toBeGreaterThan(0);
       transcript.renderSession(props.sessionKey, (session) => {
@@ -107,109 +152,60 @@ it.each(["answer", "reasoning"] as const)(
         expect(build).not.toHaveBeenCalled();
         expect(reads, stream).toBe(0);
       }
-    } finally {
-      transcript.hostDisconnected();
-    }
-  },
-);
-
-function personMessage(id: string, name: string, timestamp: number) {
-  return {
-    role: "user",
-    content: `Message from ${name}`,
-    timestamp,
-    __openclaw: {
-      id: `message-${timestamp}`,
-      senderId: id,
-      senderName: name,
-      senderIdentity: { type: "profile" as const, id },
     },
-  };
-}
-
-function drawThread(props: ReturnType<typeof threadProps>) {
-  const transcript = createTestTranscript(props.paneId);
-  const container = document.body.appendChild(document.createElement("div"));
-  return {
-    container,
-    draw: () => {
-      render(renderChatThread(props, transcript), container);
-      flush();
-      transcript.hostConnected();
-      transcript.hostUpdated();
-      flush();
-    },
-    dispose: () => {
-      render(null, container);
-      transcript.hostDisconnected();
-    },
-  };
-}
-
-it("renders browser previews in their own row outside the work summary", () => {
-  const props = threadProps(
-    "projection-browser-preview",
-    "agent:main:dashboard:projection-browser-preview",
-    [
-      { role: "user", content: "Inspect the example page", timestamp: 1_000 },
-      {
-        role: "assistant",
-        content: "I will inspect the example page.",
-        timestamp: 2_000,
-        phase: "final_answer",
-      },
-      {
-        role: "toolResult",
-        toolCallId: "browser-call",
-        toolName: "browser",
-        timestamp: 3_000,
-        content: "Opened",
-        details: {
-          browserTab: {
-            profile: "managed",
-            target: "host",
-            targetId: "example-tab",
-            url: "https://example.com",
-            title: "Example page",
-          },
-        },
-      },
-      { role: "assistant", content: "The page is ready.", timestamp: 4_000 },
-    ],
   );
-  props.showToolCalls = true;
-  saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
-    scrollTop: 0,
-    anchorToEnd: false,
-  });
-  const view = drawThread(props);
-  try {
+
+  it("renders browser previews in their own row outside the work summary", () => {
+    const props = threadProps(
+      "projection-browser-preview",
+      "agent:main:dashboard:projection-browser-preview",
+      [
+        msg("user", "Inspect the example page"),
+        msg("assistant", "I will inspect the example page.", 2_000, { phase: "final_answer" }),
+        msg("toolResult", "Opened", 3_000, {
+          toolCallId: "browser-call",
+          toolName: "browser",
+          details: {
+            browserTab: {
+              profile: "managed",
+              target: "host",
+              targetId: "example-tab",
+              url: "https://example.com",
+              title: "Example page",
+            },
+          },
+        }),
+        msg("assistant", "The page is ready.", 4_000),
+      ],
+    );
+    props.showToolCalls = true;
+    saveChatSessionScrollPosition(props.paneId, props.sessionKey, {
+      scrollTop: 0,
+      anchorToEnd: false,
+    });
+    const view = drawThread(props);
     view.draw();
-    const card = view.container.querySelector("openclaw-browser-tab-card");
+    const card = view.container.querySelector<HTMLElement>("openclaw-browser-tab-card");
     const previews = card?.closest(".chat-group--turn-block");
     expect(card).not.toBeNull();
     expect(previews).not.toBeNull();
-    expect(card?.preview?.url).toBe("https://example.com");
-    expect(card?.preview?.title).toBe("Example page");
+    expect(card?.querySelector(".url")?.textContent).toBe("https://example.com");
+    expect(card?.querySelector(".title")?.textContent).toBe("Example page");
     expect(previews?.closest(".chat-work-group")).toBeNull();
     expect(view.container.querySelector(".chat-work-group")).not.toBeNull();
     expect(view.container.textContent).toContain("I will inspect the example page.");
     expect(view.container.textContent).toContain("The page is ready.");
     expect(view.container.textContent).not.toContain("[object Object]");
-  } finally {
-    view.dispose();
-  }
-});
+  });
 
-it("refreshes sender names for a replaced sender and a changed signed-in viewer", () => {
-  const own = personMessage("alex", "Alex", 1);
-  const props = threadProps("projection-sender", "agent:main:main", [own]);
-  props.userId = "alex";
-  props.userName = "Alex";
-  const view = drawThread(props);
-  const names = () =>
-    [...view.container.querySelectorAll(".chat-sender-name")].map((node) => node.textContent);
-  try {
+  it("refreshes sender names for a replaced sender and a changed signed-in viewer", () => {
+    const own = personMessage("alex", "Alex", 1);
+    const props = threadProps("projection-sender", "agent:main:main", [own]);
+    props.userId = "alex";
+    props.userName = "Alex";
+    const view = drawThread(props);
+    const names = () =>
+      [...view.container.querySelectorAll(".chat-sender-name")].map((node) => node.textContent);
     view.draw();
     expect(names()).toEqual([]);
     props.messages = [own, personMessage("riley", "Riley", 2)];
@@ -226,21 +222,17 @@ it("refreshes sender names for a replaced sender and a changed signed-in viewer"
     props.userName = "Alex";
     view.draw();
     expect(names()).toEqual([]);
-  } finally {
-    view.dispose();
-  }
-});
+  });
 
-it("updates automatic reply attribution when only the session owner changes", () => {
-  const own = personMessage("alex", "Alex", 1);
-  const props = threadProps("projection-owner", "agent:main:main", [
-    own,
-    { role: "assistant", content: "Answer", timestamp: 2 },
-  ]);
-  props.userId = "alex";
-  props.selectedSession = { key: props.sessionKey, kind: "direct", updatedAt: 1 };
-  const view = drawThread(props);
-  try {
+  it("updates automatic reply attribution when only the session owner changes", () => {
+    const own = personMessage("alex", "Alex", 1);
+    const props = threadProps("projection-owner", "agent:main:main", [
+      own,
+      msg("assistant", "Answer", 2),
+    ]);
+    props.userId = "alex";
+    props.selectedSession = { key: props.sessionKey, kind: "direct", updatedAt: 1 };
+    const view = drawThread(props);
     for (const id of ["alex", "riley", "alex"]) {
       props.selectedSession = {
         ...props.selectedSession,
@@ -251,52 +243,48 @@ it("updates automatic reply attribution when only the session owner changes", ()
         id === "riley" ? "You" : undefined,
       );
     }
-  } finally {
-    view.dispose();
-  }
-});
+  });
 
-function activityMessage(id: string, timestamp: number) {
-  const activity: AgentActivityItem[] = ["prior", "current"].map((part) => ({
-    itemId: `${id}-${part}`,
-    toolCallId: `${id}-${part}`,
-    kind: "tool",
-    name: "read",
-    title: id,
-    status: "running",
-    phase: "start",
-  }));
-  return {
-    role: "assistant",
-    runId: "active",
-    timestamp,
-    __openclaw: { id },
-    content: activity.map(({ toolCallId }) => ({
-      type: "toolCall",
-      id: toolCallId,
+  function activityMessage(id: string, timestamp: number) {
+    const activity: AgentActivityItem[] = ["prior", "current"].map((part) => ({
+      itemId: `${id}-${part}`,
+      toolCallId: `${id}-${part}`,
+      kind: "tool",
       name: "read",
-      arguments: {},
-    })),
-    activity,
-  };
-}
+      title: id,
+      status: "running",
+      phase: "start",
+    }));
+    return {
+      role: "assistant",
+      runId: "active",
+      timestamp,
+      __openclaw: { id },
+      content: activity.map(({ toolCallId }) => ({
+        type: "toolCall",
+        id: toolCallId,
+        name: "read",
+        arguments: {},
+      })),
+      activity,
+    };
+  }
 
-it("moves live activity to the current eligible group after replacement and run changes", () => {
-  const first = activityMessage("Earlier operation", 2);
-  const latest = activityMessage("Latest operation", 4);
-  const props = threadProps("projection-activity", "agent:main:main", [
-    { role: "user", content: "Inspect the workspace", timestamp: 1 },
-    first,
-    { role: "assistant", content: "Next file", timestamp: 3, phase: "commentary" },
-    latest,
-  ]);
-  Object.assign(props, { runId: "active", runActive: true, showToolCalls: true });
-  const view = drawThread(props);
-  const liveLabels = () =>
-    [...view.container.querySelectorAll(".chat-activity-group__label--live")].map(
-      (node) => node.textContent,
-    );
-  try {
+  it("moves live activity to the current eligible group after replacement and run changes", () => {
+    const first = activityMessage("Earlier operation", 2);
+    const latest = activityMessage("Latest operation", 4);
+    const props = threadProps("projection-activity", "agent:main:main", [
+      msg("user", "Inspect the workspace", 1),
+      first,
+      msg("assistant", "Next file", 3, { phase: "commentary" }),
+      latest,
+    ]);
+    Object.assign(props, { runId: "active", runActive: true, showToolCalls: true });
+    const view = drawThread(props);
+    const liveLabels = () =>
+      [...view.container.querySelectorAll(".chat-activity-group__label--live")].map(
+        (node) => node.textContent,
+      );
     view.draw();
     expect(liveLabels()).toEqual(["Latest operation…"]);
     props.messages = props.messages.map((message) =>
@@ -310,48 +298,39 @@ it("moves live activity to the current eligible group after replacement and run 
     props.runActive = false;
     view.draw();
     expect(liveLabels()).toEqual([]);
-  } finally {
-    view.dispose();
-  }
-});
-
-it("keeps search and gallery caches warm while refreshing streamed and replaced messages", () => {
-  const hidden = {
-    role: "assistant",
-    content: "MEDIA:https://example.com/hidden.mp4",
-    timestamp: 1,
-    __openclaw: { id: "hidden" },
-  };
-  const hit = {
-    role: "assistant",
-    content: "needle MEDIA:https://example.com/visible.mp4",
-    timestamp: 2,
-    __openclaw: { id: "visible" },
-  };
-  const props = {
-    ...threadProps("projection-search-video", "agent:main:main", [hidden, hit]),
-    stream: "MEDIA:https://example.com/live.mp4",
-    streamStartedAt: 3,
-  };
-  const state = getTranscriptState(props.paneId);
-  Object.assign(state, { searchOpen: true, searchQuery: "needle" });
-  const transcript = createTestTranscript(props.paneId);
-  const build = vi.spyOn(chatThreadBuild, "buildChatItems");
-  const project = () => {
-    transcript.renderSession(props.sessionKey, (session) => {
-      projectChatTranscript(props, session);
-      return null;
-    });
-    return state.transcriptRenderContext.turnVideoMessages
-      ?.values()
-      .next()
-      .value?.map(({ message }) => message);
-  };
-  const liveMessage = () => ({
-    role: "assistant",
-    content: [{ type: "text", text: props.stream }],
   });
-  try {
+
+  it("keeps search and gallery caches warm while refreshing streamed and replaced messages", () => {
+    const hidden = msg("assistant", "MEDIA:https://example.com/hidden.mp4", 1, {
+      __openclaw: { id: "hidden" },
+    });
+    const hit = msg("assistant", "needle MEDIA:https://example.com/visible.mp4", 2, {
+      __openclaw: { id: "visible" },
+    });
+    const props = {
+      ...threadProps("projection-search-video", "agent:main:main", [hidden, hit]),
+      stream: "MEDIA:https://example.com/live.mp4",
+      streamStartedAt: 3,
+    };
+    const state = getTranscriptState(props.paneId);
+    state.search.toggle();
+    state.search.setQuery("needle");
+    const transcript = createTestTranscript(props.paneId);
+    const build = vi.spyOn(chatThreadBuild, "buildChatItems");
+    const project = () => {
+      transcript.renderSession(props.sessionKey, (session) => {
+        projectChatTranscript(props, session);
+        return null;
+      });
+      return state.transcriptRenderContext.turnVideoMessages
+        ?.values()
+        .next()
+        .value?.map(({ message }) => message);
+    };
+    const liveMessage = () => ({
+      role: "assistant",
+      content: [{ type: "text", text: props.stream }],
+    });
     expect(project()).toEqual([hidden, hit, liveMessage()]);
     build.mockClear();
     for (const stream of [props.stream, "MEDIA:https://example.com/updated.mp4"]) {
@@ -366,42 +345,131 @@ it("keeps search and gallery caches warm while refreshing streamed and replaced 
     };
     props.messages = [replacement, hit];
     expect(project()).toEqual([replacement, hit, liveMessage()]);
-  } finally {
-    transcript.hostDisconnected();
-  }
-});
-
-it("opens the visible forwarded disclosure when replying across search after a prepend", () => {
-  const forwarded = (id: string, content: string, timestamp: number) => ({
-    role: "assistant",
-    provenance: { kind: "inter_session", sourceTool: "sessions_send" },
-    senderSession: { sessionKey: "agent:other:main", agentId: "other", label: "Other" },
-    content,
-    timestamp,
-    __openclaw: { id },
   });
-  const later = forwarded("later", "needle", 2);
-  const answer = { role: "assistant", content: "needle answer", timestamp: 3 };
-  const props = threadProps("projection-reply-owner", "agent:main:main", [later, answer]);
-  const state = getTranscriptState(props.paneId);
-  const view = drawThread(props);
-  props.onRequestUpdate = view.draw;
-  try {
+
+  it("opens the visible forwarded disclosure when replying across search after a prepend", () => {
+    const forwarded = (id: string, content: string, timestamp: number) => ({
+      role: "assistant",
+      provenance: { kind: "inter_session", sourceTool: "sessions_send" },
+      senderSession: { sessionKey: "agent:other:main", agentId: "other", label: "Other" },
+      content,
+      timestamp,
+      __openclaw: { id },
+    });
+    const later = forwarded("later", "needle", 2);
+    const answer = msg("assistant", "needle answer", 3);
+    const props = threadProps("projection-reply-owner", "agent:main:main", [later, answer]);
+    const state = getTranscriptState(props.paneId);
+    const view = drawThread(props);
     view.draw();
     props.messages = [forwarded("earlier", "Hidden original", 1), later, answer];
     view.draw();
-    Object.assign(state, { searchOpen: true, searchQuery: "needle" });
+    state.search.toggle();
+    state.search.setQuery("needle");
     view.draw();
     expect(view.container.textContent).not.toContain("Hidden original");
 
     state.transcriptRenderContext.onOpenReply?.("earlier");
+    flush();
 
-    expect(state.searchOpen).toBe(false);
+    expect(state.search.snapshot.open).toBe(false);
     expect(view.container.querySelector<HTMLDetailsElement>(".chat-session-activity")?.open).toBe(
       true,
     );
     expect(view.container.textContent).toContain("Hidden original");
-  } finally {
-    view.dispose();
+  });
+});
+
+describe("voice reconciliation", () => {
+  const savedMessage = (content: string, id: string, extra: object = {}) => ({
+    role: "user",
+    content,
+    __openclaw: { id, ...extra },
+  });
+  const caption = (id: string, text: string, transcriptId: string) => ({
+    id,
+    role: "user" as const,
+    text,
+    isStreaming: false,
+    transcriptId,
+  });
+  const membershipScans = (calls: readonly (readonly unknown[])[]) =>
+    calls.filter(([callback]) => callback === persistedMessageEntryId);
+
+  function voiceProjection(props: ChatThreadProps) {
+    const controller = createTestTranscript(props.paneId);
+    const container = document.body.appendChild(document.createElement("div"));
+    cleanups.push(() => render(null, container));
+    return () => {
+      controller.renderSession(props.sessionKey, (session) => {
+        const renderRows = vi.spyOn(session, "render");
+        render(renderChatThread(props, controller), container);
+        controller.start();
+        controller.update();
+        flush();
+        expect(renderRows).toHaveBeenCalledOnce();
+        renderRows.mockRestore();
+        return null;
+      });
+      return [...container.querySelectorAll(".agent-chat__voice-turn-text")].map(
+        (turn) => turn.textContent,
+      );
+    };
   }
+
+  beforeEach(installTranscriptDomMocks);
+  afterEach(() => {
+    for (const cleanup of cleanups.splice(0).toReversed()) {
+      cleanup();
+    }
+    resetTranscriptTestDom();
+  });
+
+  it.each(["absent", "empty", "ID-less"] as const)(
+    "skips the voice membership scan for %s captions",
+    (kind) => {
+      const messages = [savedMessage("Saved message", "voice:saved")];
+      const map = vi.spyOn(messages, "map");
+      const props = threadProps(`voice-${kind}`, undefined, messages);
+      props.realtimeTalkConversation =
+        kind === "absent"
+          ? undefined
+          : kind === "empty"
+            ? []
+            : [{ id: "live", role: "user", text: "Still speaking", isStreaming: true }];
+
+      expect(voiceProjection(props)()).toEqual(kind === "ID-less" ? ["Still speaking"] : []);
+      expect(membershipScans(map.mock.calls)).toEqual([]);
+    },
+  );
+
+  it("uses one raw-history scan, preserving pending captions and refreshing replaced history", () => {
+    const messages = [
+      savedMessage("Hidden saved words", "voice:saved"),
+      savedMessage("Pending input", "pending:input"),
+      savedMessage("Pending send", "send:pending", { kind: "pending-send", state: "unconfirmed" }),
+    ];
+    const map = vi.spyOn(messages, "map");
+    const props = threadProps("voice-membership", undefined, messages);
+    props.realtimeTalkConversation = [
+      caption("saved", "Saved caption", "voice:saved"),
+      caption("unsaved", "Unsaved caption", "voice:unsaved"),
+      { id: "live", role: "assistant", text: "Live caption", isStreaming: true },
+      caption("input", "Pending input caption", "pending:input"),
+      caption("send", "Pending send caption", "send:pending"),
+    ];
+    const state = getTranscriptState(props.paneId);
+    state.search.toggle();
+    state.search.setQuery("unmatched search");
+    const project = voiceProjection(props);
+    const pendingCaptions = ["Live caption", "Pending input caption", "Pending send caption"];
+
+    expect(project()).toEqual(["Unsaved caption", ...pendingCaptions]);
+    expect(membershipScans(map.mock.calls)).toHaveLength(1);
+
+    props.messages = [savedMessage("New saved words", "voice:unsaved"), ...messages.slice(1)];
+    const replacementMap = vi.spyOn(props.messages, "map");
+    expect(project()).toEqual(["Saved caption", ...pendingCaptions]);
+    expect(membershipScans(replacementMap.mock.calls)).toHaveLength(1);
+  });
 });

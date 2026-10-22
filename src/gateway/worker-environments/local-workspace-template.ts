@@ -1,6 +1,6 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256Hex as digest } from "@openclaw/normalization-core/node-crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { parse as parseYaml } from "yaml";
 import {
@@ -21,7 +21,6 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
 
 const log = createSubsystemLogger("agents/worktrees");
-const digest = (value: string) => createHash("sha256").update(value).digest("hex");
 
 async function hasContainedVirtualStore(directory: string, workdir: string): Promise<boolean> {
   try {

@@ -56,6 +56,12 @@ export function buildCopilotPromptGuidance(params: {
     buildHarnessVisibleReplyGuidance({
       sourceReplyDeliveryMode: params.attempt.sourceReplyDeliveryMode,
       messageToolAvailable: callableTools.has("message"),
+      currentConversation: {
+        agentSessionKey: params.attempt.sessionKey,
+        currentChannelProvider: params.attempt.messageChannel ?? params.attempt.messageProvider,
+        currentChannelId: params.attempt.currentChannelId,
+        currentMessagingTarget: params.attempt.currentMessagingTarget,
+      },
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
     }),
     buildCredentialSafetyPrompt({

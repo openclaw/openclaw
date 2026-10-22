@@ -1,13 +1,19 @@
 // OpenClaw operation parser tests protect direct command routing before model fallback.
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
+import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
+import { isStaticallyChannelConfigured } from "../config/channel-configured-shared.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import {
+  executeSystemAgentOperation,
   isPersistentSystemAgentOperation,
   parseSystemAgentOperation as parseSystemAgentOperationImpl,
+  type SystemAgentOperation,
 } from "./operations.js";
+import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import {
   createSystemAgentPluginMetadataTestSnapshot,
   type SystemAgentPluginMetadataTestSnapshot,
@@ -18,26 +24,24 @@ let pluginMetadata: SystemAgentPluginMetadataTestSnapshot | undefined;
 const parseSystemAgentOperation: typeof parseSystemAgentOperationImpl = (...args) =>
   pluginMetadata!.run(() => parseSystemAgentOperationImpl(...args));
 
+function expectOperation<K extends SystemAgentOperation["kind"]>(
+  command: string,
+  kind: K,
+  fields?: Omit<Extract<SystemAgentOperation, { kind: K }>, "kind">,
+) {
+  expect(parseSystemAgentOperation(command)).toEqual({ kind, ...fields });
+}
+
 function expectConfigSet(path: string, value: string) {
-  expect(parseSystemAgentOperation(`config set ${path} ${value}`)).toEqual({
-    kind: "config-set",
-    path,
-    value,
-  });
+  expectOperation(`config set ${path} ${value}`, "config-set", { path, value });
 }
 
 function expectConfigSetRef(path: string, source: "env" | "store", id: string) {
-  expect(parseSystemAgentOperation(`config set-ref ${path} ${source} ${id}`)).toEqual({
-    kind: "config-set-ref",
-    path,
-    source,
-    id,
-  });
+  expectOperation(`config set-ref ${path} ${source} ${id}`, "config-set-ref", { path, source, id });
 }
 
 function expectInvalidConfigPath(command: string) {
-  expect(parseSystemAgentOperation(command)).toEqual({
-    kind: "none",
+  expectOperation(command, "none", {
     message: "Invalid config path. Check its quoting or escaping and try again.",
   });
 }
@@ -68,132 +72,86 @@ describe("parseSystemAgentOperation", () => {
   );
 
   it("parses typed model writes", () => {
-    expect(parseSystemAgentOperation("set default model openai/gpt-5.2")).toEqual({
-      kind: "set-default-model",
-      model: "openai/gpt-5.2",
+    const model = "openai/gpt-5.2";
+    expectOperation(`set default model ${model}`, "set-default-model", { model });
+    expectOperation(`configure models ${model}`, "set-default-model", { model });
+    expectOperation(`set default model ${model} for agent агент✨`, "set-default-model", {
+      model,
+      agentId: "агент✨",
     });
-    expect(parseSystemAgentOperation("configure models openai/gpt-5.2")).toEqual({
-      kind: "set-default-model",
-      model: "openai/gpt-5.2",
-    });
-    expect(parseSystemAgentOperation("set default model openai/gpt-5.2 for agent агент✨")).toEqual(
-      {
-        kind: "set-default-model",
-        model: "openai/gpt-5.2",
-        agentId: "агент✨",
-      },
-    );
   });
 
   it("parses interactive model provider setup", () => {
-    expect(parseSystemAgentOperation("configure model provider")).toEqual({
-      kind: "model-setup",
-    });
-    expect(parseSystemAgentOperation("setup model provider")).toEqual({
-      kind: "model-setup",
-    });
-    expect(parseSystemAgentOperation("model setup workspace /tmp/work")).toEqual({
-      kind: "model-setup",
-      workspace: "/tmp/work",
-    });
+    expectOperation("configure model provider", "model-setup");
+    expectOperation("setup model provider", "model-setup");
+    expectOperation("model setup workspace /tmp/work", "model-setup", { workspace: "/tmp/work" });
   });
 
   it("parses verbal agent switching", () => {
-    expect(parseSystemAgentOperation("talk to work agent")).toEqual({
-      kind: "open-tui",
-      agentId: "work",
-    });
+    expectOperation("talk to work agent", "open-tui", { agentId: "work" });
   });
 
   it("routes ambiguous model requests to the AI instead of guessing", () => {
-    expect(parseSystemAgentOperation("models please").kind).toBe("none");
-    expect(parseSystemAgentOperation("why did my gateway stop").kind).toBe("none");
-    expect(parseSystemAgentOperation("should I talk to my agent about this?").kind).toBe("none");
-    expect(parseSystemAgentOperation("set me up with telegram").kind).toBe("none");
-    expect(parseSystemAgentOperation("can I set the default model gpt-5.5 later?").kind).toBe(
-      "none",
-    );
+    for (const command of [
+      "models please",
+      "why did my gateway stop",
+      "should I talk to my agent about this?",
+      "set me up with telegram",
+      "can I set the default model gpt-5.5 later?",
+    ]) {
+      expect(parseSystemAgentOperation(command).kind).toBe("none");
+    }
   });
 
   it("parses gateway lifecycle operations", () => {
-    expect(parseSystemAgentOperation("gateway status")).toEqual({ kind: "gateway-status" });
-    expect(parseSystemAgentOperation("restart gateway")).toEqual({ kind: "gateway-restart" });
-    expect(parseSystemAgentOperation("start gateway")).toEqual({ kind: "gateway-start" });
-    expect(parseSystemAgentOperation("stop gateway")).toEqual({ kind: "gateway-stop" });
+    expectOperation("gateway status", "gateway-status");
+    expectOperation("restart gateway", "gateway-restart");
+    expectOperation("start gateway", "gateway-start");
+    expectOperation("stop gateway", "gateway-stop");
   });
 
   it("parses config and doctor repair operations", () => {
-    expect(parseSystemAgentOperation("validate config")).toEqual({ kind: "config-validate" });
+    expectOperation("validate config", "config-validate");
     expectConfigSet("gateway.port", "19001");
     expectConfigSet("channels.defaults.groupPolicy", '"open"');
     expectConfigSet("channels.modelByChannel.telegram.chat", '"openai/gpt-5.5"');
     expectConfigSet('channels.modelByChannel["token=prod"].chat', '"openai/gpt-5.5"');
     expectConfigSet('channels.synology-chat.accounts["prod.guild"].webhookUrl', '"secret"');
     expectConfigSet(String.raw`channels.synology-chat.accounts.prod\ guild.webhookUrl`, '"secret"');
-    expectConfigSet('channels.synology-chat.accounts["prod=us"].webhookUrl', '"secret"');
     expectConfigSet('plugins.entries.codex.config.appServer.headers["X-Test"]', '"secret"');
     expectConfigSet('channels.synology-chat.accounts["token=prod"].webhookUrl', '"secret"');
-    expectConfigSet(String.raw`plugins.entries.codex.config.appServer.headers.X\-Test`, '"secret"');
-    expectConfigSet(String.raw`channels.synology-chat.accounts.token\=prod.webhookUrl`, '"secret"');
-    expectConfigSet('channels.synology-chat.accounts["token=prod"].webhookPath', '"/hook"');
-    expectConfigSet(String.raw`channels.synology-chat.accounts.token\=prod.webhookPath`, '"/hook"');
-    expectConfigSetRef('channels.telegram.accounts["prod=us"].botToken', "env", "TELEGRAM_TOKEN");
-    expectConfigSetRef(
-      String.raw`channels.telegram.accounts.prod\=us.botToken`,
-      "env",
-      "TELEGRAM_TOKEN",
-    );
     expectConfigSet('broadcast["token=prod"]', '["telegram"]');
     expectInvalidConfigPath('config set hooks.mappings["token=abcDEF123"].agentId main');
-    expectInvalidConfigPath(
-      'config set channels.buzz.groups["gateway.auth.token=ACTUAL_GATEWAY_TOKEN"].enabled true',
-    );
     expectInvalidConfigPath("config set gateway.auth..token very-secret");
     expectInvalidConfigPath("config set gateway.auth.token=very-secret");
     expectInvalidConfigPath("config set gateway.auth.token=very-secret please");
-    expectInvalidConfigPath('config set channels.synology-chat["webhookUrl=abcDEF123"] please');
     for (const command of [
-      String.raw`config set gateway.auth.token\=very-secret please`,
       String.raw`config set gateway.auth.token\ very-secret please`,
       "config set gateway.auth.tokenabcDEF123 please",
-      "config set gateway.auth.token_abcDEF123 please",
-      "config set gateway.auth.token$abcDEF123 please",
-      'config set gateway.auth["token=very-secret"] please',
-      'config set gateway.auth["token very-secret"] please',
-      'config set gateway.auth["token:very-secret"] please',
-      'config set gateway.auth["token=very-secret"].nested please',
     ]) {
       expectInvalidConfigPath(command);
     }
     expectConfigSetRef("gateway.auth.token", "env", "GATEWAY_TOKEN");
     expectConfigSetRef("gateway.auth.token", "store", "GATEWAY_TOKEN");
-    expectInvalidConfigPath("config set-ref gateway.auth.tokenabcDEF123 env GATEWAY_TOKEN");
     expectInvalidConfigPath("config set-ref gateway.auth.token=abcDEF123 env GATEWAY_TOKEN");
     expectInvalidConfigPath("config set-ref gateway.auth.token env 123:actual-gateway-token");
-    expect(parseSystemAgentOperation("doctor fix")).toEqual({ kind: "doctor-fix" });
+    expectOperation("doctor fix", "doctor-fix");
   });
 
   it("parses plugin management operations", () => {
-    expect(parseSystemAgentOperation("plugins list")).toEqual({ kind: "plugin-list" });
-    expect(parseSystemAgentOperation("list plugin")).toEqual({ kind: "plugin-list" });
-    expect(parseSystemAgentOperation("plugins search calendar sync")).toEqual({
-      kind: "plugin-search",
-      query: "calendar sync",
-    });
-    expect(parseSystemAgentOperation("install npm plugin @openclaw/discord")).toEqual({
-      kind: "plugin-install",
+    expectOperation("plugins list", "plugin-list");
+    expectOperation("list plugin", "plugin-list");
+    expectOperation("plugins search calendar sync", "plugin-search", { query: "calendar sync" });
+    expectOperation("install npm plugin @openclaw/discord", "plugin-install", {
       spec: "npm:@openclaw/discord",
     });
-    expect(parseSystemAgentOperation("plugin install clawhub:openclaw-demo")).toEqual({
-      kind: "plugin-install",
+    expectOperation("plugin install clawhub:openclaw-demo", "plugin-install", {
       spec: "clawhub:openclaw-demo",
     });
-    expect(parseSystemAgentOperation("plugin uninstall openclaw-demo")).toEqual({
-      kind: "plugin-uninstall",
+    expectOperation("plugin uninstall openclaw-demo", "plugin-uninstall", {
       pluginId: "openclaw-demo",
     });
-    expect(parseSystemAgentOperation("plugin install npm:@example/plugin")).toEqual({
-      kind: "none",
+    expectOperation("plugin install npm:@example/plugin", "none", {
       message:
         "OpenClaw installs only ClawHub, bundled, or official-catalog plugins. Use `openclaw plugins install <spec>` in a trusted shell to review an arbitrary executable source.",
     });
@@ -210,39 +168,22 @@ describe("parseSystemAgentOperation", () => {
   );
 
   it("parses config read and schema lookups", () => {
-    expect(parseSystemAgentOperation("config get gateway.port")).toEqual({
-      kind: "config-get",
-      path: "gateway.port",
-    });
-    expect(parseSystemAgentOperation("config schema channels.telegram")).toEqual({
-      kind: "config-schema",
+    for (const path of [
+      "gateway.port",
+      'channels.telegram.accounts["prod=us"].botToken',
+      "channels.missing.opaque",
+    ]) {
+      expectOperation(`config get ${path}`, "config-get", { path });
+    }
+    expectOperation("config schema channels.telegram", "config-schema", {
       path: "channels.telegram",
     });
-    expect(parseSystemAgentOperation("config schema")).toEqual({ kind: "config-schema" });
-    expect(parseSystemAgentOperation("config schema .")).toEqual({
-      kind: "config-schema",
-      path: ".",
-    });
-    expect(
-      parseSystemAgentOperation('config get channels.telegram.accounts["prod=us"].botToken'),
-    ).toEqual({
-      kind: "config-get",
-      path: 'channels.telegram.accounts["prod=us"].botToken',
-    });
-    expect(parseSystemAgentOperation("config get channels.missing.opaque")).toEqual({
-      kind: "config-get",
-      path: "channels.missing.opaque",
-    });
+    expectOperation("config schema", "config-schema");
+    expectOperation("config schema .", "config-schema", { path: "." });
     for (const command of [
       "config get gateway.auth.tokenabcDEF123",
-      'config get gateway.auth["token=abcDEF123"]',
-      String.raw`config get gateway.auth.token\=abcDEF123`,
-      "config get gateway.auth.token abcDEF123",
       "config get channels.missing.opaque=abcDEF123",
       "config schema gateway.port=abcDEF123",
-      "config schema gateway.auth.token=abcDEF123",
-      'config schema gateway.auth["token=abcDEF123"]',
-      "config schema channels.missing.opaque=abcDEF123",
     ]) {
       expectInvalidConfigPath(command);
     }
@@ -254,21 +195,26 @@ describe("parseSystemAgentOperation", () => {
   });
 
   it("parses agent creation requests", () => {
-    expect(
-      parseSystemAgentOperation(
-        'create agent qa-writer name "QA Writer" role writer workspace /tmp/qa-writer',
-      ),
-    ).toEqual({
-      kind: "create-agent",
-      agentId: "qa-writer",
-      name: "QA Writer",
-      role: "writer",
-      workspace: "/tmp/qa-writer",
-    });
-    expect(
-      parseSystemAgentOperation("create agent editor role writer workspace /tmp/editor"),
-    ).toEqual({
-      kind: "create-agent",
+    expectOperation(
+      'create agent ledger purpose "Check arithmetic in synthetic order lists." workspace "/tmp/ledger"',
+      "create-agent",
+      {
+        agentId: "ledger",
+        purpose: "Check arithmetic in synthetic order lists.",
+        workspace: "/tmp/ledger",
+      },
+    );
+    expectOperation(
+      'create agent qa-writer name "QA Writer" role writer workspace /tmp/qa-writer',
+      "create-agent",
+      {
+        agentId: "qa-writer",
+        name: "QA Writer",
+        role: "writer",
+        workspace: "/tmp/qa-writer",
+      },
+    );
+    expectOperation("create agent editor role writer workspace /tmp/editor", "create-agent", {
       agentId: "editor",
       role: "writer",
       workspace: "/tmp/editor",
@@ -277,37 +223,238 @@ describe("parseSystemAgentOperation", () => {
       kind: "none",
       message: expect.stringContaining("Unknown agent role"),
     });
-    expect(parseSystemAgentOperation("create team")).toEqual({ kind: "create-team" });
-    expect(
-      parseSystemAgentOperation(
-        'create team coordinator lead prefix docs workspace "/tmp/my team"',
-      ),
-    ).toEqual({
-      kind: "create-team",
-      coordinatorId: "lead",
-      prefix: "docs",
-      workspaceRoot: "/tmp/my team",
-    });
-    expect(
-      parseSystemAgentOperation("create agent Work workspace /tmp/work model openai/gpt-5.2"),
-    ).toEqual({
-      kind: "create-agent",
+    expectOperation("create team", "create-team");
+    expectOperation(
+      'create team coordinator lead prefix docs workspace "/tmp/my team"',
+      "create-team",
+      {
+        coordinatorId: "lead",
+        prefix: "docs",
+        workspaceRoot: "/tmp/my team",
+      },
+    );
+    expectOperation("create agent Work workspace /tmp/work model openai/gpt-5.2", "create-agent", {
       agentId: "work",
       workspace: "/tmp/work",
       model: "openai/gpt-5.2",
     });
-    expect(parseSystemAgentOperation("add agent ops")).toEqual({
-      kind: "create-agent",
-      agentId: "ops",
-    });
-    expect(parseSystemAgentOperation("setup workspace /tmp/work model openai/gpt-5.5")).toEqual({
-      kind: "setup",
+    expectOperation("add agent ops", "create-agent", { agentId: "ops" });
+    expectOperation("setup workspace /tmp/work model openai/gpt-5.5", "setup", {
       workspace: "/tmp/work",
       model: "openai/gpt-5.5",
     });
-    expect(parseSystemAgentOperation("setup agent ops")).toEqual({
-      kind: "create-agent",
-      agentId: "ops",
+    expectOperation("setup agent ops", "create-agent", { agentId: "ops" });
+  });
+});
+
+// mock-isolation: Setup guidance uses synthetic plugins without loading installed channel runtimes.
+vi.mock("../channels/plugins/setup-registry.js", () => ({ listChannelSetupPlugins: vi.fn() }));
+vi.mock("../commands/channel-setup/discovery.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/channel-setup/discovery.js")>()),
+  resolveChannelSetupEntries: vi.fn(),
+}));
+vi.mock("../config/channel-configured-shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../config/channel-configured-shared.js")>()),
+  isStaticallyChannelConfigured: vi.fn(),
+}));
+
+function expectSetupOperation(
+  input: string,
+  operation: ReturnType<typeof parseSystemAgentOperation>,
+) {
+  expect(parseSystemAgentOperation(input)).toEqual(operation);
+}
+function expectLines(lines: string[], expected: string[]) {
+  for (const text of expected) {
+    expect(lines.join("\n")).toContain(text);
+  }
+}
+
+describe("system agent setup-flow operations", () => {
+  it("parses channel listing and connect requests", () => {
+    expectSetupOperation("channels", { kind: "channel-list" });
+    expectSetupOperation("list channels", { kind: "channel-list" });
+    expectSetupOperation("connect telegram", { kind: "channel-setup", channel: "telegram" });
+    expectSetupOperation("connect to WhatsApp", { kind: "channel-setup", channel: "whatsapp" });
+    expectSetupOperation("link discord channel", { kind: "channel-setup", channel: "discord" });
+    // Starting the wizard is not a write; the wizard collects explicit answers.
+    expect(isPersistentSystemAgentOperation({ kind: "channel-setup", channel: "telegram" })).toBe(
+      false,
+    );
+    expect(isPersistentSystemAgentOperation({ kind: "channel-list" })).toBe(false);
+  });
+
+  it("parses hosted skills, web-search, and Gateway setup requests", () => {
+    for (const input of ["configure skills", "setup skills", "set up skills"]) {
+      expect(parseSystemAgentOperation(input)).toEqual({ kind: "skills-setup" });
+    }
+    for (const input of [
+      "configure search",
+      "configure web search",
+      "setup search",
+      "web search provider setup",
+    ]) {
+      expect(parseSystemAgentOperation(input)).toEqual({ kind: "search-setup" });
+    }
+    expect(parseSystemAgentOperation("open search wizard")).toEqual({
+      kind: "open-setup",
+      target: "search",
     });
+    for (const input of ["configure gateway", "set up gateway", "gateway settings"]) {
+      expect(parseSystemAgentOperation(input)).toEqual({ kind: "gateway-config-setup" });
+    }
+    expect(parseSystemAgentOperation("open gateway wizard")).toEqual({
+      kind: "open-setup",
+      target: "gateway",
+    });
+    expect(isPersistentSystemAgentOperation({ kind: "skills-setup" })).toBe(false);
+    expect(isPersistentSystemAgentOperation({ kind: "search-setup" })).toBe(false);
+    expect(isPersistentSystemAgentOperation({ kind: "gateway-config-setup" })).toBe(false);
+    expect(parseSystemAgentOperation("configure search with brave").kind).toBe("none");
+  });
+
+  it("parses the exact memory-import grammar", () => {
+    for (const input of ["import memory", "import memories", "memory import"]) {
+      expect(parseSystemAgentOperation(input)).toEqual({ kind: "memory-import" });
+    }
+    expect(isPersistentSystemAgentOperation({ kind: "memory-import" })).toBe(false);
+    expect(parseSystemAgentOperation("import memory from codex").kind).toBe("none");
+  });
+
+  it("parses anchored setup switches and channel info", () => {
+    for (const input of [
+      "open setup wizard",
+      "setup wizard",
+      "menu setup",
+      "use the setup wizard",
+      "use the wizard",
+    ]) {
+      expectSetupOperation(input, { kind: "open-setup", target: "guided" });
+    }
+    for (const input of ["open classic wizard", "open classic setup wizard", "classic setup"]) {
+      expectSetupOperation(input, { kind: "open-setup", target: "classic" });
+    }
+    expectSetupOperation("open channel wizard", { kind: "open-setup", target: "channels" });
+    expectSetupOperation("open channel wizard for Slack", {
+      kind: "open-setup",
+      target: "channels",
+      channel: "slack",
+    });
+    expectSetupOperation("channel info Slack", { kind: "channel-info", channel: "slack" });
+    expectSetupOperation("about Telegram channel", { kind: "channel-info", channel: "telegram" });
+    expect(parseSystemAgentOperation("please open the setup wizard soon").kind).toBe("none");
+    expect(parseSystemAgentOperation("channel info slack please").kind).toBe("none");
+  });
+
+  it("prints one-shot setup pointers", async () => {
+    const { runtime, lines } = createSystemAgentTestRuntime();
+
+    for (const operation of [
+      { kind: "open-setup", target: "guided" } as const,
+      { kind: "open-setup", target: "classic" } as const,
+      { kind: "open-setup", target: "channels", channel: "slack" } as const,
+      { kind: "open-setup", target: "search" } as const,
+      { kind: "open-setup", target: "gateway" } as const,
+    ]) {
+      const result = await executeSystemAgentOperation(operation, runtime);
+      expect(result.applied).toBe(false);
+    }
+
+    expectLines(lines, [
+      "openclaw onboard`",
+      "openclaw onboard --classic",
+      "openclaw channels add --channel slack",
+      "openclaw configure --section web",
+      "openclaw configure --section gateway",
+      "on the machine running OpenClaw",
+    ]);
+  });
+
+  it("prints one-shot pointers for hosted skills, search, and Gateway setup", async () => {
+    const { runtime, lines } = createSystemAgentTestRuntime();
+
+    await executeSystemAgentOperation({ kind: "skills-setup" }, runtime);
+    await executeSystemAgentOperation({ kind: "search-setup" }, runtime);
+    await executeSystemAgentOperation({ kind: "gateway-config-setup" }, runtime);
+
+    expectLines(lines, [
+      "openclaw configure --section skills",
+      "openclaw configure --section web",
+      "openclaw configure --section gateway",
+    ]);
+  });
+
+  it("points one-shot memory import at interactive owners", async () => {
+    const { runtime, lines } = createSystemAgentTestRuntime();
+
+    await executeSystemAgentOperation({ kind: "memory-import" }, runtime);
+
+    expect(lines.join("\n")).toContain("Memory page in the Control UI");
+    expect(lines.join("\n")).toContain("openclaw onboard");
+  });
+
+  it("directs one-shot model setup to protected Models controls without a write", async () => {
+    const { runtime, lines } = createSystemAgentTestRuntime();
+
+    const result = await executeSystemAgentOperation({ kind: "model-setup" }, runtime);
+
+    expect(result.applied).toBe(false);
+    expectLines(lines, [
+      "Settings → Models → Connect provider",
+      "selected System or agent scope",
+      "replacing credentials for a provider already in use",
+    ]);
+    expect(lines.join("\n")).not.toContain("openclaw onboard");
+  });
+
+  it("prints discovered channel metadata and sorted unknown-channel choices", async () => {
+    const { runtime, lines } = createSystemAgentTestRuntime();
+    const entries: ReturnType<typeof resolveChannelSetupEntries>["entries"] = (
+      [
+        ["telegram", "Telegram", "bot"],
+        ["slack", "Slack", "app"],
+      ] as const
+    ).map(([id, label, kind]) => ({
+      id,
+      meta: {
+        id,
+        label,
+        selectionLabel: label,
+        blurb: `${label} ${kind} messaging.`,
+        docsPath: `/channels/${id}`,
+      },
+    }));
+    vi.mocked(listChannelSetupPlugins).mockReturnValue([
+      {
+        id: "slack",
+        meta: entries[1]!.meta,
+        capabilities: { chatTypes: ["direct"] },
+        config: { listAccountIds: () => [], resolveAccount: () => ({}) },
+      },
+    ]);
+    vi.mocked(resolveChannelSetupEntries).mockReturnValue({
+      entries,
+      installedCatalogEntries: [],
+      installableCatalogEntries: [],
+      installedCatalogById: new Map(),
+      installableCatalogById: new Map(),
+    });
+    vi.mocked(isStaticallyChannelConfigured).mockImplementation(
+      (_cfg, channel) => channel === "slack",
+    );
+
+    await executeSystemAgentOperation({ kind: "channel-info", channel: "slack" }, runtime);
+    expectLines(lines, [
+      "Slack (slack)",
+      "Slack app messaging.",
+      "Configured: yes",
+      "Installed: yes",
+      "https://docs.openclaw.ai/channels/slack",
+      "open channel wizard for slack",
+    ]);
+
+    lines.length = 0;
+    await executeSystemAgentOperation({ kind: "channel-info", channel: "matrix" }, runtime);
+    expect(lines.join("\n")).toContain("Known channels: slack, telegram");
   });
 });

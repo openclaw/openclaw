@@ -373,7 +373,6 @@ function resolveBridgeSession(
   return handle.bridgeSession === undefined ? handle : handle.bridgeSession;
 }
 
-/** OpenClaw-managed ACP runtime implementation backed by the upstream acpx runtime. */
 export class AcpxRuntime implements CompleteAcpRuntime {
   readonly ownerAwareSessions = 1 as const;
   private readonly legacyBareSessionKeys: Set<string>;
@@ -423,11 +422,11 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       },
       list: () => this.agentRegistry.list(),
     };
-    const createDelegate = (probeAgent = options.probeAgent) =>
+    const createBase = (overrides: Partial<Pick<AcpRuntimeOptions, "cwd" | "probeAgent">> = {}) =>
       new BaseAcpxRuntime(
         {
           ...options,
-          probeAgent,
+          ...overrides,
           sessionStore: this.sessionStore,
           agentRegistry: this.scopedAgentRegistry,
           sessionPermissions: (context) => {
@@ -486,16 +485,17 @@ export class AcpxRuntime implements CompleteAcpRuntime {
         },
         testOptions as BaseAcpxRuntimeTestOptions,
       );
-    this.delegate = createDelegate();
+    this.delegate = createBase();
     this.generationRegistry = new AcpxGenerationRegistry(
       this.sessionStore,
       this.delegate,
-      createDelegate,
+      createBase,
     );
     this.probe = new AcpxRuntimeProbe({
       getAgent: () =>
         normalizeAgentName(options.getProbeAgent?.() ?? options.probeAgent) ?? "codex",
-      createRuntime: createDelegate,
+      // The service creates its wrapper directory; the default workspace may not exist.
+      createRuntime: (probeAgent) => createBase({ probeAgent, cwd: this.wrapperRoot ?? this.cwd }),
       assertRunning: () => this.generationRegistry.assertRunning(),
       runWithLease: (agent, run) =>
         this.runWithLaunchLease({

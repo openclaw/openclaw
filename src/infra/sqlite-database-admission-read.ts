@@ -3,6 +3,7 @@ import { threadId } from "node:worker_threads";
 import {
   isPostgresSqlConnection,
   sqlPublicationAnchor,
+  type EngineConnection,
   type PostgresSqlConnection,
 } from "./sql-connection.js";
 import {
@@ -14,7 +15,7 @@ import {
   admitSqliteDatabaseFactValue,
   type Admission,
   type AdmissionFactValue,
-  type SqliteDatabaseAdmissionKey,
+  type SqliteDatabaseFactKey,
   type StagedAdmissionFact,
   type SqliteDatabaseAdmissionRegistry,
 } from "./sqlite-database-admission-record.js";
@@ -31,6 +32,8 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     schemaDirty: WeakSet<DatabaseSync>;
     rolledBack: WeakSet<DatabaseSync>;
     misses: WeakMap<Admission, Map<string, number>>;
+    openedIdentities: WeakMap<DatabaseSync, string>;
+    localSchemaRevisions: Map<string, number>;
   };
   admission: (database: DatabaseSync, create?: boolean) => Admission | undefined;
   pathAdmission: (location: string) => Admission | undefined;
@@ -39,7 +42,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   release: (record: Admission) => void;
   publishFact: <T>(
     record: Admission,
-    key: SqliteDatabaseAdmissionKey<T>,
+    key: SqliteDatabaseFactKey<T>,
     value: AdmissionFactValue,
     revision: number,
   ) => void;
@@ -63,7 +66,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
   }
   function getSqliteDatabaseAdmission<T>(
     database: DatabaseSync | PostgresSqlConnection,
-    key: SqliteDatabaseAdmissionKey<T>,
+    key: SqliteDatabaseFactKey<T>,
     options: { existingOnly?: boolean } = {},
   ): T | undefined {
     const anchor = sqlPublicationAnchor(database);
@@ -123,7 +126,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
 
   function getOrLoadSqliteDatabaseAdmissionForPath<T>(
     location: string,
-    key: SqliteDatabaseAdmissionKey<T>,
+    key: SqliteDatabaseFactKey<T>,
     load: () => T | undefined,
   ): T | undefined {
     const read = (record: Admission | undefined): T | undefined => {
@@ -149,6 +152,31 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       : read(pathAdmission(location));
   }
 
+  /** Optional preparation consumes only facts already delivered to this isolate. */
+  function peekSqliteDatabaseAdmissionForPath<T>(
+    location: string,
+    key: SqliteDatabaseFactKey<T>,
+  ): T | undefined {
+    const record = state.registry.forLocation(location);
+    const fact = record?.facts.get(key.name);
+    return record && fact && valid(record, fact)
+      ? readSqliteDatabaseAdmissionFact(fact, key)
+      : undefined;
+  }
+
+  function getSqliteDatabaseSchemaRevision(
+    connection: EngineConnection,
+    options: { existingOnly?: boolean } = {},
+  ): number | undefined {
+    const database = sqlPublicationAnchor(connection);
+    const record = admission(database, options.existingOnly !== true);
+    if (record) {
+      return readSqliteDatabaseGeneration(record, "schemaRevision");
+    }
+    const fileIdentity = state.openedIdentities.get(database);
+    return fileIdentity ? (state.localSchemaRevisions.get(fileIdentity) ?? 0) : undefined;
+  }
+
   function hasSqliteDatabaseSchemaAdmissionForPath(location: string): boolean {
     return hasSqliteDatabaseSchemaAdmission(pathAdmission(location));
   }
@@ -169,7 +197,9 @@ export function createSqliteDatabaseAdmissionReader(owner: {
 
   return {
     getSqliteDatabaseAdmission,
+    getSqliteDatabaseSchemaRevision,
     getOrLoadSqliteDatabaseAdmissionForPath,
+    peekSqliteDatabaseAdmissionForPath,
     hasSqliteDatabaseSchemaAdmissionForPath,
     getSqliteDatabaseAdmissionIdentityForPath,
     hasSqliteDatabaseSchemaAdmissionForIdentity,

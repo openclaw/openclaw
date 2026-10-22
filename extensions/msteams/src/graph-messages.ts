@@ -72,9 +72,7 @@ export async function resolveGraphConversationId(
 export function resolveConversationPath(to: string): {
   kind: "chat" | "channel";
   basePath: string;
-  chatId?: string;
   teamId?: string;
-  channelId?: string;
 } {
   const cleaned = stripTargetPrefix(to);
   const separatorIndex = cleaned.indexOf("/");
@@ -85,7 +83,6 @@ export function resolveConversationPath(to: string): {
       kind: "channel",
       basePath: `/teams/${encodeURIComponent(teamId)}/channels/${encodeURIComponent(channelId)}`,
       teamId,
-      channelId,
     };
   }
   // Conversation IDs like 19:xxx@thread.tacv2 may represent either group chats
@@ -96,7 +93,6 @@ export function resolveConversationPath(to: string): {
   return {
     kind: "chat",
     basePath: `/chats/${encodeURIComponent(cleaned)}`,
-    chatId: cleaned,
   };
 }
 
@@ -237,7 +233,6 @@ type ReactionSummary = {
   reactionType: string;
   /** Display name for the reaction (matches reactionType for known types). */
   name: string;
-  /** Emoji representation when available. */
   emoji?: string;
   count: number;
   users: Array<{ id: string; displayName?: string }>;

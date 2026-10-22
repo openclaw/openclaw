@@ -76,13 +76,10 @@ export function resolveProviderModelCatalogId(params: {
   provider: string;
   modelId: string;
   surface?: BundledProviderPolicySurface | null;
-  metadataSnapshot?: Pick<PluginMetadataSnapshot, "plugins">;
 }): string | null {
   const provider = normalizeProviderId(params.provider);
   const surface =
-    params.surface === undefined
-      ? resolveProviderModelPolicySurface(provider, params.metadataSnapshot)
-      : params.surface;
+    params.surface === undefined ? resolveProviderModelPolicySurface(provider) : params.surface;
   const normalized = surface?.normalizeModelCatalogId?.({
     provider,
     modelId: params.modelId,
@@ -113,6 +110,7 @@ function projectConfiguredModelRoute(model: ModelDefinitionConfig): ProviderMode
 /** Captures one provider artifact and config view for repeated row resolution. */
 export function createProviderModelRoutesResolver(params: {
   provider: string;
+  capability?: string;
   config?: OpenClawConfig;
   env?: Readonly<Record<string, string | undefined>>;
   requestTransportOverrides?: ProviderRouteOverridePresence;
@@ -192,6 +190,7 @@ export function createProviderModelRoutesResolver(params: {
     return (
       resolveModelRoutes({
         provider,
+        ...(params.capability ? { capability: params.capability } : {}),
         ...(modelId ? { modelId } : {}),
         requestTransportOverrides,
         ...(configuredModel ? { configuredModel: configuredModel.route } : {}),
@@ -207,6 +206,7 @@ export function createProviderModelRoutesResolver(params: {
 /** Resolves one model route through its bundled provider public artifact. */
 export function resolveProviderModelRoutes(params: {
   provider: string;
+  capability?: string;
   modelId?: string;
   api?: ModelApi | null;
   baseUrl?: unknown;

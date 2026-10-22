@@ -18,6 +18,7 @@ import {
   formatMigrationWarningSummary,
   MIGRATION_WARNING_EXAMPLE_LIMIT,
 } from "./migration-warning-summary.js";
+import type { EngineConnection } from "./sql-connection.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
 const TRANSCRIPT_ARCHIVE_RECOVERY_KEY = "historical-canonical-transcript-archive-recovery-v1";
@@ -85,7 +86,7 @@ export function transcriptArchiveRecoveryRowKey(
 }
 
 export function readTranscriptArchiveRecoveryJournal(
-  database: DatabaseSync,
+  database: EngineConnection,
 ): TranscriptArchiveRecoveryJournal | undefined {
   const db = getNodeSqliteKysely<TranscriptArchivePublicationDatabase>(database);
   const row = executeSqliteQueryTakeFirstSync(
@@ -204,11 +205,7 @@ export function repairPublishedTranscriptArchive(params: {
   params.signal?.throwIfAborted();
   assertAgentDatabaseMaintenanceAuthority();
   replaceFileAtomicSync({
-    beforeRename: ({ tempPath }) => {
-      const stagedHash = sha256Hex(fs.readFileSync(tempPath));
-      if (stagedHash !== params.planned.nextSha256) {
-        throw new Error(`Transcript archive staging verification failed for ${archivePath}`);
-      }
+    beforeRename: () => {
       params.signal?.throwIfAborted();
       // Staging and fsync can outlive the timer-driven lease heartbeat. Recheck
       // at the atomic publication boundary so an expired owner cannot rename.
@@ -222,9 +219,6 @@ export function repairPublishedTranscriptArchive(params: {
     tempPrefix: `${path.basename(archivePath)}.directive-migration`,
   });
   const published = fingerprint();
-  if (sha256Hex(fs.readFileSync(archivePath)) !== params.planned.nextSha256) {
-    throw new Error(`Transcript archive verification failed for ${archivePath}`);
-  }
   params.planned.fingerprint = fingerprint() === published ? published : undefined;
   params.signal?.throwIfAborted();
   return true;

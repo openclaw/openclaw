@@ -43,6 +43,8 @@ export function createConfigIO(options: ConfigIoFactoryOptions = {}) {
     readSourceConfigBestEffort: () => readSourceConfigBestEffortFromContext(context),
     readConfigFileSnapshot: (readOptions: ConfigSnapshotReadOptions = {}) =>
       readConfigFileSnapshotFromContext(context, readOptions),
+    readConfigFileSnapshotFromRaw: async (sourceRaw: string) =>
+      (await readConfigFileSnapshotInternal(context, {}, sourceRaw)).snapshot,
     readConfigFileSnapshotWithPluginMetadata: (
       readOptions: ConfigSnapshotMetadataReadOptions = {},
     ) => readConfigFileSnapshotWithPluginMetadataFromContext(context, readOptions),

@@ -509,7 +509,6 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
           alreadyPresent++;
         }
         await markerStore.registerIfAbsent(key, { version: 1, importedAt: Date.now() });
-        markedKeys.add(key);
       }
       if (imported === 0 && alreadyPresent === 0) {
         return { changes: [], warnings };

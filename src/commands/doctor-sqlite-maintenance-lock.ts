@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { resolvePathViaExistingAncestorSync, resolveRootPathSync } from "../infra/boundary-path.js";
+import { ignoreMissingPath } from "../infra/errno.js";
 import { formatGatewayLockFailure } from "../infra/gateway-lock-diagnostics.js";
 import { acquireGatewayLock, GatewayLockError } from "../infra/gateway-lock.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -93,10 +94,7 @@ function readMaintenancePathStat(filePath: string): fs.Stats | undefined {
   try {
     return fs.lstatSync(filePath);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
+    return ignoreMissingPath(error);
   }
 }
 

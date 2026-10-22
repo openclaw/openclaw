@@ -127,7 +127,17 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   }
   const record = asOptionalRecord(params);
   if (method === "sessions.github.action") {
-    return [record?.action === "refresh_base" ? SESSION_WRITE_SCOPE : WRITE_SCOPE];
+    return [
+      record?.action === "inspect_pr" ||
+      record?.action === "prepare_pr" ||
+      record?.action === "refresh_base" ||
+      record?.action === "edit" ||
+      record?.action === "request_review" ||
+      record?.action === "upload_evidence" ||
+      (record?.action === "ready" && record.publishingSessionKey === undefined)
+        ? SESSION_WRITE_SCOPE
+        : WRITE_SCOPE,
+    ];
   }
   if (method === "agent") {
     return isAgentSessionResetCommand(record?.message) ? [ADMIN_SCOPE] : [WRITE_SCOPE];

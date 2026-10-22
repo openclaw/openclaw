@@ -238,7 +238,7 @@ describe("collectGatewayHealthSnapshot", () => {
     tempDirs.cleanup();
   });
 
-  it("does not let callers widen the gateway probe deadline", async () => {
+  it("bounds probes by the fixed gateway collection deadline", async () => {
     testConfig = {
       session: { store: "/tmp/x" },
       channels: { telegram: { botToken: "123:test" } },
@@ -249,7 +249,7 @@ describe("collectGatewayHealthSnapshot", () => {
       return { ok: true };
     };
 
-    await getHealthSnapshot({ timeoutMs: Number.MAX_SAFE_INTEGER });
+    await getHealthSnapshot();
 
     expect(timeouts).toHaveLength(1);
     expect(timeouts[0]).toBeGreaterThan(0);
@@ -268,7 +268,6 @@ describe("collectGatewayHealthSnapshot", () => {
     });
 
     const snap = await getHealthSnapshot({
-      timeoutMs: 25,
       runtimeSnapshot: channelRuntime("telegram", {
         accountId: "default",
         running: true,
@@ -372,7 +371,6 @@ describe("collectGatewayHealthSnapshot", () => {
     });
 
     const snap = await getHealthSnapshot({
-      timeoutMs: 25,
       includeSensitive: false,
       runtimeSnapshot: channelRuntime("telegram", {
         accountId: "default",
@@ -400,7 +398,6 @@ describe("collectGatewayHealthSnapshot", () => {
     testConfig = { channels: { imessage: { enabled: true } } };
 
     const snap = await getHealthSnapshot({
-      timeoutMs: 25,
       includeSensitive: false,
     });
     const imessage = snap.channels.imessage!;
@@ -424,7 +421,6 @@ describe("collectGatewayHealthSnapshot", () => {
     });
 
     const snap = await getHealthSnapshot({
-      timeoutMs: 25,
       includeSensitive: false,
     });
     const telegram = snap.channels.telegram!;

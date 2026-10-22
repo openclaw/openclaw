@@ -57,9 +57,11 @@ import { markSessionTranscriptIndexDirtyInTransaction } from "./session-transcri
 import * as reconcile from "./session-transcript-reconcile.js";
 import type { SessionEntry } from "./types.js";
 
-const { getSessionEntryPatchDelivery } =
+const { getSessionEntryPatchDelivery, observeCommitAdmission } =
   await import("./session-entry-patch-delivery.test-support.js");
 const delivery = getSessionEntryPatchDelivery();
+const withFixture = (run: (f: ReturnType<typeof fixture>) => Promise<void>) =>
+  withOpenClawTestState({ scenario: "minimal" }, () => run(fixture()));
 
 function patchSessionEntryCore(
   ...[scope, update, options]: Parameters<typeof patchInternalSessionEntry>
@@ -67,9 +69,14 @@ function patchSessionEntryCore(
   return patchInternalSessionEntry(scope, update, { workerGuard: {}, ...options });
 }
 
+function releasableSource(release: () => void | Promise<void>) {
+  return Object.assign(() => {}, {
+    prepareSessionSource: async () => ({ assertCurrent() {}, checks: [], release }),
+  });
+}
+
 it("ends an absent live-switch selection without committing and keeps newer flags and callback CAS", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const initial = f.read()!;
     const newer = { ...initial, liveModelSwitchPending: true, modelOverride: "new-selection" };
     const update = vi.fn(() => ({ liveModelSwitchPending: undefined }));
@@ -107,8 +114,7 @@ it("ends an absent live-switch selection without committing and keeps newer flag
 });
 
 it("publishes participant writes accepted while an entry callback was awaiting commit", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     delivery.beforeCommit = () => {
       delivery.beforeCommit = undefined;
       recordSessionParticipant(f.scope, {
@@ -132,8 +138,7 @@ it("publishes participant writes accepted while an entry callback was awaiting c
 });
 
 it("preserves cold snapshots through worker writes with synchronous SDK commit guards", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const cold = {
       sessionDiffBaseline: {
         version: 1,
@@ -217,8 +222,7 @@ it("preserves cold snapshots through worker writes with synchronous SDK commit g
 it.each([false, true])(
   "evaluates the active-leaf predicate on the patch transaction's uncommitted transcript (dirty=%s)",
   async (dirty) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = fixture();
+    await withFixture(async (f) => {
       const options = { agentId: f.database.agentId, path: f.database.path };
       const scope = { ...f.scope, sessionId: "original" };
       const event = (id: string, parentId: string | null) => ({
@@ -294,8 +298,7 @@ it.each([false, true])(
 );
 
 it("keeps updater context, FIFO and publication ordering while the host executes no session SQL", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const context = new AsyncLocalStorage<string>();
     const entered = createDeferredCore();
     const release = createDeferredCore();
@@ -368,8 +371,7 @@ it("keeps updater context, FIFO and publication ordering while the host executes
 it.each(["after updater", "final grant"] as const)(
   "rejects revoked host authority %s without committing",
   async (phase) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = fixture();
+    await withFixture(async (f) => {
       let current = true;
       const refusal = new Error("patch authority revoked");
       probe.admission(admission, (request, grant, callback) => {
@@ -467,8 +469,7 @@ it.each(["shared SQLite", "custom suffixed"] as const)(
 );
 
 it("refuses a captured entry source changed during planning without reading it on the caller thread", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const scope = { ...f.scope, sessionKey: "agent:main:source-authority" };
     const expected = { sessionId: "source", updatedAt: 1, label: "original source" };
     replaceSessionEntrySync(scope, expected);
@@ -526,8 +527,7 @@ it("refuses a captured entry source changed during planning without reading it o
 });
 
 it("settles false before CAS and later throwing authority, while null updates still validate CAS", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const sourceScope = { ...f.scope, sessionKey: "agent:main:patch-source" };
     const changeSource = (label: string) =>
       replaceSessionEntrySync(sourceScope, { sessionId: "source", updatedAt: 1, label });
@@ -648,8 +648,7 @@ it("settles false before CAS and later throwing authority, while null updates st
 });
 
 it("recovers missing lifecycle timestamps during worker patch planning", async ({ signal }) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const startedAt = 1_700_000_000_000;
     runOpenClawAgentWriteTransaction(
       (database) =>
@@ -672,8 +671,7 @@ it("recovers missing lifecycle timestamps during worker patch planning", async (
 });
 
 it("retains nested worker admission for an opaque plugin updater", async ({ signal }) => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const entry = await patchSessionEntry({
       ...f.scope,
       update: async () => {
@@ -690,8 +688,7 @@ it("retains nested worker admission for an opaque plugin updater", async ({ sign
 });
 
 it("retains synchronous SDK entry reads inside an opaque last-route commit guard", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const assertCommitAllowed = vi.fn(() => {
       expect(getSessionEntry(f.scope)?.sessionId).toBe("original");
     });
@@ -782,24 +779,12 @@ it("settles acknowledged entry publication when reconcile scheduling throws", as
 it.each(["lost reply", "callback failure", "unknown settlement with callback failure"] as const)(
   "publishes exactly once after COMMIT despite %s",
   async (fault) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = fixture();
+    await withFixture(async (f) => {
       const failure = new Error(fault);
       if (fault === "unknown settlement with callback failure") {
-        let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
-        const createAdmission = admission.createSqliteWorkerOperationAdmission;
-        vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-          (callback, attachment) => {
-            const owned = createAdmission((request, grant) => {
-              if (request.stage === "commit") {
-                nativeAdmission = owned;
-              }
-              callback(request, grant);
-            }, attachment);
-            return owned;
-          },
-        );
+        const getAdmission = observeCommitAdmission();
         delivery.afterCommit = () => {
+          const nativeAdmission = getAdmission();
           expect(nativeAdmission?.committed?.facts).toMatchObject({
             kind: "session-entry-patch-committed",
           });
@@ -858,27 +843,15 @@ it.each(["lost reply", "callback failure", "unknown settlement with callback fai
 it.each(["unknown", "mismatched receipt", "unknown failure"] as const)(
   "preserves %s native outcome when releasing its prepared source also fails",
   async (fault) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = fixture();
+    await withFixture(async (f) => {
       const replyFailure =
         fault === "unknown failure"
           ? new SqliteWorkerError("commit outcome lost", "outcome-unknown")
           : new Error("commit reply lost");
       const cleanupFailure = new Error("prepared source release failed");
-      let nativeAdmission: admission.SqliteWorkerOperationAdmission | undefined;
-      const createAdmission = admission.createSqliteWorkerOperationAdmission;
-      vi.spyOn(admission, "createSqliteWorkerOperationAdmission").mockImplementation(
-        (callback, attachment) => {
-          const owned = createAdmission((request, grant) => {
-            if (request.stage === "commit") {
-              nativeAdmission = owned;
-            }
-            callback(request, grant);
-          }, attachment);
-          return owned;
-        },
-      );
+      const getAdmission = observeCommitAdmission();
       const loseCommitResult = vi.fn(() => {
+        const nativeAdmission = getAdmission();
         expect(nativeAdmission?.committed?.facts).toMatchObject({
           kind: "session-entry-patch-committed",
         });
@@ -904,13 +877,7 @@ it.each(["unknown", "mismatched receipt", "unknown failure"] as const)(
       const update = vi.fn(() => ({ label: "committed once" }));
       const failure: unknown = await patchSessionEntryCore(f.scope, update, {
         workerGuard: {
-          source: composeSessionSourceAssertion(
-            [releaseFirst, releaseLast].map((release) =>
-              Object.assign(() => {}, {
-                prepareSessionSource: async () => ({ assertCurrent() {}, checks: [], release }),
-              }),
-            ),
-          ),
+          source: composeSessionSourceAssertion([releaseFirst, releaseLast].map(releasableSource)),
         },
       }).catch((error: unknown) => error);
 
@@ -933,8 +900,7 @@ it.each(["unknown", "mismatched receipt", "unknown failure"] as const)(
 it.each([false, true])(
   "releases prepared source custody when writer acquisition fails (cleanup failure: %s)",
   async (cleanupFails) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = fixture();
+    await withFixture(async (f) => {
       const acquisitionFailure = new Error("writer owner retired before acquisition");
       const cleanupFailure = new Error("prepared source release failed");
       const release = vi.fn(async () => {
@@ -951,9 +917,7 @@ it.each([false, true])(
       try {
         const failure: unknown = await patchSessionEntryCore(f.scope, update, {
           workerGuard: {
-            source: Object.assign(() => {}, {
-              prepareSessionSource: async () => ({ assertCurrent() {}, checks: [], release }),
-            }),
+            source: releasableSource(release),
           },
         }).catch((error: unknown) => error);
         expect(release).toHaveBeenCalledOnce();
@@ -976,8 +940,7 @@ it.each([false, true])(
 );
 
 it("preserves the translated source refusal while joining failed preparation cleanup", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = fixture();
+  await withFixture(async (f) => {
     const refusal = new Error("source was revoked during preparation");
     const translated = new TypeError("caller source is no longer active", { cause: refusal });
     const cleanupFailure = new Error("retained source cleanup failed");
@@ -988,11 +951,7 @@ it("preserves the translated source refusal while joining failed preparation cle
     const update = vi.fn(() => ({ label: "must not commit" }));
     const source = composeSessionSourceAssertion(
       [
-        ...[releaseFirst, releaseLast].map((release) =>
-          Object.assign(() => {}, {
-            prepareSessionSource: async () => ({ assertCurrent() {}, checks: [], release }),
-          }),
-        ),
+        ...[releaseFirst, releaseLast].map(releasableSource),
         Object.assign(() => {}, {
           prepareSessionSource: async () => {
             throw refusal;

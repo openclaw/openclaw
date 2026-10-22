@@ -166,11 +166,20 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl);
       const openMenu = async () => {
         await page.locator(".sidebar-identity-card").click();
-        await page.locator(".sidebar-identity-menu").waitFor();
+        await expect
+          .poll(() => page.locator(".sidebar-identity-menu").getAttribute("data-phase"))
+          .toBe("open");
       };
       const openGatewayMenu = async (currentGatewayName: string) => {
         await openMenu();
         await page.getByRole("menuitem", { name: currentGatewayName, exact: true }).click();
+        await expect
+          .poll(() =>
+            page
+              .getByRole("menu", { name: currentGatewayName, exact: true })
+              .getAttribute("data-phase"),
+          )
+          .toBe("open");
       };
       await openMenu();
       expect(await page.getByRole("menuitemradio", { name: /Studio/ }).count()).toBe(0);

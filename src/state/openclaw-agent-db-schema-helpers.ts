@@ -9,6 +9,7 @@ import {
   collectSqliteSchemaIssues,
   getCanonicalSqliteNamedIndexNames,
   getCanonicalSqliteTableNames,
+  type SqliteTableContractReader,
 } from "../infra/sqlite-schema-contract.js";
 import { getAdmittedSqliteSchemaFacts } from "../infra/sqlite-schema-facts.js";
 import {
@@ -81,6 +82,7 @@ export function assertOpenClawAgentSchemaContains(
   schemaSql: string,
   participantSchema: "current" | "legacy" = "current",
   allowStartupIndexRepair = false,
+  readTable?: SqliteTableContractReader,
 ): boolean {
   const compatibility = {
     ...AGENT_SCHEMA_COMPATIBILITY,
@@ -95,13 +97,13 @@ export function assertOpenClawAgentSchemaContains(
     ],
   };
   if (!allowStartupIndexRepair) {
-    assertSqliteSchemaContains(database, pathname, schemaSql, compatibility);
+    assertSqliteSchemaContains(database, pathname, schemaSql, compatibility, readTable);
     return false;
   }
   // Admission is read-only; the writable schema owner rebuilds these projections
   // before session startup completes. Constraints and canonical data stay strict.
   const repairableIndexes = new Set(getCanonicalSqliteNamedIndexNames(schemaSql));
-  const issues = collectSqliteSchemaIssues(database, schemaSql, compatibility);
+  const issues = collectSqliteSchemaIssues(database, schemaSql, compatibility, readTable);
   if (
     issues.some(
       (issue) =>
@@ -116,6 +118,7 @@ export function assertOpenClawAgentSchemaContains(
 export function assertOpenClawAgentCurrentRuntimeSchema(
   database: DatabaseSync,
   options: { agentId: string; pathname: string },
+  readTable?: SqliteTableContractReader,
 ): void {
   const agentId = normalizeAgentId(options.agentId);
   const metadata = readExistingAgentSchemaMeta(database);
@@ -125,7 +128,14 @@ export function assertOpenClawAgentCurrentRuntimeSchema(
       `OpenClaw agent database ${options.pathname} retains retired state_leases storage; run openclaw doctor --fix before using it.`,
     );
   }
-  assertOpenClawAgentSchemaContains(database, options.pathname, OPENCLAW_AGENT_SCHEMA_SQL);
+  assertOpenClawAgentSchemaContains(
+    database,
+    options.pathname,
+    OPENCLAW_AGENT_SCHEMA_SQL,
+    "current",
+    false,
+    readTable,
+  );
 }
 
 function hasAnyCanonicalTable(database: DatabaseSync, schemaSql: string): boolean {
@@ -172,10 +182,7 @@ export function ensureSessionKeyContractSchemaInTransaction(db: DatabaseSync): v
 
 export function ensureSessionReactionsSchemaInTransaction(db: DatabaseSync): void {
   const schema = getAdmittedSqliteSchemaFacts(db);
-  if (
-    schema?.tables.has("session_reactions") &&
-    schema.indexes.has("idx_agent_session_reactions_message")
-  ) {
+  if (schema?.tables.has("session_reactions")) {
     return;
   }
   db.exec(

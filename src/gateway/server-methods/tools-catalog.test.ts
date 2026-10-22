@@ -5,7 +5,7 @@ import {
   ErrorCodes,
   type ToolsCatalogResult,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { listCoreToolFactoryDescriptors } from "../../agents/core-tool-factory-descriptors.js";
+import { listCoreToolFactoryDescriptors } from "../../agents/tool-catalog.js";
 import { filterToolsByPolicy } from "../../agents/tool-policy-match.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import type { PluginRegistry } from "../../plugins/registry-types.js";

@@ -17,9 +17,9 @@ import {
   readResponseWithLimit,
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { readRegularFile } from "openclaw/plugin-sdk/security-runtime";
+import { WebSocket } from "openclaw/plugin-sdk/websocket-runtime";
 import type { SignalRpcOptions } from "./client-types.js";
 import type { SignalReceivePayload } from "./monitor/event-handler.types.js";
-import { WebSocket } from "./ws-runtime.js";
 
 type ContainerRpcOptions = SignalRpcOptions & {
   maxAttachmentBytes?: number;

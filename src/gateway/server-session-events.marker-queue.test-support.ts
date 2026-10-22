@@ -21,14 +21,29 @@ export function registerTranscriptMarkerQueueTests() {
     "conflicting agent",
     "committed revision",
   ])("joins an unresolved marker to its keyed lane: %s", async (scenario, { signal }) => {
-    const hasEarlierKeyedUpdate = scenario === "keyed first";
+    const waitForGate = (gate: Promise<void>, task: Promise<unknown>, message: string) =>
+      withinTest(awaitGateBeforeSettlement(gate, task, message), signal);
+    const keyedFirst = scenario === "keyed first";
     const committedRevision = scenario === "committed revision";
-    const keyedAfterResolution = scenario === "keyed after resolution";
+    const keyedResolved = scenario === "keyed after resolution";
     const differentStore = scenario === "different store";
     const markerAgentId = scenario === "conflicting agent" ? "work" : undefined;
     const storePath = "/tmp/marker-queue-order.sqlite";
-    const otherStorePath = "/tmp/marker-queue-other.sqlite";
     const otherEntry = { sessionId: "sess-other", updatedAt: 1 };
+    const otherTarget = {
+      agentId: "main",
+      sessionKey: "global",
+      sessionId: otherEntry.sessionId,
+      storePath: "/tmp/marker-queue-other.sqlite",
+    };
+    const otherRow = {
+      agentId: "main",
+      storeKey: "global",
+      storeTarget: otherTarget,
+      entry: otherEntry,
+      readSourceEntry: () => undefined,
+      resolveSourceKey: (key: string) => key,
+    };
     const projection = createSessionRowProjectionFixture({
       cfg: runtimeConfigState.value,
       agentId: "main",
@@ -38,21 +53,7 @@ export function registerTranscriptMarkerQueueTests() {
         "agent:main:independent": { sessionId: "sess-independent", updatedAt: 1 },
         ...(differentStore ? { "agent:main:global": otherEntry } : {}),
       },
-      targetsBySessionKey: differentStore
-        ? new Map([
-            [
-              "agent:main:global",
-              {
-                agentId: "main",
-                storeKey: "global",
-                storeTarget: { agentId: "main", storePath: otherStorePath },
-                entry: otherEntry,
-                readSourceEntry: () => undefined,
-                resolveSourceKey: (key) => key,
-              },
-            ],
-          ])
-        : undefined,
+      targetsBySessionKey: differentStore ? new Map([["agent:main:global", otherRow]]) : undefined,
     });
     const membershipEntered = createDeferred();
     const releaseMembership = createDeferred();
@@ -74,8 +75,8 @@ export function registerTranscriptMarkerQueueTests() {
     });
     const earlierReadEntered = createDeferred();
     const releaseEarlierRead = createDeferred();
-    const markerPublicationEntered = createDeferred();
-    const releaseMarkerPublication = createDeferred();
+    const publicationEntered = createDeferred();
+    const releasePublication = createDeferred();
     const prepareRows = projection.withPreparedExactRows.bind(projection);
     let earlierQueries: Parameters<typeof prepareRows>[0] | undefined;
     let markerHeld = false;
@@ -83,13 +84,13 @@ export function registerTranscriptMarkerQueueTests() {
       async (queries, consume, options) => {
         const targets = queries(runtimeConfigState.value);
         if (targets.some((target) => target.key === "global" && target.storePath === storePath)) {
-          if (hasEarlierKeyedUpdate && !earlierQueries) {
+          if (keyedFirst && !earlierQueries) {
             earlierQueries = queries;
           }
           if (queries !== earlierQueries && !markerHeld) {
             markerHeld = true;
-            markerPublicationEntered.resolve();
-            await releaseMarkerPublication.promise;
+            publicationEntered.resolve();
+            await releasePublication.promise;
           }
         }
         return prepareRows(() => targets, consume, options);
@@ -107,144 +108,92 @@ export function registerTranscriptMarkerQueueTests() {
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
       sessionMessageSubscribers: { get: () => new Set<string>() },
-      chatAbortControllers: new Map(),
       getSessionRowProjection: () => projection,
     });
     const tasks: ReturnType<typeof handler>[] = [];
+    const enqueue = (id: string, fields: Parameters<typeof handler>[0]) => {
+      const task = handler({
+        message: { role: "assistant", content: id },
+        messageId: id,
+        ...fields,
+      });
+      tasks.push(task);
+      return task;
+    };
     const publications = () =>
       broadcastToConnIds.mock.calls.map(([name, payload]) => [
         name,
         payload?.messageId ?? payload?.sessionKey,
       ]);
     try {
-      if (hasEarlierKeyedUpdate) {
-        tasks.push(
-          handler({
-            target: { agentId: "main", sessionId: "sess-main", sessionKey: "global", storePath },
-            message: { role: "assistant", content: "earlier" },
-            messageId: "earlier",
-          }),
-        );
-        await withinTest(
-          awaitGateBeforeSettlement(
-            earlierReadEntered.promise,
-            tasks[0]!,
-            "Earlier read did not start",
-          ),
-          signal,
-        );
+      if (keyedFirst) {
+        void enqueue("earlier", {
+          target: { agentId: "main", sessionId: "sess-main", sessionKey: "global", storePath },
+        });
+        await waitForGate(earlierReadEntered.promise, tasks[0]!, "Earlier read did not start");
       }
-      const markerUpdate = handler({
+      const markerUpdate = enqueue("marker", {
         sessionFile: `sqlite:main:sess-main:${storePath}`,
         ...(markerAgentId ? { agentId: markerAgentId } : {}),
         ...(committedRevision ? { lifecycleRevision: "marker-revision" } : {}),
-        message: { role: "assistant", content: "marker" },
-        messageId: "marker",
-        ...(keyedAfterResolution ? {} : { messageSeq: 2 }),
+        ...(keyedResolved ? {} : { messageSeq: 2 }),
       });
-      tasks.push(markerUpdate);
-      await withinTest(
-        awaitGateBeforeSettlement(
-          membershipEntered.promise,
-          markerUpdate,
-          "Marker readiness did not start",
-        ),
-        signal,
-      );
-      if (keyedAfterResolution) {
+      const waitForPublication = () =>
+        waitForGate(publicationEntered.promise, markerUpdate, "Marker publication did not prepare");
+      await waitForGate(membershipEntered.promise, markerUpdate, "Marker readiness did not start");
+      if (keyedResolved) {
         releaseMembership.resolve();
-        await withinTest(
-          awaitGateBeforeSettlement(
-            markerPublicationEntered.promise,
-            markerUpdate,
-            "Resolved marker publication did not prepare",
-          ),
-          signal,
-        );
+        await waitForPublication();
       }
-      tasks.push(
-        handler({
-          sessionKey: "agent:main:global",
-          ...(differentStore
-            ? {
-                target: {
-                  agentId: "main",
-                  sessionKey: "global",
-                  sessionId: otherEntry.sessionId,
-                  storePath: otherStorePath,
-                },
-              }
-            : {}),
-          message: { role: "assistant", content: "later" },
-          messageId: "later",
-          messageSeq: 3,
-        }),
-      );
-      const independent = handler({
+      void enqueue("later", {
+        sessionKey: "agent:main:global",
+        ...(differentStore ? { target: otherTarget } : {}),
+        messageSeq: 3,
+      });
+      const independent = enqueue("independent", {
         sessionKey: "agent:main:independent",
-        message: { role: "assistant", content: "independent" },
-        messageId: "independent",
         messageSeq: 1,
       });
-      tasks.push(independent);
       await withinTest(independent, signal);
       expect(publications()).toEqual([["session.message", "independent"]]);
       releaseMembership.resolve();
-      await withinTest(
-        awaitGateBeforeSettlement(
-          markerResolved.promise,
-          markerUpdate,
-          "Marker key did not resolve",
-        ),
-        signal,
-      );
-      if (hasEarlierKeyedUpdate) {
+      await waitForGate(markerResolved.promise, markerUpdate, "Marker key did not resolve");
+      if (keyedFirst) {
         expect(publications()).toEqual([["session.message", "independent"]]);
       }
       releaseEarlierRead.resolve();
-      await withinTest(
-        awaitGateBeforeSettlement(
-          markerPublicationEntered.promise,
-          markerUpdate,
-          "Resolved marker publication did not prepare",
-        ),
-        signal,
-      );
-      expect(publications()).toEqual([
+      await waitForPublication();
+      const beforeMarker = [
         ["session.message", "independent"],
-        ...(hasEarlierKeyedUpdate ? [["session.message", "earlier"]] : []),
-      ]);
-      releaseMarkerPublication.resolve();
+        ...(keyedFirst ? [["session.message", "earlier"]] : []),
+      ];
+      expect(publications()).toEqual(beforeMarker);
+      releasePublication.resolve();
       await Promise.all(tasks);
       expect(publications()).toEqual([
-        ["session.message", "independent"],
-        ...(hasEarlierKeyedUpdate ? [["session.message", "earlier"]] : []),
+        ...beforeMarker,
         committedRevision ? ["session.message", "marker"] : ["sessions.changed", "global"],
         ["session.message", "later"],
       ]);
-      const marker = broadcastToConnIds.mock.calls[hasEarlierKeyedUpdate ? 2 : 1];
-      if (committedRevision) {
-        expect(marker?.[1]).toMatchObject({
-          sessionKey: "global",
-          messageId: "marker",
-          messageSeq: 2,
-          message: expect.objectContaining({ role: "assistant", content: "marker" }),
-        });
-      } else {
-        expect(marker?.[1]).toMatchObject({
-          sessionKey: "global",
-          sessionId: "sess-main",
-          phase: "message",
-        });
-        expect(marker?.[1]).not.toHaveProperty("message");
-        expect(marker?.[1]).not.toHaveProperty("messageId");
-        expect(marker?.[1]).not.toHaveProperty("messageSeq");
+      const marker = broadcastToConnIds.mock.calls[keyedFirst ? 2 : 1];
+      const expected = committedRevision
+        ? {
+            messageId: "marker",
+            messageSeq: 2,
+            message: expect.objectContaining({ role: "assistant", content: "marker" }),
+          }
+        : { sessionId: "sess-main", phase: "message" };
+      expect(marker?.[1]).toMatchObject({ sessionKey: "global", ...expected });
+      if (!committedRevision) {
+        for (const field of ["message", "messageId", "messageSeq"]) {
+          expect(marker?.[1]).not.toHaveProperty(field);
+        }
       }
       expect(marker?.[3]).toMatchObject({ prepareSessionProjection: expect.any(Function) });
     } finally {
       releaseMembership.resolve();
       releaseEarlierRead.resolve();
-      releaseMarkerPublication.resolve();
+      releasePublication.resolve();
       await Promise.allSettled(tasks);
       projection.dispose();
     }

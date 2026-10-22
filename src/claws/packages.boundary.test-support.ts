@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import type { installPluginFromClawHub } from "../plugins/clawhub.js";
 import * as managedInstall from "../plugins/management-mutations.js";
 import * as managedUninstall from "../plugins/management-uninstall.js";
 import * as pluginPreflight from "../plugins/plugin-install-preflight.js";
@@ -11,11 +12,59 @@ import {
   rollbackStatelessClawPackages as rollbackPackages,
 } from "./packages.js";
 import * as pluginProbe from "./plugin-capability-probe.js";
-import type {
-  persistClawPackageRef,
-  readClawPackageRefs,
-  updateClawPackageRefStatus,
-} from "./provenance.js";
+import type { readClawPackageRefs } from "./provenance.js";
+
+export const testPluginPackage = {
+  kind: "plugin",
+  source: "clawhub",
+  ref: "@owner/audit",
+  version: "2.0.1",
+  integrity: `sha256:${"a".repeat(64)}`,
+} as const;
+
+type Probe = typeof installPluginFromClawHub;
+type PluginProbe = Extract<Awaited<ReturnType<Probe>>, { ok: true }>;
+export function testPluginProbe(overrides: Partial<PluginProbe> = {}): PluginProbe {
+  return {
+    ok: true,
+    pluginId: "audit",
+    packageName: testPluginPackage.ref,
+    targetDir: "/tmp/plugin",
+    extensions: [],
+    clawhub: {
+      source: "clawhub",
+      clawhubUrl: "https://clawhub.ai",
+      clawhubPackage: testPluginPackage.ref,
+      clawhubFamily: "code-plugin",
+      integrity: testPluginPackage.integrity,
+    },
+    ...overrides,
+  };
+}
+
+export const withStagedInspection = (probe: Probe) => async (request: Parameters<Probe>[0]) => {
+  const result = await probe(request);
+  if (result.ok) {
+    await request.onPluginArtifactInspect?.({
+      pluginId: result.pluginId,
+      stagedArtifactDir: "/tmp/staged-audit",
+      mode: "install",
+    });
+  }
+  return result;
+};
+
+export function testPackageLease(onRelease: () => void = () => {}) {
+  return {
+    identity: {
+      scope: "claw-package-lifecycle" as const,
+      key: "test-package",
+      owner: "test-owner",
+    },
+    assertCurrent: () => {},
+    release: onRelease,
+  };
+}
 
 type PackageBoundaryFixtures = {
   installPlugin?: (
@@ -31,14 +80,6 @@ type PackageBoundaryFixtures = {
   installSkill?: typeof skillLifecycle.installSkillFromClawHub;
   preflightPlugin?: typeof pluginPreflight.preflightPluginInstall;
   preflightSkill?: typeof skillLifecycle.preflightSkillFromClawHub;
-  persistPackageRef?: (
-    ...args: Parameters<typeof persistClawPackageRef>
-  ) => ReturnType<typeof persistClawPackageRef> | Promise<ReturnType<typeof persistClawPackageRef>>;
-  completePackageRef?: (
-    ...args: Parameters<typeof updateClawPackageRefStatus>
-  ) =>
-    | ReturnType<typeof updateClawPackageRefStatus>
-    | Promise<ReturnType<typeof updateClawPackageRefStatus>>;
   readPackageRefs?: (
     ...args: Parameters<typeof readClawPackageRefs>
   ) => ReturnType<typeof readClawPackageRefs> | Promise<ReturnType<typeof readClawPackageRefs>>;
@@ -50,7 +91,7 @@ export type PackageInstallFixtureOptions = InstallClawPackagesOptions & {
   deps?: PackageBoundaryFixtures;
 };
 
-async function withPackageBoundaries<T>(
+export async function withPackageBoundaries<T>(
   run: () => Promise<T>,
   deps: PackageBoundaryFixtures = {},
 ): Promise<T> {
@@ -112,22 +153,6 @@ async function withPackageBoundaries<T>(
           .mockImplementation(deps.preflightSkill),
       );
     }
-    if (deps.persistPackageRef) {
-      const persist = deps.persistPackageRef;
-      mocks.push(
-        vi
-          .spyOn(addState, "persistClawPackageRefForAdd")
-          .mockImplementation(async (...args) => await persist(...args)),
-      );
-    }
-    if (deps.completePackageRef) {
-      const complete = deps.completePackageRef;
-      mocks.push(
-        vi
-          .spyOn(addState, "updateClawPackageRefStatusForAdd")
-          .mockImplementation(async (...args) => await complete(...args)),
-      );
-    }
     if (deps.readPackageRefs) {
       const read = deps.readPackageRefs;
       mocks.push(
@@ -143,11 +168,11 @@ async function withPackageBoundaries<T>(
           .mockImplementation(deps.acquirePackageLease),
       );
     }
-    if (deps.resolvePlugin) {
+    if (deps.resolvePlugin || deps.installPlugin) {
       mocks.push(
         vi
           .spyOn(pluginPreflight, "resolveInstalledClawHubPlugin")
-          .mockImplementation(deps.resolvePlugin),
+          .mockImplementation(deps.resolvePlugin ?? (async () => ({ status: "missing" }))),
       );
     }
     if (deps.probePlugin || deps.inspectPluginCapabilities) {

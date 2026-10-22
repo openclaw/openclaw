@@ -98,6 +98,12 @@ const ExecutionIdentityAdmissionInvokerSchema = Type.Union([
   closedObject({ state: Type.Literal("unknown") }),
 ]);
 
+const ExecutionIdentityRepresentedSubjectSchema = closedObject({
+  state: Type.Literal("present"),
+  kind: Type.Literal("person"),
+  rawPrincipalRef: rawRef(),
+});
+
 const ExecutionIdentityAdmissionEnvelopeSchema = closedObject({
   envelopeVersion: Type.Literal(1),
   contextId: boundedRef(),
@@ -116,6 +122,7 @@ const ExecutionIdentityAdmissionEnvelopeSchema = closedObject({
     kind: runtimeKind(),
   }),
   invoker: Type.Optional(ExecutionIdentityAdmissionInvokerSchema),
+  representedSubject: Type.Optional(ExecutionIdentityRepresentedSubjectSchema),
   applicableGrants: admissionGrants(),
   assurance: admissionAssurance(),
 });
@@ -131,6 +138,7 @@ const ExecutionIdentityAdmissionFactsSchema = closedObject({
   }),
   runtime: closedObject({ kind: runtimeKind() }),
   invoker: Type.Optional(ExecutionIdentityAdmissionInvokerSchema),
+  representedSubject: Type.Optional(ExecutionIdentityRepresentedSubjectSchema),
   applicableGrants: Type.Optional(admissionGrants()),
   assurance: Type.Optional(admissionAssurance()),
 });
@@ -361,6 +369,7 @@ function captureExecutionIdentityAdmissionEnvelope(
       : facts.invoker?.state === "unknown"
         ? { invoker: { state: "unknown" as const } }
         : {}),
+    ...(facts.representedSubject ? { representedSubject: { ...facts.representedSubject } } : {}),
     applicableGrants: sortUniqueExecutionIdentityEntries(
       facts.applicableGrants ?? [],
       (grant) => `${grant.rawGrantRef}\0${grant.state}`,
@@ -507,3 +516,12 @@ export function enqueueExecutionIdentityContextAtAdmission(
     return undefined;
   }
 }
+
+export type ExecutionIdentityRecoveryAdmission = Readonly<{
+  /** Recovery retries never manufacture replacement identity when exact evidence is absent. */
+  retryOnly: boolean;
+  consume: (runId: string) => Readonly<{
+    accepted: boolean;
+    token?: ExecutionIdentityAdmissionToken;
+  }>;
+}>;

@@ -199,6 +199,7 @@ export async function rollbackJsonFileWriteIfUnchanged(params: {
 
 export async function writeRootBoundJsonFile(params: {
   env: NodeJS.ProcessEnv;
+  databaseAccess?: ConfigWriteOptions["databaseAccess"];
   deferredPluginMigrations?: readonly DeferredPluginMigration[];
   configPath: string;
   includePath: string;
@@ -273,20 +274,21 @@ export async function writeRootBoundJsonFile(params: {
     ...pathProof,
     assertCurrent: () => {
       params.assertOwnerForRollback();
-      pathProof.assertCurrent();
       writeGuard.assertPublishedIdentity();
     },
     captureRollbackProof: () => writeGuard.captureRollbackProof(params.assertOwnerForRollback),
     withPublication: (publish, didMutate) =>
-      withDeferredPluginConfigRollback(
-        {
-          configPath: params.configPath,
-          env: params.env,
-          assertCurrent: params.assertOwnerForRollback,
-        },
-        publish,
-        didMutate,
-      ),
+      params.databaseAccess === "none"
+        ? publish()
+        : withDeferredPluginConfigRollback(
+            {
+              configPath: params.configPath,
+              env: params.env,
+              assertCurrent: params.assertOwnerForRollback,
+            },
+            publish,
+            didMutate,
+          ),
   };
   try {
     await using preparedFile = await prepareConfigFileWrite({
@@ -302,23 +304,28 @@ export async function writeRootBoundJsonFile(params: {
     });
     await params.beforeCommit?.();
     writeGuard.assertCurrent();
-    withDeferredPluginMigrationsCurrent(
-      {
-        env: params.env,
-        configPath: params.configPath,
-        expectedPending: params.deferredPluginMigrations,
-      },
-      () => {
-        params.assertBeforePublish?.();
-        preparedFile.publish();
-        publication.phase = "published";
-        recordUpdateDoctorConfigFileWrite(
-          targetAtCommit.absolutePath,
-          hashConfigRaw(currentRaw),
-          hashConfigRaw(content),
-        );
-      },
-    );
+    const publish = () => {
+      params.assertBeforePublish?.();
+      preparedFile.publish();
+      publication.phase = "published";
+      recordUpdateDoctorConfigFileWrite(
+        targetAtCommit.absolutePath,
+        hashConfigRaw(currentRaw),
+        hashConfigRaw(content),
+      );
+    };
+    if (params.databaseAccess === "none") {
+      publish();
+    } else {
+      withDeferredPluginMigrationsCurrent(
+        {
+          env: params.env,
+          configPath: params.configPath,
+          expectedPending: params.deferredPluginMigrations,
+        },
+        publish,
+      );
+    }
     await params.assertIncludeGraphForWrite(hashConfigIncludeRaw(content));
     writeGuard.assertCurrent();
     writeGuard.assertPublishedIdentity();

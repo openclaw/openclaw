@@ -22,7 +22,7 @@
  * its reply adds cancelled (true when the save panel was dismissed).
  */
 import { isHttpUrl } from "@openclaw/net-policy/url-protocol";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { isRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import type { BrowserInspectedNode } from "../components/browser/browser-client.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
@@ -148,8 +148,7 @@ function isNode(value: unknown): value is BrowserInspectedNode | null {
     (isRecord(value) &&
       typeof value.tag === "string" &&
       typeof value.id === "string" &&
-      Array.isArray(value.classes) &&
-      value.classes.every((entry: unknown) => typeof entry === "string") &&
+      isStringArray(value.classes) &&
       typeof value.role === "string" &&
       typeof value.name === "string" &&
       typeof value.focusable === "boolean" &&

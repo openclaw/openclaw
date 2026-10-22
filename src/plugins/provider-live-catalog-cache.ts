@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -8,7 +8,11 @@ import type { DiagnosticWorkerRetainedData } from "../infra/diagnostic-process-t
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { estimateRetainedDataSize } from "../infra/retained-data-size.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
-import { consumeLiveCatalogRefresh, recordLiveCatalogExpiry } from "./provider-catalog-expiry.js";
+import {
+  consumeLiveCatalogRefresh,
+  getProviderCatalogDiscoveryBudget,
+  recordLiveCatalogExpiry,
+} from "./provider-catalog-expiry.js";
 
 type LiveCatalogCacheEntry<T> = {
   expiresAt: number;
@@ -37,10 +41,6 @@ async function consumeLiveCatalog<T>(entry: LiveCatalogCacheEntry<T>, signal?: A
   return value;
 }
 
-function buildLiveCatalogCacheKey(parts: readonly unknown[]): string {
-  return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
-}
-
 /**
  * Shares pending loads and caches successful values for a short TTL after completion.
  */
@@ -66,19 +66,32 @@ export async function getCachedLiveCatalogValue<T>(params: {
   if (expiresAt === undefined) {
     return await params.load(params.signal);
   }
-  const key = buildLiveCatalogCacheKey(params.keyParts);
+  const key = sha256Hex(JSON.stringify(params.keyParts));
   const refresh = consumeLiveCatalogRefresh(key);
+  // Different acquisition budgets must not inherit each other's pending transport deadline.
+  const budget = getProviderCatalogDiscoveryBudget();
+  const pendingKey =
+    key +
+    ":" +
+    JSON.stringify([budget ? (budget.timeoutMs ?? "unscoped") : 5_000, budget?.providerTimeouts]);
   // SAFETY: Callers reuse key parts only for the same catalog loader and result type.
   const existing = liveCatalogCache.get(key) as LiveCatalogCacheEntry<T> | undefined;
-  if (existing) {
-    if (
-      (!refresh || existing.result.state === "pending") &&
-      isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })
-    ) {
-      return await consumeLiveCatalog(existing, params.signal);
-    }
-    liveCatalogCache.delete(key);
+  if (
+    existing?.result.state === "fulfilled" &&
+    !refresh &&
+    isFutureDateTimestampMs(existing.expiresAt, { nowMs: rawNow })
+  ) {
+    return await consumeLiveCatalog(existing, params.signal);
   }
+  // SAFETY: The pending alias has the same load identity and stable acquisition budget.
+  const shared = liveCatalogCache.get(pendingKey) as LiveCatalogCacheEntry<T> | undefined;
+  if (
+    shared?.result.state === "pending" &&
+    isFutureDateTimestampMs(shared.expiresAt, { nowMs: rawNow })
+  ) {
+    return await consumeLiveCatalog(shared, params.signal);
+  }
+  liveCatalogCache.delete(key);
   // Read-only metadata may finish and warm the cache after every observer cancels.
   const pending = { state: "pending" as const, value: params.load() };
   const entry: LiveCatalogCacheEntry<T> = { expiresAt, retained: false, result: pending };
@@ -102,14 +115,21 @@ export async function getCachedLiveCatalogValue<T>(params: {
       if (completed) {
         entry.result = completed;
       }
-      if (!entry.retained && liveCatalogCache.get(key) === entry) {
+      const ownsPending = liveCatalogCache.get(pendingKey) === entry;
+      if (ownsPending) {
+        liveCatalogCache.delete(pendingKey);
+      }
+      // Returned healthy values retain their own TTL, but an older or evicted load
+      // cannot replace a newer generation's globally reusable result.
+      if (liveCatalogCache.get(key) === entry && (!entry.retained || !ownsPending)) {
         liveCatalogCache.delete(key);
       }
     });
   // Auth-scoped catalogs vary by token. Bound retained entries without rejecting
   // new catalogs or canceling consumers of an evicted load.
-  pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 1);
+  pruneMapToMaxSize(liveCatalogCache, LIVE_CATALOG_CACHE_MAX_ENTRIES - 2);
   liveCatalogCache.set(key, entry);
+  liveCatalogCache.set(pendingKey, entry);
   return await consumeLiveCatalog(entry, params.signal);
 }
 
@@ -124,7 +144,7 @@ export function clearLiveCatalogCacheForTests(): void {
 export function getLiveCatalogRetainedData(): DiagnosticWorkerRetainedData[] {
   const values: unknown[] = [];
   let pending = 0;
-  for (const entry of liveCatalogCache.values()) {
+  for (const entry of new Set(liveCatalogCache.values())) {
     if (entry.result.state === "fulfilled") {
       values.push(entry.result.value);
     } else {

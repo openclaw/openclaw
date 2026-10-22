@@ -11,8 +11,9 @@ import {
   prepareSystemAgentRunAdmission,
   type AdmittedRunContext,
 } from "./admitted-run-context.js";
+import { buildPreparedCliRunContext } from "./cli-runner.test-helpers.js";
 import type { PreparedCliRunContext } from "./cli-runner/types.js";
-import { waitForDeferredTurnMaintenanceForSession } from "./embedded-agent-runner/context-engine-maintenance.js";
+import { waitForSessionMaintenance } from "./session-maintenance/coordinator.js";
 
 const { executeMock, historyMock, hookHistoryMock, hookRunnerMock, beforeReplyMock, prepareMock } =
   vi.hoisted(() => ({
@@ -121,53 +122,37 @@ function buildPreparedContext(contextEngine: ContextEngine): PreparedCliRunConte
     sessionMode: "existing" as const,
     serialize: true,
   };
-
-  return {
-    params: {
-      admittedRunContext: testAdmittedRunContext,
-      sessionId: "openclaw-session-1",
-      sessionKey: "agent:main:main",
-      agentId: "main",
-      sessionFile: "session.jsonl",
-      sessionTarget,
-      workspaceDir: "/tmp/openclaw-cli-context-engine-test",
-      prompt: "visible ask",
-      transcriptPrompt: "transcript visible ask",
-      provider: "claude-cli",
-      model: "sonnet-4.6",
-      thinkLevel: "low",
-      timeoutMs: 1_000,
-      runId: "run-1",
-    },
-    started: Date.now(),
-    startedMonotonicMs: performance.now(),
+  const context = buildPreparedCliRunContext({
+    sessionTarget,
     workspaceDir: "/tmp/openclaw-cli-context-engine-test",
-    backendResolved: {
-      id: "claude-cli",
-      config: backend,
-      bundleMcp: false,
-      pluginId: "anthropic",
+    prompt: "visible ask",
+    model: "sonnet-4.6",
+    thinkLevel: "low",
+    runId: "run-1",
+    backend,
+  });
+  return {
+    ...context,
+    params: {
+      ...context.params,
+      admittedRunContext: testAdmittedRunContext,
+      sessionFile: "session.jsonl",
+      transcriptPrompt: "transcript visible ask",
     },
+    backendResolved: { id: "claude-cli", config: backend, bundleMcp: false, pluginId: "anthropic" },
+    preparedBackend: { backend, env: {} },
     executionTarget: { kind: "process" },
-    preparedBackend: {
-      backend,
-      env: {},
-    },
-    reusableCliSession: {
-      mode: "reuse",
-      sessionId: "existing-external-cli-session",
-    },
+    reusableCliSession: { mode: "reuse", sessionId: "existing-external-cli-session" },
     hadSessionFile: true,
-    contextEngineConfig: {},
     contextEngine,
     contextEngineTurnPrompt: "transcript visible ask",
-    modelId: "sonnet-4.6",
-    normalizedModel: "sonnet-4.6",
-    systemPrompt: "You are a helpful assistant.",
-    systemPromptReport: {} as PreparedCliRunContext["systemPromptReport"],
-    claudeSkillsPluginArgs: [],
-    authEpochVersion: 2,
   };
+}
+
+function expectNoCalls(...mocks: Array<ReturnType<typeof vi.fn>>) {
+  for (const mock of mocks) {
+    expect(mock).not.toHaveBeenCalled();
+  }
 }
 
 describe("runPreparedCliAgent context engine lifecycle", () => {
@@ -216,13 +201,13 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
 
     expect((await runCliAgent(context.params)).payloads).toBeUndefined();
     expect(executeMock).toHaveBeenCalledWith(context, undefined, undefined);
-    expect(beforeReplyMock).not.toHaveBeenCalled();
-    expect(hookRunnerMock).not.toHaveBeenCalled();
-    expect(hookHistoryMock).not.toHaveBeenCalled();
-    expect(historyMock).not.toHaveBeenCalled();
-    for (const hook of Object.values(hooks)) {
-      expect(hook).not.toHaveBeenCalled();
-    }
+    expectNoCalls(
+      beforeReplyMock,
+      hookRunnerMock,
+      hookHistoryMock,
+      historyMock,
+      ...Object.values(hooks),
+    );
   });
 
   it("publishes the generated response before backend cleanup can throw", async () => {
@@ -266,15 +251,17 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     prepareMock.mockResolvedValue(context);
     const result = await runCliAgent(context.params);
 
-    expect(beforeReplyMock).not.toHaveBeenCalled();
     expect(result.meta.agentMeta?.sessionId).toBe("existing-external-cli-session");
     expect(result.meta.terminalReply).toEqual({ disposition: "empty" });
     expect(executeMock).toHaveBeenCalledWith(context, "existing-external-cli-session", undefined);
-    expect(hookRunnerMock).not.toHaveBeenCalled();
-    expect(hookHistoryMock).not.toHaveBeenCalled();
-    expect(historyMock).not.toHaveBeenCalled();
-    expect(bootstrap).not.toHaveBeenCalled();
-    expect(afterTurn).not.toHaveBeenCalled();
+    expectNoCalls(
+      beforeReplyMock,
+      hookRunnerMock,
+      hookHistoryMock,
+      historyMock,
+      bootstrap,
+      afterTurn,
+    );
   });
 
   it.each(["", "NO_REPLY"])("rejects a result-required ordinary completion %j", async (text) => {
@@ -303,56 +290,46 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     context.contextEngineTurnPrompt = "original user ask";
     const result = await runPreparedCliAgent(context);
 
-    expect(result.meta.agentMeta?.sessionId).toBe("external-cli-session-1");
     expect(result.meta.agentMeta).toMatchObject({
+      sessionId: "external-cli-session-1",
       usage: { input: 11, output: 7, total: 18 },
       lastCallUsage: { input: 11, output: 7, total: 18 },
       diagnosticUsage: { input: 21, output: 9, total: 30 },
     });
     expect(historyMock).toHaveBeenCalledExactlyOnceWith(context.params);
     expect(hookHistoryMock).not.toHaveBeenCalled();
-    expect(bootstrap).toHaveBeenCalledTimes(1);
-    const bootstrapParams = bootstrap.mock.calls[0]?.[0];
-    expect.soft(bootstrapParams).toMatchObject({
-      sessionId: "openclaw-session-1",
-      sessionKey: "agent:main:main",
+    const session = {
+      sessionId: sessionTarget.sessionId,
+      sessionKey: sessionTarget.sessionKey,
       sessionTarget,
       sessionFile: "session.jsonl",
-    });
+    };
+    expect(bootstrap).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(session));
     expect(afterTurn).toHaveBeenCalledTimes(1);
     const afterTurnParams = afterTurn.mock.calls[0]?.[0];
     expect.soft(afterTurnParams).toMatchObject({
-      sessionId: "openclaw-session-1",
-      sessionKey: "agent:main:main",
-      sessionTarget,
-      sessionFile: "session.jsonl",
+      ...session,
       prePromptMessageCount: 101,
-      isHeartbeat: false,
       tokenBudget: undefined,
       runtimeContext: undefined,
     });
-    expect(afterTurnParams?.messages).toHaveLength(103);
-    expect(afterTurnParams?.messages.slice(0, 101)).toEqual(history);
-    expect(afterTurnParams?.messages[101]).toMatchObject({
-      role: "user",
-      content: "original user ask",
-    });
-    expect(afterTurnParams?.messages[102]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: " final answer " }],
-      provider: "claude-cli",
-      model: "sonnet-4.6",
-      usage: { input: 11, output: 7, total: 18 },
-    });
+    expect(afterTurnParams?.messages).toEqual([
+      ...history,
+      expect.objectContaining({ role: "user", content: "original user ask" }),
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: " final answer " }],
+        provider: "claude-cli",
+        model: "sonnet-4.6",
+        usage: { input: 11, output: 7, total: 18 },
+      }),
+    ]);
     expect(maintain).toHaveBeenCalledTimes(2);
     expect.soft(maintain.mock.calls[0]?.[0]).toMatchObject({
       sessionTarget,
     });
     expect.soft(maintain.mock.calls[1]?.[0]).toMatchObject({
-      sessionId: "openclaw-session-1",
-      sessionKey: "agent:main:main",
-      sessionTarget,
-      sessionFile: "session.jsonl",
+      ...session,
       runtimeContext: {
         rewriteTranscriptEntries: expect.any(Function),
         llm: { complete: expect.any(Function) },
@@ -453,10 +430,8 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
 
     await runCliAgent(context.params);
 
-    expect(onContextEngineTurnCandidate).not.toHaveBeenCalled();
-    expect(afterTurn).not.toHaveBeenCalled();
+    expectNoCalls(onContextEngineTurnCandidate, afterTurn, dispose);
     expect(maintain).toHaveBeenCalledTimes(1);
-    expect(dispose).not.toHaveBeenCalled();
   });
 
   it.each(["messaging", "room_event"] as const)(
@@ -491,25 +466,21 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
 
   it("does not synthesize a context-engine user turn for empty transcript prompts", async () => {
     const { afterTurn, dispose } = createLifecycle();
-    const contextEngine = createContextEngine({ afterTurn, dispose });
-    const context = buildPreparedContext(contextEngine);
+    const context = buildPreparedContext(createContextEngine({ afterTurn, dispose }));
     context.params.transcriptPrompt = "";
     context.contextEngineTurnPrompt = "";
     await runPreparedCliAgent(context);
 
     const afterTurnParams = afterTurn.mock.calls[0]?.[0];
-    expect(afterTurnParams?.messages).toHaveLength(3);
     expect(afterTurnParams?.prePromptMessageCount).toBe(2);
-    expect(afterTurnParams?.messages.slice(0, 2)).toEqual([
+    expect(afterTurnParams?.messages).toEqual([
       textMessage("user", "old ask", 1),
       textMessage("assistant", "old answer", 2),
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: " final answer " }],
+      }),
     ]);
-    const turnMessages = afterTurnParams?.messages.slice(afterTurnParams.prePromptMessageCount);
-    expect(turnMessages).toHaveLength(1);
-    expect(turnMessages?.[0]).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: " final answer " }],
-    });
     expect(dispose).not.toHaveBeenCalled();
   });
 
@@ -529,7 +500,7 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     await runPreparedCliAgent(context);
 
     expect(dispose).not.toHaveBeenCalled();
-    await waitForDeferredTurnMaintenanceForSession(context.params.sessionKey);
+    await waitForSessionMaintenance(context.params.sessionKey);
     expect(maintain).toHaveBeenCalledTimes(2);
     expect(dispose).not.toHaveBeenCalled();
   });
@@ -557,10 +528,8 @@ describe("runPreparedCliAgent context engine lifecycle", () => {
     );
 
     expect(bootstrap).toHaveBeenCalledTimes(1);
-    expect(afterTurn).not.toHaveBeenCalled();
-    expect(ingestBatch).not.toHaveBeenCalled();
+    expectNoCalls(afterTurn, ingestBatch, dispose);
     expect(maintain).toHaveBeenCalledTimes(1);
-    expect(dispose).not.toHaveBeenCalled();
   });
 
   it("keeps a committed CLI reply successful after operator model authority revokes post-commit", async () => {

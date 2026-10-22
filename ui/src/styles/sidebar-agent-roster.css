@@ -1,70 +1,31 @@
 openclaw-sidebar-agent-roster {
   --team-slot-gap: 4px;
-  /* Session titles start after the row spacer, lead indicator, and gaps
-     (20px + 4px + 20px + 8px); agent names and pagination share this edge. */
-  --roster-title-offset: 52px;
   --roster-avatar-size: 24px;
   width: 100%;
 }
 
-/* Avatar sits over the session lead column so agent names start at the
-   session-title edge; hover actions keep a reserved trailing cell. */
 .sidebar-agent-roster__header {
+  position: relative;
   display: grid;
-  grid-template-columns: calc(var(--roster-title-offset) - 4px) minmax(0, 1fr) auto;
-  grid-template-rows: var(--roster-header-height, 36px);
+  grid-template-columns: var(--roster-avatar-size) minmax(0, 1fr);
+  grid-template-rows: 44px;
   align-items: center;
-  column-gap: 4px;
+  column-gap: 8px;
+  padding-inline: 8px;
   border-radius: var(--radius-md);
   color: var(--muted);
   font-size: 12px;
   font-weight: 600;
 }
 
-.sidebar-agent-roster__header:hover,
+.sidebar-agent-roster__header:is(:hover, :focus-within),
 .sidebar-agent-roster__header--current {
   background: var(--bg-hover);
 }
 
-.sidebar-agent-roster__header > .sidebar-agent-roster__avatar,
-.sidebar-agent-roster__toggle {
+.sidebar-agent-roster__row > .sidebar-agent-roster__avatar {
   grid-column: 1;
   justify-self: end;
-  /* Center the avatar over the 20px session lead indicator. */
-  margin-inline-end: calc((var(--roster-avatar-size) - 20px) / 2);
-}
-
-.sidebar-agent-roster__toggle {
-  position: relative;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--text);
-  cursor: default;
-}
-
-.sidebar-agent-roster__toggle:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
-}
-
-.sidebar-agent-roster__toggle > .sidebar-agent-roster__chevron {
-  position: absolute;
-  inset: 0;
-  justify-content: center;
-  border-radius: 50%;
-  background: var(--bg-elevated);
-  color: var(--text);
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.sidebar-agent-roster__header:hover .sidebar-agent-roster__toggle > .sidebar-agent-roster__chevron,
-.sidebar-agent-roster__toggle:focus-visible > .sidebar-agent-roster__chevron {
-  opacity: 1;
 }
 
 .sidebar-agent-roster__header .sidebar-agent-roster__avatar {
@@ -72,6 +33,12 @@ openclaw-sidebar-agent-roster {
   width: var(--roster-avatar-size);
   height: var(--roster-avatar-size);
   font-size: 15px;
+}
+
+.sidebar-agent-roster__avatar .session-glyph,
+.sidebar-agent-roster__avatar .session-glyph__content {
+  width: 100%;
+  height: 100%;
 }
 
 .sidebar-agent-roster__row,
@@ -117,15 +84,21 @@ openclaw-sidebar-agent-roster {
   display: grid;
   flex: 1;
   min-width: 0;
-  font-size: 14px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 16px;
 }
 
 .sidebar-agent-roster__copy > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.sidebar-agent-roster__preview {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
 }
 
 .sidebar-agent-roster__unread {
@@ -139,25 +112,32 @@ openclaw-sidebar-agent-roster {
 }
 
 .sidebar-agent-roster__row {
-  grid-area: 1 / 2;
+  grid-area: 1 / 1 / 2 / 3;
+  display: grid;
+  grid-template-columns: var(--roster-avatar-size) minmax(0, 1fr);
+  align-items: center;
+  column-gap: 8px;
   flex: 1;
   align-self: stretch;
   padding: 0;
 }
 
-.sidebar-agent-roster__action,
-.sidebar-agent-roster__chevron {
-  display: flex;
-  flex: 0 0 auto;
-  align-items: center;
-  color: var(--muted);
+.sidebar-agent-roster__header:is(:hover, :focus-within) .sidebar-agent-roster__row {
+  padding-inline-end: 32px;
 }
 
 .sidebar-agent-roster__action {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
   padding: 4px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
+  color: var(--muted);
 }
 
 .sidebar-agent-roster__action:hover {
@@ -165,64 +145,55 @@ openclaw-sidebar-agent-roster {
   background: var(--bg-hover);
 }
 
+.sidebar-agent-roster__action:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
 .sidebar-agent-roster__link svg,
-.sidebar-agent-roster__action svg,
-.sidebar-agent-roster__chevron svg {
+.sidebar-agent-roster__action svg {
   width: 14px;
   height: 14px;
 }
 
-.sidebar-agent-roster__group > .sidebar-recent-sessions__group {
-  padding: 0;
-  margin: 0;
-}
-
-.sidebar-agent-roster .sidebar-session-pagination {
-  padding-left: var(--roster-title-offset);
-}
-
-.sidebar-agent-roster__header + .sidebar-recent-sessions__group {
-  min-height: 0;
-}
-
 .sidebar-agent-roster__group {
-  margin-bottom: 12px;
+  margin-bottom: 2px;
 }
-/* Status badges are interactive (tooltips, focusable attention), so they keep
-   their own line under the name instead of trading places with hover actions. */
+/* Status sits inline after the name, centered on the row. The header only grows
+   a third track when there is a status, so plain rows keep their full width. */
+.sidebar-agent-roster__header:has(> .sidebar-agent-roster__signals .sidebar-session-team-state) {
+  grid-template-columns: var(--roster-avatar-size) minmax(0, 1fr) auto;
+}
 .sidebar-agent-roster__signals {
-  grid-area: 2 / 2 / auto / -1;
+  grid-area: 1 / 3;
   display: flex;
-  flex-wrap: wrap;
-  min-width: 0;
   align-items: center;
-  gap: var(--team-slot-gap);
-  padding-bottom: 6px;
 }
-.sidebar-agent-roster__signals:not(
-  :has(
-    > .sidebar-session-team-state,
-    .sidebar-recent-session__details-endcap > :not(openclaw-viewer-facepile),
-    .viewer-facepile
-  )
-) {
+.sidebar-agent-roster__signals:not(:has(.sidebar-session-team-state)) {
   display: none;
 }
-.sidebar-agent-roster__signals > .sidebar-recent-session__details-endcap {
-  display: contents;
-}
-.sidebar-agent-roster__signals openclaw-viewer-facepile:not(:has(.viewer-facepile)) {
-  display: none;
+/* Revealed actions overlay the row end; step the status left of them instead of
+   reserving the same space again inside the link. */
+.sidebar-agent-roster__header:is(:hover, :focus-within):has(
+    > .sidebar-agent-roster__signals .sidebar-session-team-state
+  ) {
+  & > .sidebar-agent-roster__row {
+    padding-inline-end: 0;
+  }
+  & > .sidebar-agent-roster__signals {
+    margin-inline-end: 32px;
+  }
 }
 .sidebar-agent-roster__actions {
-  grid-area: 1 / 3;
-  justify-self: end;
+  position: absolute;
+  top: 50%;
+  inset-inline-end: 4px;
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  gap: var(--team-slot-gap);
   opacity: 0;
   pointer-events: none;
+  transform: translateY(-50%);
 }
 .sidebar-agent-roster__header:hover .sidebar-agent-roster__actions,
 .sidebar-agent-roster__header:focus-within .sidebar-agent-roster__actions,
@@ -379,12 +350,20 @@ openclaw-sidebar-agent-roster {
   .sidebar-recent-session--team:is(:hover, :focus-within) > .sidebar-recent-session__link {
     padding-right: 0;
   }
-  .sidebar-agent-roster__header {
-    --roster-header-height: 44px;
-  }
   .sidebar-agent-roster__actions {
     opacity: 1;
     pointer-events: auto;
+  }
+  .sidebar-agent-roster__row {
+    padding-inline-end: 32px;
+  }
+  .sidebar-agent-roster__header:has(> .sidebar-agent-roster__signals .sidebar-session-team-state) {
+    & > .sidebar-agent-roster__row {
+      padding-inline-end: 0;
+    }
+    & > .sidebar-agent-roster__signals {
+      margin-inline-end: 32px;
+    }
   }
   .sidebar-agent-roster__actions .sidebar-agent-roster__action {
     min-width: 32px;
@@ -400,4 +379,23 @@ openclaw-sidebar-agent-roster {
 .sidebar-agent-roster__menu {
   position: relative;
   z-index: auto;
+}
+
+.sidebar-agent-roster__menu .oc-menu {
+  min-width: 190px;
+}
+
+.sidebar-agent-roster__menu .oc-menu-item__icon {
+  width: 16px;
+  height: 16px;
+  margin-inline-end: 0;
+}
+
+.sidebar-agent-roster__menu .oc-menu-item__icon svg {
+  width: 16px;
+  height: 16px;
+}
+
+.sidebar-agent-roster__pin--pinned svg {
+  fill: currentColor;
 }

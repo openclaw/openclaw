@@ -3,6 +3,7 @@ import { IncomingMessage, request, ServerResponse } from "node:http";
 import { Socket } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   onInternalDiagnosticEvent,
   waitForDiagnosticEventsDrained,
@@ -296,6 +297,8 @@ it.each([
 it.each([
   ["core", "disconnect"],
   ["core", "client expired"],
+  ["core", "role boundary enabled"],
+  ["core", "role scope revoked"],
   ["core", "operator revoked"],
   ["core", "unexpected"],
   ["core", "unexpected abort"],
@@ -309,12 +312,27 @@ it.each([
   const streaming = createDeferred();
   const operator = new AbortController();
   let auth: ResolvedGatewayAuth = { mode: "token", token: "before", allowTailscale: false };
+  const roleConfig = (writable: boolean): OpenClawConfig => ({
+    gateway: {
+      roles: {
+        default: "reader",
+        definitions: {
+          reader: {
+            scopes: writable ? ["operator.write"] : ["operator.read"],
+            agents: "*",
+            sessions: { others: "none" },
+          },
+        },
+      },
+    },
+  });
+  let config: OpenClawConfig = outcome === "role scope revoked" ? roleConfig(true) : {};
   const unexpected = outcome.startsWith("unexpected");
   const streamingResponse = outcome.startsWith("stream");
   const disconnected = outcome === "disconnect";
   const closed = disconnected || streamingResponse;
   const [status, message, type] =
-    outcome === "client expired"
+    outcome === "client expired" || outcome.startsWith("role ")
       ? [401, "Unauthorized", "unauthorized"]
       : outcome === "operator revoked"
         ? [403, GATEWAY_OPERATOR_ACCESS_DENIED_MESSAGE, "forbidden"]
@@ -338,8 +356,8 @@ it.each([
       captureHttpRequestAuthority({
         req,
         auth,
-        cfg: {},
-        getRuntimeConfig: () => ({}),
+        cfg: config,
+        getRuntimeConfig: () => config,
         getResolvedAuth: () => auth,
       }),
     );
@@ -413,6 +431,8 @@ it.each([
     auth = { ...auth, token: "after" };
   } else if (outcome.endsWith("operator revoked")) {
     operator.abort();
+  } else if (outcome.startsWith("role ")) {
+    config = roleConfig(false);
   }
   const end = vi.spyOn(res, "end");
   const write = vi.spyOn(res, "write");

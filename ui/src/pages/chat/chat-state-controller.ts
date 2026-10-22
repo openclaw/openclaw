@@ -8,29 +8,31 @@ import { showToast } from "../../lib/toast.ts";
 import { releaseDisplacedChatAttachmentPayloads } from "./attachment-payload-store.ts";
 import { disposeSelectedSessionMessageSubscription } from "./chat-history-subscription.ts";
 import { chatOutboxOwner } from "./chat-outbox-owner.ts";
+import { subscribeChatOutboxQueue } from "./chat-outbox-queue.ts";
 import { getChatPendingInputs } from "./chat-pending-inputs.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import { activeChatRunStartupStatus } from "./chat-run-startup.ts";
+import { isChatRunWorking } from "./chat-run-working.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
-import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
 import { resolveChatAgentId } from "./chat-state-route.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
-import { isChatRunWorking } from "./components/chat-composer-state.ts";
-import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
+import { releaseChatMediaResourceOwner } from "./components/chat-message-media.ts";
 import {
   clearSessionWorkspacePreviews,
   clearWorkspaceTimer,
 } from "./components/chat-session-workspace-state.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
+import { markChatComposerEdit } from "./composer-draft-storage.ts";
 import {
   captureChatComposerOwner,
   isChatComposerOwnerCurrent,
   isIncognitoComposerScope,
 } from "./composer-persistence-state.ts";
-import { ChatComposerPersistence, markChatComposerEdit } from "./composer-persistence.ts";
-import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
+import { ChatComposerPersistence } from "./composer-persistence.ts";
+import { activeQueuedMessageEdit, subscribeQueuedMessageEdit } from "./queued-message-edit.ts";
 import {
   type AfterCommitEffect,
   notifyRenderLifecycleForTest,
@@ -49,14 +51,13 @@ function transcriptSources(state: ChatPageHost): readonly unknown[] {
     state.chatStreamSegments,
     state.chatReasoning,
     state.guardianNotices,
-    state.realtimeTalkConversationState.entries,
+    state.realtimeTalk.snapshot.realtimeTalkConversationState.entries,
   ];
 }
 
 export function createChatState<TState extends ChatPageHost>(
   renderer: {
-    invalidate: () => void;
-    readonly updateComplete: Promise<unknown>;
+    awaitDomCommit: () => Promise<unknown>;
   },
   onStateChange?: () => void,
   onQueuedMessageDiscarded?: (item: ChatQueueItem) => void,
@@ -68,27 +69,39 @@ export function createChatState<TState extends ChatPageHost>(
     mentions: stateValue?.chatMentions ?? emptyMentions,
     attachments: stateValue?.chatAttachments ?? [],
     pendingAttachmentReads: attachmentReadsValue.pendingReads,
+    attachmentReadRevision: attachmentReadsValue.revision,
     goalDraftMode: stateValue?.chatGoalDraftMode,
   }));
   const attachmentChanged = () => {
     if (disposed) {
       return;
     }
-    publishComposerDraft();
-    stateValue?.requestUpdate?.();
+    publishStateEffects();
   };
   let attachmentReadsValue = new ChatAttachmentReadLifecycle(attachmentChanged);
   let publishedDraft: ReturnType<typeof composerDraft.read> | undefined;
-  const composerPersistence = new ChatComposerPersistence(() => stateValue);
+  let publishedAttachmentReads: ChatAttachmentReadLifecycle | undefined;
+  let publishedAttachmentReadRevision: number | undefined;
+  const composerPersistence = new ChatComposerPersistence(
+    () => stateValue,
+    () => {
+      if (disposed || !stateValue) {
+        return;
+      }
+      publishComposerDraft();
+      onStateChange?.();
+    },
+  );
   let privateDraftReview: { controller: AbortController; isCurrent: () => boolean } | undefined;
   let previousChatLoading = false;
   let previousTranscriptSources: readonly unknown[] = [];
   let previousChatStream: string | null = null;
   let pendingScroll: { force: boolean; contentChanged: boolean } | undefined;
+  let pendingScrollCommit: (() => void) | undefined;
   const cleanups: Array<() => void> = [];
   let disposed = false;
   let renderLifecycleScope: ChatRenderLifecycleScope | undefined;
-  let backgroundRenderFrame: number | undefined;
+  let releaseRunPublication: (() => void) | undefined;
 
   const api = {
     composerPersistence,
@@ -103,6 +116,9 @@ export function createChatState<TState extends ChatPageHost>(
         return;
       }
       disposed = true;
+      if (stateValue) {
+        chatOutboxOwner(stateValue).admissions.cancelRequests(stateValue);
+      }
       cancelRenderLifecycleScope();
       attachmentReadsValue.abortReads();
       // Flush while stateValue still points at the active session. Composer
@@ -171,37 +187,55 @@ export function createChatState<TState extends ChatPageHost>(
       };
     },
 
-    createRenderLifecycle(): RenderLifecycle {
+    createRenderLifecycle(): Pick<RenderLifecycle, "afterCommit"> {
       cancelRenderLifecycleScope();
       const scope: ChatRenderLifecycleScope = new Set();
       renderLifecycleScope = scope;
       return {
-        invalidate: () => {
-          requestUpdateForScope(scope);
-        },
         afterCommit: (effect, onCancel) => afterCommit(scope, effect, onCancel),
       };
     },
 
     attach(state: TState) {
+      releaseRunPublication?.();
       if (stateValue && stateValue !== state) {
+        chatOutboxOwner(stateValue).admissions.cancelRequests(stateValue);
         privateDraftReview?.controller.abort();
         disposeSelectedSessionMessageSubscription(stateValue);
-        releaseChatMediaResourceSubscriber(stateValue.requestUpdate);
+        releaseChatMediaResourceOwner(stateValue);
         attachmentReadsValue.abortReads();
         composerPersistence.stop();
-        cancelChatStreamRenderFrame(stateValue);
+        chatRunPresentation(stateValue).cancelFrame();
         cancelChatScroll(stateValue);
         stopChatRealtimeTalk(stateValue);
       }
       stateValue = state;
+      state.composerDraftChanged = () => {
+        if (stateValue !== state || disposed) {
+          return;
+        }
+        publishStateEffects();
+      };
       publishComposerDraft();
       previousTranscriptSources = transcriptSources(state);
       state.canRestoreComposer = () => stateValue === state && composerPersistence.active;
       previousChatLoading = state.chatLoading;
       previousChatStream = state.chatStream;
-      const renderLifecycle = state.renderLifecycle;
-      state.requestUpdate = () => renderLifecycle.invalidate();
+      // Publication also owns persistence and activity/retention effects in parked panes.
+      releaseRunPublication = chatRunPresentation(state).subscribe(() => {
+        // Geometry commits follow a growing tail; locked readers also need same-height arrivals.
+        if (state.chatFollowLocked) {
+          captureRenderLifecycleChanges();
+          schedulePendingScroll(false);
+        }
+        publishStateEffects();
+      });
+      // Queue transitions synchronously update pane retention and shell activity,
+      // independently of whether the pane's projected frame is currently observed.
+      cleanups.push(subscribeChatOutboxQueue(state, () => onStateChange?.()));
+      // Edit custody controls pane retention even while its frame is parked.
+      cleanups.push(subscribeQueuedMessageEdit(state, () => onStateChange?.()));
+      // Each discarded item has its own completion callback, not a latest-value presentation.
       cleanups.push(
         chatOutboxOwner(state).subscribe(state, (item) => {
           if (stateValue === state) {
@@ -242,16 +276,6 @@ export function createChatState<TState extends ChatPageHost>(
           },
         ),
       );
-      const sendChat = state.handleSendChat;
-      state.handleSendChat = async (messageOverride, options, submissionAction) => {
-        const pending = sendChat(messageOverride, options, submissionAction);
-        renderLifecycle.invalidate();
-        try {
-          return await pending;
-        } finally {
-          renderLifecycle.invalidate();
-        }
-      };
       const commitDraftChange = state.handleChatDraftChange;
       state.handleChatDraftChange = (next, mentions) => {
         commitDraftChange(next, mentions);
@@ -273,12 +297,6 @@ export function createChatState<TState extends ChatPageHost>(
       cleanups.push(cleanup);
     },
 
-    requestBackgroundUpdate(): void {
-      if (renderLifecycleScope) {
-        requestUpdateForScope(renderLifecycleScope, true);
-      }
-    },
-
     handleTranscriptResize(): void {
       if (stateValue && !disposed) {
         scheduleCommittedChatScroll(stateValue, false, false, { source: "resize" });
@@ -289,31 +307,26 @@ export function createChatState<TState extends ChatPageHost>(
       if (renderLifecycleScope && isRenderLifecycleScopeActive(renderLifecycleScope)) {
         notifyRenderLifecycleForTest(renderer, "commit");
       }
-      const pending = pendingScroll;
-      pendingScroll = undefined;
-      if (stateValue && pending) {
-        scheduleCommittedChatScroll(stateValue, pending.force, stateValue.chatHasAutoScrolled, {
-          contentChanged: pending.contentChanged,
-        });
+      schedulePendingScroll(true);
+    },
+
+    publishPendingRunState() {
+      const state = stateValue;
+      if (state?.chatStreamRenderFrame != null) {
+        chatRunPresentation(state).cancelFrame();
+        chatRunPresentation(state).publish();
       }
     },
 
-    prepareRender() {
-      // A render consumes both deferred producers before their next frame.
-      cancelBackgroundRender();
-      const state = stateValue;
-      if (state?.chatStreamRenderFrame != null) {
-        cancelChatStreamRenderFrame(state);
-        composerPersistence.persistChangedState();
-        captureRenderLifecycleChanges();
-        onStateChange?.();
-      }
-    },
+    // Every owner-driven frame captures transcript changes before its DOM commit.
+    captureRenderChanges: captureRenderLifecycleChanges,
   };
   return api;
 
   function publishComposerDraft() {
     publishedDraft = composerDraft.read();
+    publishedAttachmentReads = attachmentReadsValue;
+    publishedAttachmentReadRevision = attachmentReadsValue.revision;
     composerDraft.publish();
   }
 
@@ -422,7 +435,7 @@ export function createChatState<TState extends ChatPageHost>(
           ...Object.values(state.chatComposerFallbackByScope).map((item) => item.attachments),
         ],
       );
-      state.requestUpdate?.();
+      publishStateEffects();
       await retryReload?.();
     } catch {
       if (review.isCurrent()) {
@@ -452,61 +465,30 @@ export function createChatState<TState extends ChatPageHost>(
     return !disposed && renderLifecycleScope === scope;
   }
 
-  function cancelBackgroundRender(): void {
-    if (backgroundRenderFrame !== undefined) {
-      cancelAnimationFrame(backgroundRenderFrame);
-      backgroundRenderFrame = undefined;
-    }
-  }
-
-  function requestUpdateForScope(scope: ChatRenderLifecycleScope, background = false): boolean {
-    if (!isRenderLifecycleScopeActive(scope)) {
-      return false;
-    }
+  function publishStateEffects(): void {
     if (privateDraftReview && !privateDraftReview.isCurrent()) {
       privateDraftReview.controller.abort();
     }
     composerPersistence.persistChangedState();
-    captureRenderLifecycleChanges();
-    // Legacy restore writers still signal through the page owner. Ordinary
-    // stream updates must not invalidate the independent composer projection.
-    // Explicit mutation hooks above also cover changes within retained arrays.
+    // Stream publications preserve the independent composer snapshot unless its input changed.
     const draft = composerDraft.read();
     if (
       !publishedDraft ||
+      attachmentReadsValue !== publishedAttachmentReads ||
+      attachmentReadsValue.revision !== publishedAttachmentReadRevision ||
       draft.draft !== publishedDraft.draft ||
       draft.mentions !== publishedDraft.mentions ||
       draft.attachments !== publishedDraft.attachments ||
       draft.pendingAttachmentReads !== publishedDraft.pendingAttachmentReads ||
+      draft.attachmentReadRevision !== publishedDraft.attachmentReadRevision ||
       draft.goalDraftMode !== publishedDraft.goalDraftMode
     ) {
       publishComposerDraft();
     }
     onStateChange?.();
-    notifyRenderLifecycleForTest(renderer, "invalidate");
-    // Only background producers opt in. Draft persistence and scroll ownership
-    // are captured above, and transcript changes still commit before paint.
-    if (
-      background &&
-      !pendingScroll &&
-      globalThis.document?.visibilityState !== "hidden" &&
-      typeof globalThis.requestAnimationFrame === "function"
-    ) {
-      backgroundRenderFrame ??= requestAnimationFrame(() => {
-        backgroundRenderFrame = undefined;
-        if (isRenderLifecycleScopeActive(scope)) {
-          renderer.invalidate();
-        }
-      });
-    } else {
-      cancelBackgroundRender();
-      renderer.invalidate();
-    }
-    return true;
   }
 
   function cancelRenderLifecycleScope(): void {
-    cancelBackgroundRender();
     const scope = renderLifecycleScope;
     if (!scope) {
       return;
@@ -550,12 +532,7 @@ export function createChatState<TState extends ChatPageHost>(
       }
     };
     scope.add(cancel);
-    // Request first so updateComplete represents the render this effect needs.
-    if (!requestUpdateForScope(scope)) {
-      cancel();
-      return cancel;
-    }
-    const completion = renderer.updateComplete;
+    const completion = renderer.awaitDomCommit();
     void completion.then(() => {
       if (!scope.has(cancel)) {
         return;
@@ -593,13 +570,15 @@ export function createChatState<TState extends ChatPageHost>(
     const messagesChanged = sources.some(
       (source, index) => previousTranscriptSources[index] !== source,
     );
-    const streamChanged = previousChatStream !== state.chatStream;
+    // This owner captures scrolling, not a dependency of the pane's rendering computation.
+    const stream = chatRunPresentation<ChatPageHost>(state).values.chatStream ?? null;
+    const streamChanged = previousChatStream !== stream;
     const loadingChanged = previousChatLoading !== state.chatLoading;
     const loadFinished = previousChatLoading && !state.chatLoading;
-    const streamStarted = previousChatStream == null && typeof state.chatStream === "string";
+    const streamStarted = previousChatStream == null && typeof stream === "string";
     previousTranscriptSources = sources;
     previousChatLoading = state.chatLoading;
-    previousChatStream = state.chatStream;
+    previousChatStream = stream;
     if (!messagesChanged && !streamChanged && !loadingChanged) {
       return;
     }
@@ -609,7 +588,31 @@ export function createChatState<TState extends ChatPageHost>(
     };
   }
 
+  function schedulePendingScroll(committed: boolean) {
+    if (!stateValue?.chatScrollElement?.()) {
+      return;
+    }
+    pendingScrollCommit?.();
+    pendingScrollCommit = undefined;
+    const pending = pendingScroll;
+    if (pending) {
+      if (!committed) {
+        pendingScrollCommit = stateValue.renderLifecycle.afterCommit(() => {
+          pendingScrollCommit = undefined;
+          schedulePendingScroll(true);
+        });
+        return;
+      }
+      pendingScroll = undefined;
+      scheduleCommittedChatScroll(stateValue, pending.force, stateValue.chatHasAutoScrolled, {
+        contentChanged: pending.contentChanged,
+      });
+    }
+  }
+
   function stopChatEffects() {
+    releaseRunPublication?.();
+    releaseRunPublication = undefined;
     privateDraftReview?.controller.abort();
     while (cleanups.length > 0) {
       cleanups.pop()?.();
@@ -617,8 +620,8 @@ export function createChatState<TState extends ChatPageHost>(
     const state = stateValue;
     if (state) {
       disposeSelectedSessionMessageSubscription(state);
-      releaseChatMediaResourceSubscriber(state.requestUpdate);
-      cancelChatStreamRenderFrame(state);
+      releaseChatMediaResourceOwner(state);
+      chatRunPresentation(state).cancelFrame();
       cancelChatScroll(state);
       invalidateImageLightbox(state);
       if (

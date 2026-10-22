@@ -26,7 +26,7 @@ Rootless Podman defaults to `--userns=keep-id` for writable workspace mounts. A 
         scope: "session",
         workspaceAccess: "rw",
         docker: {
-          image: "openclaw-sandbox:bookworm-slim",
+          image: "openclaw-sandbox:trixie-slim",
           network: "none",
           readOnlyRoot: true,
           capDrop: ["ALL"],
@@ -40,7 +40,7 @@ Rootless Podman defaults to `--userns=keep-id` for writable workspace mounts. A 
 Build or pull the sandbox image into the selected Podman store before enabling the backend. From a source checkout, build the same sandbox Dockerfile with Podman:
 
 ```bash
-podman build -t openclaw-sandbox:bookworm-slim -f scripts/docker/sandbox/Dockerfile .
+podman build -t openclaw-sandbox:trixie-slim -f scripts/docker/sandbox/Dockerfile .
 ```
 
 ## Changing connections and upgrading existing sandboxes

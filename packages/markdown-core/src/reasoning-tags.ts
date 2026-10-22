@@ -15,6 +15,7 @@ export {
   findMarkdownCodeSpans,
   findMarkdownCodeRegions,
   parseMarkdownOwnership,
+  REASONING_TAG_NAMES,
   scanReasoningTags,
   stripReasoningTagsFromMarkdown,
 } from "./reasoning-tag-parser.js";

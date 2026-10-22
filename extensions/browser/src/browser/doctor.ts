@@ -99,23 +99,19 @@ export function buildBrowserDoctorReport(params: {
     const runningVersion = isChromeExtensionVersion(params.extensionVersion)
       ? params.extensionVersion
       : undefined;
-    const bundledVersion = isChromeExtensionVersion(chromeExtensionManifest.version)
-      ? chromeExtensionManifest.version
-      : undefined;
+    const bundledVersion = chromeExtensionManifest.version;
     // Chrome treats absent version components as zero, so trailing zeroes do not indicate drift.
     const mismatch = Boolean(
       runningVersion &&
-      bundledVersion &&
       runningVersion.replace(/(?:\.0)+$/, "") !== bundledVersion.replace(/(?:\.0)+$/, ""),
     );
     checks.push({
       id: "extension-version",
       label: "Chrome extension version",
-      status: !runningVersion || !bundledVersion ? "info" : mismatch ? "warn" : "pass",
-      summary:
-        runningVersion && bundledVersion
-          ? `running ${runningVersion}; bundled ${bundledVersion} (${mismatch ? "mismatch" : "match"})`
-          : "version data unavailable",
+      status: !runningVersion ? "info" : mismatch ? "warn" : "pass",
+      summary: runningVersion
+        ? `running ${runningVersion}; bundled ${bundledVersion} (${mismatch ? "mismatch" : "match"})`
+        : "version data unavailable",
       ...(mismatch
         ? {
             fixHint:

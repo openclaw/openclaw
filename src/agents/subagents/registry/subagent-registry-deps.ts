@@ -1,6 +1,8 @@
+import type { AgentWaitParams } from "../../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { ResolveContextEngineOptions } from "../../../context-engine/registry.js";
 import type { callGateway } from "../../../gateway/call.js";
+import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { createLazyImportLoader, createLazyPromiseLoader } from "../../../shared/lazy-promise.js";
@@ -27,6 +29,26 @@ export const loadSubagentBrowserCleanupModule = browserCleanupLoader.load;
 export const callSubagentRegistryGateway: typeof callGateway = (request) =>
   bindGatewayLifecycleRequest()(request);
 
+export function createSubagentRegistryGatewayCaller(
+  getGatewayContextResolver: () => GatewayContextResolver | undefined,
+): typeof callGateway {
+  return async <T>(request: Parameters<typeof callGateway>[0]) => {
+    if (request.method === "agent.wait") {
+      const gatewayRuntime = getGatewayContextResolver()?.()?.recoveryRuntime;
+      if (gatewayRuntime) {
+        // Registry waits are Gateway-owned lifecycle work. Keep them on the
+        // owning instance when one exists; standalone processes authenticate normally.
+        return await gatewayRuntime.waitForAgent<T>(
+          // SAFETY: the instance-owned wait facade validates AgentWaitParams before execution.
+          (request.params ?? {}) as AgentWaitParams,
+          request.timeoutMs ?? undefined,
+        );
+      }
+    }
+    return await callSubagentRegistryGateway<T>(request);
+  };
+}
+
 export async function loadSubagentRegistryPluginRuntimeHandle(params: {
   config: OpenClawConfig;
   workspaceDir?: string;
@@ -46,11 +68,4 @@ export async function resolveSubagentRegistryContextEngine(
     ...options,
     initialize: runtime.ensureContextEnginesInitialized,
   });
-}
-
-export function resetSubagentRegistryRuntimeLoadersForTests() {
-  subagentRegistryRuntimeLoader.clear();
-  subagentRegistryPluginRuntimeLoader.clear();
-  subagentAnnounceLoader.clear();
-  browserCleanupLoader.clear();
 }

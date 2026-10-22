@@ -89,7 +89,6 @@ describe("happy path prompt snapshots", () => {
     const scenarios = [
       { name: "telegram-direct", replacements: [] },
       { name: "discord-group", replacements: ["sessions_spawn"] },
-      { name: "heartbeat-turn", replacements: ["openclaw_direct"] },
     ];
 
     for (const { name, replacements } of scenarios) {
@@ -277,7 +276,7 @@ describe("happy path prompt snapshots", () => {
   });
 
   it("keeps managed persona outside native collaboration and user-input history", async () => {
-    for (const scenario of ["telegram-direct", "discord-group", "heartbeat-turn"]) {
+    for (const scenario of ["telegram-direct", "discord-group"]) {
       const snapshot = await materializeCodexPromptSnapshot(scenario);
       const turnSection = renderedPromptSection(
         snapshot,

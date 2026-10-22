@@ -78,11 +78,13 @@ function persistLifecycle(
   entry: SessionEntry,
   event: LifecycleEvent,
   sessionKey = "agent:main:main",
+  clientRunId?: string,
 ): Promise<SessionEntry> {
   return persistLifecycleThroughMockedStore(persistenceMocks, {
     sessionKey,
     entry,
     event: { lifecycleGeneration: getAgentEventLifecycleGeneration(), ...event },
+    clientRunId,
   });
 }
 
@@ -334,35 +336,45 @@ describe("session lifecycle state", () => {
     });
   });
 
-  it("keeps provider lifecycle ownership while recording the client terminal run", async () => {
-    const started = await persistLifecycle(
-      { sessionId: "session-id", updatedAt: 900 },
-      {
-        ts: 1_000,
-        sessionId: "session-id",
-        runId: "provider-run",
-        clientRunId: "client-run",
-        data: { phase: "start", startedAt: 1_000 },
-      },
-    );
-    expect(started.lifecycleRunId).toBe("provider-run");
-    expect(started.status).toBeUndefined();
-    expect(started.restartRecoveryRuns).toEqual([
-      { runId: "provider-run", lifecycleGeneration: getAgentEventLifecycleGeneration() },
-    ]);
+  it.each([false, true])(
+    "keeps provider ownership while recording the client terminal run (separate fact: %s)",
+    async (separate) => {
+      const started = await persistLifecycle(
+        { sessionId: "session-id", updatedAt: 900 },
+        {
+          ts: 1_000,
+          sessionId: "session-id",
+          runId: "provider-run",
+          ...(!separate ? { clientRunId: "client-run" } : {}),
+          data: { phase: "start", startedAt: 1_000 },
+        },
+        undefined,
+        separate ? "client-run" : undefined,
+      );
+      expect(started.lifecycleRunId).toBe("provider-run");
+      expect(started.status).toBeUndefined();
+      expect(started.restartRecoveryRuns).toEqual([
+        { runId: "provider-run", lifecycleGeneration: getAgentEventLifecycleGeneration() },
+      ]);
 
-    const completed = await persistLifecycle(started, {
-      ts: 2_000,
-      sessionId: "session-id",
-      runId: "provider-run",
-      clientRunId: "client-run",
-      data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
-    });
+      const completed = await persistLifecycle(
+        started,
+        {
+          ts: 2_000,
+          sessionId: "session-id",
+          runId: "provider-run",
+          ...(!separate ? { clientRunId: "client-run" } : {}),
+          data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+        },
+        undefined,
+        separate ? "client-run" : undefined,
+      );
 
-    expect(completed.lifecycleRunId).toBeUndefined();
-    expect(completed.lastRunId).toBe("client-run");
-    expect(completed.restartRecoveryRuns).toBeUndefined();
-  });
+      expect(completed.lifecycleRunId).toBeUndefined();
+      expect(completed.lastRunId).toBe("client-run");
+      expect(completed.restartRecoveryRuns).toBeUndefined();
+    },
+  );
 
   it("clears inherited run ownership when a start event has no run id", async () => {
     const started = await persistLifecycle(
@@ -461,12 +473,11 @@ describe("session lifecycle state", () => {
   });
 
   it.each([
-    { name: "visible run", controlUiVisible: true, isHeartbeat: false, lastActivityAt: 1_800 },
-    { name: "heartbeat", controlUiVisible: true, isHeartbeat: true, lastActivityAt: 1_000 },
-    { name: "hidden run", controlUiVisible: false, isHeartbeat: false, lastActivityAt: 1_000 },
+    { name: "visible run", controlUiVisible: true, lastActivityAt: 1_800 },
+    { name: "hidden run", controlUiVisible: false, lastActivityAt: 1_000 },
   ])(
     "records unread-worthy completion activity for a $name",
-    async ({ controlUiVisible, isHeartbeat, lastActivityAt }) => {
+    async ({ controlUiVisible, lastActivityAt }) => {
       const persisted = await persistLifecycle(
         {
           sessionId: "session-id",
@@ -478,7 +489,6 @@ describe("session lifecycle state", () => {
           ts: 2_000,
           sessionId: "session-id",
           controlUiVisible,
-          isHeartbeat,
           data: { phase: "end", endedAt: 1_800 },
         },
       );

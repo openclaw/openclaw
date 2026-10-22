@@ -44,7 +44,6 @@ function isSlackAuthoredTextRepresentedInFragments(
 export function resolveSlackAuthoredTextPlacement(params: {
   text?: string;
   interactive?: LegacyInteractiveReply;
-  renderedInBlocks?: boolean;
   renderedTextFragments?: readonly string[];
 }): SlackAuthoredTextPlacement {
   const text = normalizeOptionalString(params.text);
@@ -52,7 +51,6 @@ export function resolveSlackAuthoredTextPlacement(params: {
     return "none";
   }
   const isRepresentedInBlocks =
-    params.renderedInBlocks ||
     isSlackAuthoredTextRepresentedInFragments(text, params.renderedTextFragments ?? []) ||
     isSlackAuthoredTextRepresentedInFragments(
       text,

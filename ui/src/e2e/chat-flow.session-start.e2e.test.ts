@@ -1,6 +1,6 @@
 import { expect, it } from "vitest";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
-import { closeChatDetails, openChatDetails } from "./chat-details.test-support.ts";
+import { closeChatDetails, openChatTaskProgress } from "./chat-details.test-support.ts";
 import {
   chatMessage,
   newChatPage,
@@ -11,13 +11,12 @@ import {
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
+const modelList = (id: string, name: string) => [{ available: true, id, name, provider: "openai" }];
 
 suite.define(() => {
   it("waits for configured inference before sending the first chat turn", async () => {
     const page = await newChatPage(suite);
-    const models = [
-      { available: true, id: "startup-model", name: "Startup Model", provider: "openai" },
-    ];
+    const models = modelList("startup-model", "Startup Model");
     const gateway = await installMockGateway(page, {
       agentModel: "openai/startup-model",
       defaultAgentId: "ops",
@@ -73,10 +72,12 @@ suite.define(() => {
     const progressRequest = await gateway.waitForRequest("progressCard.get");
     expect(progressRequest.params).toEqual({ sessionKey: "global", agentId: "ops" });
     const progress = page.getByText("Global progress after startup", { exact: true });
-    await progress.waitFor({ state: "attached" });
     expect(await progress.isVisible()).toBe(false);
-    const details = await openChatDetails(page);
-    await details.getByText("Global progress after startup", { exact: true }).waitFor();
+    const details = await openChatTaskProgress(page);
+    await details
+      .locator(".session-progress-card__markdown")
+      .getByText("Global progress after startup", { exact: true })
+      .waitFor();
     await closeChatDetails(page);
 
     const prompt = "send after configured inference loads";
@@ -103,16 +104,13 @@ suite.define(() => {
       state: "delta",
     });
     const transcript = page.locator(".chat-thread-inner");
-    await transcript
-      .getByText("First token visible.", { exact: true })
-      .waitFor({ timeout: 10_000 });
+    const firstToken = transcript.getByText("First token visible.", { exact: true });
+    await firstToken.waitFor({ timeout: 10_000 });
     await page.locator(".chat-thread").getByText(prompt).waitFor({ timeout: 10_000 });
-    await transcript
-      .getByText("First token visible.", { exact: true })
-      .waitFor({ timeout: 10_000 });
+    await firstToken.waitFor({ timeout: 10_000 });
     await expect
-      .poll(() => page.locator('[data-chat-model-option="openai/startup-model"]').count())
-      .toBe(1);
+      .poll(() => page.locator("[data-chat-model-select]").textContent())
+      .toContain("Startup Model");
     await gateway.emitChatFinal({ runId, text: "History race stayed visible." });
     await transcript.getByText("History race stayed visible.").waitFor({ timeout: 10_000 });
     await composer.fill("/");
@@ -128,14 +126,13 @@ suite.define(() => {
 
   it("paints startup history while canonical roster and metadata requests remain pending", async () => {
     const page = await newChatPage(suite);
+    const history = "Transcript paints while optional startup data loads";
     const gateway = await installMockGateway(page, {
       agentModel: "openai/hydrated-model",
       deferredMethods: ["agents.list", "chat.metadata", "models.list"],
       methodResponses: {
         "chat.startup": {
-          messages: [
-            chatMessage("assistant", "Transcript paints while optional startup data loads"),
-          ],
+          messages: [chatMessage("assistant", history)],
           sessionId: "session:agent:main:main",
           thinkingLevel: null,
         },
@@ -146,10 +143,8 @@ suite.define(() => {
     await gateway.waitForRequest("chat.startup");
     await gateway.waitForRequest("agents.list");
     await gateway.waitForRequest("chat.metadata");
-    await page
-      .locator(".chat-thread-inner")
-      .getByText("Transcript paints while optional startup data loads", { exact: true })
-      .waitFor({ timeout: 10_000 });
+    const transcript = page.locator(".chat-thread-inner");
+    await transcript.getByText(history, { exact: true }).waitFor({ timeout: 10_000 });
     expect(await gateway.getRequests("agents.list")).toHaveLength(1);
 
     await gateway.resolveDeferred("agents.list", {
@@ -159,15 +154,9 @@ suite.define(() => {
       scope: "agent",
     });
     await gateway.resolveDeferred("chat.metadata", { commands: [] });
+    await gateway.waitForRequest("models.list");
     await gateway.resolveDeferred("models.list", {
-      models: [
-        {
-          available: true,
-          id: "hydrated-model",
-          name: "Hydrated Model",
-          provider: "openai",
-        },
-      ],
+      models: modelList("hydrated-model", "Hydrated Model"),
     });
     await expect
       .poll(() =>

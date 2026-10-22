@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import { setEnvironmentData, threadId } from "node:worker_threads";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import type { SqliteCleanCloseSealRefusal } from "./sqlite-clean-close-seal.js";
 import { SQLITE_DATABASE_ADMISSIONS_KEY } from "./sqlite-database-admission-key.js";
 import {
   isSoleDatabaseFileDescriptor,
@@ -37,15 +39,15 @@ export type AdmissionFactValue = {
 
 export function readSqliteDatabaseAdmissionFact<T>(
   fact: AdmissionFactValue,
-  key: SqliteDatabaseAdmissionKey<T>,
+  key: SqliteDatabaseFactKey<T>,
 ): T | undefined {
-  fact[decodedValue] ??= { value: key.read(fact.value) };
-  // SAFETY: A private key name identifies one value type, decoded by that key at admission.
+  fact[decodedValue] ??= { value: key.read ? key.read(fact.value) : fact.value };
+  // SAFETY: Each key names its typed publisher's value; boundary keys retain their decoder.
   return fact[decodedValue].value as T | undefined;
 }
 
 export function admitSqliteDatabaseFactValue<T>(
-  key: SqliteDatabaseAdmissionKey<T>,
+  key: SqliteDatabaseFactKey<T>,
   value: T,
 ): AdmissionFactValue {
   const fact: AdmissionFactValue = { value };
@@ -66,9 +68,66 @@ export type StagedAdmissionFact = AdmissionFactValue &
   };
 export type ScopedWriteRevision = {
   identity: string;
-  // The revision and retirement flag share custody across all admission snapshots.
+  // Revision, retirement, and active effect pins share custody across admission snapshots.
   state: Int32Array<SharedArrayBuffer>;
 };
+
+const MAX_WRITE_SCOPE_BYTES = 1024 * 1024;
+const scopeRetention = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteDatabaseWriteScopeRetention"),
+  () => new WeakMap<Map<string, ScopedWriteRevision>, { bytes: number; retired: Set<string> }>(),
+);
+// Account for UTF-16 keys plus the UUID, shared cell, and map/snapshot entries.
+const writeScopeBytes = (key: string) => key.length * 2 + 256;
+
+/** Idle receipts cache freshness; active effect guards retain their exact shared cells. */
+export function retainSqliteDatabaseWriteScope(
+  record: Admission,
+  key: string,
+  revision: ScopedWriteRevision,
+): void {
+  const scopes = record.writeScopes;
+  let retention = scopeRetention.get(scopes);
+  if (!retention) {
+    retention = {
+      bytes: [...scopes.keys()].reduce((bytes, scopeKey) => bytes + writeScopeBytes(scopeKey), 0),
+      retired: new Set(),
+    };
+    scopeRetention.set(scopes, retention);
+  }
+  if (!scopes.delete(key)) {
+    retention.bytes += writeScopeBytes(key);
+  }
+  scopes.set(key, revision);
+  pruneSqliteDatabaseWriteScopes(record);
+}
+
+/** Active effect scopes may exceed the idle budget until their final release. */
+export function pruneSqliteDatabaseWriteScopes(record: Admission): boolean {
+  const retention = scopeRetention.get(record.writeScopes)!;
+  if (retention.bytes <= MAX_WRITE_SCOPE_BYTES) {
+    return false;
+  }
+  let changed = false;
+  for (const [oldest, value] of record.writeScopes) {
+    // Claim an unpinned cell before another isolate can retain it for an effect.
+    const pins = Atomics.compareExchange(value.state, 2, 0, -1);
+    if (pins > 0 && Atomics.load(value.state, 1) === 0) {
+      continue;
+    }
+    Atomics.store(value.state, 1, 1);
+    // A writer missing this cell must fence receipts registered after its dispatch.
+    advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
+    record.writeScopes.delete(oldest);
+    retention.bytes -= writeScopeBytes(oldest);
+    retention.retired.add(oldest);
+    changed = true;
+    if (retention.bytes <= MAX_WRITE_SCOPE_BYTES) {
+      break;
+    }
+  }
+  return changed;
+}
 
 export type Admission = {
   identity: string;
@@ -78,6 +137,8 @@ export type Admission = {
   descriptorOwner: number;
   generationId: string;
   generation: SharedArrayBuffer;
+  /** First-load diagnostic, shared with workers without rereading the seal. */
+  cleanCloseRefusal?: SqliteCleanCloseSealRefusal;
   /** Last complete host snapshot; relays preserve this value without advancing it. */
   hostRevision?: number;
   writeScopes: Map<string, ScopedWriteRevision>;
@@ -100,6 +161,11 @@ export type SqliteDatabaseAdmissionExchange = (
   location?: string,
   create?: boolean,
 ) => SqliteDatabaseAdmissions;
+
+/** Internal typed publications need no decoder; public/custom keys retain their read contract. */
+export type SqliteDatabaseFactKey<T> = Omit<SqliteDatabaseAdmissionKey<T>, "read"> & {
+  read?: SqliteDatabaseAdmissionKey<T>["read"];
+};
 
 export function readSqliteDatabaseAdmissions(value: unknown): SqliteDatabaseAdmissions | undefined {
   // SAFETY: These facts come only from this process's paired worker and bootstrap transports.
@@ -210,15 +276,18 @@ function snapshotWriteScopes(
   keys?: readonly string[],
 ): WriteScopeBuckets {
   let buckets = previous;
-  const visit = (value: ScopedWriteRevision, key: string) => {
+  const retention = scopeRetention.get(current);
+  const visit = (value: ScopedWriteRevision | undefined, key: string) => {
     let hash = 0;
     for (let index = 0; index < key.length; index++) {
       hash = (hash * 31 + key.charCodeAt(index)) | 0;
     }
     const index = hash & (EMPTY_WRITE_SCOPE_BUCKETS.length - 1);
-    const retired = Atomics.load(value.state, 1) !== 0;
+    const retired = !value || Atomics.load(value.state, 1) !== 0;
     if (retired) {
-      current.delete(key);
+      if (current.delete(key) && retention) {
+        retention.bytes -= writeScopeBytes(key);
+      }
     }
     if (retired ? !previous[index]!.has(key) : previous[index]!.get(key) === value) {
       return;
@@ -232,19 +301,20 @@ function snapshotWriteScopes(
     if (retired) {
       buckets[index]!.delete(key);
     } else {
-      buckets[index]!.set(key, value);
+      buckets[index]!.set(key, value!);
     }
   };
   if (keys) {
     for (const key of keys) {
-      const value = current.get(key);
-      if (value) {
-        visit(value, key);
-      }
+      visit(current.get(key), key);
     }
   } else {
     current.forEach(visit);
   }
+  for (const key of retention?.retired ?? []) {
+    visit(current.get(key), key);
+  }
+  retention?.retired.clear();
   return buckets;
 }
 
@@ -612,7 +682,7 @@ export class SqliteDatabaseAdmissionRegistry {
         record = {
           ...incoming,
           facts: new Map(incoming.facts),
-          writeScopes: new Map(incoming.writeScopes),
+          writeScopes: new Map(),
           references: new Map(incoming.references),
           hostRevision: undefined,
         };
@@ -622,6 +692,10 @@ export class SqliteDatabaseAdmissionRegistry {
       } else if (record.generationId !== incoming.generationId) {
         // Only the host creates a generation; unrelated revocation cells cannot certify its facts.
         continue;
+      }
+      if (!record.cleanCloseRefusal && incoming.cleanCloseRefusal) {
+        record.cleanCloseRefusal = incoming.cleanCloseRefusal;
+        changed = true;
       }
       for (const [key, fact] of incoming.facts) {
         if (
@@ -647,7 +721,7 @@ export class SqliteDatabaseAdmissionRegistry {
         if (threadId === 0) {
           advanceSqliteDatabaseGeneration(record, "writeScopeRevision");
         }
-        record.writeScopes.set(key, revision);
+        retainSqliteDatabaseWriteScope(record, key, revision);
         changed = true;
       }
       const writeScopeRevision = readSqliteDatabaseGeneration(record, "writeScopeRevision");

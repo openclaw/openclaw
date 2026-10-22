@@ -1,10 +1,14 @@
 import crypto from "node:crypto";
+import { OPENCLAW_AGENT_RUNTIME_ID } from "../../agents/agent-runtime-id.js";
 import { createMissingReplyNotice } from "../../agents/reply-completion.js";
+import {
+  createSessionMaintenanceFollowup,
+  scheduleSessionMaintenance,
+} from "../../agents/session-maintenance/run.js";
 import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../../infra/system-events.js";
 import { sessionDeliveryChannel } from "../../utils/delivery-context.read.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
-import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
@@ -13,7 +17,6 @@ import {
   resolveSourceReplyPolicy,
   normalizeAssistantFinalDeliveryText,
 } from "./agent-runner-core.js";
-import { scheduleReplySessionMaintenance } from "./agent-runner-maintenance.js";
 import type { AccountedAgentTurn } from "./agent-runner-result-accounting.js";
 import { buildReplyDiagnosticsPayload } from "./agent-runner-result-diagnostics.js";
 import type { prepareReplyAgentPayloads } from "./agent-runner-result-payloads.js";
@@ -41,7 +44,6 @@ export async function completeReplyAgentRun(input: {
     activeSessionStore,
     cfg,
     followupRun,
-    isHeartbeat,
     opts,
     preflightCompactionApplied,
     queueKey,
@@ -128,8 +130,23 @@ export async function completeReplyAgentRun(input: {
   if (trailingPluginStatusPayload) {
     finalPayloads = [...finalPayloads, trailingPluginStatusPayload];
   }
+  const resolveReplyPolicy = (resolvedSessionKey: string) =>
+    resolveSourceReplyPolicy({
+      cfg,
+      sessionCtx,
+      sessionEntry: activeSessionEntry,
+      sessionKey: resolvedSessionKey,
+      runtimePolicySessionKey,
+      opts,
+    });
+  const sourceReplyPolicy = sessionKey ? resolveReplyPolicy(sessionKey) : undefined;
   if (responseUsageLine) {
-    finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
+    finalPayloads = appendUsageLine(finalPayloads, responseUsageLine, {
+      completedSourceReply:
+        sourceReplyPolicy?.sourceReplyDeliveryMode === "message_tool_only" &&
+        completedSourceReplyDelivery &&
+        prepared.replyCompletion.outcome === "delivered",
+    });
   }
   if (isHookBlockedRun) {
     finalPayloads = markBeforeAgentRunBlockedPayloads(finalPayloads);
@@ -137,29 +154,21 @@ export async function completeReplyAgentRun(input: {
 
   // Capture only policy-visible final payloads in session store to support
   // durable delivery retries. Hidden reasoning, message-tool-only replies,
-  // and sendPolicy-denied replies must not become heartbeat-replayable text.
+  // and sendPolicy-denied replies must not become replayable text.
   const isStrandedReplyRetryRun = followupRun.strandedReplyRetry === true;
   if (
     sessionKey &&
     storePath &&
     runResult.meta?.terminalReply?.disposition !== "silent" &&
+    prepared.replyCompletion.outcome !== "silent" &&
     (finalPayloads.length > 0 ||
       isStrandedReplyRetryRun ||
       runResult.meta?.terminalReply !== undefined)
   ) {
-    const sourceReplyPolicy = resolveSourceReplyPolicy({
-      cfg,
-      sessionCtx,
-      sessionEntry: activeSessionEntry,
-      sessionKey,
-      runtimePolicySessionKey,
-      opts,
-    });
+    const recoverySourceReplyPolicy = sourceReplyPolicy ?? resolveReplyPolicy(sessionKey);
     const assistantFinalText = normalizeAssistantFinalDeliveryText(
       runResult.meta?.finalAssistantVisibleText ?? rawAssistantText ?? "",
     );
-    // Heartbeats already deliver fallback finals via sendDurableMessageBatch;
-    // recovering here would duplicate that message.
     const recovery =
       prepared.replyCompletion.outcome === "pending"
         ? { kind: "none" as const }
@@ -168,10 +177,9 @@ export async function completeReplyAgentRun(input: {
             payloads: finalPayloads,
             finalText: assistantFinalText,
             terminalReply: runResult.meta?.terminalReply,
-            sourceReplyDeliveryMode: sourceReplyPolicy.sourceReplyDeliveryMode,
-            sendPolicyDenied: sourceReplyPolicy.sendPolicyDenied,
+            sourceReplyDeliveryMode: recoverySourceReplyPolicy.sourceReplyDeliveryMode,
+            sendPolicyDenied: recoverySourceReplyPolicy.sendPolicyDenied,
             successfulSourceReplyDelivery: completedSourceReplyDelivery,
-            isHeartbeat,
             isRoomEvent: sessionCtx.InboundEventKind === "room_event",
           });
     if (recovery.kind === "retry") {
@@ -190,12 +198,12 @@ export async function completeReplyAgentRun(input: {
     } else if (recovery.kind === "retry") {
       const retryEnqueued = enqueueFollowupRun(
         queueKey,
-        recovery.run,
+        { ...recovery.run, controllerInput: undefined, controllerClaim: undefined },
         resolvedQueue,
         "none",
         runFollowupTurn,
         false,
-        { position: "front" },
+        { position: "front", storePath },
       );
       if (!retryEnqueued) {
         finalPayloads = [...finalPayloads, createMissingReplyNotice()];
@@ -204,28 +212,23 @@ export async function completeReplyAgentRun(input: {
     const recoverablePendingFinalText = buildRecoverablePendingFinalDeliveryText(
       normalizePendingFinalRecoveryPayloads(finalPayloads),
     );
-    let pendingText = sourceReplyPolicy.suppressDelivery ? "" : (recoverablePendingFinalText ?? "");
-    if (isHeartbeat) {
-      const stripped = stripHeartbeatToken(pendingText, {
-        mode: "heartbeat",
-        maxAckChars: DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-      });
-      pendingText = stripped.shouldSkip ? "" : stripped.text || pendingText;
-    }
-    // The local source observer confirms the committed answer in chat history.
-    // Its live notification needs no second durable delivery state machine.
+    const pendingText = recoverySourceReplyPolicy.suppressDelivery
+      ? ""
+      : (recoverablePendingFinalText ?? "");
+    // Committed text/media needs no second delivery state machine; other parts still do.
     const canUseLocalTranscript =
       isInternalSourceReplyChannel(sessionCtx) && !prepared.reminderNoteAppended;
-    const sendableFinalPayloads = sourceReplyPolicy.suppressDelivery
+    const sendableFinalPayloads = recoverySourceReplyPolicy.suppressDelivery
       ? []
       : finalPayloads.filter((payload) => {
           const metadata = getReplyPayloadMetadata(payload);
-          const committedLocalText =
+          const committedSourceReply =
+            metadata?.sourceReplyTranscriptMirror?.transcriptOwner === true;
+          const committedLocalContent =
             canUseLocalTranscript &&
-            metadata?.localTranscriptDeliveryConfirmed === true &&
-            !metadata.assistantMediaFailures?.length &&
-            !payload.mediaUrl &&
-            !payload.mediaUrls?.length &&
+            (metadata?.localTranscriptDeliveryConfirmed === true || committedSourceReply) &&
+            !metadata?.assistantMediaFailures?.length &&
+            (committedSourceReply || (!payload.mediaUrl && !payload.mediaUrls?.length)) &&
             !payload.attachments?.length &&
             !payload.presentation &&
             !payload.interactive &&
@@ -237,7 +240,9 @@ export async function completeReplyAgentRun(input: {
             !payload.ttsSupplement &&
             !metadata?.responsePrefix &&
             !metadata?.responseUsageLine;
-          return !committedLocalText && normalizePendingFinalDeliveryPayloads([payload]).length > 0;
+          return (
+            !committedLocalContent && normalizePendingFinalDeliveryPayloads([payload]).length > 0
+          );
         });
     if (sendableFinalPayloads.length > 0) {
       const commandOwner = getCommandOwnerAuthority(followupRun.run);
@@ -300,6 +305,59 @@ export async function completeReplyAgentRun(input: {
   const result = returnWithQueuedFollowupDrain(
     finalPayloads.length <= 1 ? finalPayloads[0] : finalPayloads,
   );
-  scheduleReplySessionMaintenance({ context, accounting, sessionEntry: activeSessionEntry });
+  const { replyOperation } = context;
+  const meta = runResult.meta;
+  const auth = context.execution.maintenanceAuthProfile;
+  if (
+    !activeSessionEntry ||
+    !sessionKey ||
+    !storePath ||
+    !accounting.providerUsed ||
+    !replyOperation.lifecycleGeneration ||
+    accounting.preserveUserFacingSessionState ||
+    context.execution.status !== "ok" ||
+    accounting.fallbackExhausted ||
+    autoCompactionCount > 0 ||
+    meta?.aborted ||
+    meta?.yielded ||
+    meta?.error ||
+    meta?.agentMeta?.agentHarnessId !== OPENCLAW_AGENT_RUNTIME_ID ||
+    auth === undefined ||
+    cfg.agents?.defaults?.compaction?.enabled === false
+  ) {
+    return result;
+  }
+  const maintenancePrepared = {
+    cfg,
+    sessionKey,
+    storePath,
+    timeoutMs: followupRun.run.timeoutMs,
+    runtimePolicySessionKey,
+  };
+  // The descriptor has no foreground authority; delivery settlement gates its new owner.
+  scheduleSessionMaintenance(
+    {
+      prepared: maintenancePrepared,
+      followupRun: createSessionMaintenanceFollowup({
+        run: followupRun.run,
+        sessionEntry: activeSessionEntry,
+        cfg,
+        sessionKey,
+        runtimePolicySessionKey: runtimePolicySessionKey ?? followupRun.run.runtimePolicySessionKey,
+        provider: accounting.providerUsed,
+        model: accounting.modelUsed,
+        auth,
+      }),
+      sessionId: activeSessionEntry.sessionId,
+      lifecycleRevision: activeSessionEntry.lifecycleRevision,
+      lifecycleGeneration: replyOperation.lifecycleGeneration,
+      startedAt: replyOperation.startedAtMs,
+      agentHarnessId: meta.agentMeta.agentHarnessId,
+      compactionRequestBudget: context.execution.compactionRequestBudget,
+    },
+    replyOperation.ownerSettlement.then(
+      () => replyOperation.result?.kind === "completed" && !replyOperation.abortSignal.aborted,
+    ),
+  );
   return result;
 }

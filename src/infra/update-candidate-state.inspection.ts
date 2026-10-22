@@ -13,9 +13,13 @@ import { captureRuntimeWorkerSource } from "./runtime-worker-generation.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { resolveAggregateSqliteInspectionTimeoutMs } from "./sqlite-readonly-worker.js";
 import { withUpdateCandidateIoBudget } from "./update-candidate-io.js";
-import { createUpdateStateInspectionDiagnostics } from "./update-candidate-state.diagnostics.js";
+import {
+  createUpdateStateInspectionDiagnostics,
+  type UpdateStateInspectionProgress,
+} from "./update-candidate-state.diagnostics.js";
 import { withUpdateStateInspectionWork } from "./update-candidate-state.process.js";
 import type { readUpdateStateDatabaseSizes } from "./update-candidate-state.sizes.js";
+import { isPublicUpdateFailureCode } from "./update-failure-public-codes.js";
 
 // Worker progress replaces these labels once the selected step reports its own phase.
 const WORKER_STARTUP_PHASES = new Map<unknown, string>([
@@ -23,6 +27,7 @@ const WORKER_STARTUP_PHASES = new Map<unknown, string>([
   ["database-generations", "database generation verification"],
   ["database-backup", "database backup"],
   ["database-restore-preparation", "database restore preparation"],
+  ["runtime-retention", "runtime dependency inventory"],
 ]);
 
 export async function runUpdateStateInspectionWorker(params: {
@@ -39,9 +44,11 @@ export async function runUpdateStateInspectionWorker(params: {
   timeoutMs?: number;
   readOnlySource?: string;
   sources?: readonly string[];
-  ioBudget?: "probe" | "deadline";
+  ioBudget?: "deadline";
   /** Best-effort callers continue after failure and compose their own guidance. */
   retryAdvice?: boolean;
+  maxOutputBytes?: number;
+  onProgress?: (progress: UpdateStateInspectionProgress) => void;
 }) {
   const selectedUrl = resolveRuntimeWorkerUrl({
     ...(params.readOnlySource
@@ -69,6 +76,7 @@ export async function runUpdateStateInspectionWorker(params: {
           ? [path.resolve(params.input.stateDir, "state", "openclaw.sqlite")]
           : params.databases.map((database) => database.path))),
     retryAdvice: params.retryAdvice,
+    onProgress: params.onProgress,
   });
   try {
     const timeoutMs = Math.max(
@@ -91,6 +99,7 @@ export async function runUpdateStateInspectionWorker(params: {
             : JSON.stringify({
                 ...params.input,
                 includeLocalStoreVersions: true,
+                includeClientCredentialStoreVersion: true,
                 env: {
                   HOME: params.sourceEnv.HOME,
                   OPENCLAW_HOME: params.sourceEnv.OPENCLAW_HOME,
@@ -106,7 +115,7 @@ export async function runUpdateStateInspectionWorker(params: {
           },
           killGraceMs: 500,
           killProcessTree: true,
-          maxOutputBytes: { stdout: 1024 * 1024, stderr: 20_000 },
+          maxOutputBytes: { stdout: params.maxOutputBytes ?? 1024 * 1024, stderr: 20_000 },
           outputCapture: { stdout: "head", stderr: "discard" },
           terminateOnOutputLimit: { stdout: true },
           onOutputChunk: inspection.onOutputChunk,
@@ -127,8 +136,6 @@ export async function runUpdateStateInspectionWorker(params: {
                 ),
                 timeoutMs,
                 signal: params.signal,
-                nodeRunner: params.nodeRunner,
-                env: params.sourceEnv,
               },
               run,
             ),
@@ -157,11 +164,13 @@ export function parseUpdateStateInspectionWorker<T>(
 ): T {
   if (result.code !== 0 || result.termination !== "exit" || result.outputLimitExceeded) {
     const signal = result.signal ? `, signal ${result.signal}` : "";
-    throw result.inspection.failure(
-      result.stderr ||
-        (result.outputLimitExceeded ? "Worker output exceeded its capture limit" : result.stdout),
-      `${result.termination}${signal}`,
+    const failure = result.inspection.failure(
+      result.stderr || (result.outputLimitExceeded ? "" : result.stdout),
+      `${result.outputLimitExceeded ? "output-limit" : result.termination}${signal}`,
     );
+    const code =
+      !result.outputLimitExceeded && result.stderr.split(/\r?\n/u).find(isPublicUpdateFailureCode);
+    throw code ? Object.assign(failure, { code }) : failure;
   }
   try {
     return schema.parse(JSON.parse(result.stdout));

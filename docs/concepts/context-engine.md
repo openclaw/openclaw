@@ -181,7 +181,7 @@ export default function register(api) {
       },
     },
 
-    async ingest({ sessionId, message, isHeartbeat }) {
+    async ingest({ sessionId, message }) {
       // Store the message in your data store
       return { ingested: true };
     },
@@ -285,7 +285,11 @@ and implement `commitTurn(...)` as one atomic write keyed by
 The `messages` payload contains only the inclusive range from the admitted user
 entry through the accepted terminal entry. Engines that need the earlier
 transcript during bootstrap or rebuild should read it through the transcript
-cursor API, `readSessionTranscriptVisibleMessageDelta(...)`.
+cursor API, `readSessionTranscriptVisibleMessageDelta(...)` from
+`openclaw/plugin-sdk/context-engine-transcript-runtime`. Pass
+`start: "reset-window"` so a fresh drain begins at the latest same-session reset
+instead of importing pre-reset history; see
+[Context engine transcript cursor](/plugins/sdk-runtime/agent#context-engine-transcript-cursor).
 Pre-turn transcript reads during bootstrap, maintenance, assembly, and retries
 then see the exact transcript prefix before the admitted user message. The host
 calls `commitTurn` only for the accepted successful turn; failed or aborted

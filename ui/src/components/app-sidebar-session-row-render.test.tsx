@@ -68,12 +68,12 @@ function createHost(mode: "chip" | "roster" = "roster", snapshot?: Partial<Sideb
   const container = document.createElement("div");
   const props = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
   props.sidebarAgentsMode = mode;
-  const host = new AppSidebarOwner(
-    { dashboards: null, loadMoreDashboards() {} },
-    props,
-    context,
-    props,
-  );
+  const host = new AppSidebarOwner({ dashboards: null, loadMoreDashboards() {} }, context, props);
+  // The full sidebar mounts this owner; row-only fixtures keep the supplied catalog summary.
+  host.sessionPullRequests = {
+    summary: (_sessionKey, _worktreeId, initial) => initial,
+    count: () => undefined,
+  };
   host.sessionOwnershipVisibility = { filters: true, avatars: true };
   document.body.append(container);
   if (snapshot) {
@@ -158,7 +158,7 @@ it("hides archived pages in the restored sidebar before live data arrives", asyn
       }),
     ]),
   });
-  host.requestUpdate();
+  host.invalidate();
   await host.updateComplete;
   expect(
     dom.present(
@@ -167,6 +167,35 @@ it("hides archived pages in the restored sidebar before live data arrives", asyn
       ".sidebar-pages .sidebar-session-sort",
     ),
   ).toEqual([true, false, false]);
+});
+
+it("sorts built-in Pages alphabetically without reordering dashboards", async () => {
+  const { host, context, dom } = await createCachedHost();
+  const dashboardKeys = ["agent:main:dashboard:zulu", "agent:main:dashboard:alpha"];
+  host.restoreSidebarSnapshot({
+    ...emptySnapshot,
+    mode: "roster",
+    navigationView: "pages",
+    pageScopeId: context.agentSelection.state.scopeId,
+    pages: snapshotSessions(
+      dashboardKeys.map((key) => projectSidebarSession({ key, label: key, hasBoard: true })),
+    ),
+  });
+  host.invalidate();
+  await host.updateComplete;
+  const entries = [...dom.all(".sidebar-pages [data-sidebar-entry]")];
+  const routes = entries
+    .map((entry) => entry.getAttribute("data-sidebar-entry"))
+    .filter((entry): entry is string => Boolean(entry?.startsWith("route:")));
+  const routeLabels = routes.map(
+    (route) => dom.query(`[data-sidebar-entry="${route}"] a`)?.textContent?.trim() ?? "",
+  );
+  expect(routeLabels.length).toBeGreaterThan(4);
+  expect(routeLabels).not.toContain("");
+  expect(routeLabels).toEqual(routeLabels.toSorted((left, right) => left.localeCompare(right)));
+  expect(entries.map((entry) => entry.getAttribute("data-sidebar-entry")).slice(-2)).toEqual(
+    dashboardKeys.map((key) => `session:${key}`),
+  );
 });
 
 it("paints the restored roster and workspace in the first sidebar update", async () => {
@@ -179,7 +208,7 @@ it("paints the restored roster and workspace in the first sidebar update", async
     mode: "roster",
     cards: [{ id: "main", name: "Harbor", mainKey: "agent:main:main", textAvatar: "⚓" }],
   });
-  host.requestUpdate();
+  host.invalidate();
   await host.updateComplete;
   expect(
     dom.present('aside[data-snapshot-state="cached"]', "openclaw-sidebar-agent-roster"),
@@ -188,7 +217,7 @@ it("paints the restored roster and workspace in the first sidebar update", async
   expect(dom.query('[data-avatar="⚓"]')).not.toBeNull();
 });
 
-it("keeps cached session rows while the live roster settles", async () => {
+it("keeps cached agent rows while the live roster settles", async () => {
   const key = "agent:main:dashboard:cedar";
   const list = createDeferred<SessionsListResult>();
   const requested = createDeferred();
@@ -202,7 +231,7 @@ it("keeps cached session rows while the live roster settles", async () => {
         return { ts: 1, path: "", count: 0, defaults: {}, sessions: [] };
       }
       if (method === "sessions.groups.list") {
-        return { names: [], sectionOrder: [] };
+        return { groups: [], sectionOrder: [] };
       }
       if (method === "sessions.subscribe") {
         return { subscribed: true };
@@ -242,15 +271,16 @@ it("keeps cached session rows while the live roster settles", async () => {
     ],
     cards: [{ id: "main", name: "Harbor", mainKey: "agent:main:main", textAvatar: "⚓" }],
   });
-  host.requestUpdate();
+  host.invalidate();
   await host.updateComplete;
-  const rowIds = () =>
-    [...host.querySelectorAll(".sidebar-session-content [data-session-key]")].map((row) =>
-      row.getAttribute("data-session-key"),
+  const agentIds = () =>
+    [...host.querySelectorAll(".sidebar-agent-roster__row[data-agent-id]")].map((row) =>
+      row.getAttribute("data-agent-id"),
     );
-  await waitForSolid(() => expect(rowIds()).toEqual([key]));
+  await waitForSolid(() => expect(agentIds()).toEqual(["main"]));
+  expect(host.querySelector(`[data-session-key="${key}"]`)).toBeNull();
   const samples: Array<Array<string | null>> = [];
-  const sample = () => samples.push(rowIds());
+  const sample = () => samples.push(agentIds());
   const observer = new MutationObserver(sample);
   observer.observe(host.hostElement, { childList: true, subtree: true });
   onTestFinished(() => observer.disconnect());
@@ -269,9 +299,10 @@ it("keeps cached session rows while the live roster settles", async () => {
   observer.disconnect();
   sample();
   expect(host.querySelector('aside[data-snapshot-state="live"]')).not.toBeNull();
-  for (const rows of samples) {
-    expect(rows).toEqual([key]);
+  for (const agents of samples) {
+    expect(agents).toEqual(["main"]);
   }
+  expect(host.querySelector(`[data-session-key="${key}"]`)).toBeNull();
 });
 
 it("keeps the unread badge on an idle child with an icon", () => {
@@ -319,7 +350,7 @@ it.each([false, null, undefined])(
 
 it.each(["owner", "icon"] as const)(
   "retains %s artwork and actions when live rows republish unchanged presentation",
-  async (kind) => {
+  (kind) => {
     const { dom, session, current, setCurrent } = mountRow({
       label: "Research",
       color: "blue",
@@ -328,7 +359,7 @@ it.each(["owner", "icon"] as const)(
       owner: { actor: { type: "human", id: "ada", label: "Ada" } },
     });
     const chip = dom.query("openclaw-session-owner-chip");
-    await chip?.updateComplete;
+    flush();
     const content = dom.query(".session-glyph__content")!;
     const artwork = content.firstElementChild;
     const graphic = content.querySelector("svg");
@@ -360,7 +391,6 @@ it.each(["owner", "icon"] as const)(
       owner: { actor: { type: "human", id: "ada", label: "Ada renamed" } },
     });
     flush();
-    await chip?.updateComplete;
     expect(archive.getAttribute("aria-label")).toBe("Restore session: Research");
     expect(archive.querySelector("svg")).toBe(archiveIcon);
     expect(content.firstElementChild).toBe(artwork);
@@ -411,11 +441,14 @@ it("renders the saved chip identity before agent discovery without reviving anot
     );
     expect(card!.querySelector("[data-avatar='⚓']")).not.toBeNull();
   });
+  // The visible name already labels the trigger; no hover tooltip repeats it.
+  expect(dom.query("openclaw-tooltip")).toBeNull();
   host.sessionKey = "agent:other:thread";
   context.agentSelection.set("other");
   update();
   expect(dom.query("openclaw-sidebar-agent-card")).toBeNull();
   expect(dom.query(".sidebar-workspace-header")).not.toBeNull();
+  expect(dom.query("openclaw-tooltip")).toBeNull();
 });
 
 it("retains the workspace name DOM across unrelated sidebar publications and renames", () => {
@@ -498,7 +531,7 @@ it.each([false, true])(
   "keeps row facepiles idle with unchanged inputs (owner: %s), while admitting new presence",
   async (withOwner) => {
     const { host, container, dom } = createHost();
-    const session = projectSidebarSession({
+    let session = projectSidebarSession({
       key: "agent:main:thread",
       owner: withOwner
         ? { actor: { type: "human", id: "ada", identity: { type: "profile", id: "ada" } } }
@@ -544,8 +577,9 @@ it.each([false, true])(
       withOwner ? undefined : "ada",
     );
 
-    session.owner = {
-      actor: { type: "human", id: "bea", identity: { type: "profile", id: "bea" } },
+    session = {
+      ...session,
+      owner: { actor: { type: "human", id: "bea", identity: { type: "profile", id: "bea" } } },
     };
     update();
     await facepile.updateComplete;

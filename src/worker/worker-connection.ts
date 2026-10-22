@@ -23,6 +23,7 @@ import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { notifyListeners, registerListener } from "../shared/listeners.js";
+import { createPendingPromiseTracker } from "../shared/pending-promises.js";
 import {
   connectWorkerConnectionAttempt,
   isRetryableWorkerCloseReason,
@@ -58,10 +59,7 @@ const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
 
 export class WorkerConnection {
-  readonly rpc: Pick<
-    WorkerConnectionFrameDispatcher,
-    "request" | "onInferenceEvent" | "onInferenceTerminal"
-  >;
+  readonly rpc: Pick<WorkerConnectionFrameDispatcher, "request" | "onInferenceFrame">;
   private stateValue: WorkerConnectionState = { kind: "idle" };
   private readiness: Deferred<WorkerHelloOk> | undefined;
   private readonly readyListeners = new Set<(hello: WorkerHelloOk) => void>();
@@ -76,6 +74,7 @@ export class WorkerConnection {
   private reconnectPromise: Promise<void> | undefined;
   private heartbeatTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly heartbeatWork = new Set<Promise<void>>();
+  private readonly trackHeartbeat = createPendingPromiseTracker(this.heartbeatWork);
   private readonly admissionTimeoutMs: number;
   private readonly admissionDeadlineMs: number;
   private readonly requestTimeoutMs: number;
@@ -237,11 +236,11 @@ export class WorkerConnection {
   }
 
   private async connectUntilReady(): Promise<WorkerHelloOk> {
-    const startedAt = Date.now();
+    const startedAt = performance.now();
     let attempt = 0;
     let lastFailure: Error | undefined;
     while (!this.isTerminal()) {
-      let remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
+      let remainingMs = this.admissionDeadlineMs - (performance.now() - startedAt);
       if (remainingMs <= 0) {
         throw this.failAdmissionDeadline(attempt, lastFailure);
       }
@@ -258,7 +257,7 @@ export class WorkerConnection {
         } catch (error) {
           throw this.isTerminal() ? this.terminalError() : toStructuredErrorObject(error);
         }
-        remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
+        remainingMs = this.admissionDeadlineMs - (performance.now() - startedAt);
         if (remainingMs <= 0) {
           throw this.failAdmissionDeadline(attempt, lastFailure);
         }
@@ -372,12 +371,7 @@ export class WorkerConnection {
     this.heartbeatTimer = setTimeout(() => {
       this.heartbeatTimer = undefined;
       // Reconnect can start a newer heartbeat while an older callback still settles writes.
-      const work = this.sendHeartbeat();
-      this.heartbeatWork.add(work);
-      void work.then(
-        () => this.heartbeatWork.delete(work),
-        () => this.heartbeatWork.delete(work),
-      );
+      void this.trackHeartbeat(this.sendHeartbeat());
     }, intervalMs);
     this.heartbeatTimer.unref?.();
   }
@@ -500,7 +494,7 @@ export class WorkerConnection {
     return error;
   }
 
-  private isTerminal(state: WorkerConnectionState = this.stateValue): boolean {
+  isTerminal(state: WorkerConnectionState = this.stateValue): boolean {
     return state.kind === "failed" || state.kind === "fenced" || state.kind === "stopped";
   }
 

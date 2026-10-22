@@ -41,6 +41,7 @@ import {
 import {
   bindCollectorSpawnTool,
   captureCollectorSpawnGuard,
+  captureCollectorPluginOwner as capturePluginOwner,
 } from "../subagents/swarm/swarm-collector-capability.js";
 import { resolveSwarmConfig } from "../subagents/swarm/swarm-config.js";
 import {
@@ -158,7 +159,7 @@ function buildSessionsSpawnToolSchema(params: {
   const spawnModes = params.threadAvailable ? SUBAGENT_SPAWN_MODES : (["run"] as const);
   const schema = {
     task: Type.String(),
-    user: requesterProfileSchema(),
+    user: requesterProfileSchema({ defaultToTurnOwner: true }),
     taskName: Type.Optional(
       Type.String({
         description:
@@ -189,7 +190,7 @@ function buildSessionsSpawnToolSchema(params: {
     cwd: Type.Optional(
       Type.String({
         description:
-          "Child working directory. Visible paths outside configured agent workspaces require operator.admin. Mutually exclusive with projectId/projectGitUrl. With no source selector and worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
+          "Child working directory. Workspace-contained file tools (apply_patch/file writes) resolve and contain paths against cwd; set cwd for edits outside the agent workspace. Visible paths outside configured agent workspaces require operator.admin. Mutually exclusive with projectId/projectGitUrl. With no source selector and worktree=true: inherit the same-agent parent managed repository; otherwise use the target agent workspace.",
       }),
     ),
     ...(params.threadAvailable
@@ -237,7 +238,7 @@ function buildSessionsSpawnToolSchema(params: {
           collect: Type.Optional(
             Type.Boolean({
               description:
-                "Swarm collector child for large parallel fan-out, not one or a few children; no completion notification.",
+                "Swarm collector child for large parallel fan-out or required in-turn result collection; collect with agents_wait, no completion notification.",
             }),
           ),
           outputSchema: Type.Optional(
@@ -583,6 +584,7 @@ export function createSessionsSpawnTool(
           onSpawnEffectsStart,
           agentSessionKey: opts?.agentSessionKey,
           senderIsOwner: opts?.senderIsOwner,
+          gitContributorProfileId: opts?.gitContributorProfileId,
           expectedParentSessionId: opts?.expectedParentSessionId,
           requesterTurnRunId: opts?.requesterTurnRunId,
           completionOwnerKey: opts?.completionOwnerKey,
@@ -686,6 +688,7 @@ export function createSessionsSpawnTool(
               {
                 ...inheritedSpawnContext(),
                 requesterThinkingLevel: opts?.requesterThinkingLevel,
+                nativePluginOwner: collect ? capturePluginOwner(tool, _toolCallId) : undefined,
                 requesterThinkingExplicit,
                 requesterModel: opts?.requesterModel,
                 currentMessagingTarget: opts?.currentMessagingTarget ?? opts?.currentChannelId,

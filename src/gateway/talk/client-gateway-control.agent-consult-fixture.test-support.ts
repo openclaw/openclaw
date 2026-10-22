@@ -1,4 +1,5 @@
 import { vi } from "vitest";
+import { createMockSubsystemLogger } from "../../../test/helpers/mock-subsystem-logger.js";
 import type { OperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { testing as embeddedRunsTesting } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { createTalkClientAgentConsultRunner } from "./client-agent-consult.js";
@@ -15,7 +16,7 @@ export function createConsultRunner(
 ) {
   return createTalkClientAgentConsultRunner({
     config,
-    context: { chatAbortControllers: new Map(), logGateway: { warn: vi.fn() } } as never,
+    context: { logGateway: createMockSubsystemLogger("gateway/test") },
     sessionTarget: {
       agentId: "researcher",
       sessionKey: "main",

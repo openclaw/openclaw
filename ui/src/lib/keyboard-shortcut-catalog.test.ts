@@ -6,7 +6,6 @@ import { isTerminalPanelShortcut } from "../components/panel-toggle-contract.ts"
 import { t } from "../i18n/index.ts";
 import { resolveKeyboardShortcutSections } from "./keyboard-shortcut-catalog.ts";
 import {
-  formatKeyboardShortcutCombo,
   isApplePlatform,
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -14,7 +13,24 @@ import {
 } from "./keyboard-shortcut-contract.ts";
 
 describe("keyboard shortcut catalog matching", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+  it.each([false, true])("shows the New Session chord for native=%s", (native) => {
+    vi.stubGlobal("__OPENCLAW_NATIVE_WEB_CHROME__", native);
+    for (const preference of ["enter", "modifier-enter"] as const) {
+      const entry = resolveKeyboardShortcutSections(preference)
+        .flatMap((section) => section.entries)
+        .find((candidate) => candidate.id === "newSession")!;
+      expect(entry.combos.map((combo) => formatKeyboardShortcutParts(combo, true))).toEqual([
+        native ? ["⌘", "N"] : ["⌘", "⇧", "O"],
+      ]);
+      expect(entry.combos.map((combo) => formatKeyboardShortcutParts(combo, false))).toEqual([
+        native ? ["Ctrl", "N"] : ["Ctrl", "Shift", "O"],
+      ]);
+    }
+  });
   it.each(["MacIntel", "Win32", "Linux x86_64"])(
     "matches direct session shortcuts exactly on %s without taking New Window",
     (platform) => {
@@ -166,23 +182,28 @@ describe("keyboard shortcut catalog presentation", () => {
       "Shift",
       "D",
     ]);
-    expect(formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.terminalPanel, true)).toBe("⌃`");
-    expect(formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.approveAlways, false)).toBe(
-      "Ctrl+Shift+Enter",
-    );
+    expect(formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.terminalPanel, true)).toEqual([
+      "⌃",
+      "`",
+    ]);
+    expect(formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.approveAlways, false)).toEqual([
+      "Ctrl",
+      "Shift",
+      "Enter",
+    ]);
     expect(formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.escape, true)).toEqual(["esc"]);
     expect(formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.historyPrevious, true)).toEqual([
       "↑",
     ]);
-    expect(formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSessionSelect, true)).toBe(
-      "⌥Click",
+    expect(formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.toggleSessionSelect, true)).toEqual(
+      ["⌥", "Click"],
     );
-    expect(formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSessionSelect, false)).toBe(
-      "Alt+Click",
-    );
-    expect(formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.extendSessionSelect, false)).toBe(
-      "Shift+Click",
-    );
+    expect(
+      formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.toggleSessionSelect, false),
+    ).toEqual(["Alt", "Click"]);
+    expect(
+      formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.extendSessionSelect, false),
+    ).toEqual(["Shift", "Click"]);
     expect(formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.zoomIn, false)).toEqual(["+"]);
     expect(formatKeyboardShortcutParts(KEYBOARD_SHORTCUT_COMBOS.zoomReset, true)).toEqual(["0"]);
   });
@@ -210,26 +231,26 @@ describe("keyboard shortcut catalog presentation", () => {
   it("lists every built-in panel with a unique chord", () => {
     const panels = resolveKeyboardShortcutSections().find((section) => section.id === "panels")!;
     const expected = {
-      terminalPanel: "⌃`",
-      homePanel: "⌘⇧H",
-      workspaceFiles: "⌘⇧B",
-      sideChat: "⌘⇧S",
-      browserPanel: "⌘⌥⇧U",
-      desktopPanel: "⌘⌥⇧D",
-      discussionPanel: "⌘⌥⇧J",
-      dashboardPanel: "⌘⌥⇧G",
-      reviewPanel: "⌘⌥⇧E",
+      terminalPanel: [["⌃", "`"]],
+      homePanel: [["⌘", "⇧", "H"]],
+      workspaceFiles: [["⌘", "⇧", "B"]],
+      sideChat: [["⌘", "⇧", "S"]],
+      browserPanel: [["⌘", "⌥", "⇧", "U"]],
+      desktopPanel: [["⌘", "⌥", "⇧", "D"]],
+      discussionPanel: [["⌘", "⌥", "⇧", "J"]],
+      dashboardPanel: [["⌘", "⌥", "⇧", "G"]],
+      reviewPanel: [["⌘", "⌥", "⇧", "E"]],
     };
     expect(
       Object.fromEntries(
         panels.entries.map((entry) => [
           entry.id,
-          entry.combos.map((combo) => formatKeyboardShortcutCombo(combo, true)).join(" / "),
+          entry.combos.map((combo) => formatKeyboardShortcutParts(combo, true)),
         ]),
       ),
     ).toEqual(expected);
     const combos = Object.values(KEYBOARD_SHORTCUT_COMBOS).map((combo) =>
-      formatKeyboardShortcutCombo(combo, true),
+      JSON.stringify(formatKeyboardShortcutParts(combo, true)),
     );
     expect(new Set(combos).size).toBe(combos.length);
     for (const entry of panels.entries) {
@@ -260,4 +281,27 @@ describe("keyboard shortcut catalog presentation", () => {
       }
     }
   });
+});
+
+it("shows mobile Return as newline and omits composer submission chords", () => {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
+  try {
+    const entries = resolveKeyboardShortcutSections("modifier-enter").flatMap(
+      (section) => section.entries,
+    );
+    expect(entries.find((entry) => entry.id === "newline")?.combos).toEqual([
+      KEYBOARD_SHORTCUT_COMBOS.sendMessage,
+    ]);
+    for (const id of [
+      "sendMessage",
+      "paletteStartSession",
+      "startNewSession",
+      "steerImmediately",
+      "saveQueuedMessage",
+    ]) {
+      expect(entries.find((entry) => entry.id === id)).toBeUndefined();
+    }
+  } finally {
+    vi.restoreAllMocks();
+  }
 });

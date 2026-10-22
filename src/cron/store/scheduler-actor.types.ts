@@ -14,12 +14,15 @@ export type CronScheduleMaintenanceOptions = {
 
 export type CronSchedulerConfig = {
   cronEnabled: boolean;
+  preparingAgentIds?: string[];
   cronConfig?: CronConfig;
   defaultAgentId?: string;
   configuredChannels?: string[];
   maxMissedJobsPerRestart?: number;
   missedJobStaggerMs?: number;
   startupDeferredMissedAgentJobDelayMs?: number;
+  /** The Gateway process that owns this scheduler; see `cron.drainQueue`. */
+  hostProcessId?: string;
 };
 
 export type CronSchedulerSnapshot = { config: CronSchedulerConfig };

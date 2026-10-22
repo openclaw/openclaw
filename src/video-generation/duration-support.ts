@@ -39,6 +39,7 @@ export function normalizeVideoGenerationDuration(params: {
   provider?: VideoGenerationProvider;
   model?: string;
   durationSeconds?: number;
+  supportedDurationSeconds?: readonly number[];
   inputImageCount?: number;
   inputVideoCount?: number;
 }): number | undefined {
@@ -49,7 +50,8 @@ export function normalizeVideoGenerationDuration(params: {
   if (rounded === undefined) {
     throw positiveDurationError("durationSeconds", "s");
   }
-  const supported = resolveVideoGenerationSupportedDurations(params);
+  const supported =
+    params.supportedDurationSeconds ?? resolveVideoGenerationSupportedDurations(params);
   if (!supported || supported.length === 0) {
     return rounded;
   }

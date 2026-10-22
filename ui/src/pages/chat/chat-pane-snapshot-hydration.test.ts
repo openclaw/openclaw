@@ -6,7 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { ChatPaneRuntime } from "./chat-pane-render.ts";
@@ -21,7 +21,7 @@ import {
 import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
-import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
+import { releaseChatMediaResourceOwner } from "./components/chat-message-media.ts";
 import { mountChatThread } from "./components/chat-thread.test-support.ts";
 import {
   installTranscriptDomMocks,
@@ -54,7 +54,6 @@ describe("stored chat snapshot hydration", () => {
       "openclaw-chat-runtime-test",
       ChatPaneRuntime,
     ) as unknown as TestChatPane;
-    vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
     pane.sessionKey = targetSessionKey;
     pane.chatMessagesBySession = sharedMessages;
     pane.context = createInitializationContext(
@@ -67,6 +66,41 @@ describe("stored chat snapshot hydration", () => {
     pane.context.gateway.snapshot.hello = transcriptOnlyHello;
     vi.spyOn(pane.context.sessions, "listBranches").mockResolvedValue([]);
     return pane;
+  }
+
+  function startPane(pane: TestChatPane, attach?: (state: ChatPageHost) => void) {
+    const stopAfterAttach = new Error("stop after attach");
+    let attachedState: ChatPageHost | undefined;
+    vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
+      attachedState = state;
+      attach?.(state);
+      throw stopAfterAttach;
+    });
+    expect(() => getPaneTestRuntime(pane).start()).toThrow(stopAfterAttach);
+    return expectDefined(attachedState, "attached pane state");
+  }
+
+  function networkHydration(sessionKey: string, client: GatewayBrowserClient) {
+    const memory: ChatMessageCache = new Map();
+    const store = new SessionSnapshotStore(memory);
+    store.connect();
+    observeChatCache(memory, store);
+    const pane = createMountedPane(sessionKey, memory, client);
+    pane.sessionSnapshotStore = store;
+    return {
+      pane,
+      start: () =>
+        startPane(pane, (state) => {
+          Object.assign(state, { client, connected: true, connectionEpoch: 1 });
+          void loadChatHistory(state);
+        }),
+      dispose: async () => {
+        pane.disconnectedCallback();
+        store.disconnect();
+        await store.whenIdle();
+        await clearStoredChatSnapshots();
+      },
+    };
   }
 
   async function writeStoredSnapshot(
@@ -142,13 +176,7 @@ describe("stored chat snapshot hydration", () => {
         if (stored) {
           pane.sessionSnapshotStore = store;
         }
-        const stopAfterAttach = new Error("stop after attach");
-        vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
-          state.client = client;
-          state.connected = true;
-          throw stopAfterAttach;
-        });
-        expect(() => getPaneTestRuntime(pane).start()).toThrow(stopAfterAttach);
+        startPane(pane, (state) => Object.assign(state, { client, connected: true }));
         return pane;
       };
       const first = mount();
@@ -177,14 +205,14 @@ describe("stored chat snapshot hydration", () => {
           pendingInputs: getChatPendingInputs(remounted.state)?.page.items,
           assistantAttachmentAuthToken: "test-auth-token",
           connectionEpoch: 1,
-          onRequestUpdate: renderPane,
+          mediaOwner: renderPane,
         };
         if (view) {
           view.update(props);
         } else {
           view = mountChatThread(props, transcript);
         }
-        transcript.hostUpdated();
+        transcript.update();
         return view;
       };
       try {
@@ -196,11 +224,14 @@ describe("stored chat snapshot hydration", () => {
           ).not.toBeNull(),
         );
         const { container } = renderPane();
-        transcript.hostConnected();
+        transcript.start();
         flush();
-        const displayed = expectDefined(
-          container.querySelector<HTMLImageElement>(".chat-message-image"),
-          "remounted initial image",
+        await vi.dynamicImportSettled();
+        const displayed = await waitForSolid(() =>
+          expectDefined(
+            container.querySelector<HTMLImageElement>(".chat-message-image"),
+            "remounted initial image",
+          ),
         );
         // jsdom has no decoder; deliver the loaded-preview boundary before custody.
         Object.defineProperty(displayed, "naturalWidth", { value: 1 });
@@ -265,8 +296,8 @@ describe("stored chat snapshot hydration", () => {
         expect(request.mock.calls.every(([method]) => method === "chat.history")).toBe(true);
       } finally {
         view?.unmount();
-        releaseChatMediaResourceSubscriber(renderPane);
-        transcript.hostDisconnected();
+        releaseChatMediaResourceOwner(renderPane);
+        transcript.dispose();
         remounted.disconnectedCallback();
         await store.flush();
         await clearStoredChatSnapshots();
@@ -274,94 +305,49 @@ describe("stored chat snapshot hydration", () => {
     },
   );
 
-  it("paints a persistent snapshot while the network refresh is already in flight", async () => {
-    vi.stubGlobal("indexedDB", new IDBFactory());
-    const targetSessionKey = "agent:main:persistent";
-    const cachedMessages = [nativeHistoryMessage(1, "persistent history")];
-    const networkMessages = [nativeHistoryMessage(1, "network history")];
-    await writeStoredSnapshot(targetSessionKey, cachedMessages);
-    const response = createDeferred<Record<string, unknown>>();
-    const request = vi.fn(() => response.promise);
-    const client = createGatewayBrowserClientFixture({ request });
-    const sharedMessages: ChatMessageCache = new Map();
-    const store = new SessionSnapshotStore(sharedMessages);
-    store.connect();
-    observeChatCache(sharedMessages, store);
-    const pane = createMountedPane(targetSessionKey, sharedMessages, client);
-    pane.sessionSnapshotStore = store;
-    const stopAfterAttach = new Error("stop after attach");
-    let attachedState: ChatPageHost | undefined;
-    vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
-      attachedState = state;
-      state.client = client;
-      state.connected = true;
-      state.connectionEpoch = 1;
-      void loadChatHistory(state);
-      throw stopAfterAttach;
-    });
-
-    try {
-      expect(() => getPaneTestRuntime(pane).start()).toThrow(stopAfterAttach);
-      expect(request).toHaveBeenCalledWith(
-        "chat.history",
-        expect.objectContaining({ sessionKey: targetSessionKey }),
-        { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+  it.each(["delayed", "immediate"] as const)(
+    "hydrates persistent history without overwriting its %s network refresh",
+    async (timing) => {
+      vi.stubGlobal("indexedDB", new IDBFactory());
+      const targetSessionKey = "agent:main:persistent";
+      const cachedMessages = [nativeHistoryMessage(1, "persistent history")];
+      const networkMessages = [nativeHistoryMessage(1, "network history")];
+      await writeStoredSnapshot(targetSessionKey, cachedMessages);
+      const response = createDeferred<Record<string, unknown>>();
+      const request = vi.fn(() => response.promise);
+      const hydration = networkHydration(
+        targetSessionKey,
+        timing === "delayed"
+          ? createGatewayBrowserClientFixture({ request })
+          : ({ request } as unknown as GatewayBrowserClient),
       );
-      await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(cachedMessages));
-
-      response.resolve({ messages: networkMessages, sessionId: "network-session" });
-      await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(networkMessages));
-    } finally {
-      pane.disconnectedCallback();
-      store.disconnect();
-      await store.whenIdle();
-      await clearStoredChatSnapshots();
-    }
-  });
-
-  it("discards persistent hydration when the network snapshot lands first", async () => {
-    vi.stubGlobal("indexedDB", new IDBFactory());
-    const targetSessionKey = "agent:main:network-first";
-    await writeStoredSnapshot(targetSessionKey, [
-      nativeHistoryMessage(1, "stale persistent history"),
-    ]);
-    const networkMessages = [nativeHistoryMessage(1, "authoritative network history")];
-    const request = vi.fn(async () => ({
-      messages: networkMessages,
-      sessionId: "network-session",
-    }));
-    const client = { request } as unknown as GatewayBrowserClient;
-    const sharedMessages: ChatMessageCache = new Map();
-    const store = new SessionSnapshotStore(sharedMessages);
-    store.connect();
-    observeChatCache(sharedMessages, store);
-    const pane = createMountedPane(targetSessionKey, sharedMessages, client);
-    pane.sessionSnapshotStore = store;
-    const stopAfterAttach = new Error("stop after attach");
-    let attachedState: ChatPageHost | undefined;
-    vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
-      attachedState = state;
-      state.client = client;
-      state.connected = true;
-      state.connectionEpoch = 1;
-      void loadChatHistory(state);
-      throw stopAfterAttach;
-    });
-
-    try {
-      expect(() => getPaneTestRuntime(pane).start()).toThrow(stopAfterAttach);
-      await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(networkMessages));
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-      expect(attachedState?.chatMessages).toEqual(networkMessages);
-    } finally {
-      pane.disconnectedCallback();
-      store.disconnect();
-      await store.whenIdle();
-      await clearStoredChatSnapshots();
-    }
-  });
+      if (timing === "immediate") {
+        response.resolve({ messages: networkMessages, sessionId: "network-session" });
+      }
+      try {
+        const state = hydration.start();
+        if (timing === "delayed") {
+          expect(request).not.toHaveBeenCalled();
+          await vi.waitFor(() => expect(state.chatMessages).toEqual(cachedMessages));
+          expect(request).toHaveBeenCalledWith(
+            "chat.history",
+            expect.objectContaining({ sessionKey: targetSessionKey }),
+            { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
+          );
+          response.resolve({ messages: networkMessages, sessionId: "network-session" });
+        }
+        await vi.waitFor(() => expect(state.chatMessages).toEqual(networkMessages));
+        if (timing === "immediate") {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 0);
+          });
+          expect(state.chatMessages).toEqual(networkMessages);
+        }
+      } finally {
+        await hydration.dispose();
+      }
+    },
+  );
 
   it("merges stored history with an admitted prompt when hydration resolves late", async () => {
     const targetSessionKey = "agent:main:first-turn-retry";
@@ -369,22 +355,10 @@ describe("stored chat snapshot hydration", () => {
       addEventListener: vi.fn(() => vi.fn()),
       request: vi.fn(),
     } as unknown as GatewayBrowserClient;
-    const context = createInitializationContext(
-      createGatewayBrowserClientFixture({
-        offlineRecoveryScope: "test-recovery-scope",
-        recoveryScopeReady: false,
-      }),
-    );
-    context.gateway.snapshot.client = client;
-    // SAFETY: The fixture uses the real pane runtime and its forwarded test surface.
-    const pane = createPaneTestHost(
-      "openclaw-chat-runtime-test",
-      ChatPaneRuntime,
-    ) as unknown as TestChatPane;
-    vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
-    pane.sessionKey = targetSessionKey;
     const sharedMessages: ChatMessageCache = new Map();
-    pane.chatMessagesBySession = sharedMessages;
+    const pane = createMountedPane(targetSessionKey, sharedMessages);
+    const context = pane.context;
+    context.gateway.snapshot.client = client;
     let deliverStoredSnapshot: ((snapshot: unknown) => void) | undefined;
     pane.sessionSnapshotStore = {
       read: () =>
@@ -392,7 +366,6 @@ describe("stored chat snapshot hydration", () => {
           deliverStoredSnapshot = resolve;
         }),
     } as never;
-    pane.context = context;
     context.chatSubmissions.retain(
       buildInitialChatSubmission(
         targetSessionKey,
@@ -401,15 +374,8 @@ describe("stored chat snapshot hydration", () => {
         "initial-run",
       ),
     );
-    const stopAfterAttach = new Error("stop after attach");
-    let attachedState: ChatPageHost | undefined;
-    vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
-      attachedState = state;
-      throw stopAfterAttach;
-    });
-
     try {
-      expect(() => getPaneTestRuntime(pane).start()).toThrow(stopAfterAttach);
+      const attachedState = startPane(pane);
       expect(attachedState?.chatMessages).toEqual([
         expect.objectContaining({
           role: "user",

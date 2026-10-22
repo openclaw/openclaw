@@ -17,7 +17,7 @@ vi.mock("../../../plugins/provider-hook-runtime.js", async (importOriginal) => {
 
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { formatBillingErrorMessage } from "../../embedded-agent-helpers.js";
+import { formatBillingErrorMessage } from "../../failover/user-copy.js";
 import { resolvePreparedSandboxRuntimeStatus } from "../../sandbox/runtime-status.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { makeAssistantMessageFixture } from "../../test-helpers/assistant-message-fixtures.js";
@@ -68,7 +68,6 @@ describe("buildEmbeddedRunPayloads tool-error silence", () => {
 
   it.each([
     { name: "a scheduled run", mutatingAction: false, isCronTrigger: true },
-    { name: "a heartbeat", mutatingAction: false, isHeartbeatTrigger: true },
     { name: "an aborted run", mutatingAction: false, runAborted: true },
   ])(
     "keeps failure reporting for $name despite NO_REPLY",

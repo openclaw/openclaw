@@ -1,23 +1,20 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createSignal, onCleanup, Show } from "solid-js";
-import type {
-  UserProfile,
-  UsersSetAvatarResult,
-  UsersSetDisplayNameResult,
-} from "../../../../packages/gateway-protocol/src/index.ts";
 import {
-  GATEWAY_OWNER_PROFILE_ID,
-  GIT_COAUTHOR_PREFERENCE_KEY,
-  isGitCoauthorCreditEnabled,
-} from "../../../../packages/gateway-protocol/src/index.ts";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
+  action,
+  affects,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  Errored,
+  isPending,
+  latest,
+  Loading,
+  onSettled,
+  refresh,
+  Show,
+} from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
-import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
-import { invalidateUserPreferences, saveUserPreferences } from "../../app/user-prefs-cache.ts";
-import type { AuthenticatedUser } from "../../app/user-profile.ts";
-import { resolveCurrentSelfUser } from "../../app/user-profile.ts";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -37,266 +34,19 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { assertUploadsEnabled } from "../../lib/uploads.ts";
 import "../../styles/profile.css";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../config/settings-targets.ts";
-import { processProfileAvatar, ProfileAvatarError } from "./avatar-processing.ts";
 import { IdentitySection } from "./identity-section.tsx";
 import { ModelAccounts } from "./model-accounts.tsx";
 import { PersonalInstructions } from "./personal-instructions.tsx";
 import { userProfileAvatarUrl } from "./profile-avatar-url.ts";
 import { ProfileHero } from "./profile-hero.tsx";
+import { type IdentityChange, ProfileState } from "./profile-state.ts";
 
 registerEnglishCatalog(registerModelAccountsEnglish);
 registerEnglishCatalog(registerProfileEnglish);
 
 const PROFILE_DOCS_URL = "https://docs.openclaw.ai/concepts/user-model";
-
-type IdentityChange =
-  | { kind: "display-name" }
-  | { kind: "avatar"; file: File }
-  | { kind: "git-coauthor"; enabled: boolean };
-
-class ProfileState {
-  selfUser: AuthenticatedUser | null = null;
-  ownProfile: UserProfile | null = null;
-  displayName = "";
-  gitCoauthorEnabled = true;
-  identityLoading = false;
-  identityBusy: IdentityChange["kind"] | null = null;
-  identityError: string | null = null;
-
-  client: GatewayBrowserClient | null = null;
-  connected = false;
-  connecting = false;
-  canWrite = false;
-  connectionScopes: readonly string[] | null = null;
-  identityRequestId = 0;
-
-  constructor(
-    readonly context: ApplicationContext,
-    readonly publish: () => void,
-  ) {}
-  dispose() {
-    this.identityRequestId += 1;
-    this.client = null;
-    this.connected = false;
-  }
-  applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot) {
-    const clientChanged = snapshot.client !== this.client;
-    const nextConnected = snapshot.phase === "connected";
-    const nextCanWrite = nextConnected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
-    const writeAccessChanged = nextCanWrite !== this.canWrite;
-    const connectionChanged = nextConnected !== this.connected;
-    const nextSelfUser = nextConnected
-      ? resolveCurrentSelfUser({ snapshotUser: snapshot.selfUser })
-      : null;
-    const selfProfileChanged =
-      nextSelfUser?.id !== this.selfUser?.id ||
-      nextSelfUser?.identity?.id !== this.selfUser?.identity?.id;
-    const identitySourceChanged =
-      clientChanged || connectionChanged || selfProfileChanged || writeAccessChanged;
-    this.client = snapshot.client;
-    this.connected = nextConnected;
-    this.connecting = snapshot.phase === "connecting" || snapshot.phase === "reconnecting";
-    this.canWrite = nextCanWrite;
-    // Hello records this connection's negotiated grants, not the profile's role ceiling.
-    this.connectionScopes = nextConnected ? (snapshot.hello?.auth?.scopes ?? null) : null;
-    this.selfUser = nextSelfUser;
-    if (identitySourceChanged) {
-      this.identityRequestId += 1;
-      this.ownProfile = null;
-      this.displayName = "";
-      this.gitCoauthorEnabled = true;
-      this.identityLoading = false;
-      this.identityBusy = null;
-      this.identityError = null;
-    }
-    this.publish();
-    if (!nextConnected || !snapshot.client) {
-      return;
-    }
-    if (identitySourceChanged) {
-      void this.loadIdentity();
-    }
-    void this.context.agents.ensureList().then((list) => {
-      if (list) {
-        void this.context.agentIdentity.ensure([list.defaultId]);
-      }
-    });
-  }
-
-  async loadIdentity() {
-    const client = this.client;
-    if (!client || !this.connected || this.identityLoading) {
-      return;
-    }
-    const requestId = ++this.identityRequestId;
-    const currentProfile = this.ownProfile;
-    const displayNameDraft = this.displayName;
-    const hasUnsavedDisplayName =
-      currentProfile !== null && displayNameDraft.trim() !== (currentProfile.displayName ?? "");
-    this.identityLoading = true;
-    this.identityError = null;
-    this.publish();
-    try {
-      const profile = await this.context.gateway.loadSelfProfile();
-      if (requestId !== this.identityRequestId) {
-        return;
-      }
-      this.ownProfile = profile;
-      if (!profile) {
-        return;
-      }
-      this.displayName = hasUnsavedDisplayName ? displayNameDraft : (profile.displayName ?? "");
-      this.gitCoauthorEnabled = true;
-      this.publish();
-      // Consent belongs to the person, not to a display-primary GitHub account.
-      if (profile.id !== GATEWAY_OWNER_PROFILE_ID) {
-        const { loadUserPreferences } = await import("../../app/user-prefs-request.ts");
-        if (requestId !== this.identityRequestId) {
-          return;
-        }
-        const preferences = await loadUserPreferences(client, profile.id, {
-          keys: [GIT_COAUTHOR_PREFERENCE_KEY],
-        });
-        if (requestId !== this.identityRequestId) {
-          return;
-        }
-        this.gitCoauthorEnabled =
-          preferences.status === "ok" &&
-          isGitCoauthorCreditEnabled(preferences.entries[GIT_COAUTHOR_PREFERENCE_KEY]);
-      }
-    } catch (error) {
-      if (requestId === this.identityRequestId) {
-        this.identityError = formatUiError(error, t("profilePage.identity.profileUnavailable"));
-      }
-    } finally {
-      if (requestId === this.identityRequestId) {
-        this.identityLoading = false;
-        this.publish();
-      }
-    }
-  }
-
-  async saveIdentity(change: IdentityChange) {
-    const client = this.client;
-    const profile = this.ownProfile;
-    if (
-      !client ||
-      !profile ||
-      !this.canWrite ||
-      this.identityBusy ||
-      this.identityLoading ||
-      (change.kind === "git-coauthor" && profile.id === GATEWAY_OWNER_PROFILE_ID)
-    ) {
-      return;
-    }
-    this.identityBusy = change.kind;
-    this.identityError = null;
-    this.publish();
-    const identityRequestId = this.identityRequestId;
-    const isCurrent = () => client === this.client && identityRequestId === this.identityRequestId;
-    try {
-      switch (change.kind) {
-        case "display-name": {
-          const result = await client.request<UsersSetDisplayNameResult>("users.setDisplayName", {
-            profileId: profile.id,
-            displayName: this.displayName.trim() || null,
-          });
-          if (!isCurrent()) {
-            return;
-          }
-          this.ownProfile = result.profile;
-          this.displayName = result.profile.displayName ?? "";
-          this.context.gateway.updateSelfUser?.({ name: result.profile.displayName ?? undefined });
-          break;
-        }
-        case "avatar": {
-          assertUploadsEnabled(this.context.config);
-          const displayNameDraft = this.displayName;
-          const hasUnsavedDisplayName = displayNameDraft.trim() !== (profile.displayName ?? "");
-          const selfAvatarUrlBefore =
-            this.selfUser?.id === profile.id ? this.selfUser.avatarUrl : undefined;
-          const avatar = await processProfileAvatar(change.file);
-          if (!isCurrent()) {
-            return;
-          }
-          assertUploadsEnabled(this.context.config);
-          const result = await client.request<UsersSetAvatarResult>("users.setAvatar", {
-            profileId: profile.id,
-            mime: avatar.mime,
-            avatarBase64: avatar.avatarBase64,
-          });
-          if (!isCurrent()) {
-            return;
-          }
-          this.ownProfile = result.profile;
-          this.displayName = hasUnsavedDisplayName
-            ? displayNameDraft
-            : (result.profile.displayName ?? "");
-          const avatarUrl = userProfileAvatarUrl(
-            this.context.gateway.connection.gatewayUrl,
-            result.profile.id,
-            result.avatarRevision,
-            this.context.resourceBasePath,
-          );
-          const presenceAvatarChanged =
-            this.selfUser?.id === result.profile.id &&
-            this.selfUser.avatarUrl !== selfAvatarUrlBefore;
-          if (avatarUrl && !presenceAvatarChanged) {
-            this.context.gateway.updateSelfUser?.({ avatarUrl });
-          }
-          break;
-        }
-        case "git-coauthor": {
-          const result = await saveUserPreferences(client, {
-            entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: change.enabled },
-          });
-          if (!isCurrent()) {
-            return;
-          }
-          if (result.status !== "ok") {
-            throw new Error(t("profilePage.identity.profileUnavailable"));
-          }
-          this.gitCoauthorEnabled = change.enabled;
-          return;
-        }
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        this.identityError =
-          change.kind === "avatar" && error instanceof ProfileAvatarError
-            ? t(
-                error.code === "too-large"
-                  ? "profilePage.identity.avatarErrors.tooLarge"
-                  : error.code === "source-too-large"
-                    ? "profilePage.identity.avatarErrors.sourceTooLarge"
-                    : "profilePage.identity.avatarErrors.invalid",
-              )
-            : formatUiError(error, t("profilePage.identity.profileUnavailable"));
-      }
-      return;
-    } finally {
-      if (isCurrent() && this.identityBusy === change.kind) {
-        this.identityBusy = null;
-        this.publish();
-      }
-    }
-    if (isCurrent()) {
-      void this.loadIdentity();
-    }
-  }
-
-  refreshManually() {
-    if (this.connected && !this.identityBusy && !this.identityLoading) {
-      if (this.client) {
-        invalidateUserPreferences(this.client);
-      }
-      void this.loadIdentity();
-    }
-  }
-}
 
 function accessSummary(scopes: readonly string[] | null) {
   if (scopes === null) {
@@ -328,26 +78,88 @@ export function ProfilePage() {
     revision();
     return state;
   };
-  // Retire identity requests synchronously when connection authority changes.
-  const stopGateway = context.gateway.subscribe((snapshot) => state.applyGatewaySnapshot(snapshot));
-  const stopEvents = context.gateway.subscribeEvents((event) => {
-    if (
-      !state.identityBusy &&
-      event.event === "sessions.changed" &&
-      asOptionalRecord(event.payload)?.reason === "profile-identity"
-    ) {
-      state.identityRequestId += 1;
-      state.identityLoading = false;
-      void state.loadIdentity();
+  const canWrite = createMemo(() => view().canWrite);
+  const identityScope = createMemo(() => view().identityScope);
+  const presentation = createMemo(() => {
+    const scope = identityScope();
+    const [saving, setSaving] = createOptimistic<IdentityChange["kind"] | null>(null);
+    const [gitCoauthorEnabled, setGitCoauthorEnabled] = createOptimistic(
+      () => view().gitCoauthorEnabled,
+    );
+    return { scope, saving, setSaving, gitCoauthorEnabled, setGitCoauthorEnabled };
+  });
+  const identityBusy = () => presentation().saving() ?? view().identityBusy;
+  const presentMutation = action(function* (
+    current: ReturnType<typeof presentation>,
+    pending: Promise<void>,
+    retired: Promise<void>,
+    change: IdentityChange,
+  ) {
+    const isCurrent = () =>
+      current.scope === state.identityScope && retired === state.presentationLifetime.promise;
+    try {
+      if (isCurrent()) {
+        current.setSaving(change.kind);
+        if (change.kind === "git-coauthor") {
+          current.setGitCoauthorEnabled(change.enabled);
+        } else {
+          affects(identityRead);
+        }
+      }
+      yield Promise.race([pending, retired]);
+      if (isCurrent()) {
+        yield refresh(change.kind === "git-coauthor" ? current.gitCoauthorEnabled : identityRead);
+      }
+    } catch (error) {
+      if (isCurrent()) {
+        state.identityError = formatUiError(error, t("profilePage.identity.profileUnavailable"));
+        state.publish();
+      }
     }
   });
-  state.applyGatewaySnapshot(context.gateway.snapshot);
-  onCleanup(() => {
-    stopGateway();
-    stopEvents();
-    state.dispose();
+  async function saveIdentity(change: IdentityChange) {
+    const current = presentation();
+    const retired = state.presentationLifetime.promise;
+    const pending = state.saveIdentity(change);
+    if (state.identityBusy !== change.kind) {
+      return pending;
+    }
+    // Let the owner's admission publish before joining the presentation action.
+    await Promise.resolve();
+    return presentMutation(current, pending, retired, change);
+  }
+  onSettled(() => {
+    // Retire before route rendering; pending actions can park reactive cleanup.
+    const stopRoute = context.router.subscribe(() => {
+      state.retirePresentation();
+      state.publish();
+    });
+    // Retire identity requests synchronously when connection authority changes.
+    const stopGateway = context.gateway.subscribe((snapshot) =>
+      state.applyGatewaySnapshot(snapshot),
+    );
+    const stopEvents = context.gateway.subscribeEvents((event) => {
+      if (
+        !state.identityBusy &&
+        event.event === "sessions.changed" &&
+        asOptionalRecord(event.payload)?.reason === "profile-identity"
+      ) {
+        state.identityRequestId += 1;
+        state.identityLoading = false;
+        state.loadIdentity();
+      }
+    });
+    state.applyGatewaySnapshot(context.gateway.snapshot);
+    return () => {
+      stopRoute();
+      stopGateway();
+      stopEvents();
+      state.dispose();
+    };
   });
   const connected = () => view().connected && view().client !== null;
+  const hasPresentation = () =>
+    connected() || view().connectionScopes !== null || view().selfUser !== null;
   const agent = () => {
     const list = agents.read();
     const id = list?.defaultId ?? "main";
@@ -368,6 +180,57 @@ export function ProfilePage() {
         );
   };
 
+  const identityReceipt = createMemo(() => view().identityReceipt);
+  const identityRead = createMemo(() => identityReceipt().result);
+  const readIdentity = () => {
+    latest(identityRead);
+    return null;
+  };
+  const IdentityContent = (props: { pending: boolean }) => (
+    <Show
+      when={view().selfUser && view().ownProfile}
+      fallback={
+        <div id={PROFILE_SETTINGS_TARGET_IDS.identity}>
+          <SettingsSection title={t("profilePage.identity.title")}>
+            {props.pending || (view().connected && !view().identityReady) ? (
+              <SettingsLoadingSkeleton label={t("profilePage.identity.loading")} rows={2} />
+            ) : (
+              <SettingsEmpty
+                message={
+                  view().identityError ??
+                  t(
+                    !view().selfUser
+                      ? "profilePage.identity.unidentified"
+                      : "profilePage.identity.profileUnavailable",
+                  )
+                }
+              />
+            )}
+          </SettingsSection>
+        </div>
+      }
+    >
+      <IdentitySection
+        config={context.config}
+        profile={view().ownProfile!}
+        canWrite={latest(canWrite)}
+        connected={view().identityReady}
+        avatarUrl={avatarUrl()}
+        displayName={view().displayName}
+        gitCoauthorEnabled={presentation().gitCoauthorEnabled()}
+        busy={identityBusy() ?? (props.pending ? "loading" : null)}
+        error={view().identityError}
+        onDisplayNameInput={(value) => {
+          state.displayName = value;
+          state.publish();
+        }}
+        onSaveDisplayName={() => void saveIdentity({ kind: "display-name" })}
+        onAvatarSelect={(file) => void saveIdentity({ kind: "avatar", file })}
+        onGitCoauthorChange={(enabled) => void saveIdentity({ kind: "git-coauthor", enabled })}
+      />
+    </Show>
+  );
+
   return (
     <openclaw-profile-page>
       <ShellLayoutBoundary traits={{ toolbarHeader: true }}>
@@ -381,7 +244,7 @@ export function ProfilePage() {
           <Show when={view().connected}>
             <button
               class="btn profile-refresh"
-              disabled={view().identityLoading || view().identityBusy !== null}
+              disabled={!view().identityReady || view().identityLoading || identityBusy() !== null}
               onClick={() => state.refreshManually()}
             >
               {view().identityLoading ? t("common.refreshing") : t("common.refresh")}
@@ -392,7 +255,7 @@ export function ProfilePage() {
       <SettingsWorkspace>
         <SettingsPage>
           <Show
-            when={connected()}
+            when={hasPresentation()}
             fallback={
               <SettingsGroup>
                 {view().connecting ? (
@@ -424,7 +287,7 @@ export function ProfilePage() {
                     <button
                       type="button"
                       class="btn"
-                      disabled={view().identityBusy !== null}
+                      disabled={identityBusy() !== null}
                       onClick={() => context.gateway.connect()}
                     >
                       {t("profilePage.access.reconnect")}
@@ -455,61 +318,41 @@ export function ProfilePage() {
                 </details>
               </SettingsSection>
             </div>
-            <Show
-              when={view().selfUser && view().ownProfile}
-              fallback={
-                <div id={PROFILE_SETTINGS_TARGET_IDS.identity}>
-                  <SettingsSection title={t("profilePage.identity.title")}>
-                    {view().identityLoading ? (
-                      <SettingsLoadingSkeleton label={t("profilePage.identity.loading")} rows={2} />
-                    ) : (
-                      <SettingsEmpty
-                        message={
-                          view().identityError ??
-                          t(
-                            !view().selfUser
-                              ? "profilePage.identity.unidentified"
-                              : "profilePage.identity.profileUnavailable",
-                          )
-                        }
-                      />
-                    )}
-                  </SettingsSection>
-                </div>
-              }
+            <Errored
+              fallback={(error, reset) => (
+                <>
+                  <div class="callout danger" role="alert">
+                    {formatUiError(error())}{" "}
+                    <button
+                      class="btn btn--sm"
+                      onClick={() => {
+                        state.refreshManually();
+                        reset();
+                      }}
+                    >
+                      {t("common.retry")}
+                    </button>
+                  </div>
+                  <IdentityContent pending={false} />
+                </>
+              )}
             >
-              <IdentitySection
-                config={context.config}
-                profile={view().ownProfile!}
-                canWrite={view().canWrite}
-                avatarUrl={avatarUrl()}
-                displayName={view().displayName}
-                gitCoauthorEnabled={view().gitCoauthorEnabled}
-                busy={view().identityLoading ? "loading" : view().identityBusy}
-                error={view().identityError}
-                onDisplayNameInput={(value) => {
-                  state.displayName = value;
-                  state.publish();
-                }}
-                onSaveDisplayName={() => void state.saveIdentity({ kind: "display-name" })}
-                onAvatarSelect={(file) => void state.saveIdentity({ kind: "avatar", file })}
-                onGitCoauthorChange={(enabled) =>
-                  void state.saveIdentity({ kind: "git-coauthor", enabled })
-                }
-              />
-            </Show>
+              <Loading on={latest(identityScope)} fallback={<IdentityContent pending={true} />}>
+                {readIdentity()}
+                <IdentityContent pending={isPending(identityRead)} />
+              </Loading>
+            </Errored>
           </Show>
           <PersonalInstructions
             hidden={
-              !connected() ||
+              !hasPresentation() ||
               view().context.gateway.snapshot.hello?.policy?.hasMultipleSessionSharingIdentities !==
                 true
             }
           />
-          <Show when={connected()}>
+          <Show when={hasPresentation()}>
             <ModelAccounts
-              identityId={view().selfUser?.id ?? null}
-              profileId={view().ownProfile?.id ?? null}
+              target={state.modelAccountsTarget}
               personLabel={
                 view().ownProfile
                   ? view().ownProfile!.displayName?.trim() ||

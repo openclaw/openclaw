@@ -1,4 +1,3 @@
-// Shared STT plus agent-consult meeting engine.
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
 import type { RealtimeTranscriptionSession } from "../realtime-transcription/provider-types.js";

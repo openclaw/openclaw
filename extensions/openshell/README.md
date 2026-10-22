@@ -49,6 +49,16 @@ Use the OpenShell docs for credentials, workspace mirroring, runtime selection, 
 
 - https://docs.openclaw.ai/gateway/openshell
 
+## Brokered worker inference
+
+The optional `worker` configuration adds `openclaw openshell worker create`,
+`run`, and `configure`. It launches the ordinary OpenClaw node inside an
+OpenShell sandbox after credential-provider readiness, then binds the existing
+paired-device worker-inference profile. Docker and Podman use the same OpenShell
+gateway contract; OCE and Kubernetes are not required. Sandbox-only behavior is
+unchanged. See https://docs.openclaw.ai/gateway/openshell-workers for setup,
+credential custody, image requirements, and live-proof limitations.
+
 ## Package
 
 - Plugin id: `openshell`

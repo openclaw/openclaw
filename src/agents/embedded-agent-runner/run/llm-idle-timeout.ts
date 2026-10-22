@@ -5,6 +5,7 @@ import {
 } from "@openclaw/ai/internal/runtime";
 import { withProviderAcceptanceObserver } from "@openclaw/ai/transports";
 import { isCloudModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import {
   asPositiveFiniteNumber,
   finiteSecondsToTimerSafeMilliseconds,
@@ -107,10 +108,7 @@ function findConfiguredProviderConfig(
   }
   const providers = cfg?.models?.providers;
   return (
-    providers?.[normalizedProvider] ||
-    Object.entries(providers ?? {}).find(
-      ([key]) => key.trim().toLowerCase() === normalizedProvider,
-    )?.[1]
+    providers?.[normalizedProvider] || findNormalizedProviderValue(providers, normalizedProvider)
   );
 }
 
@@ -256,13 +254,17 @@ export function streamWithIdleTimeout(
       reject: (error: Error) => void,
       budget = timeoutMs,
       reason = "no response from model",
+      name = "LlmIdleTimeoutError",
     ) => {
       const timer = setTimeout(() => {
         if (requestDeadline?.reject === reject) {
           requestTimedOut = true;
         }
         clearRequestDeadline();
-        const error = new Error(`LLM idle timeout (${Math.floor(budget / 1000)}s): ${reason}`);
+        const error = Object.assign(
+          new Error(`LLM idle timeout (${Math.floor(budget / 1000)}s): ${reason}`),
+          { name },
+        );
         streamAbortController.abort(error);
         onIdleTimeout?.(error);
         reject(error);
@@ -408,6 +410,7 @@ export function streamWithIdleTimeout(
               rejectTimeout,
               progressTimeoutMs,
               "no model progress",
+              "LlmNoProgressError",
             );
           }
         };

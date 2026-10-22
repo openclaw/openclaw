@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createUniqueId, onCleanup, onSettled } from "solid-js";
+import { createEffect, createUniqueId, onSettled } from "solid-js";
 import { createOverlayAnchor } from "../../../components/overlay-anchor.ts";
 import { createOverlay, findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -19,42 +19,47 @@ export function ChatPullRequestChecks(props: {
   let trigger!: HTMLElement;
   let surface!: HTMLElement;
   let mounted = false;
+  let presented = false;
   const overlay = createOverlay(`chat-pr-checks-${createUniqueId()}`, undefined, {
     interactionElements: () => [details],
     // Keyboard session switching preserves the retained disclosure's open intent.
     dismissOutsideFocus: false,
     acquireOcclusion: acquireNativeOverlaySurface,
   });
-  onCleanup(() => overlay.dispose());
-  const sync = () => {
+  const sync = (nextPresented: boolean, dismissed?: boolean) => {
+    presented = nextPresented;
     if (mounted) {
       // Explicit Details dismissal clears intent; parking only hides the surface.
-      if (props.dismissed) {
+      if (dismissed) {
         details.open = false;
       }
-      overlay.request(props.presented && details.open);
+      overlay.request(presented && details.open);
     }
   };
   // Synchronize the native disclosure with the pane presentation and overlay owner.
-  createEffect(() => [props.presented, props.dismissed], sync);
+  createEffect(
+    () => ({ presented: props.presented, dismissed: props.dismissed }),
+    (next) => sync(next.presented, next.dismissed),
+  );
   onSettled(() => {
     overlay.bindSurface(surface);
     overlay.bindTrigger(trigger);
     overlay.setParent(findOverlayParent(trigger));
     const anchor = createOverlayAnchor(surface);
     anchor.update(trigger, "top-end");
-    // Parking hides the native surface while preserving disclosure intent.
+    // Apply each native close edge synchronously; parking preserves disclosure intent.
     const stop = overlay.subscribe((open) => {
-      if (props.presented) {
+      if (presented) {
         details.open = open;
       }
     });
     mounted = true;
-    sync();
+    sync(props.presented, props.dismissed);
     return () => {
       mounted = false;
       stop();
       anchor.dispose();
+      overlay.dispose();
     };
   });
   return (
@@ -62,7 +67,7 @@ export function ChatPullRequestChecks(props: {
       ref={(node) => (details = node)}
       class="chat-pr__checks"
       data-checks={props.checksState}
-      onToggle={sync}
+      onToggle={() => sync(props.presented, props.dismissed)}
     >
       <summary
         ref={(node) => (trigger = node)}

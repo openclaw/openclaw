@@ -23,12 +23,13 @@ export type ControlUiLinkReaderPreviewParams = {
   agentId?: string;
   /** Present only for a descriptor opting into the foreground session context. */
   sessionKey?: string;
+  /** Wait for a fresh response instead of returning last-known cached metadata. */
+  refresh?: boolean;
 };
 export type ControlUiLinkReaderDeferredSection = "checks" | "files" | "discussion";
 export type ControlUiLinkReaderSection = "overview" | ControlUiLinkReaderDeferredSection;
 
 export type ControlUiLinkReaderDetailParams = ControlUiLinkReaderPreviewParams & {
-  refresh?: boolean;
   /** Omit for the complete document; supported only by progressive readers. */
   section?: ControlUiLinkReaderSection;
 };

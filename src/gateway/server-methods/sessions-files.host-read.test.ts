@@ -2,6 +2,9 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { resolveSandboxConfigForAgent } from "../../agents/sandbox/config.js";
+import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
+import { resolveSandboxWorkspaceLayoutPaths } from "../../agents/sandbox/shared.js";
 import {
   setRuntimeConfigSnapshot,
   clearRuntimeConfigSnapshot,
@@ -50,6 +53,20 @@ vi.mock("../session-utils-store-worker.js", async (importOriginal) => ({
     hoisted.loadSessionEntry(params.key, { agentId: params.agentId }),
 }));
 
+vi.mock("../../config/sessions/session-entry-read-facts.js", async (importOriginal) => {
+  const { createRepositorySessionEntryReader } =
+    await import("./sessions-files.repository.test-support.js");
+  const actual =
+    await importOriginal<typeof import("../../config/sessions/session-entry-read-facts.js")>();
+  return {
+    ...actual,
+    readRetainedSessionEntryFacts: createRepositorySessionEntryReader(
+      actual.readRetainedSessionEntryFacts,
+      (key) => hoisted.loadSessionEntry(key),
+    ),
+  };
+});
+
 // mock-isolation: File-policy tests supply visible transcript pages without opening SQLite.
 vi.mock("../../config/sessions/session-transcript-delta-read.js", () => ({
   withSessionTranscriptDeltaReader: ((scope, consume) =>
@@ -87,8 +104,21 @@ afterEach(() => {
 
 function prepareHostFileRead(
   overrides: Partial<InternalSessionEntry> = {},
-  cfg: OpenClawConfig = {},
+  inputCfg: OpenClawConfig = {},
 ) {
+  const cfg: OpenClawConfig = {
+    ...inputCfg,
+    agents: {
+      ...inputCfg.agents,
+      defaults: {
+        ...inputCfg.agents?.defaults,
+        sandbox: {
+          ...inputCfg.agents?.defaults?.sandbox,
+          workspaceRoot: outsideDirs.make("session-file-sandboxes-"),
+        },
+      },
+    },
+  };
   const entry: InternalSessionEntry = {
     sessionId: "sess-main",
     updatedAt: 1,
@@ -96,6 +126,26 @@ function prepareHostFileRead(
     spawnedCwd: workspaceRoot,
     ...overrides,
   };
+  const runtime = resolveSandboxRuntimeStatus({
+    cfg,
+    agentId: "main",
+    sessionKey,
+    preparedSessionEntry: entry,
+  });
+  const sandbox = resolveSandboxConfigForAgent(cfg, "main");
+  if (runtime.sandboxed && sandbox.workspaceAccess === "none") {
+    const layout = resolveSandboxWorkspaceLayoutPaths({
+      cfg: runtime.sandboxRequired
+        ? { ...sandbox, scope: "agent", workspaceAccess: runtime.workspaceAccess }
+        : sandbox,
+      agentId: "main",
+      rawSessionKey: sessionKey,
+      isolationSubject: runtime.isolationSubject,
+      workspaceDir: workspaceRoot,
+    });
+    fs.mkdirSync(path.join(layout.workspaceDir, "src"), { recursive: true });
+    fs.writeFileSync(path.join(layout.workspaceDir, "src/readme.md"), "# Read me\n");
+  }
   hoisted.loadSessionEntry.mockReturnValue({
     agentId: "main",
     canonicalKey: sessionKey,
@@ -267,7 +317,9 @@ it("canonicalizes host previews and lists outside touched-file metadata without 
   ]);
   expect(list.files[0]).not.toHaveProperty("content");
   expect(list.files[0]).not.toHaveProperty("hash");
-  const hidden = expectOkPayload(await invoke("sessions.files.list", { sessionKey }));
+  const hidden = expectOkPayload(
+    await invoke("sessions.files.list", { sessionKey }, fixture.context),
+  );
   expect(hidden.files).toEqual([]);
   const hardlinkedPath = path.join(path.dirname(outsidePath), "hardlinked.txt");
   fs.linkSync(outsidePath, hardlinkedPath);

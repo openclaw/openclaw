@@ -61,6 +61,7 @@ function copyGeneratedPublisherFixture(root: string, workspaceName: string) {
 }
 
 export type GeneratedPublisherOptions = {
+  headBranch?: string;
   disarmRace?: boolean;
   updateSourceBeforeAutoMerge?: boolean;
   race?: "delete" | "advance" | "recreate";
@@ -85,6 +86,7 @@ export function prepareGeneratedPublisherFixture(
   options: GeneratedPublisherOptions = {},
   workspaceName = "worktree",
 ) {
+  const headBranch = options.headBranch ?? "automation/locale";
   const origin = path.join(root, "origin.git");
   const updater = path.join(root, "updater");
   const worktree = path.join(root, workspaceName);
@@ -92,6 +94,7 @@ export function prepareGeneratedPublisherFixture(
   const runnerTemp = path.join(root, "runner-temp");
   const prState = path.join(root, "pr-open");
   const mergeCalls = path.join(root, "merge-calls");
+  const ghCalls = path.join(root, "gh-calls");
   const stalePrHeadOnce = path.join(root, "stale-pr-head-once");
   const stalePrViewHeadOnce = path.join(root, "stale-pr-view-head-once");
   const summary = path.join(root, "summary.md");
@@ -109,11 +112,11 @@ export function prepareGeneratedPublisherFixture(
     writeFileSync(stalePrViewHeadOnce, "", "utf8");
   }
   if (options.existingPr) {
-    runGit(worktree, ["switch", "-c", "automation/locale"]);
+    runGit(worktree, ["switch", "-c", headBranch]);
     writeFixture(worktree, "generated/a.txt", "stale-pr-a\n");
     runGit(worktree, ["add", "generated"]);
     runGit(worktree, ["commit", "-m", "stale generated pull request"]);
-    runGit(worktree, ["push", "-u", "origin", "automation/locale"]);
+    runGit(worktree, ["push", "-u", "origin", headBranch]);
     initialBranch = runGit(worktree, ["rev-parse", "HEAD"]);
     writeFileSync(prState, "", "utf8");
     runGit(worktree, ["switch", "main"]);
@@ -150,9 +153,9 @@ export function prepareGeneratedPublisherFixture(
     writeExecutable(path.join(origin, "hooks", "post-receive"), [
       "#!/bin/sh",
       "while read -r old_head new_head ref; do",
-      '  if [ "$ref" = "refs/heads/automation/locale" ]; then',
+      '  if [ "$ref" = "refs/heads/${FAKE_HEAD_BRANCH}" ]; then',
       '    git update-ref refs/heads/main "$new_head"',
-      '    git update-ref -d refs/heads/automation/locale "$new_head"',
+      '    git update-ref -d refs/heads/${FAKE_HEAD_BRANCH} "$new_head"',
       "  fi",
       "done",
     ]);
@@ -162,12 +165,13 @@ export function prepareGeneratedPublisherFixture(
   writeExecutable(path.join(fakeBin, "gh"), [
     "#!/usr/bin/env bash",
     "set -euo pipefail",
+    'printf "%s\\n" "$*" >> "$FAKE_GH_CALLS"',
     "read_head() {",
     '  if [[ -f "$1" ]]; then',
     '    head="0000000000000000000000000000000000000000"',
     '    rm -f "$1"',
     "  else",
-    '    head="$("${FAKE_REAL_GIT:-git}" --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/automation/locale)"',
+    '    head="$("${FAKE_REAL_GIT:-git}" --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/${FAKE_HEAD_BRANCH})"',
     "  fi",
     "}",
     'if [[ "$FAKE_UPDATE_BEFORE_AUTO_MERGE" == "true" && ( "${1-}:${2-}" == "pr:create" || "${1-}:${2-}" == "pr:edit" ) ]]; then',
@@ -186,7 +190,7 @@ export function prepareGeneratedPublisherFixture(
     "    ;;",
     "  pr:create)",
     '    if [[ "$FAKE_RECONCILIATION" == "" ]]; then : > "$FAKE_PR_STATE"; fi',
-    '    if [[ "$FAKE_RECONCILIATION" == "merged" ]]; then "$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/main "$("$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/automation/locale)"; fi',
+    '    if [[ "$FAKE_RECONCILIATION" == "merged" ]]; then "$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/main "$("$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" rev-parse refs/heads/${FAKE_HEAD_BRANCH})"; fi',
     '    printf "%s\\n" "https://github.com/openclaw/openclaw/pull/1"',
     "    ;;",
     "  pr:edit) exit 0 ;;",
@@ -199,9 +203,9 @@ export function prepareGeneratedPublisherFixture(
     '    if [[ -n "$FAKE_RACE" && ! -f "$FAKE_PR_STATE.raced" ]]; then',
     '      : > "$FAKE_PR_STATE.raced"',
     '      if [[ "$FAKE_RACE" == "advance" ]]; then',
-    '        "$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/automation/locale "$FAKE_INITIAL_MAIN"',
+    '        "$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/${FAKE_HEAD_BRANCH} "$FAKE_INITIAL_MAIN"',
     "      else",
-    '        "$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" update-ref -d refs/heads/automation/locale "$head"',
+    '        "$FAKE_REAL_GIT" --git-dir="$FAKE_ORIGIN" update-ref -d refs/heads/${FAKE_HEAD_BRANCH} "$head"',
     "      fi",
     "    fi",
     "    ;;",
@@ -210,7 +214,7 @@ export function prepareGeneratedPublisherFixture(
     '    printf "%s\\n" "$*" >> "$FAKE_MERGE_CALLS"',
     '    if [[ " $* " == *" --disable-auto "* ]]; then',
     '      : > "$FAKE_MERGE_CALLS.disabled"',
-    '      if [[ "$FAKE_DISARM_RACE" == "true" ]]; then "${FAKE_REAL_GIT:-git}" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/automation/locale "$FAKE_INITIAL_MAIN"; fi',
+    '      if [[ "$FAKE_DISARM_RACE" == "true" ]]; then "${FAKE_REAL_GIT:-git}" --git-dir="$FAKE_ORIGIN" update-ref refs/heads/${FAKE_HEAD_BRANCH} "$FAKE_INITIAL_MAIN"; fi',
     "    fi",
     "    ;;",
     '  *) printf "unexpected gh call: %s\\n" "$*" >&2; exit 2 ;;',
@@ -234,6 +238,8 @@ export function prepareGeneratedPublisherFixture(
       FAKE_AUTO_MERGE_METHOD: options.existingAutoMergeMethod ?? "",
       FAKE_MALFORMED_AUTO_MERGE_RECORD: String(options.malformedAutoMergeRecord ?? false),
       FAKE_ORIGIN: origin,
+      FAKE_HEAD_BRANCH: headBranch,
+      FAKE_GH_CALLS: ghCalls,
       FAKE_MERGE_CALLS: mergeCalls,
       FAKE_PR_STATE: prState,
       FAKE_STALE_HEAD_ONCE: stalePrHeadOnce,
@@ -246,7 +252,7 @@ export function prepareGeneratedPublisherFixture(
       GITHUB_REPOSITORY: "openclaw/openclaw",
       GITHUB_REPOSITORY_OWNER: "openclaw",
       GITHUB_STEP_SUMMARY: summary,
-      HEAD_BRANCH: "automation/locale",
+      HEAD_BRANCH: headBranch,
       PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
       PR_BODY: "Generated test body",
       PR_TITLE: "chore(test): refresh generated output",
@@ -262,7 +268,7 @@ export function prepareGeneratedPublisherFixture(
         throw new Error("generated publisher left its Git authorization header configured");
       }
 
-      const branchRef = "refs/heads/automation/locale";
+      const branchRef = "refs/heads/" + headBranch;
       const originGit = (...args: string[]) => runGit(root, ["--git-dir", origin, ...args]);
       const branchExists =
         spawnSync("git", ["--git-dir", origin, "show-ref", "--verify", branchRef]).status === 0;

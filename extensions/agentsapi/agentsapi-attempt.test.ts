@@ -11,6 +11,7 @@ import {
   initializeGlobalHookRunner,
   loadUserTurnTranscriptRecorderFactoryForTest,
   resetGlobalHookRunner,
+  runInHarnessToolAuthorityForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
@@ -19,6 +20,7 @@ import {
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import * as transcriptRuntime from "openclaw/plugin-sdk/session-transcript-runtime";
 import { useSessionStoreTempDirs } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { awaitGateBeforeSettlement, withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { runAgentsApiAttempt, type AgentsApiPromptHistories } from "./agentsapi-attempt.js";
@@ -125,8 +127,11 @@ function activeSession(
 
 async function whileRunning(
   fixture: AttemptFixture,
-  { failure, submitted }: { failure?: Error; submitted?: string[] },
-  run: (handle: Parameters<typeof registerRun>[1]) => Promise<void>,
+  { failure, submitted, signal }: { failure?: Error; submitted?: string[]; signal?: AbortSignal },
+  run: (
+    handle: Parameters<typeof registerRun>[1],
+    attempt: ReturnType<AttemptFixture["run"]>,
+  ) => Promise<void>,
 ) {
   const started = createDeferred<void>();
   const finish = createDeferred<void>();
@@ -144,15 +149,15 @@ async function whileRunning(
   );
   const attempt = fixture.run();
   try {
-    await Promise.race([
+    const nativeStart = awaitGateBeforeSettlement(
       started.promise,
-      attempt.then((result) => {
-        throw new Error("Attempt settled before native start", { cause: result.terminal });
-      }),
-    ]);
+      attempt,
+      "Attempt settled before native start",
+    );
+    await (signal ? withinTest(nativeStart, signal) : nativeStart);
     const handle = registerRun.mock.calls.at(-1)?.[1];
     assert(handle, "Expected the registered Agents API run");
-    await run(handle);
+    await run(handle, attempt);
   } finally {
     finish.resolve();
     await attempt;
@@ -428,9 +433,9 @@ it("leaves PDF steering uncommitted so its next turn transfers the original in t
   });
 });
 
-it.each(["same run", "new run", "reset binding", "new budget", "cancelled", "revoked"] as const)(
+it.for(["same run", "new run", "reset binding", "new budget", "cancelled", "revoked"] as const)(
   "handles %s after steering without widening retry prompt history",
-  async (retryScope) => {
+  async (retryScope, { signal }) => {
     const fixture = await createAttempt();
     await SessionManager.open(fixture.target, fixture.params.workspaceDir).appendMessageAsync({
       role: "user",
@@ -440,7 +445,6 @@ it.each(["same run", "new run", "reset binding", "new budget", "cancelled", "rev
     const foreground = await fixture.recorder(fixture.params.prompt, "foreground-user");
     await foreground.persistApproved();
     fixture.params.userTurnTranscriptRecorder = foreground;
-    fixture.params.toolAuthorityFingerprint = "fixture-steering-authority";
     const steering = await fixture.recorder(steeringText, "steering-user");
     const histories: unknown[][] = [];
     const priorHistory = [userMessage("Earlier request.")];
@@ -459,18 +463,33 @@ it.each(["same run", "new run", "reset binding", "new budget", "cancelled", "rev
     );
     allowFollowup();
     const failure = new Error("fixture provider failure after accepted steering");
-    const first = await whileRunning(fixture, { failure }, async (handle) => {
-      const queue = vi.spyOn(handle, "queueMessage");
+    const first = await whileRunning(fixture, { failure, signal }, async (handle, attempt) => {
+      const confirmSteerTarget = steering.confirmSteerTargetRunIdForPersistence;
+      assert(confirmSteerTarget);
+      const confirmed = createDeferred<void>();
+      vi.spyOn(steering, "confirmSteerTargetRunIdForPersistence").mockImplementation(
+        (targetRunId) => {
+          const confirmation = confirmSteerTarget.call(steering, targetRunId);
+          confirmed.resolve(confirmation);
+          return confirmation;
+        },
+      );
       expect(
         queueAgentHarnessMessage(fixture.params.sessionId, steeringText, {
           isInboundUserMessage: true,
-          toolAuthorityFingerprint: fixture.params.toolAuthorityFingerprint,
+          toolAuthorityFingerprint: handle.toolAuthorityFingerprint,
           waitForTranscriptCommit: true,
           userTurnTranscriptRecorder: steering,
         }),
       ).toBe(true);
-      await queue.mock.results[0]?.value;
-      await steering.confirmSteerTargetRunIdForPersistence?.(fixture.params.runId);
+      await withinTest(
+        awaitGateBeforeSettlement(
+          confirmed.promise,
+          attempt,
+          "Agents API attempt settled before steering confirmation",
+        ),
+        signal,
+      );
     });
     expect(first.terminal).toEqual({ kind: "failed", source: "prompt", error: failure });
     expect(histories).toEqual([priorHistory]);
@@ -493,17 +512,13 @@ it.each(["same run", "new run", "reset binding", "new budget", "cancelled", "rev
       fixture.revoke(interruption);
     }
     const historyReads = vi.spyOn(SessionManager, "openModelContextAsync");
-    const retried = await fixture.run();
-
     if (retryScope === "cancelled" || retryScope === "revoked") {
-      expect(retried.terminal).toEqual(
-        retryScope === "cancelled"
-          ? { kind: "aborted", source: "external" }
-          : { kind: "failed", source: "prompt", error: interruption },
-      );
+      await expect(fixture.run()).rejects.toBe(interruption);
+      expect(historyReads).not.toHaveBeenCalled();
       expect(createSession).toHaveBeenCalledTimes(1);
       return;
     }
+    const retried = await fixture.run();
 
     // Steering confirmation keeps the foreground admission, so a changed scope
     // rereads the same fenced prefix instead of reusing the first attempt's history.
@@ -618,17 +633,19 @@ async function createAttempt(pluginConfig: unknown = {}) {
     run: () => {
       // Cold workers must not consume this outcome fixture's execution budget.
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      return runAgentsApiAttempt(
-        params,
-        binding,
-        async (next) => {
-          binding = next;
-        },
-        assertCurrent,
-        () => {},
-        target,
-        () => pluginConfig,
-        promptHistories,
+      return runInHarnessToolAuthorityForTest(params, "agentsapi", (admitted) =>
+        runAgentsApiAttempt(
+          admitted,
+          binding,
+          async (next) => {
+            binding = next;
+          },
+          assertCurrent,
+          () => {},
+          target,
+          () => pluginConfig,
+          promptHistories,
+        ),
       );
     },
   };

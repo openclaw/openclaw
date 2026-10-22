@@ -69,33 +69,57 @@ function migrateProviderConfig(providers: Record<string, unknown>) {
   return migrateLegacyConfigForTest({ models: { providers } });
 }
 
+function codexProvider(overrides: Record<string, unknown> = {}) {
+  return {
+    api: "openai-chatgpt-responses",
+    baseUrl: "https://chatgpt.com/backend-api",
+    ...overrides,
+  };
+}
+
+function browserSandbox(browser: Record<string, unknown>) {
+  return { sandbox: { browser } };
+}
+
+function modelMapConfig(models: Record<string, unknown>) {
+  return { agents: { defaults: { models } } };
+}
+
+function modelSelections(model: string, alias: string) {
+  return {
+    model,
+    utilityModel: model,
+    heartbeat: { model },
+    subagents: { model },
+    models: { [model]: { alias } },
+  };
+}
+
+function defaultModelSelections(model: string) {
+  return {
+    ...modelSelections(model, "Gemini"),
+    imageModel: model,
+    voiceModel: model,
+    pdfModel: model,
+    mediaModels: {
+      image: model,
+      video: { primary: model, fallbacks: [model] },
+      music: model,
+    },
+    subagents: { model: { primary: model, fallbacks: [model] } },
+    compaction: { model, memoryFlush: { model } },
+  };
+}
+
 describe("legacy Codex provider config migrate", () => {
   it("moves legacy OpenAI Codex provider config to canonical OpenAI provider config", () => {
-    const res = migrateProviderConfig({
-      "openai-codex": {
-        baseUrl: "https://chatgpt.com/backend-api/codex",
-        api: "openai-chatgpt-responses",
-        models: [
-          {
-            id: "gpt-5.5",
-            name: "GPT-5.5",
-            api: "openai-chatgpt-responses",
-          },
-        ],
-      },
-    });
-
-    expect(res.config?.models?.providers?.openai).toEqual({
+    const provider = {
       baseUrl: "https://chatgpt.com/backend-api/codex",
       api: "openai-chatgpt-responses",
-      models: [
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          api: "openai-chatgpt-responses",
-        },
-      ],
-    });
+      models: [{ id: "gpt-5.5", name: "GPT-5.5", api: "openai-chatgpt-responses" }],
+    };
+    const res = migrateProviderConfig({ "openai-codex": provider });
+    expect(res.config?.models?.providers?.openai).toEqual(provider);
     expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
   });
 
@@ -168,48 +192,39 @@ describe("legacy Codex provider config migrate", () => {
   );
 
   it("removes equivalent same-id shipped codex models", () => {
+    const model = {
+      id: "gpt-5.6-sol",
+      ...codexProvider(),
+      agentRuntime: { id: "codex" },
+    };
     const res = migrateProviderConfig({
-      openai: {
-        models: [
-          {
-            id: "gpt-5.6-sol",
-            api: "openai-chatgpt-responses",
-            baseUrl: "https://chatgpt.com/backend-api",
-            agentRuntime: { id: "codex" },
-          },
-        ],
-      },
-      codex: {
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-        models: [{ id: "gpt-5.6-sol" }],
-      },
+      openai: { models: [model] },
+      codex: codexProvider({ models: [{ id: "gpt-5.6-sol" }] }),
     });
 
     expect(res.config?.models?.providers).not.toHaveProperty("codex");
-    expect(res.config?.models?.providers?.openai?.models).toEqual([
-      {
-        id: "gpt-5.6-sol",
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-        agentRuntime: { id: "codex" },
-      },
-    ]);
+    expect(res.config?.models?.providers?.openai?.models).toEqual([model]);
     expect(res.changes).toContain(
       "Removed models.providers.codex because models.providers.openai already exists.",
     );
   });
 
   it("preserves model-scoped defaults and overrides when merging legacy providers", () => {
+    const defaults = codexProvider({
+      contextWindow: 200000,
+      contextTokens: 180000,
+      maxTokens: 8192,
+      params: { store: false, reasoning: { effort: "medium" } },
+      agentRuntime: { id: "codex" },
+    });
+    const embedding = {
+      id: "text-embedding-3-small",
+      name: "Chat",
+      api: "openai-chatgpt-responses",
+    };
     const res = migrateProviderConfig({
       "openai-codex": {
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-        contextWindow: 200000,
-        contextTokens: 180000,
-        maxTokens: 8192,
-        params: { store: false, reasoning: { effort: "medium" } },
-        agentRuntime: { id: "codex" },
+        ...defaults,
         models: [
           {
             id: "gpt-5.5",
@@ -222,7 +237,7 @@ describe("legacy Codex provider config migrate", () => {
       openai: {
         api: "openai-chatgpt-responses",
         baseUrl: "https://api.openai.com/v1",
-        models: [{ id: "text-embedding-3-small", name: "Chat", api: "openai-chatgpt-responses" }],
+        models: [embedding],
       },
     });
     expect(res.config?.models?.providers).not.toHaveProperty("openai-codex");
@@ -230,69 +245,43 @@ describe("legacy Codex provider config migrate", () => {
       api: "openai-chatgpt-responses",
       baseUrl: "https://api.openai.com/v1",
       models: [
-        { id: "text-embedding-3-small", name: "Chat", api: "openai-chatgpt-responses" },
+        embedding,
         {
+          ...defaults,
           id: "gpt-5.5",
           name: "Chat",
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api",
-          contextWindow: 200000,
-          contextTokens: 180000,
-          maxTokens: 8192,
           params: { store: false, reasoning: { effort: "high" }, verbosity: "low" },
-          agentRuntime: { id: "codex" },
         },
-        {
-          id: "gpt-5.4",
-          api: "openai-chatgpt-responses",
-          baseUrl: "https://chatgpt.com/backend-api",
-          contextWindow: 200000,
-          contextTokens: 180000,
-          maxTokens: 8192,
-          params: { store: false, reasoning: { effort: "medium" } },
-          agentRuntime: { id: "codex" },
-        },
+        { ...defaults, id: "gpt-5.4" },
       ],
     });
   });
 
   it("preserves legacy models-add metadata marker when merging codex models", () => {
+    const model = {
+      id: "gpt-5.5",
+      api: "openai-chatgpt-responses",
+      reasoning: true,
+      input: ["text", "image"],
+      cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
+      contextWindow: 400_000,
+      contextTokens: 272_000,
+      maxTokens: 128_000,
+    };
     const res = migrateProviderConfig({
       openai: {
         api: "openai-chatgpt-responses",
         baseUrl: "https://api.openai.com/v1",
         models: [{ id: "text-embedding-3-small" }],
       },
-      "openai-codex": {
-        api: "openai-chatgpt-responses",
-        baseUrl: "https://chatgpt.com/backend-api",
-        models: [
-          {
-            id: "gpt-5.5",
-            api: "openai-chatgpt-responses",
-            reasoning: true,
-            input: ["text", "image"],
-            cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-            contextWindow: 400_000,
-            contextTokens: 272_000,
-            maxTokens: 128_000,
-          },
-        ],
-      },
+      "openai-codex": codexProvider({ models: [model] }),
     });
 
     const openai = res.config?.models?.providers?.openai as Record<string, unknown> | undefined;
     expect(openai?.models).toEqual([
       { id: "text-embedding-3-small" },
       {
-        id: "gpt-5.5",
-        api: "openai-chatgpt-responses",
-        reasoning: true,
-        input: ["text", "image"],
-        cost: { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 },
-        contextWindow: 400_000,
-        contextTokens: 272_000,
-        maxTokens: 128_000,
+        ...model,
         baseUrl: "https://chatgpt.com/backend-api",
         metadataSource: "models-add",
       },
@@ -675,49 +664,13 @@ describe("legacy sandbox config migrate", () => {
     const raw = {
       agents: {
         ownership: "explicit",
-        defaults: {
-          sandbox: {
-            browser: {
-              enabled: true,
-              network: " NONE ",
-              autoStart: false,
-            },
-          },
-        },
+        defaults: browserSandbox({ enabled: true, network: " NONE ", autoStart: false }),
         entries: {
-          main: {
-            sandbox: { browser: { enabled: true, network: "none", headless: true } },
-          },
-          inherited: {
-            sandbox: {
-              browser: {
-                enabled: true,
-                headless: true,
-              },
-            },
-          },
-          isolated: {
-            sandbox: {
-              browser: {
-                network: "isolated-browser-net",
-              },
-            },
-          },
-          blankEnabled: {
-            sandbox: {
-              browser: {
-                enabled: true,
-                network: "   ",
-              },
-            },
-          },
-          blankInherited: {
-            sandbox: {
-              browser: {
-                network: "",
-              },
-            },
-          },
+          main: browserSandbox({ enabled: true, network: "none", headless: true }),
+          inherited: browserSandbox({ enabled: true, headless: true }),
+          isolated: browserSandbox({ network: "isolated-browser-net" }),
+          blankEnabled: browserSandbox({ enabled: true, network: "   " }),
+          blankInherited: browserSandbox({ network: "" }),
         },
       },
     };
@@ -764,12 +717,7 @@ describe("legacy sandbox config migrate", () => {
           {
             id: "legacy",
             default: true,
-            sandbox: {
-              browser: {
-                network: "NONE",
-                autoStart: false,
-              },
-            },
+            ...browserSandbox({ network: "NONE", autoStart: false }),
           },
         ],
       },
@@ -818,7 +766,7 @@ describe("legacy migrate x_search auth", () => {
     });
   });
 
-  it("detects and repairs retired xAI model-only tool config without plugin discovery", () => {
+  it("moves legacy xAI search config without replacing model selections", () => {
     const raw = {
       tools: {
         web: {
@@ -827,26 +775,18 @@ describe("legacy migrate x_search auth", () => {
         },
       },
     };
-
-    expect(findLegacyConfigIssues(raw).map((issue) => issue.path)).toEqual(
-      expect.arrayContaining(["tools.web.search", "tools.web.x_search.model"]),
-    );
-
     const res = migrateLegacyConfigForTest(raw);
 
     expect(res.config?.plugins?.entries?.xai).toEqual({
       enabled: true,
-      config: { webSearch: { model: "grok-4.3" } },
+      config: { webSearch: { model: "grok-4-1-fast" } },
     });
     expect((res.config?.tools?.web as Record<string, unknown> | undefined)?.x_search).toEqual({
-      model: "grok-4.3",
+      model: "grok-4-1-fast-non-reasoning",
     });
-    expect(res.changes).toEqual(
-      expect.arrayContaining([
-        'Updated tools.web.search.grok.model from "grok-4-1-fast" to "grok-4.3".',
-        'Updated tools.web.x_search.model from "grok-4-1-fast-non-reasoning" to "grok-4.3".',
-      ]),
-    );
+    expect(res.changes).toEqual([
+      "Moved tools.web.search.grok → plugins.entries.xai.config.webSearch.",
+    ]);
   });
 });
 
@@ -860,13 +800,7 @@ describe("legacy Codex Supervisor config migrate", () => {
           "codex-supervisor": {
             enabled: true,
             config: {
-              endpoints: [
-                {
-                  id: "local",
-                  transport: "stdio-proxy",
-                  command: "codex",
-                },
-              ],
+              endpoints: [{ id: "local", transport: "stdio-proxy", command: "codex" }],
               allowRawTranscripts: true,
               allowWriteControls: true,
             },
@@ -897,21 +831,11 @@ describe("legacy Codex Supervisor config migrate", () => {
     },
     {
       name: "disabled supervision preserves the implicit harness",
-      agents: {
-        defaults: {
-          model: "openai/gpt-5.5",
-        },
-      },
+      agents: { defaults: { model: "openai/gpt-5.5" } },
       plugins: {
         entries: {
-          codex: {
-            config: {
-              appServer: { transport: "stdio" },
-            },
-          },
-          "codex-supervisor": {
-            enabled: false,
-          },
+          codex: { config: { appServer: { transport: "stdio" } } },
+          "codex-supervisor": { enabled: false },
         },
       },
       expected: {
@@ -985,9 +909,7 @@ describe("legacy Codex Supervisor config migrate", () => {
     {
       name: "malformed legacy entry does not create Codex config",
       plugins: {
-        entries: {
-          "codex-supervisor": "invalid",
-        },
+        entries: { "codex-supervisor": "invalid" },
       },
       expected: { entries: {} },
       changes: ["Removed invalid plugins.entries.codex-supervisor config."],
@@ -1109,31 +1031,8 @@ describe("legacy model compat migrate", () => {
     const canonical = "google/gemini-3.1-pro-preview";
     const raw = {
       agents: {
-        defaults: {
-          model: retired,
-          utilityModel: retired,
-          imageModel: retired,
-          voiceModel: retired,
-          pdfModel: retired,
-          mediaModels: {
-            image: retired,
-            video: { primary: retired, fallbacks: [retired] },
-            music: retired,
-          },
-          heartbeat: { model: retired },
-          subagents: { model: { primary: retired, fallbacks: [retired] } },
-          compaction: { model: retired, memoryFlush: { model: retired } },
-          models: { [retired]: { alias: "Gemini" } },
-        },
-        entries: {
-          ops: {
-            model: retired,
-            utilityModel: retired,
-            heartbeat: { model: retired },
-            subagents: { model: retired },
-            models: { [retired]: { alias: "Ops Gemini" } },
-          },
-        },
+        defaults: defaultModelSelections(retired),
+        entries: { ops: modelSelections(retired, "Ops Gemini") },
       },
       models: {
         providers: {
@@ -1151,32 +1050,13 @@ describe("legacy model compat migrate", () => {
     );
     const res = migrateLegacyConfigForTest(raw);
     const defaults = res.config?.agents?.defaults;
-    expect(defaults).toMatchObject({
-      model: canonical,
-      utilityModel: canonical,
-      imageModel: canonical,
-      voiceModel: canonical,
-      pdfModel: canonical,
-      mediaModels: {
-        image: canonical,
-        video: { primary: canonical, fallbacks: [canonical] },
-        music: canonical,
-      },
-      heartbeat: { model: canonical },
-      subagents: { model: { primary: canonical, fallbacks: [canonical] } },
-      compaction: { model: canonical, memoryFlush: { model: canonical } },
-      models: { [canonical]: { alias: "Gemini" } },
-    });
-    expect(res.config?.agents?.entries?.ops).toMatchObject({
-      model: canonical,
-      utilityModel: canonical,
-      heartbeat: { model: canonical },
-      subagents: { model: canonical },
-      models: { [canonical]: { alias: "Ops Gemini" } },
-    });
+    expect(defaults).toMatchObject(defaultModelSelections(canonical));
+    expect(res.config?.agents?.entries?.ops).toMatchObject(
+      modelSelections(canonical, "Ops Gemini"),
+    );
     expect(res.config?.models?.providers?.google?.models?.[0]?.id).toBe("gemini-3.1-pro-preview");
     expect(res.config?.models?.providers?.myproxy?.models?.[0]?.id).toBe(canonical);
-    expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-5.5");
+    expect(res.config?.models?.providers?.openai?.models?.[0]?.id).toBe("gpt-4o");
   });
 
   it("canonicalizes persisted OpenAI GPT-5.6 aliases without affecting GitHub Copilot", () => {
@@ -1214,25 +1094,17 @@ describe("legacy model compat migrate", () => {
   });
 
   it("merges provider catalog rows that normalize to an explicitly canonical id", () => {
-    const res = migrateLegacyConfigForTest({
-      models: {
-        providers: {
-          google: {
-            models: [
-              {
-                id: "gemini-3-pro-preview",
-                name: "Retired alias",
-                maxTokens: 65_536,
-                cost: { input: 1 },
-              },
-              {
-                id: "gemini-3.1-pro-preview",
-                name: "Canonical",
-                cost: { output: 2 },
-              },
-            ],
+    const res = migrateProviderConfig({
+      google: {
+        models: [
+          {
+            id: "gemini-3-pro-preview",
+            name: "Retired alias",
+            maxTokens: 65_536,
+            cost: { input: 1 },
           },
-        },
+          { id: "gemini-3.1-pro-preview", name: "Canonical", cost: { output: 2 } },
+        ],
       },
     });
 
@@ -1253,53 +1125,49 @@ describe("legacy model compat migrate", () => {
     );
   });
 
-  it("deep-merges colliding retired model refs and reports only unequal fields", () => {
-    const res = migrateLegacyConfigForTest({
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-4o": {
-              params: {
-                reasoning: { effort: "high", budget: 100 },
-                tags: ["stable"],
-                fallbacks: ["openai/gpt-4"],
-              },
-              streaming: false,
-            },
-            "openai/gpt-4": {
-              params: {
-                reasoning: { effort: "low", summary: "auto" },
-                tags: ["stable"],
-                fallbacks: ["openai/gpt-5.5"],
-              },
-              alias: "legacy-four",
-            },
+  it("deep-merges colliding model spellings and reports only unequal fields", () => {
+    const res = migrateLegacyConfigForTest(
+      modelMapConfig({
+        "openai/gpt-5.6": {
+          params: {
+            reasoning: { effort: "high", budget: 100 },
+            tags: ["stable"],
+            fallbacks: ["openai/GPT-5.6"],
           },
+          streaming: false,
         },
-      },
-    });
+        "openai/GPT-5.6": {
+          params: {
+            reasoning: { effort: "low", summary: "auto" },
+            tags: ["stable"],
+            fallbacks: ["openai/gpt-5.6-sol"],
+          },
+          alias: "legacy-four",
+        },
+      }),
+    );
 
     expect(res.config?.agents?.defaults?.models).toEqual({
-      "openai/gpt-5.5": {
+      "openai/gpt-5.6-sol": {
         params: {
           reasoning: { effort: "high", budget: 100, summary: "auto" },
           tags: ["stable"],
-          fallbacks: ["openai/gpt-5.5"],
+          fallbacks: ["openai/gpt-5.6-sol"],
         },
         streaming: false,
         alias: "legacy-four",
       },
     });
     expect(res.changes.filter((change) => change.includes("Merged"))).toEqual([
-      'Merged config.agents.defaults.models key "openai/gpt-4" into "openai/gpt-5.5"; kept existing values for conflicting fields: params.reasoning.effort.',
+      'Merged config.agents.defaults.models key "openai/GPT-5.6" into "openai/gpt-5.6-sol"; kept existing values for conflicting fields: params.reasoning.effort.',
     ]);
   });
 
   it("filters blocked keys recursively from both model collision sides", () => {
     const raw =
-      '{"agents":{"defaults":{"models":{"openai/gpt-5.5":{"__proto__":{"polluted":true},"alias":"canonical-five","params":{"nested":{"__proto__":{"polluted":true},"model":"openai/gpt-4o"}}},"openai/gpt-4":{"alias":"legacy-four","__proto__":{"polluted":true},"streaming":false,"params":{"nested":{"__proto__":{"polluted":true},"added":true}}}}}}}';
+      '{"agents":{"defaults":{"models":{"openai/gpt-5.6-sol":{"__proto__":{"polluted":true},"alias":"canonical-five","params":{"nested":{"__proto__":{"polluted":true},"model":"openai/gpt-5.6"}}},"openai/GPT-5.6":{"alias":"legacy-four","__proto__":{"polluted":true},"streaming":false,"params":{"nested":{"__proto__":{"polluted":true},"added":true}}}}}}}';
     const res = migrateLegacyConfigForTest(JSON.parse(raw));
-    const merged = res.config?.agents?.defaults?.models?.["openai/gpt-5.5"] as Record<
+    const merged = res.config?.agents?.defaults?.models?.["openai/gpt-5.6-sol"] as Record<
       string,
       unknown
     >;
@@ -1314,14 +1182,14 @@ describe("legacy model compat migrate", () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
     expect(merged).toEqual({
       alias: "canonical-five",
-      params: { nested: { model: "openai/gpt-5.5", added: true } },
+      params: { nested: { model: "openai/gpt-5.6-sol", added: true } },
       streaming: false,
     });
   });
 
   it("does not invoke prototype setters when copying the rewritten config root", () => {
     const raw = JSON.parse(
-      '{"__proto__":{"polluted":true},"agents":{"defaults":{"model":"openai/gpt-4"}}}',
+      '{"__proto__":{"polluted":true},"agents":{"defaults":{"model":"openai/GPT-5.6"}}}',
     ) as Record<string, unknown>;
     const res = migrateLegacyConfigForTest(raw);
     const config = res.config as unknown as Record<string, unknown>;
@@ -1329,26 +1197,22 @@ describe("legacy model compat migrate", () => {
     expect(Object.getPrototypeOf(config)).toBe(Object.prototype);
     expect(Object.hasOwn(config, "__proto__")).toBe(true);
     expect(config.polluted).toBeUndefined();
-    expect(res.config?.agents?.defaults?.model).toBe("openai/gpt-5.5");
+    expect(res.config?.agents?.defaults?.model).toBe("openai/gpt-5.6-sol");
   });
 
   it("reports malformed scalar collisions without claiming equal values conflict", () => {
-    const res = migrateLegacyConfigForTest({
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.5": false,
-            "openai/gpt-4": true,
-            "openai/gpt-4o": false,
-          },
-        },
-      },
-    });
+    const res = migrateLegacyConfigForTest(
+      modelMapConfig({
+        "openai/gpt-5.6-sol": false,
+        "openai/GPT-5.6": true,
+        "openai/gpt-5.6": false,
+      }),
+    );
 
-    expect(res.config?.agents?.defaults?.models?.["openai/gpt-5.5"]).toBe(false);
+    expect(res.config?.agents?.defaults?.models?.["openai/gpt-5.6-sol"]).toBe(false);
     expect(res.changes.filter((change) => change.includes("Merged"))).toEqual([
-      'Merged config.agents.defaults.models key "openai/gpt-4" into "openai/gpt-5.5"; kept existing values for conflicting fields: value.',
-      'Merged config.agents.defaults.models key "openai/gpt-4o" into "openai/gpt-5.5".',
+      'Merged config.agents.defaults.models key "openai/GPT-5.6" into "openai/gpt-5.6-sol"; kept existing values for conflicting fields: value.',
+      'Merged config.agents.defaults.models key "openai/gpt-5.6" into "openai/gpt-5.6-sol".',
     ]);
   });
 
@@ -1537,19 +1401,15 @@ describe("legacy model compat migrate", () => {
   });
 
   it("removes only invalid thinking formats across provider catalogs", () => {
-    const res = migrateLegacyConfigForTest({
-      models: {
-        providers: {
-          bailian: {
-            models: [
-              { id: "valid", compat: { thinkingFormat: "qwen-chat-template" } },
-              { id: "legacy", compat: { thinkingFormat: "old-bailian", supportsTools: true } },
-            ],
-          },
-          openrouter: {
-            models: [{ id: "legacy-router", compat: { thinkingFormat: "openrouter-v0" } }],
-          },
-        },
+    const res = migrateProviderConfig({
+      bailian: {
+        models: [
+          { id: "valid", compat: { thinkingFormat: "qwen-chat-template" } },
+          { id: "legacy", compat: { thinkingFormat: "old-bailian", supportsTools: true } },
+        ],
+      },
+      openrouter: {
+        models: [{ id: "legacy-router", compat: { thinkingFormat: "openrouter-v0" } }],
       },
     });
     expect(res.config?.models?.providers?.bailian?.models).toEqual([

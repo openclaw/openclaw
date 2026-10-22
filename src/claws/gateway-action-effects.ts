@@ -61,21 +61,17 @@ function sourceLabel(action: ClawAddPlanAction, sourceRoot: string): string {
 
 function fileEffect(params: {
   id: string;
-  source?: string;
-  currentDigest?: string;
+  source: string;
   desiredDigest?: string;
-  currentPresent?: boolean;
 }): ClawActionEffect {
-  if (!params.currentDigest && !params.desiredDigest) {
+  if (!params.desiredDigest) {
     throw new Error("Claw workspace file digest cannot be disclosed.");
   }
   return {
     type: "workspace-file",
     destination: workspaceDestination(params.id),
-    ...(params.source ? { source: params.source } : {}),
-    ...(params.currentDigest ? { currentDigest: params.currentDigest } : {}),
-    ...(params.desiredDigest ? { desiredDigest: params.desiredDigest } : {}),
-    ...(params.currentPresent !== undefined ? { currentPresent: params.currentPresent } : {}),
+    source: params.source,
+    desiredDigest: params.desiredDigest,
   };
 }
 
@@ -138,23 +134,12 @@ function mcpDeclaration(details: Record<string, unknown>) {
   };
 }
 
-export function clawActionNeedsEffect(
-  operation: "add" | "update" | "remove",
-  action: { kind: string; id: string; action: string },
-): boolean {
-  if (
-    operation === "remove" &&
-    action.action === "retain" &&
-    (action.kind === "workspaceFile" || action.kind === "bootstrap")
-  ) {
-    return false;
-  }
+export function clawActionNeedsEffect(action: { kind: string; id: string }): boolean {
   return (
     action.kind === "workspaceFile" ||
     action.kind === "bootstrap" ||
     action.kind === "mcpServer" ||
-    (action.kind === "package" && action.id.startsWith("skill:")) ||
-    (operation === "remove" && action.kind === "packageRef")
+    (action.kind === "package" && action.id.startsWith("skill:"))
   );
 }
 

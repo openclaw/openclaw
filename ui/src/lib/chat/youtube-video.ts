@@ -69,8 +69,6 @@ export function parseYouTubeVideoUrl(raw: string | undefined) {
     embedUrl.searchParams.set("start", String(startSeconds));
   }
   return {
-    videoId,
-    startSeconds,
     watchUrl: watchUrl.href,
     embedUrl: embedUrl.href,
     thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,

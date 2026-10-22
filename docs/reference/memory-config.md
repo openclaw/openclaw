@@ -326,6 +326,31 @@ authentication.
     Changing these values affects embedding cache identity for provider batch indexing and should be followed by a memory reindex when the upstream model treats the labels differently.
 
   </Accordion>
+  <Accordion title="OpenAI-compatible output dimensions">
+    Providers that use the OpenAI-compatible embeddings transport (`openai-compatible`, `omlx`, and custom `models.providers` entries with an OpenAI-compatible API) receive `outputDimensionality` as the `dimensions` request field. Set it only when the server supports that field for the configured model, for example a Matryoshka embedding model served by a runtime that shortens vectors server-side.
+
+    | Key                    | Type     | Default       | Description                                    |
+    | ---------------------- | -------- | ------------- | ---------------------------------------------- |
+    | `outputDimensionality` | `number` | model default | Requested vector size, sent as `dimensions`    |
+
+    ```json5
+    {
+      memory: {
+        search: {
+          provider: "openai-compatible",
+          remote: { baseUrl: "http://127.0.0.1:8000/v1" },
+          model: "local-embedder",
+          outputDimensionality: 512,
+        },
+      },
+    }
+    ```
+
+    OpenClaw checks every returned vector against the requested size. When an endpoint returns a different size, the request fails with `expected <requested> dimensions, got <returned>` instead of storing those vectors under the requested size. The failure is not retried or split into smaller batches. Some servers ignore `dimensions` and always return the model's native size; for those, remove `outputDimensionality` or use a runtime that honors it. The managed `local` provider instead truncates the native vector to the requested size and L2-normalizes it locally. Use a model that supports this projection; requesting more dimensions than the model returns fails.
+
+    `outputDimensionality` is part of the index identity. After changing or removing it, rebuild with `openclaw memory index --force --agent <id>`. Also rebuild existing managed-local indexes if they were created with `outputDimensionality` but still contain native-size vectors.
+
+  </Accordion>
   <Accordion title="Bedrock">
     ### Bedrock embedding config
 
@@ -496,15 +521,18 @@ auto-injected.
 
 ## Additional memory paths
 
-| Key          | Type                                                  | Description                              |
-| ------------ | ----------------------------------------------------- | ---------------------------------------- |
-| `extraPaths` | `Array<string \| { path: string; pattern?: string }>` | Additional directories or files to index |
+| Key          | Type                                                                       | Description                              |
+| ------------ | -------------------------------------------------------------------------- | ---------------------------------------- |
+| `extraPaths` | `Array<string \| { path: string; pattern?: string; evergreen?: boolean }>` | Additional directories or files to index |
 
 ```json5
 {
   memory: {
     search: {
-      extraPaths: ["../team-docs", { path: "/srv/shared-notes", pattern: "runbooks/**/*.md" }],
+      extraPaths: [
+        "../team-docs",
+        { path: "/srv/shared-notes", pattern: "runbooks/**/*.md", evergreen: true },
+      ],
     },
   },
 }
@@ -517,6 +545,18 @@ scans skip subdirectories that their patterns can prove irrelevant. Complex patt
 conservative traversal. The builtin engine skips symlinks. When a configured root is a
 symlink, `openclaw memory status` names the skipped root in text and JSON output and recommends
 configuring its resolved absolute directory instead.
+
+Set `evergreen: true` only for stable reference sources whose relevance should not fall as their
+filesystem modification time ages. The option disables temporal decay for matching `extraPaths`
+files while leaving semantic/keyword relevance, trust, provenance, and automatic-injection
+eligibility unchanged. It does not override date-based decay for canonical `memory/YYYY-MM-DD*.md`
+daily notes. If duplicate entries use the same path and pattern, the last entry's `evergreen` value
+wins. Changing only this flag changes query-time ranking; it does not rebuild the index or
+re-embed unchanged content.
+
+Before downgrading to a version that does not support `evergreen`, remove that property from
+every global and per-agent `extraPaths` object. Older strict configuration schemas reject the
+unknown property, including `evergreen: false`; removing it restores the older decay policy.
 
 For shared notes, keep each workspace's `memory/` directory local and add the shared directory's
 resolved filesystem path to `extraPaths`. This setting indexes notes; it does not authorize legacy host-event

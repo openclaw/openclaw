@@ -161,7 +161,7 @@ export async function runSessionCollaborationWrite<
     };
     const capturedCommand: { type: Key; input: SessionSharingWorkerOperations[Key]["input"] } = {
       type: command.type,
-      input: structuredClone({ ...command.input, scope: commandScope }),
+      input: { ...command.input, scope: commandScope },
     };
     try {
       // Register drainable resources only after earlier writers release their FIFO slot.
@@ -351,7 +351,7 @@ export async function runSessionCollaborationWrite<
                   commandScope,
                 );
                 if (prepared) {
-                  capturedCommand.input = structuredClone({ ...prepared, scope: commandScope });
+                  capturedCommand.input = { ...prepared, scope: commandScope };
                 }
                 assertQueuedCurrent();
                 mutationDispatched = capturedCommand.type !== "category.prepare";

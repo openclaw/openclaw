@@ -99,7 +99,7 @@ export interface SummarizationCompletionParams {
   errorLabel: string;
 }
 
-/** Runs one summarization completion and maps abort/error stops to CompactionError. */
+/** Runs one summarization completion and rejects failed or incomplete output. */
 export async function runSummarizationCompletion(
   params: SummarizationCompletionParams,
 ): Promise<Result<string, CompactionError>> {
@@ -200,5 +200,13 @@ export async function runSummarizationCompletion(
       new InvalidSummaryOutputError(`${params.errorLabel} failed: model returned no summary text`),
     );
   }
+  if (response.stopReason === "length") {
+    return err(
+      new InvalidSummaryOutputError(
+        `${params.errorLabel} failed: summary truncated at the output token limit`,
+      ),
+    );
+  }
+
   return ok(summary);
 }

@@ -2,11 +2,15 @@
 
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { loadConfig } from "./config-gateway-operations.ts";
 import { nextRequestVersion } from "./config-state-model.ts";
 import { configSnapshot } from "./config-suite.test-support.ts";
-import { createConfigCapabilityHarness } from "./config-test-harness.ts";
+import {
+  CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
+  createConfigCapabilityHarness,
+} from "./config-test-harness.ts";
 
 function snapshot(count: number): ConfigSnapshot {
   return configSnapshot({ count }, `hash-${count}`);
@@ -26,6 +30,77 @@ function mutate(runtimeConfig: ReturnType<typeof mutationHarness>["runtimeConfig
 }
 
 describe("external mutation config refresh", () => {
+  it.each([false, true])(
+    "preserves edits made during an agent update (overlapping field: %s)",
+    async (overlap) => {
+      vi.useFakeTimers();
+      const update = deferred();
+      let config: Record<string, unknown> = { agents: {} };
+      let hash = "before-update";
+      const request = vi.fn(async (method: string, params?: unknown) => {
+        if (method === "config.get") {
+          return configSnapshot(config, hash);
+        }
+        if (method === "agents.update") {
+          await update.promise;
+          config = { agents: { entries: { main: { name: "Saved identity" } } } };
+          hash = "after-update";
+          return {};
+        }
+        if (method === "config.set") {
+          const submission = params as { raw: string; baseHash: string };
+          if (submission.baseHash !== hash) {
+            throw new GatewayRequestError({
+              code: "INVALID_REQUEST",
+              message: "config changed since last load; re-run config.get and retry",
+            });
+          }
+          config = JSON.parse(submission.raw) as Record<string, unknown>;
+          hash = "after-form-save";
+          return { config, hash };
+        }
+        return {};
+      });
+      const { runtimeConfig } = createConfigCapabilityHarness(request);
+      try {
+        await runtimeConfig.ensureLoaded();
+        const mutation = runtimeConfig.runExternalMutation((client) =>
+          client.request("agents.update", { agentId: "main", name: "Saved identity" }),
+        );
+        runtimeConfig.patchForm(
+          ["agents", "entries", "main", overlap ? "name" : "model"],
+          overlap ? "Local identity" : { primary: "fixture/selected" },
+        );
+        await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
+        update.resolve();
+        await mutation;
+        await runtimeConfig.waitForPendingWrites();
+
+        expect(config).toEqual({
+          agents: {
+            entries: {
+              main: {
+                name: "Saved identity",
+                ...(!overlap ? { model: { primary: "fixture/selected" } } : {}),
+              },
+            },
+          },
+        });
+        expect(runtimeConfig.state.configFormDirty).toBe(overlap);
+        expect(runtimeConfig.state.configAutoSaveStatus).toBe(overlap ? "conflict" : "saved");
+        if (overlap) {
+          expect(runtimeConfig.state.configForm).toMatchObject({
+            agents: { entries: { main: { name: "Local identity" } } },
+          });
+          expect(request.mock.calls.filter(([method]) => method === "config.set")).toHaveLength(0);
+        }
+      } finally {
+        update.resolve();
+        runtimeConfig.dispose();
+      }
+    },
+  );
+
   it.each(
     [
       { order: "mutation read first", failure: false },
@@ -123,7 +198,7 @@ describe("external mutation config refresh", () => {
         await readStarted.promise;
         if (retirement === "write acknowledgement") {
           // Config write acknowledgements invalidate older reads without issuing a replacement.
-          nextRequestVersion(runtimeConfig.state, "config");
+          nextRequestVersion(runtimeConfig.state);
         } else if (retirement === "disconnect" || retirement === "same-client reconnect") {
           publish(false);
           if (retirement === "same-client reconnect") {

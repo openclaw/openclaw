@@ -6,7 +6,11 @@ import {
 } from "../../infra/sqlite-lifecycle-errors.js";
 import { retainSqliteWorkerErrorCode } from "../../infra/sqlite-worker-contract.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
-import { getCliHistoryWriter } from "./cli-history-boundary.js";
+import {
+  answerCliHistoryOwnerProbe,
+  cliHistoryWriterFacts,
+  getCliHistoryWriter,
+} from "./cli-history-boundary.js";
 import {
   assertSessionGoalOperationTime,
   prepareSessionTurnGoalMessage,
@@ -82,10 +86,11 @@ export async function appendSessionTurnInWorker(
   const freshCommitGuards = new Set<() => void>();
   const sources: (PreparedSessionSourceAuthority | undefined)[] = [];
   const committedCompletions: Promise<void>[] = [];
+  const assertOwnerCurrent = () =>
+    (ownerSource?.assertPreparedCurrent ?? ownerSource?.assertCurrent)?.();
   const assertCurrent = () => {
     execution?.assertCurrent();
     inputActor?.storageAuthority?.assertCurrent();
-    (ownerSource?.assertPreparedCurrent ?? ownerSource?.assertCurrent)?.();
     options.assertCurrent?.();
     options.sessionTurnMutation?.assertCurrent?.();
     if (options.sessionTurnMutation) {
@@ -124,13 +129,8 @@ export async function appendSessionTurnInWorker(
           }
         : undefined,
     },
-    cliWriter: cliWriter
-      ? {
-          runId: cliWriter.runId,
-          authFingerprint: cliWriter.authFingerprint,
-          lifecycleRevision: cliWriter.lifecycleRevision,
-        }
-      : undefined,
+    // The worker asks the host to confirm the owner inside its commit transaction.
+    cliWriter: cliWriter && cliHistoryWriterFacts(cliWriter),
     ownerSources: ownerSource?.checks.map(({ predicate }) => predicate),
     custody: custody?.facts,
     relocation: custody?.relocation,
@@ -182,7 +182,10 @@ export async function appendSessionTurnInWorker(
       return restoreSessionTurnColdTranscript(
         scope,
         options,
-        assertCurrent,
+        () => {
+          assertCurrent();
+          assertOwnerCurrent();
+        },
         plan.options.initialSessionEntry,
       );
     };
@@ -199,6 +202,9 @@ export async function appendSessionTurnInWorker(
       assertCurrent,
       candidateKind: "session-turn",
       onTransactionFacts(facts) {
+        if (answerCliHistoryOwnerProbe(facts, cliWriter)) {
+          return true;
+        }
         if (isRecord(facts) && facts.kind === "session-turn-owner") {
           if (!ownerSource) {
             throw new Error("Session turn omitted its owner source authority");
@@ -240,6 +246,8 @@ export async function appendSessionTurnInWorker(
         return true;
       },
       assertCandidate(candidate) {
+        // The transaction has supplied source facts; admit the real write once here.
+        assertOwnerCurrent();
         if (custodyRequired) {
           custody?.assertCurrent(candidate.authority, assertCurrent);
         }
@@ -299,6 +307,9 @@ export async function appendSessionTurnInWorker(
         }
         const accepted: SessionTranscriptTurnMessageAppend[] = [];
         for (const append of messages) {
+          if (append.shouldAppend) {
+            assertOwnerCurrent();
+          }
           if (!append.shouldAppend || (await append.shouldAppend(context))) {
             accepted.push(append);
           }
@@ -373,6 +384,7 @@ export async function appendSessionTurnInWorker(
             if (hooks?.prepareMessageAfterIdempotencyCheckAsync) {
               append.preparationVersion = preparation?.version;
             }
+            assertOwnerCurrent();
             message = await prepare(message);
             assertCurrent();
           }

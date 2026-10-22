@@ -84,7 +84,12 @@ export function resolveSelectedNodeTestRunner(
           (group.configs[0] === "test/vitest/vitest.unit-fast-isolated.config.ts" &&
             group.includePatterns?.length === 1 &&
             group.includePatterns[0] ===
-              "src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts")) &&
+              "src/agents/embedded-agent-runner/run/attempt.llm-boundary.cache-stability.test.ts") ||
+          (group.includePatterns?.length === 1 &&
+            ((group.configs[0] === "test/vitest/vitest.gateway-core.config.ts" &&
+              group.includePatterns[0] === "src/gateway/mcp-app-extension-runtime.test.ts") ||
+              (group.configs[0] === "test/vitest/vitest.agents-core.config.ts" &&
+                group.includePatterns[0] === "src/agents/cli-runner.helpers.test.ts")))) &&
         [BUNDLED_NODE_TEST_RUNNER, DEFAULT_NODE_TEST_RUNNER].includes(group.runner) &&
         (group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2" ||
           (group.env?.OPENCLAW_VITEST_MAX_WORKERS === undefined &&

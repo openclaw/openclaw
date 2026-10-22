@@ -8,12 +8,26 @@ import {
   type AgentDeletionJournalInput,
   beginAgentDeletionJournalInDatabase,
   deleteAgentDeletionJournalInDatabase,
+  readAgentDeletionJournalInDatabase,
   updateAgentDeletionJournalPathsInDatabase,
 } from "../state/agent-deletion-journal.js";
+import type { AgentDeletionJournalPurpose } from "../state/agent-deletion-journal.types.js";
 import { ensureAgentProvenanceSchema } from "../state/agent-provenance.schema.js";
 import { requireOpenClawStateDatabaseIdentity } from "../state/openclaw-state-db-cache.js";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+
+export function readAgentDeletionJournal(
+  agentId: string,
+  options: OpenClawStateDatabaseOptions = {},
+  purpose: AgentDeletionJournalPurpose = "maintenance",
+): AgentDeletionJournalEntry | undefined {
+  return withExistingOpenClawStateDatabaseCurrentReadOnly(
+    (database) => readAgentDeletionJournalInDatabase(database, agentId, purpose),
+    options,
+  );
+}
 
 /** Seed a deletion journal while preserving native admission invalidation for fixtures. */
 export function beginAgentDeletionJournal(

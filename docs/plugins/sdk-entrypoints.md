@@ -355,6 +355,12 @@ Open databases and load mutation-capable runtime state only inside `runLocal`;
 its scope supplies the admitted config, environment, abort signal, and current
 owner assertion. Close plugin-owned stores before the callback returns.
 
+Commands that use configured database families set `databaseEngine: "configured"`.
+The helper resolves the selected config's engines after acquiring offline ownership,
+before runtime config can write state, and retains that selection through resource
+settlement. Commands routed to a running Gateway use its engines and do not need
+the PostgreSQL credentials in the CLI process.
+
 The helper routes to the local Gateway with its expected owner ID, or retains
 exclusive offline ownership through resource settlement. It never replays an
 uncertain Gateway mutation locally. Use `onForeignOwner: "refuse"` for commands
@@ -373,3 +379,29 @@ plugin transport effects and disclosure; pass its assertion into the plugin's
 database writer and file publication boundaries too. Versioned owner-bound RPC
 names let CLI callers require updated plugin handlers without assuming that an
 updated Gateway also upgraded an independently installed plugin.
+
+## OpenAI-compatible Decisions runtime
+
+`openclaw/plugin-sdk/decisions-openai-runtime` supplies the shared native
+Decisions codec and HTTP executor used by OpenAI and ClawRouter. Import it
+only from a lazy decision runtime, not a plugin's eager entrypoint.
+
+`evaluateOpenAICompatibleDecision(batch, context, route)` accepts a host-prepared
+V2 context and a provider-owned `{ provider, baseUrl, modelId? }` route. The
+base URL is the API prefix before `/decisions`; an optional upstream model ID
+changes only the wire model, preserving the prepared model's transport binding.
+The helper uses the prepared credential, headers, proxy/TLS policy, abort signal,
+deadline, and live admission assertion. It never discovers credentials or
+constructs conversation history. Consumers own endpoint eligibility and any
+account-specific route grant before calling it.
+
+`supportsOpenAIDecisionBatch(batch, reasoning)` gates protocol kinds, image and
+question bounds, and automatic reasoning before transport/discovery. Malformed
+caller contracts throw; structurally valid requests outside protocol support or
+bounds return `false`. Results preserve Boolean/choice/score distributions, token usage, and
+per-question refusals; invalid or credential-reflecting responses fail closed.
+
+The lightweight `decisions` subpath exports
+`ModelInferenceCapabilitiesSchema` for provider-owned catalog augmentation using
+the canonical capability schema rather than a competing normalizer. Static
+capability declarations do not confer account entitlement.

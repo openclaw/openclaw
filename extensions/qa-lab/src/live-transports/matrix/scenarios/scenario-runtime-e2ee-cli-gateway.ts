@@ -127,15 +127,6 @@ export async function runMatrixQaE2eeCliEncryptionSetupMultiAccountScenario(
     }
 
     return {
-      artifacts: {
-        accountId,
-        cliDeviceId: setup.status.deviceId ?? cliDevice.deviceId,
-        decoyAccountPreserved,
-        defaultAccountPreserved,
-        encryptionChanged: setup.encryptionChanged,
-        setupSuccess: setup.success,
-        verificationBootstrapSuccess: setup.bootstrap.success,
-      },
       details: [
         "Matrix CLI encryption setup changed only the requested account in a multi-account config",
         `setup stdout: ${setupArtifacts.stdoutPath}`,
@@ -153,11 +144,6 @@ export async function runMatrixQaE2eeCliEncryptionSetupMultiAccountScenario(
 export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
   context: MatrixQaScenarioContext,
 ): Promise<MatrixQaScenarioExecution> {
-  if (!context.restartGatewayAfterStateMutation) {
-    throw new Error(
-      "Matrix CLI setup gateway reply scenario requires hard gateway restart support",
-    );
-  }
   const gatewayConfigPath = requireMatrixQaGatewayConfigPath(context);
   const accountId = "cli-setup-gateway";
   const scenarioId = "matrix-e2ee-cli-setup-then-gateway-reply";
@@ -231,9 +217,6 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
       waitAccountId: accountId,
     },
   );
-  await context.waitGatewayAccountReady?.(accountId, {
-    timeoutMs: context.timeoutMs,
-  });
   const cli = await createMatrixQaCliGatewayRuntime({
     artifactLabel: "cli-setup-then-gateway-reply",
     context,
@@ -273,9 +256,6 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
         waitAccountId: accountId,
       },
     );
-    await context.waitGatewayAccountReady?.(accountId, {
-      timeoutMs: context.timeoutMs,
-    });
     // The Gateway now owns encrypted state. Exercise a real CLI crypto command
     // against the same account, then require the Gateway to resume and reply.
     const { artifacts: handoffArtifacts, payload: handoffPayload } = await runMatrixQaSetupCliJson(
@@ -335,18 +315,6 @@ export async function runMatrixQaE2eeCliSetupThenGatewayReplyScenario(
     })();
 
     return {
-      artifacts: {
-        accountId,
-        cliDeviceId: setup.status?.deviceId ?? account.deviceId ?? null,
-        driverUserId: driverAccount.userId,
-        encryptionChanged: setup.encryptionChanged,
-        gatewayReply: replied.reply,
-        gatewayUserId: account.userId,
-        roomKey,
-        roomId,
-        setupSuccess: setup.success,
-        verificationBootstrapSuccess: setup.bootstrap.success,
-      },
       details: [
         "Matrix CLI encryption setup left the gateway able to reply in an encrypted room",
         `setup stdout: ${setupArtifacts.stdoutPath}`,

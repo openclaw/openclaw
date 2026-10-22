@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show, createMemo } from "solid-js";
+import { Errored, For, Loading, Show, createMemo } from "solid-js";
 import { resolveConfigObjectFields } from "../../components/config-form.node.collection.ts";
 import { ConfigNode } from "../../components/config-form.node.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
@@ -12,8 +12,8 @@ import {
   SettingsSection,
 } from "../../components/solid/settings-ui.tsx";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
-import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
+import { handleNavigationClick } from "../../lib/navigation-click.ts";
 import type { PluginDiscoveryDetailResult, PluginsInspectResult } from "../../lib/plugins/index.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { PluginManager } from "../../plugins/control-ui-manager.solid.tsx";
@@ -22,7 +22,7 @@ import { PluginArtTile } from "./consent-dialog.tsx";
 import { renderPluginDetailShell as PluginDetailShell } from "./detail-shell.tsx";
 import "./custom-elements.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
-import { PluginInstallAction } from "./install-action.tsx";
+import { PluginInstallAction, type PluginInstallActionProps } from "./install-action.tsx";
 import type { PluginInstallProgress } from "./install-progress.ts";
 import {
   renderPluginCapabilitySection,
@@ -38,6 +38,7 @@ import {
   renderPluginRowMessage,
   type PluginRowMessage,
 } from "./plugin-row-message.tsx";
+import type { PluginDetailRead } from "./plugins-detail-reads.ts";
 import type { PluginMutationAction } from "./plugins-page-model.ts";
 import {
   flattenPluginSettingsFields,
@@ -46,18 +47,22 @@ import {
   type PluginSettingsEditorProps,
   type PluginSettingsField,
 } from "./settings-editor.tsx";
-import { renderPluginLifecycle } from "./settings-lifecycle.tsx";
+import { PluginLifecycle } from "./settings-lifecycle.tsx";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
+import { PluginSettingsReadStatus } from "./settings-read-status.tsx";
 import type { PluginToolPreview } from "./tool-preview.tsx";
 export type PluginSettingsTab = "installed" | "advanced";
 type SharedProps = Omit<
   PluginSettingsEditorModel,
   "pluginId" | "configSchema" | "backHref" | "onBack"
 > & {
+  registerRemovalHeading?: (heading: HTMLHeadingElement) => () => void;
+  registerInstallAction?: PluginInstallActionProps["registerInstallAction"];
   registerIcon?: (readId: () => string) => () => void;
   loading: boolean;
   error: string | null;
   busy: Readonly<Record<string, PluginMutationAction>>;
+  presentedEnabled?: (pluginId: string) => boolean | undefined;
   messages: Readonly<Record<string, PluginRowMessage>>;
   iconUrls: Readonly<Record<string, string>>;
   iconLoading?: (pluginId: string) => boolean;
@@ -93,7 +98,7 @@ export type DetailProps = SharedProps &
     onOpenTool?: (name: string) => void;
     settingsHref?: string;
     inspection: PluginsInspectResult | null;
-    inspectionError: string | null;
+    inspectionRead: PluginDetailRead;
     catalog?: PluginDiscoveryDetailResult;
     catalogLoading?: boolean;
     catalogIconUrls?: Readonly<Record<string, string>>;
@@ -160,9 +165,9 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
   );
   return (
     <>
-      {!props.connected ? (
+      {!props.connected && !props.result ? (
         <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />
-      ) : props.loading ? (
+      ) : props.loading && !props.result ? (
         <SettingsLoadingSkeleton rows={4} carapace />
       ) : props.error && !props.result ? (
         renderRetryError(props.error, props.onRefresh)
@@ -201,13 +206,9 @@ function InstalledInventory(props: InventoryProps): JSX.Element {
                     <a
                       class="settings-row__text plugins-settings-row__link"
                       href={props.pluginHref(plugin().id)}
-                      onClick={(event: MouseEvent) => {
-                        if (!shouldHandleNavigationClick(event)) {
-                          return;
-                        }
-                        event.preventDefault();
-                        props.onOpenPlugin(plugin().id);
-                      }}
+                      onClick={(event: MouseEvent) =>
+                        handleNavigationClick(event, () => props.onOpenPlugin(plugin().id))
+                      }
                     >
                       <span class="settings-row__title oc-settings-row-title">{plugin().name}</span>
                       <span class="settings-row__desc oc-settings-row-description">
@@ -245,19 +246,15 @@ function AdvancedSettings(options: InventoryProps): JSX.Element {
   });
   return (
     <Show
-      when={options.connected}
+      when={options.connected || Boolean(config())}
       fallback={<SettingsEmpty message={t("pluginsPage.connectToManage")} carapace />}
     >
       <Show
         when={config()}
         fallback={
-          options.configError ? (
-            renderRetryError(options.configError, options.onConfigReadRetry)
-          ) : options.configSchemaLoading || !options.configValue ? (
-            <SettingsLoadingSkeleton rows={4} carapace />
-          ) : (
+          !options.configError && !options.configSchemaLoading && options.configValue ? (
             <SettingsEmpty message={t("pluginsPage.schemaUnavailable")} carapace />
-          )
+          ) : null
         }
       >
         {(current) => (
@@ -277,12 +274,17 @@ function AdvancedSettings(options: InventoryProps): JSX.Element {
                 onRemove: options.onConfigRemove,
               }}
             />
-            {options.configError
-              ? renderRetryError(options.configError, options.onConfigWriteRetry)
-              : null}
           </>
         )}
       </Show>
+      <PluginSettingsReadStatus
+        model={{ ...options, configSchema: options.advancedSchema }}
+        loading={
+          !options.configError && !config() && (options.configSchemaLoading || !options.configValue)
+        }
+        rows={4}
+        renderError={renderRetryError}
+      />
     </Show>
   );
 }
@@ -321,7 +323,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
                 class="btn btn--xs btn--icon oc-action oc-action-icon oc-action-secondary"
                 aria-label={t("common.reload")}
                 disabled={props.configBusy || props.configSchemaLoading}
-                onClick={props.onConfigReload}
+                onClick={() => props.onConfigReload()}
               >
                 <Icon name="refresh" />
               </button>
@@ -337,6 +339,7 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
   return (
     <SettingsPage carapace={true}>
       <SettingsPageHeader
+        registerHeading={props.registerRemovalHeading}
         title={t("tabs.plugins")}
         subtitle={t("pluginsPage.settingsDescription")}
       />
@@ -358,7 +361,6 @@ export function renderPluginSettingsInventory(props: InventoryProps): JSX.Elemen
         <div
           id="plugin-settings-panel"
           role="tabpanel"
-          tabindex="0"
           aria-labelledby={`plugin-settings-tab-${props.tab}`}
         >
           {body}
@@ -401,6 +403,39 @@ function permissionSettings(options: DetailProps): PluginSettingsEditorProps["pe
     fields,
   };
 }
+function PluginInspectionStatus(props: DetailProps) {
+  const source = createMemo(() => props.inspectionRead);
+  const receipt = createMemo(() => source().receipt());
+  const read = () => source().value();
+  const placeholder = () =>
+    !props.inspection && !props.catalog ? (
+      <SettingsLoadingSkeleton rows={2} carapace={true} />
+    ) : null;
+  return (
+    <Loading on={receipt()} fallback={placeholder()}>
+      <Errored
+        fallback={(error, reset) => (
+          <div class="callout danger plugins-settings-error oc-banner oc-banner-error" role="alert">
+            <span>{formatUiError(error())}</span>
+            <button
+              type="button"
+              class="btn btn--sm oc-action oc-action-secondary"
+              onClick={() => {
+                props.onRetryInspection();
+                reset();
+              }}
+            >
+              {t("pluginsPage.tryAgain")}
+            </button>
+          </div>
+        )}
+      >
+        {read()}
+      </Errored>
+    </Loading>
+  );
+}
+
 function PluginNotices(props: DetailProps) {
   const plugin = createMemo(() =>
     props.result?.plugins.find((entry) => entry.id === props.pluginId),
@@ -408,9 +443,7 @@ function PluginNotices(props: DetailProps) {
   return (
     <>
       {props.error ? renderRetryError(props.error, props.onRefresh) : null}
-      {props.inspectionError
-        ? renderRetryError(props.inspectionError, props.onRetryInspection)
-        : null}
+      <PluginInspectionStatus {...props} />
       {plugin()?.error ? (
         <div class="callout danger oc-banner oc-banner-error" role="alert">
           {formatUiExternalText(plugin()!.error!)}
@@ -427,7 +460,7 @@ export function renderPluginSettingsDetail(props: DetailProps): JSX.Element {
   );
   return (
     <>
-      {!props.connected ? (
+      {!props.connected && !props.result ? (
         <SettingsPage carapace={true}>
           <SettingsEmpty message={t("pluginsPage.connectToManage")} carapace={true} />
         </SettingsPage>
@@ -475,20 +508,20 @@ function PluginOverview(props: DetailProps): JSX.Element {
   );
   const catalog = createMemo(() => props.catalog ?? props.inspection?.catalog);
   const components = createMemo(() => props.inspection?.components);
-  const catalogIcon = createMemo(() => {
+  const catalogIcon = () => {
     const url = catalog()?.plugin.catalog.imageUrl;
     return {
       src: url ? props.catalogIconUrls?.[url] : undefined,
       loading: Boolean(url && props.catalogIconLoading?.(url)),
     };
-  });
-  const authorIcon = createMemo(() => {
+  };
+  const authorIcon = () => {
     const url = catalog()?.detail.author?.imageUrl;
     return {
       src: url ? props.catalogIconUrls?.[url] : undefined,
       loading: Boolean(url && props.catalogIconLoading?.(url)),
     };
-  });
+  };
   const skills = createMemo(() =>
     (components()?.skills ?? []).map((name) => ({
       name,
@@ -505,6 +538,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
   return (
     <SettingsPage wide={true} carapace={true}>
       <PluginDetailShell
+        registerRemovalHeading={props.registerRemovalHeading}
         id={"plugin-installed-detail"}
         name={plugin().name}
         summary={plugin().description || catalog()?.plugin.catalog.summary}
@@ -531,16 +565,18 @@ function PluginOverview(props: DetailProps): JSX.Element {
         titleAction={
           <Show
             when={Boolean(props.installProgress)}
-            fallback={renderPluginLifecycle(
-              {
-                ...props,
-                settingsHref: props.settingsHref ?? "#configuration",
-                onSettings: () => props.onTabChange("configuration"),
-              },
-              plugin(),
-            )}
+            fallback={
+              <PluginLifecycle
+                {...props}
+                settingsHref={props.settingsHref ?? "#configuration"}
+                onSettings={() => props.onTabChange("configuration")}
+                plugin={plugin()}
+                enabled={props.presentedEnabled?.(plugin().id) ?? plugin().enabled}
+              />
+            }
           >
             <PluginInstallAction
+              registerInstallAction={props.registerInstallAction}
               buttonClass="btn oc-action plugin-catalog-detail__install"
               primary={true}
               progress={props.installProgress}
@@ -561,9 +597,6 @@ function PluginOverview(props: DetailProps): JSX.Element {
         panel={
           <>
             <PluginNotices {...props} />
-            {!props.inspection && !catalog() && !props.inspectionError ? (
-              <SettingsLoadingSkeleton rows={2} carapace={true} />
-            ) : null}
             {renderPluginCapabilitySection(
               t("pluginsPage.auth.accounts"),
               (props.inspection?.mcpAuth ?? []).map((server) => ({

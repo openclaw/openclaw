@@ -1,23 +1,23 @@
+import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { Type } from "typebox";
-import { Value } from "typebox/value";
-import { z } from "zod";
-import { ProgressCardSchema } from "../../../../packages/gateway-protocol/src/schema/progress-card.js";
-import { SessionRowSchema } from "../../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { requestResult, transactionComplete } from "../../lib/chat/control-ui-database.runtime.ts";
 import { removePairingQrContent } from "../../lib/chat/pairing-qr.ts";
+import {
+  isChatTranscriptMetadata,
+  isProgressCard,
+} from "../../lib/protocol-validators.generated/transcript.js";
+import { listen } from "../../lib/reactive/listener.ts";
+import * as json from "../../lib/snapshot-json.ts";
 import {
   getSessionCacheValue,
   MAX_CACHED_CHAT_SESSIONS,
   setSessionCacheValue,
 } from "./session-cache.ts";
 import {
-  CHAT_TRANSCRIPT_METADATA_KEYS,
   MAX_CACHED_CHAT_WEIGHT,
   type ChatCacheObserver,
   type ChatMessageCache,
   type ChatSessionSnapshot,
-  type ChatTranscriptMetadata,
 } from "./session-message-cache.ts";
 import {
   isPersistableChatSnapshotKey,
@@ -40,79 +40,100 @@ import { deleteStoredChatSnapshot } from "./session-snapshot-invalidation.ts";
 import {
   consumePrewarmedChatSnapshot,
   discardPrewarmedChatSnapshot,
+  peekPrewarmedChatSnapshot,
 } from "./session-snapshot-prewarm.ts";
-const CHAT_SNAPSHOT_PROJECTION_VERSION = 2;
+const CHAT_SNAPSHOT_PROJECTION_VERSION = 3;
+const CHAT_SNAPSHOT_MESSAGE_LIMIT = 80;
 const CHAT_SNAPSHOT_WRITE_DELAY_MS = 500;
 const CHAT_SNAPSHOT_IDLE_TIMEOUT_MS = 1000;
+const parsedPrewarms = new WeakMap<object, Promise<ChatSessionSnapshot | null>>();
 
-const paginationSchema = z.discriminatedUnion("hasMore", [
-  z
-    .object({
-      completeSnapshot: z.literal(true).optional(),
-      hasMore: z.literal(false),
-      totalMessages: z.number().finite().nonnegative().optional(),
-    })
-    .strict(),
-  z
-    .object({
-      hasMore: z.literal(true),
-      nextOffset: z.number().finite().nonnegative(),
-      totalMessages: z.number().finite().nonnegative().optional(),
-    })
-    .strict(),
-]);
-
-const transcriptMetadataSchema = Type.Pick(SessionRowSchema, CHAT_TRANSCRIPT_METADATA_KEYS);
-
-const snapshotSchema = z
-  .object({
-    widgetHeights: z
-      .record(z.string(), z.number().finite().min(48).max(8000))
-      .refine((heights) => Object.keys(heights).length <= 100)
-      .optional(),
-    transcriptMetadata: z
-      .custom<ChatTranscriptMetadata>((value) => Value.Check(transcriptMetadataSchema, value))
-      .optional(),
-    progressCard: z
-      .custom<NonNullable<ChatSessionSnapshot["progressCard"]>>((value) =>
-        Value.Check(ProgressCardSchema, value),
-      )
-      .nullable()
-      .optional(),
-    deltaCursor: z.string().optional(),
-    displayedLeafEntryId: z.string().nullable().optional(),
+const nonnegative = json.refine(json.number, (value) => value >= 0);
+const sessionKeySchema = json.refine(json.text, (value) => value.length > 0);
+const completePaginationSchema = json.object(
+  {
+    completeSnapshot: json.optional(json.literal(true)),
+    hasMore: json.literal(false),
+    totalMessages: json.optional(nonnegative),
+  },
+  true,
+);
+const morePaginationSchema = json.object(
+  {
+    hasMore: json.literal(true),
+    nextOffset: nonnegative,
+    totalMessages: json.optional(nonnegative),
+  },
+  true,
+);
+const paginationSchema = {
+  parse(value: unknown) {
+    return asOptionalRecord(value)?.hasMore === true
+      ? morePaginationSchema.parse(value)
+      : completePaginationSchema.parse(value);
+  },
+};
+const snapshotSchema = json.object(
+  {
+    board: json.optional(
+      json.nullable(json.object({ snapshot: json.unknown, receivedAtMs: nonnegative }, true)),
+    ),
+    widgetHeights: json.optional(
+      json.refine(
+        json.record(json.refine(json.number, (height) => height >= 48 && height <= 8000)),
+        (heights) => Object.keys(heights).length <= 100,
+      ),
+    ),
+    transcriptMetadata: json.optional(json.checked(isChatTranscriptMetadata)),
+    progressCard: json.optional(json.nullable(json.checked(isProgressCard))),
+    deltaCursor: json.optional(json.text),
+    // Only persisted warm metadata needs its full validator; read admission loads it below.
+    historyState: json.optional(json.unknown),
+    displayedLeafEntryId: json.optional(json.nullable(json.text)),
     // Message contents are opaque; only the array boundary needs validation.
-    messages: z.custom<unknown[]>(Array.isArray),
+    messages: json.checked<unknown[]>(Array.isArray),
     pagination: paginationSchema,
-    sessionId: z.string().nullable(),
-  })
-  .strict();
+    sessionId: json.nullable(json.text),
+  },
+  true,
+);
+const recordSchema = json.refine(
+  json.object(
+    {
+      projectionVersion: json.refine(
+        json.number,
+        (value) => Number.isSafeInteger(value) && value > 0,
+      ),
+      savedAt: nonnegative,
+      sessionId: json.nullable(json.text),
+      sessionKey: sessionKeySchema,
+      snapshot: snapshotSchema,
+    },
+    true,
+  ),
+  (record) => record.sessionId === record.snapshot.sessionId,
+);
 
-const recordSchema = z
-  .object({
-    projectionVersion: z.number().int().positive(),
-    savedAt: z.number().finite().nonnegative(),
-    sessionId: z.string().nullable(),
-    sessionKey: z.string().min(1),
-    snapshot: snapshotSchema,
-  })
-  .strict()
-  .refine((record) => record.sessionId === record.snapshot.sessionId);
-
-type SessionSnapshotRecord = z.infer<typeof recordSchema>;
-const metadataSchema = z
-  .object({
-    savedAt: z.number().finite().nonnegative(),
-    sessionKey: z.string().min(1),
-    weight: z.number().finite().nonnegative(),
-  })
-  .strict();
-type SessionSnapshotMetadata = z.infer<typeof metadataSchema>;
-const sidebarRecordSchema = metadataSchema.omit({ weight: true }).extend({
-  projectionVersion: z.literal(1),
-  model: z.unknown(),
-});
-type SidebarRecord = z.infer<typeof sidebarRecordSchema>;
+type SessionSnapshotRecord = Omit<json.SnapshotValue<typeof recordSchema>, "snapshot"> & {
+  snapshot: ChatSessionSnapshot;
+};
+const metadataFields = {
+  savedAt: nonnegative,
+  sessionKey: sessionKeySchema,
+};
+const metadataSchema = json.object({ ...metadataFields, weight: nonnegative }, true);
+type SessionSnapshotMetadata = json.SnapshotValue<typeof metadataSchema>;
+const sidebarRecordsSchema = json.array(
+  json.object(
+    {
+      ...metadataFields,
+      projectionVersion: json.literal(1),
+      model: json.unknown,
+    },
+    true,
+  ),
+);
+type SidebarRecord = json.SnapshotValue<typeof sidebarRecordsSchema>[number];
 const sidebarRecordBytes = (record: SidebarRecord) =>
   new TextEncoder().encode(JSON.stringify(record)).byteLength;
 type PreparedSnapshotRecord = {
@@ -126,11 +147,78 @@ type PendingSessionState = {
 
 const activeStores = new Set<SessionSnapshotStore>();
 
-function parseSnapshotRecord(value: unknown, sessionKey?: string): SessionSnapshotRecord | null {
-  const parsed = recordSchema.safeParse(value);
-  return parsed.success && (!sessionKey || parsed.data.sessionKey === sessionKey)
-    ? parsed.data
-    : null;
+async function parseSnapshotRecord(
+  value: unknown,
+  sessionKey?: string,
+  onBoard?: (board: ChatSessionSnapshot["board"]) => void,
+): Promise<SessionSnapshotRecord | null> {
+  const parsed = json.parseSnapshot(recordSchema, value);
+  if (!parsed || (sessionKey && parsed.sessionKey !== sessionKey)) {
+    return null;
+  }
+  const historyState = parsed.snapshot.historyState;
+  if (historyState !== undefined) {
+    // Do not hold board restoration behind the lazy transcript validator.
+    onBoard?.(parsed.snapshot.board);
+    const { isChatHistoryState } =
+      await import("../../lib/protocol-validators.generated/history-state.js");
+    if (!isChatHistoryState(historyState)) {
+      return null;
+    }
+  }
+  return { ...parsed, snapshot: { ...parsed.snapshot, historyState } };
+}
+
+async function readSnapshotRecord(
+  sessionKey: string,
+  value: unknown,
+  isCurrent: () => boolean,
+  onBoard?: (board: ChatSessionSnapshot["board"]) => void,
+): Promise<ChatSessionSnapshot | null> {
+  if (
+    value === undefined ||
+    !isCurrent() ||
+    !isPersistableChatSnapshotKey(sessionKey) ||
+    asOptionalRecord(value)?.projectionVersion !== CHAT_SNAPSHOT_PROJECTION_VERSION
+  ) {
+    return null;
+  }
+  const record = await parseSnapshotRecord(value, sessionKey, onBoard);
+  if (!isCurrent()) {
+    return null;
+  }
+  if (!record) {
+    debugSnapshotStore("resetting cache after record shape mismatch");
+    await resetSessionSnapshotDatabase();
+  }
+  return record?.snapshot ?? null;
+}
+
+function readSharedPrewarm(
+  entry: object,
+  read: () => Promise<ChatSessionSnapshot | null>,
+): Promise<ChatSessionSnapshot | null> {
+  let snapshot = parsedPrewarms.get(entry);
+  if (!snapshot) {
+    snapshot = read();
+    parsedPrewarms.set(entry, snapshot);
+  }
+  return snapshot;
+}
+
+export async function readPrewarmedChatSnapshot(
+  cacheKey: string,
+): Promise<ChatSessionSnapshot | null> {
+  const entry = peekPrewarmedChatSnapshot();
+  if (entry?.cacheKey !== cacheKey) {
+    return null;
+  }
+  const snapshot = await readSharedPrewarm(entry, () =>
+    entry.promise.then((value) =>
+      readSnapshotRecord(entry.cacheKey, value, () => !entry.cancelled),
+    ),
+  );
+  return snapshot && !entry.cancelled && peekPrewarmedChatSnapshot() === entry ? snapshot : null;
 }
 
 function createSnapshotRecord(
@@ -140,12 +228,56 @@ function createSnapshotRecord(
   let snapshot: ChatSessionSnapshot;
   let weight: number;
   try {
+    let projected = pending.snapshot;
+    const messages = projected.messages;
+    let start = Math.max(0, messages.length - CHAT_SNAPSHOT_MESSAGE_LIMIT);
+    // A history entry can project multiple rows; retain its whole sequence group.
+    while (start > 0) {
+      const seq = readSessionMessageSequence(messages[start]);
+      if (seq === null || seq !== readSessionMessageSequence(messages[start - 1])) {
+        break;
+      }
+      start--;
+    }
+    if (start > 0) {
+      // Display rows are not Gateway page boundaries. Refill from zero on the
+      // first upward scroll; the history owner deduplicates the overlap and
+      // returns the next authoritative offset, including merged CLI histories.
+      projected = {
+        ...projected,
+        messages: messages.slice(start),
+        pagination: {
+          hasMore: true,
+          nextOffset: 0,
+          ...(projected.pagination.totalMessages !== undefined
+            ? { totalMessages: projected.pagination.totalMessages }
+            : {}),
+        },
+      };
+    }
     // Pairing credentials stay in the live projection, never the browser's disk cache.
-    const json = JSON.stringify(pending.snapshot, (_key, value: unknown) =>
-      removePairingQrContent(value),
-    );
-    snapshot = JSON.parse(json);
-    weight = json.length;
+    let redacted = false;
+    const serialized = JSON.stringify(projected, (_key, value: unknown) => {
+      if (value === projected.messages) {
+        return projected.messages.map((message) => {
+          const record = asOptionalRecord(message);
+          if (!record || !Object.hasOwn(record, "openclawResponsesInputReplay")) {
+            return message;
+          }
+          const { openclawResponsesInputReplay: _replay, ...display } = record;
+          return display;
+        });
+      }
+      const sanitized = removePairingQrContent(value);
+      redacted ||= sanitized !== value;
+      return sanitized;
+    });
+    snapshot = JSON.parse(serialized);
+    // A receipt cannot certify metadata changed by the disk privacy projection.
+    if (redacted) {
+      delete snapshot.historyState;
+    }
+    weight = serialized.length;
   } catch {
     return null;
   }
@@ -178,13 +310,13 @@ async function readSnapshotMetadata(): Promise<SessionSnapshotMetadata[] | null>
     await transactionComplete(transaction);
     const records: SessionSnapshotMetadata[] = [];
     for (const value of values) {
-      const record = metadataSchema.safeParse(value);
-      if (!record.success) {
+      const record = json.parseSnapshot(metadataSchema, value);
+      if (!record) {
         debugSnapshotStore("resetting cache after metadata shape mismatch");
         await resetSessionSnapshotDatabase(database);
         return null;
       }
-      records.push(record.data);
+      records.push(record);
     }
     return records;
   } catch (error) {
@@ -220,12 +352,12 @@ async function writeSnapshotRecords(
     const currentValues = await requestResult(metadataStore.getAll());
     const next = new Map<string, SessionSnapshotMetadata>();
     for (const value of currentValues) {
-      const metadata = metadataSchema.safeParse(value);
-      if (!metadata.success) {
+      const metadata = json.parseSnapshot(metadataSchema, value);
+      if (!metadata) {
         transaction.abort();
         throw new Error("IndexedDB metadata shape mismatch");
       }
-      next.set(metadata.data.sessionKey, metadata.data);
+      next.set(metadata.sessionKey, metadata);
     }
     for (const { record, metadata } of records) {
       next.set(record.sessionKey, metadata);
@@ -272,7 +404,7 @@ async function accessSidebarSnapshot<Model>(
     }
     const transaction = database.transaction(SIDEBAR_SNAPSHOT_STORE_NAME, "readwrite");
     const store = transaction.objectStore(SIDEBAR_SNAPSHOT_STORE_NAME);
-    const records = sidebarRecordSchema.array().parse(await requestResult(store.getAll()));
+    const records = sidebarRecordsSchema.parse(await requestResult(store.getAll()));
     if (!isCurrent()) {
       await transactionComplete(transaction);
       return null;
@@ -409,29 +541,19 @@ export class SessionSnapshotStore implements ChatCacheObserver {
     }
   }
 
-  async read(sessionKey: string): Promise<ChatSessionSnapshot | null> {
+  async read(
+    sessionKey: string,
+    onBoard?: (board: ChatSessionSnapshot["board"]) => void,
+  ): Promise<ChatSessionSnapshot | null> {
     const isCurrent = this.captureReadScope(sessionKey);
     const prewarm = consumePrewarmedChatSnapshot(sessionKey);
-    const value = await (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey));
-    if (value === undefined || !isCurrent() || !isPersistableChatSnapshotKey(sessionKey)) {
+    const read = () =>
+      (prewarm?.promise ?? readStoredChatSnapshotRecord(sessionKey)).then((value) =>
+        readSnapshotRecord(sessionKey, value, isCurrent, onBoard),
+      );
+    const snapshot = await (prewarm ? readSharedPrewarm(prewarm, read) : read());
+    if (!snapshot || !isCurrent()) {
       return null;
-    }
-    // Older display projections cannot resume a cursor or contribute a retained history prefix.
-    if (asOptionalRecord(value)?.projectionVersion !== CHAT_SNAPSHOT_PROJECTION_VERSION) {
-      return null;
-    }
-    const record = parseSnapshotRecord(value, sessionKey);
-    if (!record) {
-      debugSnapshotStore("resetting cache after record shape mismatch");
-      await resetSessionSnapshotDatabase();
-      return null;
-    }
-    let snapshot = record.snapshot;
-    const messages = snapshot.messages.map(removePairingQrContent);
-    if (messages.some((message, index) => message !== snapshot.messages[index])) {
-      snapshot = { ...snapshot, messages };
-      // Older writers persisted live QR credentials; repair through the normal write owner.
-      this.write(sessionKey, snapshot);
     }
     setSessionCacheValue(this.hydratedSnapshots, sessionKey, new WeakRef(snapshot));
     return snapshot;
@@ -609,8 +731,8 @@ function flushActiveStores(): void {
 
 // Module-lifetime browser events flush every active store, including during page teardown.
 if (typeof window !== "undefined") {
-  window.addEventListener("pagehide", flushActiveStores);
-  document.addEventListener("visibilitychange", () => {
+  listen(window, "pagehide", flushActiveStores);
+  listen(document, "visibilitychange", () => {
     if (document.visibilityState === "hidden") {
       flushActiveStores();
     }

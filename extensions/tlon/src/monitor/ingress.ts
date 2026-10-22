@@ -2,7 +2,6 @@
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
-  type ChannelIngressQueue,
   type ChannelIngressMonitorDeliveryResult,
   type ChannelIngressMonitorLifecycle,
 } from "openclaw/plugin-sdk/channel-outbound";
@@ -16,7 +15,6 @@ import { getTlonRuntime } from "../runtime.js";
 import { UrbitAuthError, UrbitHttpError } from "../urbit/errors.js";
 
 const TLON_INGRESS_PAYLOAD_VERSION = 1;
-const TLON_INGRESS_POLL_INTERVAL_MS = 1_000;
 
 export type TlonIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "admission">;
 
@@ -46,6 +44,27 @@ const TlonIngressPermanentError = createChannelIngressError<"invalid-event" | "t
   "TlonIngressPermanentError",
   { withReason: true },
 );
+
+// Raw Urbit events are attacker-shaped JSON. JSON.parse accepts nesting that
+// JSON.stringify cannot serialize, so durable storage must reject such events
+// instead of letting a stack overflow escape the awaited SSE callback.
+class TlonIngressUnserializableEventError extends Error {
+  constructor(cause: unknown) {
+    super("Tlon firehose event is too deeply nested to store.", { cause });
+    this.name = "TlonIngressUnserializableEventError";
+  }
+}
+
+function serializeTlonIngressEvent(event: unknown): string {
+  try {
+    return JSON.stringify(event);
+  } catch (error) {
+    if (error instanceof RangeError) {
+      throw new TlonIngressUnserializableEventError(error);
+    }
+    throw error;
+  }
+}
 
 function inspectChannelsEvent(event: unknown): { eventId: string; laneKey: string } | null {
   const envelope = asRecord(event);
@@ -142,27 +161,22 @@ function resolveTlonIngressNonRetryableFailure(error: unknown) {
 
 export function createTlonIngressMonitor(options: {
   accountId: string;
-  queue?: ChannelIngressQueue<TlonIngressPayload>;
   dispatch: TlonIngressDispatch;
   runtime: Pick<RuntimeEnv, "error" | "log">;
-  pollIntervalMs?: number;
-  adoptionStallTimeoutMs?: number;
   abortSignal?: AbortSignal;
 }) {
   const monitor = createChannelIngressMonitor<TlonIngressRaw, TlonIngressBody, TlonIngressPayload>({
-    queue:
-      options.queue ??
-      (() =>
-        getTlonRuntime().state.openChannelIngressQueue<TlonIngressPayload>({
-          accountId: options.accountId,
-        })),
+    queue: () =>
+      getTlonRuntime().state.openChannelIngressQueue<TlonIngressPayload>({
+        accountId: options.accountId,
+      }),
     inspect: (raw) => inspectTlonIngressEvent(raw.source, raw.event),
     payload: {
       version: TLON_INGRESS_PAYLOAD_VERSION,
       serialize: (raw, { receivedAt }) => ({
         receivedAt,
         source: raw.source,
-        rawEvent: JSON.stringify(raw.event),
+        rawEvent: serializeTlonIngressEvent(raw.event),
       }),
       deserialize: (body, { claim }) => deserializeTlonIngressEvent(body, claim.id),
       encode: ({ body }) => ({ version: TLON_INGRESS_PAYLOAD_VERSION, ...body }),
@@ -176,7 +190,7 @@ export function createTlonIngressMonitor(options: {
         ),
     },
     deliver: (raw, lifecycle) => options.dispatch(raw.source, raw.event, lifecycle),
-    pollIntervalMs: options.pollIntervalMs ?? TLON_INGRESS_POLL_INTERVAL_MS,
+    pollIntervalMs: 1_000,
     // Preserve the retired process-local guard's full 2,000-message key window.
     retention: {
       completedTtlMs: undefined,
@@ -187,9 +201,6 @@ export function createTlonIngressMonitor(options: {
     appendRetryDelaysMs: [0],
     drain: {
       resolveNonRetryableFailure: resolveTlonIngressNonRetryableFailure,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
       onLog: (message) => options.runtime.log?.(`tlon ${message}`),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),
@@ -202,9 +213,18 @@ export function createTlonIngressMonitor(options: {
     receive: async ({
       source,
       event,
-    }: TlonIngressRaw): Promise<{ kind: "accepted" | "ignored" }> => {
-      const result = await monitor.admit({ source, event });
-      return { kind: result.kind === "durable" ? "accepted" : "ignored" };
+    }: TlonIngressRaw): Promise<{ kind: "accepted" | "ignored" | "dropped" }> => {
+      try {
+        const result = await monitor.admit({ source, event });
+        return { kind: result.kind === "durable" ? "accepted" : "ignored" };
+      } catch (error) {
+        if (error instanceof TlonIngressUnserializableEventError) {
+          // Permanent poison: acknowledge it so the Urbit channel queue is not pinned.
+          options.runtime.log?.(`tlon dropped ${source} event: ${error.message}`);
+          return { kind: "dropped" };
+        }
+        throw error;
+      }
     },
     start: monitor.start,
     stop: monitor.stop,

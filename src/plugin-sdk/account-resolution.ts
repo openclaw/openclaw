@@ -1,6 +1,3 @@
-/**
- * Public SDK subpath for account id normalization and account matching helpers.
- */
 export {
   createAccountListHelpers,
   hasConfiguredAccountValue,

@@ -5,6 +5,7 @@ import { isTranscriptOnlyOpenClawAssistantMessage } from "../../../../../src/sha
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { normalizeBasePath } from "../../../app-route-paths.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { registerChatComposerEnglish } from "../../../i18n/locales/en-chat-composer.ts";
 import { formatCompactTokenCount, formatCost } from "../../../lib/format.ts";
 import { isMonitoredAuthProvider } from "../../../lib/model-auth.ts";
 import {
@@ -13,9 +14,11 @@ import {
   type ProviderQuotaGroup,
   type ProviderUsageDisplayProps,
 } from "../../../lib/provider-quota-summary.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { resolveSessionContextLimit } from "../../../lib/sessions/context-budget.ts";
 import { createChatPickerOverlay } from "./chat-picker-overlay.ts";
+
+registerEnglishCatalog(registerChatComposerEnglish);
 
 const CONTEXT_NOTICE_RATIO = 0.85;
 
@@ -179,7 +182,7 @@ function QuotaRow(props: {
         aria-valuenow={props.usedPercent}
       >
         <span
-          class={severity() ? `context-usage__limit-fill--${severity()}` : ""}
+          class={{ [`context-usage__limit-fill--${severity()}`]: Boolean(severity()) }}
           style={{ width: `${props.usedPercent}%` }}
         />
       </div>
@@ -280,10 +283,10 @@ export function ContextNotice(props: ContextNoticeProps) {
         })
       : t("chat.usageRemaining");
   });
-  const colors = createMemo(() => {
+  const colors = () => {
     const context = model();
     return context ? { "--ctx-color": context.color, "--ctx-bg": context.bg } : undefined;
-  });
+  };
   const dashOffset = () => RING_CIRCUMFERENCE * (1 - (model()?.pct ?? 0) / 100);
   const providerCosts = createMemo(() =>
     model() ? latestProviderCostStats(props.messages) : null,
@@ -315,8 +318,13 @@ export function ContextNotice(props: ContextNoticeProps) {
         const pickerRef = createChatPickerOverlay((details) => setOpen(details.open));
         return (
           <div class="context-usage" style={colors()}>
-            <details ref={pickerRef}>
+            <details
+              ref={pickerRef.details}
+              onClick={pickerRef.onClick}
+              onToggle={pickerRef.onToggle}
+            >
               <summary
+                ref={pickerRef.trigger}
                 class={["context-ring", { "context-ring--warning": model()?.warning }]}
                 aria-label={summary()}
                 title={t("chat.composer.contextUsage.open")}
@@ -339,7 +347,12 @@ export function ContextNotice(props: ContextNoticeProps) {
                   />
                 </svg>
               </summary>
-              <div class="oc-overlay chat-picker-overlay" data-anchored-overlay popover="manual">
+              <div
+                ref={pickerRef.surface}
+                class="oc-overlay chat-picker-overlay"
+                data-anchored-overlay
+                popover="manual"
+              >
                 <Show when={open()}>
                   <section
                     class="context-usage__popover"

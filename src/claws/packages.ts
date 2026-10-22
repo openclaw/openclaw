@@ -5,7 +5,6 @@ import { normalizeClawHubSha256Integrity } from "../infra/clawhub-integrity.js";
 import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import { computeDeclaredSurfaceHash } from "../plugins/capability-summary.js";
 import { installManagedPlugin } from "../plugins/management-mutations.js";
-import { uninstallPluginWithPolicy } from "../plugins/management-uninstall.js";
 import {
   preflightPluginInstall,
   resolveInstalledClawHubPlugin,
@@ -14,27 +13,11 @@ import { defaultRuntime } from "../runtime.js";
 import { installSkillFromClawHub, preflightSkillFromClawHub } from "../skills/lifecycle/clawhub.js";
 import {
   acquireClawPackageLifecycleLease,
-  maintainClawPackageLifecycleLease,
-  type MaintainedClawPackageLifecycleLease,
+  type ClawPackageLifecycleLease,
 } from "../state/claw-package-lifecycle-lease.js";
-import {
-  persistClawPackageRefForAdd,
-  readClawPackageRefsForAdd,
-  updateClawPackageRefStatusForAdd,
-} from "./add-state-write.js";
 import type { InstallClawPackagesOptions } from "./package-install-options.js";
 import { packageFromAction } from "./package-plan-action.js";
-import { bindClawPluginBeforeCommit } from "./package-plugin-before-commit.js";
 import { matchesPlannedPluginProbe } from "./package-plugin-probe-match.js";
-import {
-  acquireMaintainedClawPackageLease,
-  createClawPackageRefWriter,
-  withClawPackageRefWrite,
-} from "./package-ref-state-write.js";
-import {
-  findResumableIntroducedPluginRequirement,
-  ownerInstallIsNewerThanRefs,
-} from "./package-resume.js";
 import { createStatelessClawPackageReceipt } from "./package-stateless-receipt.js";
 import { rollbackStatelessClawPackagesWithStamps } from "./package-stateless-rollback.js";
 import {
@@ -126,65 +109,40 @@ async function installClawPackagesUnlocked(
       runtime.log("Restart the gateway to load plugins.");
     }
   };
-  const uninstallPlugin = async (params: Parameters<typeof uninstallPluginWithPolicy>[0]) => {
-    const result = await uninstallPluginWithPolicy(params);
-    if (!result.ok) {
-      throw new Error(result.error);
-    }
-    runtime.log(`Rolled back plugin requirement: ${result.value.pluginId}`);
-  };
-  const persistPackageRef: typeof persistClawPackageRefForAdd = options.stateless
-    ? async (currentPlan, pkg, refOptions) =>
-        createStatelessClawPackageReceipt(currentPlan, pkg, {
-          ...refOptions,
-          nowMs: refOptions?.nowMs ?? options.nowMs,
-        })
-    : persistClawPackageRefForAdd;
-  const completePackageRef: typeof updateClawPackageRefStatusForAdd = options.stateless
-    ? async (ref, status) => ({ ...ref, status, updatedAtMs: options.nowMs ?? Date.now() })
-    : updateClawPackageRefStatusForAdd;
-  const readPackageRefs = options.stateless ? async () => [] : readClawPackageRefsForAdd;
   const installedPackages: PersistedClawPackageRef[] = [];
-  const installedPlugins: Array<{ installId: string; packageIndex: number }> = [];
 
   for (const action of plan.actions.filter((candidate) => candidate.kind === "package")) {
-    let packageLease: MaintainedClawPackageLifecycleLease | null = null;
+    let packageLease: ClawPackageLifecycleLease | null = null;
     try {
       const pkg = packageFromAction(action);
-      packageLease = await acquireMaintainedClawPackageLease(pkg, plan.agent.workspace, options);
-      const forwardWriter = createClawPackageRefWriter(
-        packageLease,
-        options,
-        (refOptions, stateOptions) =>
-          persistPackageRef(plan, pkg, { ...stateOptions, ...refOptions }),
-        (ref, status, stateOptions) => completePackageRef(ref, status, stateOptions),
-      );
-      const { assertCurrent, assertForwardCurrent } = forwardWriter;
-      const persistForwardPackageRef = forwardWriter.persist;
-      const completeForwardPackageRef = forwardWriter.complete;
+      const leaseArtifact =
+        pkg.kind === "skill"
+          ? { kind: pkg.kind, source: pkg.source, ref: pkg.ref, workspace: plan.agent.workspace }
+          : { kind: pkg.kind, source: pkg.source, ref: pkg.ref };
+      const acquired = await acquireClawPackageLifecycleLease(leaseArtifact, {
+        env: options.env,
+        path: options.path,
+        required: true,
+      });
+      if (!acquired) {
+        throw new Error(`Could not acquire package lifecycle lease for ${pkg.ref}.`);
+      }
+      packageLease = acquired;
+      const assertCurrent = () => {
+        acquired.assertCurrent();
+        options.assertCurrent?.();
+      };
+      const assertForwardCurrent = () => {
+        assertCurrent();
+        options.assertForwardCurrent?.();
+      };
       if (pkg.kind === "skill") {
-        const upgrade = options.skillUpgrade?.ref === pkg.ref ? options.skillUpgrade : undefined;
-        if (upgrade) {
-          if (!options.onSkillTransaction) {
-            throw new Error("Skill upgrade transaction receiver is unavailable.");
-          }
-          await upgrade.assertCurrent();
-        }
-        const rawPreflight = await preflightSkillFromClawHub({
+        const preflight = await preflightSkillFromClawHub({
           workspaceDir: plan.agent.workspace,
           slug: pkg.ref,
           version: pkg.version,
           expectedIntegrity: pkg.integrity,
         });
-        const preflight =
-          upgrade &&
-          !rawPreflight.ok &&
-          rawPreflight.code === "skill_version_conflict" &&
-          rawPreflight.integrity &&
-          normalizeClawHubSha256Integrity(rawPreflight.integrity) ===
-            normalizeClawHubSha256Integrity(pkg.integrity)
-            ? { ...rawPreflight, ok: true as const, action: "install" as const }
-            : rawPreflight;
         assertCurrent();
         if (!preflight.ok) {
           throw new Error(preflight.error);
@@ -204,7 +162,8 @@ async function installClawPackagesUnlocked(
         }
         if (preflight.action === "reuse") {
           installedPackages.push(
-            await persistForwardPackageRef({
+            createStatelessClawPackageReceipt(plan, pkg, {
+              nowMs: options.nowMs,
               status: "complete",
               relationship: "managed",
               origin: "pre-existing",
@@ -228,7 +187,8 @@ async function installClawPackagesUnlocked(
             riskWarning: pkg.riskWarning,
           });
         }
-        let packageRef = await persistForwardPackageRef({
+        let packageRef = createStatelessClawPackageReceipt(plan, pkg, {
+          nowMs: options.nowMs,
           status: "pending",
           relationship: "managed",
           origin: "claw-introduced",
@@ -236,88 +196,46 @@ async function installClawPackagesUnlocked(
         });
         installedPackages.push(packageRef);
         assertForwardCurrent();
-        if (upgrade) {
-          await upgrade.assertCurrent();
-        }
         const installed = await installSkillFromClawHub({
           workspaceDir: plan.agent.workspace,
           slug: pkg.ref,
           version: pkg.version,
           expectedIntegrity: pkg.integrity,
           clawManaged: true,
-          ...(upgrade
-            ? { force: true, expectedClawHubState: upgrade.plan, deferCommit: true }
-            : {}),
-          beforePersistentApply: () => {
-            assertForwardCurrent();
-            if (!upgrade) {
-              options.onExternalMutation?.(pkg);
-            }
-          },
-          ...(upgrade ? { assertOwned: assertCurrent } : {}),
+          beforePersistentApply: assertForwardCurrent,
           confirmInstall: (warning) => {
             assertCurrent();
             return warning === pkg.riskWarning;
           },
         });
-        if (!installed.ok && installed.recoveryIncomplete) {
-          options.onExternalMutation?.(pkg);
-        }
-        if (installed.ok && upgrade) {
-          if (installed.transaction) {
-            options.onSkillTransaction?.(pkg, installed.transaction);
-          } else {
-            options.onExternalMutation?.(pkg);
-          }
-        }
         assertCurrent();
         if (!installed.ok) {
           throw new Error(installed.error);
         }
-        if (upgrade) {
-          if (!installed.transaction) {
-            throw new Error(`Skill ${pkg.ref}@${pkg.version} returned no rollback receipt.`);
-          }
-        }
         if (installed.version !== pkg.version) {
           throw new Error(`Skill ${pkg.ref}@${pkg.version} changed during installation.`);
         }
-        packageRef = await completeForwardPackageRef(packageRef, "complete");
+        assertForwardCurrent();
+        packageRef = {
+          ...packageRef,
+          status: "complete",
+          updatedAtMs: options.nowMs ?? Date.now(),
+        };
         installedPackages[installedPackages.length - 1] = packageRef;
         continue;
       }
 
       const preflight = await preflightPluginInstall({
         clawhubPackage: pkg.ref,
-        rawSpec: `clawhub:${pkg.ref}@${pkg.version}`,
         expectedVersion: pkg.version,
       });
       assertCurrent();
       if (!preflight.ok) {
         throw new Error(
-          preflight.code === "plugin_version_conflict"
-            ? `Plugin ${pkg.ref}@${pkg.version} conflicts with installed version ${preflight.installedVersion}.`
-            : preflight.error,
+          `Plugin ${pkg.ref}@${pkg.version} conflicts with installed version ${preflight.installedVersion}.`,
         );
       }
-      const resumableRequirement =
-        pkg.ownerAction === "install" && preflight.action === "reuse"
-          ? findResumableIntroducedPluginRequirement({
-              agentId: plan.agent.finalId,
-              pkg,
-              preflight,
-              expectedIntegrity: pkg.integrity,
-              refs: await readPackageRefs({
-                ...options,
-                agentId: plan.agent.finalId,
-                kind: pkg.kind,
-                source: pkg.source,
-                ref: pkg.ref,
-                version: pkg.version,
-              }),
-            })
-          : undefined;
-      if (preflight.action !== pkg.ownerAction && !resumableRequirement) {
+      if (preflight.action !== pkg.ownerAction) {
         throw new ClawPackageInstallError(
           "package_owner_state_changed",
           `Plugin ${pkg.ref}@${pkg.version} owner state changed from ${pkg.ownerAction} to ${preflight.action}; run add --dry-run again.`,
@@ -362,38 +280,13 @@ async function installClawPackagesUnlocked(
             installedPackages,
           );
         }
-        if (resumableRequirement) {
-          assertForwardCurrent();
-          options.runtimeBatch?.retain(probe.pluginId);
-          installedPackages.push(
-            await persistForwardPackageRef({
-              status: "complete",
-              relationship: resumableRequirement.relationship,
-              origin: resumableRequirement.origin,
-              independentOwner: resumableRequirement.independentOwner,
-            }),
-          );
-          continue;
-        }
-        const existingRefs = await readPackageRefs({
-          ...options,
-          kind: pkg.kind,
-          source: pkg.source,
-          ref: pkg.ref,
-          version: pkg.version,
-        });
-        const inheritsClawOrigin =
-          existingRefs.length > 0 &&
-          existingRefs.every(
-            (candidate) => candidate.origin === "claw-introduced" && !candidate.independentOwner,
-          ) &&
-          !ownerInstallIsNewerThanRefs(preflight.installedAt, existingRefs);
         installedPackages.push(
-          await persistForwardPackageRef({
+          createStatelessClawPackageReceipt(plan, pkg, {
+            nowMs: options.nowMs,
             status: "complete",
             relationship: "referenced",
-            origin: inheritsClawOrigin ? "claw-introduced" : "pre-existing",
-            independentOwner: !inheritsClawOrigin,
+            origin: "pre-existing",
+            independentOwner: true,
           }),
         );
         continue;
@@ -408,7 +301,8 @@ async function installClawPackagesUnlocked(
         );
       }
 
-      let packageRef = await persistForwardPackageRef({
+      let packageRef = createStatelessClawPackageReceipt(plan, pkg, {
+        nowMs: options.nowMs,
         status: "pending",
         relationship: "referenced",
         origin: "claw-introduced",
@@ -417,20 +311,19 @@ async function installClawPackagesUnlocked(
       installedPackages.push(packageRef);
 
       assertForwardCurrent();
-      const pluginCommit = bindClawPluginBeforeCommit(options, pkg, assertForwardCurrent);
       await installPlugin({
         request: {
           source: "clawhub",
           packageName: pkg.ref,
           version: pkg.version,
-          mode: options.pluginInstallMode ?? "install",
+          mode: "install",
           expectedIntegrity: pkg.integrity,
           expectedPluginId: probe.pluginId,
         },
         env: options.clawHubBaseUrl
           ? { ...options.env, OPENCLAW_CLAWHUB_URL: options.clawHubBaseUrl }
           : options.env,
-        beforePersistentApply: pluginCommit.beforePersistentApply,
+        beforePersistentApply: assertForwardCurrent,
         onBeforePluginArtifactCommit: async (artifact) => {
           const { snapshot } = await readConfigFileSnapshotForWrite();
           const current = inspectClawPluginCapabilities(
@@ -448,9 +341,8 @@ async function installClawPackagesUnlocked(
               `Plugin ${pkg.ref}@${pkg.version} effective capability grants changed after planning; run add --dry-run again.`,
             );
           }
-          pluginCommit.artifactReviewed();
         },
-        beforePersistentEffect: pluginCommit.beforePersistentEffect,
+        beforePersistentEffect: async () => assertForwardCurrent(),
         logger: createPluginInstallLogger(runtime),
         confirmInstall: async (warning) => {
           assertCurrent();
@@ -480,33 +372,25 @@ async function installClawPackagesUnlocked(
         clawManaged: true,
         deferRuntime: options.runtimeBatch?.install(),
       });
-      // A committed upgrade cannot restore its previous payload; retain it for reconciliation.
-      if (options.pluginInstallMode !== "update") {
-        installedPlugins.push({
-          installId: probe.pluginId,
-          packageIndex: installedPackages.length - 1,
+      const installed = await resolveInstalledClawHubPlugin({ clawhubPackage: pkg.ref });
+      if (
+        installed.status === "found" &&
+        installed.pluginId === probe.pluginId &&
+        installed.installedVersion === pkg.version &&
+        installed.record.integrity &&
+        normalizeClawHubSha256Integrity(installed.record.integrity) ===
+          normalizeClawHubSha256Integrity(pkg.integrity) &&
+        installed.record.installedAt
+      ) {
+        statelessPluginInstallStamps.set(packageRef, {
+          pluginId: installed.pluginId,
+          installedAt: installed.record.installedAt,
         });
-      }
-      if (options.stateless) {
-        const installed = await resolveInstalledClawHubPlugin({ clawhubPackage: pkg.ref });
-        if (
-          installed.status === "found" &&
-          installed.pluginId === probe.pluginId &&
-          installed.installedVersion === pkg.version &&
-          installed.record.integrity &&
-          normalizeClawHubSha256Integrity(installed.record.integrity) ===
-            normalizeClawHubSha256Integrity(pkg.integrity) &&
-          installed.record.installedAt
-        ) {
-          statelessPluginInstallStamps.set(packageRef, {
-            pluginId: installed.pluginId,
-            installedAt: installed.record.installedAt,
-          });
-        }
       }
       assertCurrent();
       const pendingRef = packageRef;
-      packageRef = await completeForwardPackageRef(packageRef, "complete");
+      assertForwardCurrent();
+      packageRef = { ...packageRef, status: "complete", updatedAtMs: options.nowMs ?? Date.now() };
       const stamp = statelessPluginInstallStamps.get(pendingRef);
       if (stamp) {
         statelessPluginInstallStamps.set(packageRef, stamp);
@@ -523,14 +407,15 @@ async function installClawPackagesUnlocked(
         !statelessPluginInstallStamps.has(pending)
       ) {
         try {
-          installedPackages[installedPackages.length - 1] = await withClawPackageRefWrite(
-            packageLease,
-            options,
-            () => options.assertCurrent?.(),
-            async (stateOptions) => await completePackageRef(pending, "failed", stateOptions),
-          );
+          packageLease.assertCurrent();
+          options.assertCurrent?.();
+          installedPackages[installedPackages.length - 1] = {
+            ...pending,
+            status: "failed",
+            updatedAtMs: options.nowMs ?? Date.now(),
+          };
         } catch {
-          // Preserve the installer error; pending provenance still exposes uncertain ownership.
+          // Preserve the installer error and its pending in-memory receipt.
         }
       }
       try {
@@ -539,126 +424,7 @@ async function installClawPackagesUnlocked(
       } catch {
         // The rollback path will report a busy lease instead of mutating without ownership.
       }
-      const rollbackErrors: string[] = [];
-      for (const installedPlugin of options.stateless ? [] : installedPlugins.toReversed()) {
-        const packageRef = installedPackages[installedPlugin.packageIndex];
-        if (!packageRef) {
-          continue;
-        }
-        let rollbackLease: MaintainedClawPackageLifecycleLease | null = null;
-        try {
-          const acquiredRollbackLease = await acquireClawPackageLifecycleLease(
-            { kind: "plugin", source: "clawhub", ref: packageRef.ref },
-            { env: options.env, path: options.path, required: true },
-          );
-          if (!acquiredRollbackLease) {
-            throw new Error(`Could not acquire package lifecycle lease for ${packageRef.ref}.`, {
-              cause: error,
-            });
-          }
-          rollbackLease = maintainClawPackageLifecycleLease(acquiredRollbackLease);
-          const activeRollbackLease = rollbackLease;
-          const sharedRefs = (
-            await readPackageRefs({
-              ...options,
-              kind: "plugin",
-              source: "clawhub",
-              ref: packageRef.ref,
-              version: packageRef.version,
-              integrity: packageRef.integrity,
-            })
-          ).filter(
-            (ref) =>
-              ref.agentId !== plan.agent.finalId &&
-              (ref.status === "pending" || ref.status === "complete"),
-          );
-          if (sharedRefs.length > 0) {
-            rollbackErrors.push(
-              `kept plugin ${installedPlugin.installId} because another Claw now references it`,
-            );
-            continue;
-          }
-          const currentRefs = await readPackageRefs({
-            ...options,
-            kind: "plugin",
-            source: "clawhub",
-            ref: packageRef.ref,
-            version: packageRef.version,
-          });
-          if (currentRefs.some((candidate) => candidate.independentOwner)) {
-            rollbackErrors.push(
-              `kept plugin ${installedPlugin.installId} because it now has a direct owner`,
-            );
-            continue;
-          }
-          const installed = await resolveInstalledClawHubPlugin({ clawhubPackage: packageRef.ref });
-          const installedIntegrity =
-            installed.status === "found" && installed.record.integrity
-              ? normalizeClawHubSha256Integrity(installed.record.integrity)
-              : null;
-          if (
-            installed.status !== "found" ||
-            installed.pluginId !== installedPlugin.installId ||
-            installed.installedVersion !== packageRef.version ||
-            installedIntegrity !== normalizeClawHubSha256Integrity(packageRef.integrity) ||
-            ownerInstallIsNewerThanRefs(installed.record.installedAt, currentRefs)
-          ) {
-            rollbackErrors.push(
-              `kept plugin ${installedPlugin.installId} because its installed identity changed after Claw installation`,
-            );
-            continue;
-          }
-          options.assertCurrent?.();
-          await uninstallPlugin({
-            pluginId: installedPlugin.installId,
-            caller: "cli",
-            invalidateRuntimeCache: false,
-            clawManaged: true,
-            beforePersistentApply: () => {
-              rollbackLease?.assertCurrent();
-              options.assertCurrent?.();
-            },
-            onWarning: (warning) => runtime.log(warning),
-            deferRuntime: options.runtimeBatch?.install(),
-          });
-          rollbackLease.assertCurrent();
-          options.assertCurrent?.();
-          installedPackages[installedPlugin.packageIndex] = await withClawPackageRefWrite(
-            activeRollbackLease,
-            options,
-            () => options.assertCurrent?.(),
-            async (stateOptions) =>
-              await completePackageRef(
-                installedPackages[installedPlugin.packageIndex] ?? packageRef,
-                "rolled_back",
-                stateOptions,
-              ),
-          );
-        } catch (rollbackError) {
-          if (hasSqliteWorkerOutcomeUnknown(rollbackError)) {
-            throw rollbackError;
-          }
-          rollbackErrors.push(
-            `could not remove plugin ${installedPlugin.installId}: ${coerceErrorMessage(rollbackError)}`,
-          );
-          continue;
-        } finally {
-          try {
-            await rollbackLease?.release();
-          } catch {
-            // Lease expiry recovers cleanup when the shared state database is unavailable.
-          }
-        }
-      }
       const message = coerceErrorMessage(error);
-      if (rollbackErrors.length > 0) {
-        throw new ClawPackageInstallError(
-          "package_rollback_failed",
-          `${message} Rollback incomplete: ${rollbackErrors.join("; ")}.`,
-          installedPackages,
-          { cause: error },
-        );
-      }
       throw new ClawPackageInstallError(
         error instanceof ClawPackageInstallError ? error.code : "package_install_failed",
         message,

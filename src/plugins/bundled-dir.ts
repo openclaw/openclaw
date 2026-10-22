@@ -270,33 +270,25 @@ function resolveBundledPluginsDirUncached(env: NodeJS.ProcessEnv): string | unde
     }
   }
 
-  try {
-    for (const packageRoot of resolvePackageRootsForBundledPlugins(rejectedExistingOverride)) {
-      const bundledDir = resolveBundledDirFromPackageRoot(
-        packageRoot,
-        resolvePluginRuntimeArtifactPreference(),
-      );
-      if (bundledDir) {
-        return bundledDir;
-      }
+  for (const packageRoot of resolvePackageRootsForBundledPlugins(rejectedExistingOverride)) {
+    const bundledDir = resolveBundledDirFromPackageRoot(
+      packageRoot,
+      resolvePluginRuntimeArtifactPreference(),
+    );
+    if (bundledDir) {
+      return bundledDir;
     }
-  } catch {
-    // ignore
   }
 
   // bun --compile: ship a sibling bundled plugin tree next to the executable.
-  try {
-    const execDir = path.dirname(process.execPath);
-    const siblingBuilt = path.join(execDir, "dist", "extensions");
-    if (pluginCacheExistsSync(siblingBuilt)) {
-      return siblingBuilt;
-    }
-    const sibling = path.join(execDir, "extensions");
-    if (pluginCacheExistsSync(sibling)) {
-      return sibling;
-    }
-  } catch {
-    // ignore
+  const execDir = path.dirname(process.execPath);
+  const siblingBuilt = path.join(execDir, "dist", "extensions");
+  if (pluginCacheExistsSync(siblingBuilt)) {
+    return siblingBuilt;
+  }
+  const sibling = path.join(execDir, "extensions");
+  if (pluginCacheExistsSync(sibling)) {
+    return sibling;
   }
 
   // npm/dev: walk up from this module to find the bundled plugin tree at the package root.

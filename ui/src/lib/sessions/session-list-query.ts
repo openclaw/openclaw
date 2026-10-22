@@ -1,16 +1,9 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { sessionActivityTimestamp } from "../../../../src/shared/session-activity-timestamp.js";
+import { SESSIONS_LIST_OWNER_LIMIT } from "../../../../src/shared/session-list-limits.js";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
 import { compareSessionRowsByUpdatedAt, sessionMatchesArchivedFilter } from "./navigation.ts";
-import type {
-  SessionGateway,
-  SessionListOptions,
-  SessionListScope,
-  SessionListSnapshot,
-  SessionRefreshOptions,
-  SessionRefreshOutcome,
-} from "./session-capability.ts";
 import {
   normalizeAgentId,
   areUiSessionKeysEquivalent,
@@ -29,6 +22,14 @@ import {
   reconcileParsedSessionChangedRow,
   sessionChangedSnapshots,
 } from "./session-row-reconcile.ts";
+import type {
+  SessionGateway,
+  SessionListOptions,
+  SessionListScope,
+  SessionListSnapshot,
+  SessionRefreshOptions,
+  SessionRefreshOutcome,
+} from "./session-types.ts";
 
 type SessionListRowLookup = (key: string, agentId?: string | null) => GatewaySessionRow | undefined;
 
@@ -180,24 +181,30 @@ export function canApplySessionListSnapshot(
     }
     const windowSize =
       result.nextOffset ?? result.limitApplied ?? options.limit ?? DEFAULT_SESSION_LIST_QUERY.limit;
-    if (
-      excluded &&
-      result.hasMore === true &&
-      sortBy === "updatedAt" &&
-      (options.ownerFirst !== true ||
-        (viewerProfileId &&
-          !(
-            excluded.owner?.actor.identity?.type === "profile" &&
-            excluded.owner.actor.identity.id === viewerProfileId
-          ))) &&
-      result.sessions.filter(
+    if (excluded && result.hasMore === true && sortBy === "updatedAt") {
+      const newerRows = result.sessions.filter(
         (row) =>
           sessionMatchesArchivedFilter(row, options.archivedFilter ?? "active") &&
           compareSessionRowsByUpdatedAt(row, excluded) < 0,
-      ).length >= windowSize
-    ) {
-      covered = true;
-      continue;
+      );
+      if (
+        newerRows.length >= windowSize &&
+        (options.ownerFirst !== true ||
+          (viewerProfileId &&
+            (!(
+              excluded.owner?.actor.identity?.type === "profile" &&
+              excluded.owner.actor.identity.id === viewerProfileId
+            ) ||
+              // Owned ancestors below both bounded windows cannot enter either page.
+              newerRows.filter(
+                (row) =>
+                  row.owner?.actor.identity?.type === "profile" &&
+                  row.owner.actor.identity.id === viewerProfileId,
+              ).length >= Math.min(windowSize, SESSIONS_LIST_OWNER_LIMIT))))
+      ) {
+        covered = true;
+        continue;
+      }
     }
     const next = reconcileParsedSessionChangedRow(existing, parsedSnapshot, {
       resultAgentId: options.agentId,
@@ -437,7 +444,6 @@ export function coalesceSessionRefresh(
 
 export type ManagedSessionListRefresh = {
   append: boolean;
-  immediate?: boolean;
   offset?: number;
   invalidated?: true;
   background?: true;

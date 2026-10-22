@@ -19,6 +19,7 @@ import {
   syncDirectory,
 } from "./directory-durability.js";
 import { formatDiskSpaceBytes, tryReadDiskSpace } from "./disk-space.js";
+import { ignoreMissingPath } from "./errno.js";
 import { formatErrorMessageWithCode } from "./errors.js";
 import { sameFileMutationFingerprint } from "./file-descriptor.js";
 import { hasNodeErrorCode } from "./path-guards.js";
@@ -41,7 +42,7 @@ import {
   readUpdateStateDatabaseSizes,
   readUpdateStateDatabaseSizesInProcess,
 } from "./update-candidate-state.sizes.js";
-import { readUpdatePhysicalDatabaseGenerations } from "./update-database-generations.js";
+import { readUpdatePhysicalDatabaseGenerations } from "./update-physical-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 
 export const UpdateDatabaseBackupSchema = z.object({
@@ -73,6 +74,8 @@ export const UpdateDatabaseBackupSchema = z.object({
   missingPaths: z.array(z.string()),
   sourcePaths: z.array(z.string()),
   sourceGenerations: z.record(z.string(), z.string().nullable()),
+  /** Manual original images held under maintenance custody; never automatic rollback authority. */
+  originalCaptureSourcePaths: z.array(z.string()).optional(),
   databaseOwners: z
     .array(UpdateStateDatabaseOwnerSchema.and(z.object({ path: z.string() })))
     .optional(),
@@ -96,6 +99,7 @@ type BackupInput = {
   additionalPaths?: readonly string[];
   additionalFiles?: readonly string[];
   preserveSourceArtifacts?: boolean;
+  integrityCheck?: "quick" | "full";
   /** Native migration owns the stopped Gateway until Doctor takes custody. */
   stopped?: boolean;
   postgresOffline?: boolean;
@@ -125,7 +129,8 @@ async function inspectRestorableDatabaseFiles(
 ) {
   const identities = new Map<string, BigIntStats>();
   for (const database of databases) {
-    for (const suffix of ["", "-wal", "-shm", "-journal"]) {
+    // Readers mutate/recreate the transient WAL index; only durable files fence capture.
+    for (const suffix of ["", "-wal", "-journal"]) {
       const file = `${database}${suffix}`;
       let info;
       try {
@@ -148,16 +153,19 @@ async function inspectRestorableDatabaseFiles(
       ) {
         throw new Error(`Update database file changed during backup: ${file}.`);
       }
-      identities.set(file, info);
+      // Readers can create an empty WAL beside a checkpointed database.
+      if (suffix !== "-wal" || info.size !== 0n) {
+        identities.set(file, info);
+      }
     }
   }
-  if (
-    stopped &&
-    previous &&
-    (identities.size !== previous.size ||
-      [...identities.keys()].some((file) => !previous.has(file)))
-  ) {
-    throw new Error("Update database journal state changed during stopped backup.");
+  if (stopped && previous) {
+    const changed = [...previous.keys(), ...identities.keys()].find(
+      (file) => previous.has(file) !== identities.has(file),
+    );
+    if (changed) {
+      throw new Error(`Update database journal state changed during stopped backup: ${changed}.`);
+    }
   }
   return identities;
 }
@@ -250,16 +258,9 @@ async function canonicalDatabaseInventory(
         canonical = await fs.realpath(spelling);
         present.add(canonical);
       } catch (error) {
-        if (!hasNodeErrorCode(error, "ENOENT")) {
-          throw error;
-        }
+        ignoreMissingPath(error);
         // A dangling alias is not proof that a database was absent.
-        const entry = await fs.lstat(spelling).catch((cause: unknown) => {
-          if (!hasNodeErrorCode(cause, "ENOENT")) {
-            throw cause;
-          }
-          return undefined;
-        });
+        const entry = await fs.lstat(spelling).catch(ignoreMissingPath);
         if (entry) {
           throw new Error(`Update database path cannot be resolved: ${spelling}`, { cause: error });
         }
@@ -295,6 +296,8 @@ export async function createUpdateDatabaseBackupInProcess(
     inspectionPlan: InspectionPlan;
     /** Exact families admitted by the owning Doctor before launching this backup child. */
     excludedDatabasePaths?: readonly string[];
+    /** Source custody prepared by the parent only for manual original-state capture. */
+    originalCaptureSourcePaths?: readonly string[];
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
   },
 ): Promise<UpdateDatabaseBackup> {
@@ -336,6 +339,9 @@ export async function createUpdateDatabaseBackupInProcess(
   const { readBackupEngine, capturePostgresBackup } =
     await import("../snapshot/database-backup.js");
   const engines = new Map(inventory.present.map((file) => [file, readBackupEngine(file)]));
+  const originalCaptureSources = new Set(
+    input.originalCaptureSourcePaths?.filter((file) => engines.get(file)?.engine === "sqlite"),
+  );
   if (
     [...engines.values()].some((engine) => engine.engine === "postgres") &&
     !input.postgresOffline &&
@@ -358,7 +364,8 @@ export async function createUpdateDatabaseBackupInProcess(
       input.stopped &&
       !identities.has(`${sourcePath}-journal`) &&
       (identities.get(`${sourcePath}-wal`)?.size ?? 0n) === 0n;
-    const before = input.stopped ? undefined : await readGeneration(sourcePath);
+    const retainGeneration = !input.stopped && !originalCaptureSources.has(sourcePath);
+    const before = retainGeneration ? await readGeneration(sourcePath) : undefined;
     const snapshot = stopped
       ? await createStoppedSqliteSnapshot({
           sourcePath,
@@ -375,6 +382,10 @@ export async function createUpdateDatabaseBackupInProcess(
           },
           preserveRowIds: true,
           requireNonEmptySource: true,
+          integrity:
+            engines.get(sourcePath)?.engine === "sqlite" && input.integrityCheck
+              ? { check: input.integrityCheck }
+              : undefined,
         });
     const engine = engines.get(sourcePath)!;
     let postgres;
@@ -390,8 +401,9 @@ export async function createUpdateDatabaseBackupInProcess(
       });
       postgres = { ...engine, exportDirectory };
     }
-    // Native restore uses its supervisor's stopped-state fence, not live-writer generations.
-    if (!input.stopped) {
+    // Automatic rollback keeps write attribution after custody ends. Manual original
+    // capture stays under its maintenance owner and never grants restore authority.
+    if (retainGeneration) {
       const after = await readGeneration(sourcePath);
       if (after !== undefined && before === after) {
         sourceGenerations[sourcePath] = after;
@@ -426,6 +438,9 @@ export async function createUpdateDatabaseBackupInProcess(
     missingPaths: inventory.missing,
     sourcePaths: inventory.sourcePaths,
     sourceGenerations,
+    ...(input.originalCaptureSourcePaths
+      ? { originalCaptureSourcePaths: [...originalCaptureSources] }
+      : {}),
     databaseOwners: inventory.databaseOwners,
     warnings,
     ...(input.pluginOwners ? { pluginOwners: input.pluginOwners } : {}),
@@ -435,6 +450,7 @@ export async function createUpdateDatabaseBackupInProcess(
 /** Retain raw, verified database files separately from the old package fingerprint. */
 export async function createUpdateDatabaseBackup({
   acquisition,
+  purpose,
   nodeRunner = process.execPath,
   timeoutMs,
   signal: callerSignal,
@@ -443,6 +459,8 @@ export async function createUpdateDatabaseBackup({
   ...input
 }: BackupInput & {
   acquisition?: UpdateRecoveryCaptureAcquisition;
+  /** Original-state evidence does not need generations while its owner retains every source. */
+  purpose?: "original-state";
   nodeRunner?: string;
   timeoutMs?: number;
   signal?: AbortSignal;
@@ -459,9 +477,6 @@ export async function createUpdateDatabaseBackup({
         paths: await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }),
         pluginOwners: undefined,
       };
-  const postgresPaths = prepared.paths.filter(
-    (file) => readBackupEngine(file).engine === "postgres",
-  );
   const additionalPaths = [...(input.additionalPaths ?? []), ...prepared.paths].map((file) =>
     path.resolve(file),
   );
@@ -494,6 +509,11 @@ export async function createUpdateDatabaseBackup({
         acquisition?.mode === "maintenance-owner" &&
         maintenanceOwnerHasSourceCustody(scope, shared) &&
         !openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(shared);
+      // Only maintenance admission consumes this classification. Other callers
+      // let the backup worker inspect engines without another full source image.
+      const postgresPaths = custody
+        ? prepared.paths.filter((file) => readBackupEngine(file).engine === "postgres")
+        : [];
       const inspectionPlan =
         custody && maintenanceOwnerMayCopySourcesInProcess(scope, shared)
           ? await discoverUpdateStateSchemaInspectionInProcess({
@@ -526,6 +546,18 @@ export async function createUpdateDatabaseBackup({
         ...(additionalPaths ?? []),
         ...(additionalFiles ?? []),
       ].filter((file) => !rehearsal?.excludes(file));
+      let originalCaptureSourcePaths: string[] | undefined;
+      if (purpose === "original-state" && custody) {
+        const { isOpenClawAgentDatabaseOpen } = await import("../state/openclaw-agent-db.js");
+        originalCaptureSourcePaths = [
+          ...new Set(files.map(resolvePathViaExistingAncestorSync)),
+        ].filter(
+          (file) =>
+            maintenanceOwnerHasSourceCustody(scope, file) &&
+            !openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(file) &&
+            !isOpenClawAgentDatabaseOpen(file),
+        );
+      }
       rehearsal?.assertCurrent();
       const databases = custody
         ? await readUpdateStateDatabaseSizesInProcess(files, signal)
@@ -537,7 +569,12 @@ export async function createUpdateDatabaseBackup({
         await runUpdateStateInspectionWorker({
           ...worker,
           retryAdvice,
-          input: { ...capturedInput, mode: "database-backup", inspectionPlan },
+          input: {
+            ...capturedInput,
+            mode: "database-backup",
+            inspectionPlan,
+            originalCaptureSourcePaths,
+          },
           ...(custody ? { ioBudget: "deadline" as const } : {}),
           databases,
         }),

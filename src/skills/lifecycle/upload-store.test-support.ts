@@ -1,30 +1,16 @@
 import { vi } from "vitest";
+import * as tmpDir from "../../infra/tmp-openclaw-dir.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import * as stateContext from "../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../state/openclaw-state-worker-store.js";
-import type { SkillUploadStore } from "./upload-store.js";
-import "./upload-store.js";
 
-type SkillUploadStoreTestApi = {
-  createSkillUploadStore(options?: {
-    env?: NodeJS.ProcessEnv;
-    installLeaseHeartbeatMs?: number;
-    installLeaseMs?: number;
-    path?: string;
-    tempRootDir?: string;
-    ttlMs?: number;
-  }): SkillUploadStore;
-};
+const captureStateContext = stateContext.captureOpenClawStateWorkerContext;
 
-function getTestApi(): SkillUploadStoreTestApi {
-  return (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.skillUploadStoreTestApi")
-  ] as SkillUploadStoreTestApi;
-}
-
-export function createSkillUploadStore(
-  options?: Parameters<SkillUploadStoreTestApi["createSkillUploadStore"]>[0],
-): SkillUploadStore {
-  return getTestApi().createSkillUploadStore(options);
+export function useSkillUploadStoreLocation(databasePath: string, tempRootDir: string): void {
+  vi.spyOn(stateContext, "captureOpenClawStateWorkerContext").mockImplementation((options) =>
+    captureStateContext(options ?? { path: databasePath }),
+  );
+  vi.spyOn(tmpDir, "resolvePreferredOpenClawTmpDir").mockReturnValue(tempRootDir);
 }
 
 /** Observe real worker settlement without making the interval callback an awaitable API. */

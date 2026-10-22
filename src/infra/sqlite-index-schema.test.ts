@@ -8,6 +8,7 @@ import {
   verifyAndRepairCanonicalSqliteIndexSteps,
 } from "./sqlite-index-schema.js";
 import { runSqliteIntegrityOperationSync } from "./sqlite-integrity.js";
+import { assertSqliteSchemaContains } from "./sqlite-schema-contract.js";
 
 const CANONICAL_SCHEMA = `
   CREATE TABLE records (
@@ -183,9 +184,12 @@ describe("repairCanonicalSqliteIndexes", () => {
     try {
       db.exec(`DROP INDEX idx_records_identity; ${driftedSql};`);
 
-      expect(repairCanonicalSqliteIndexes(db, "test database", expectedCatalog)).toEqual([
-        "idx_records_identity",
-      ]);
+      expect(
+        repairCanonicalSqliteIndexes(db, "test database", expectedCatalog, {
+          validateAfterRepair: () =>
+            assertSqliteSchemaContains(db, "test database", expectedCatalog),
+        }),
+      ).toEqual(["idx_records_identity"]);
 
       const row = db
         .prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_records_identity'")
@@ -203,6 +207,47 @@ describe("repairCanonicalSqliteIndexes", () => {
       db.close();
     }
   });
+
+  it.each(["quick", "full"] as const)(
+    "checks the %s source once and each rebuilt table once without losing rows",
+    (check) => {
+      const db = createDatabase();
+      try {
+        db.exec(`
+          INSERT INTO records VALUES
+            (1, 'Tenant', NULL, 1),
+            (2, 'Other', 'two', 0);
+          DROP INDEX idx_records_identity;
+          DROP INDEX idx_records_active_lookup;
+        `);
+        const traced = traceSqlExecutions(db);
+
+        expect(
+          repairCanonicalSqliteIndexes(traced.database, "test database", expectedCatalog, {
+            integrity: { check },
+            validateAfterRepair: () =>
+              assertSqliteSchemaContains(db, "test database", expectedCatalog),
+          }),
+        ).toEqual(["idx_records_active_lookup", "idx_records_identity"]);
+
+        expect(
+          traced.statements.filter((sql) =>
+            /^PRAGMA (?:quick_check|integrity_check|foreign_key_check)\b/u.test(sql),
+          ),
+        ).toEqual([
+          `PRAGMA ${check === "quick" ? "quick_check" : "integrity_check"};`,
+          "PRAGMA foreign_key_check;",
+          "PRAGMA integrity_check('records');",
+        ]);
+        expect(db.prepare("SELECT * FROM records ORDER BY id").all()).toEqual([
+          { id: 1, tenant_id: "Tenant", external_id: null, active: 1 },
+          { id: 2, tenant_id: "Other", external_id: "two", active: 0 },
+        ]);
+      } finally {
+        db.close();
+      }
+    },
+  );
 
   it("rolls back without dropping the drifted index when canonical rows conflict", () => {
     const db = createDatabase();
@@ -440,6 +485,13 @@ describe("repairCanonicalSqliteIndexes", () => {
           allowMissingColumns: true,
         }),
       ).toEqual([]);
+      expect(() =>
+        repairCanonicalSqliteIndexes(db, "test database", expectedCatalog, {
+          allowMissingColumns: true,
+          validateUnchanged: (readTable) =>
+            assertSqliteSchemaContains(db, "test database", expectedCatalog, {}, readTable),
+        }),
+      ).toThrow(/column definitions differ for records/iu);
       expect(
         db.prepare("SELECT sql FROM sqlite_schema WHERE name = 'idx_records_active_lookup'").get(),
       ).toEqual({ sql: "CREATE INDEX idx_records_active_lookup ON records(tenant_id)" });

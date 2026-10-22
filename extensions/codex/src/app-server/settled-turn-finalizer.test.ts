@@ -1,11 +1,10 @@
 import type { AgentHarnessV2 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import * as agentAuth from "openclaw/plugin-sdk/agent-runtime";
 import type { Model } from "openclaw/plugin-sdk/llm";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import * as authBridge from "./auth-bridge.js";
 import { CodexSettledTurnContext } from "./settled-turn-context.js";
-import { projectSettledCodexMessages } from "./settled-turn-projection.js";
 import {
   attachCodexMirrorAttestation,
   fingerprintCodexMirrorSourceMessage,
@@ -87,45 +86,20 @@ function createSettledAttempt(
     authProfileId: "openai:captured",
   },
 ): EmbeddedRunAttemptResult {
-  const messagesSnapshot: EmbeddedRunAttemptResult["messagesSnapshot"] = [
-    {
-      role: "assistant",
-      content: [{ type: "toolCall", id: "call-1", name: "message", arguments: {} }],
-    } as never,
-    {
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "message",
-      content: [{ type: "text", text: "Message sent." }],
-    } as never,
-  ];
   return {
     terminal: { kind: "ok" },
     sessionIdUsed: "session-1",
-    messagesSnapshot,
-    settledTurnFinalizationContext: new CodexSettledTurnContext(
-      projectSettledCodexMessages([
-        { role: "user", content: "Send the update to Alice." } as never,
-        ...messagesSnapshot,
-      ]),
-      selection,
-    ),
+    messagesSnapshot: [],
+    settledTurnFinalizationContext: new CodexSettledTurnContext([], selection),
     assistantTexts: [],
     toolMetas: [{ toolName: "message", replaySafe: false }],
     lastAssistant: undefined,
-    lastToolError: undefined,
     didSendViaMessagingTool: true,
     messagingToolSentTexts: ["update"],
     messagingToolSentMediaUrls: [],
     messagingToolSentTargets: [],
-    toolMediaUrls: ["/tmp/already-delivered.png"],
-    toolAudioAsVoice: true,
-    hasToolMediaBlockReply: true,
-    successfulCronAdds: 1,
     cloudCodeAssistFormatError: false,
-    attemptUsage: { input: 100, output: 20, total: 120 },
     replayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
-    currentAttemptReplayMetadata: { hadPotentialSideEffects: true, replaySafe: false },
     itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
   };
 }
@@ -170,52 +144,64 @@ function finalize(
   return runCodexSettledTurnFinalization({ attempt, settledAttempt }, options);
 }
 
-describe("runCodexSettledTurnFinalization", () => {
-  beforeEach(() => {
-    vi.spyOn(authBridge, "resolveCodexAppServerPreparedAuthHandoff");
-    mocks.runBounded.mockReset().mockResolvedValue(boundedResult());
-    mocks.mirror.mockReset();
-    mocks.mirror.mockImplementation(
-      async (params: {
-        messages: EmbeddedRunAttemptResult["messagesSnapshot"];
-        assertCurrent?: () => void;
-      }) => {
-        params.assertCurrent?.();
-        const assistant = params.messages[0]!;
-        return {
-          assistantMirrorIdentitiesOwned: ["settled-finalizer:run-1"],
-          messagesPresent: [
-            attachCodexMirrorAttestation(
-              Object.assign({}, assistant, {
-                idempotencyKey: "codex-settled-finalizer:run-1:assistant",
-              }),
-              fingerprintCodexMirrorSourceMessage(assistant as never),
-            ),
-          ],
-        };
-      },
-    );
-  });
+function expectBounded(params: Record<string, unknown>) {
+  expect(mocks.runBounded).toHaveBeenCalledWith(expect.objectContaining(params));
+}
 
-  afterEach(() => {
-    vi.restoreAllMocks();
-  });
+function mirrorReceipt(assistant: EmbeddedRunAttemptResult["messagesSnapshot"][number]) {
+  return {
+    assistantMirrorIdentitiesOwned: ["settled-finalizer:run-1"],
+    messagesPresent: [
+      attachCodexMirrorAttestation(
+        assistant,
+        fingerprintCodexMirrorSourceMessage(assistant as never),
+      ),
+    ],
+  };
+}
 
-  it("binds tool-result failure status into mirror attestations", () => {
-    const toolResult = {
-      role: "toolResult",
-      toolCallId: "call-1",
-      toolName: "message",
-      content: [{ type: "text", text: "Message sent." }],
-    };
+beforeEach(() => {
+  vi.spyOn(authBridge, "resolveCodexAppServerPreparedAuthHandoff");
+  mocks.runBounded.mockReset().mockResolvedValue(boundedResult());
+  mocks.mirror.mockReset();
+  mocks.mirror.mockImplementation(
+    async (params: {
+      messages: EmbeddedRunAttemptResult["messagesSnapshot"];
+      assertCurrent?: () => void;
+    }) => {
+      params.assertCurrent?.();
+      const assistant = params.messages[0]!;
+      const receipt = mirrorReceipt(assistant);
+      Object.assign(receipt.messagesPresent[0]!, {
+        idempotencyKey: "codex-settled-finalizer:run-1:assistant",
+      });
+      return receipt;
+    },
+  );
+});
 
-    expect(fingerprintCodexMirrorSourceMessage(toolResult as never)).not.toBe(
-      fingerprintCodexMirrorSourceMessage({ ...toolResult, isError: true } as never),
-    );
-  });
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
-  it("uses configured transport for remote settled finalization", async () => {
+it("binds tool-result failure status into mirror attestations", () => {
+  const toolResult = {
+    role: "toolResult",
+    toolCallId: "call-1",
+    toolName: "message",
+    content: [{ type: "text", text: "Message sent." }],
+  };
+
+  expect(fingerprintCodexMirrorSourceMessage(toolResult as never)).not.toBe(
+    fingerprintCodexMirrorSourceMessage({ ...toolResult, isError: true } as never),
+  );
+});
+
+it.each([true, undefined] as const)(
+  "preserves private display policy in remote settled finalization (private=%s)",
+  async (privateCompletion) => {
     const attempt = createAttempt();
+    attempt.privateCompletion = privateCompletion;
     const settledAttempt = createSettledAttempt({
       model: "gpt-5.6-luna",
       modelProvider: "openai",
@@ -227,13 +213,11 @@ describe("runCodexSettledTurnFinalization", () => {
 
     const result = await finalize(attempt, settledAttempt, options);
 
-    expect(mocks.runBounded).toHaveBeenCalledWith(
-      expect.objectContaining({
-        isolation: "configured-transport",
-        requireNoExternalCapabilities: true,
-        options,
-      }),
-    );
+    expectBounded({
+      isolation: "configured-transport",
+      requireNoExternalCapabilities: true,
+      options,
+    });
     expect(result).toMatchObject({
       assistantTranscriptOwned: true,
       assistantTranscriptIdempotencyKey: "codex-settled-finalizer:run-1:assistant",
@@ -244,178 +228,162 @@ describe("runCodexSettledTurnFinalization", () => {
         content: [{ type: "text", text: "The update was sent successfully." }],
       },
     });
-  });
+    expect(Reflect.get(result.assistant, "display") === false).toBe(privateCompletion === true);
+  },
+);
 
-  it.each(["agent", "user"] as const)(
-    "uses the selected scoped subscription for a bounded side turn (ordinary home: %s)",
-    async (homeScope) => {
-      const attempt = createAttempt("subscription");
-      const token = [
-        Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url"),
-        Buffer.from(
-          JSON.stringify({
-            "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-account" },
-          }),
-        ).toString("base64url"),
-        "synthetic-signature",
-      ].join(".");
-      attempt.authProfileStore.profiles["openai:captured"] = {
-        type: "token",
-        provider: "openai",
-        token,
-      };
-      const resolveProfile = vi.spyOn(agentAuth, "resolveApiKeyForProfile").mockResolvedValue({
-        apiKey: token,
-        provider: "openai",
-        profileId: "openai:captured",
-        profileType: "token",
-        readCurrentCredential: null,
-      });
-      const ordinaryNativeHome = homeScope === "user";
-      if (ordinaryNativeHome) {
-        attempt.runtimePlan!.auth.forwardedAuthProfileId = "openai:captured";
-      }
-      const settledAttempt = createSettledAttempt({
-        model: "gpt-5.6-luna",
-        authProfileId: ordinaryNativeHome ? undefined : "openai:captured",
-      });
-      const options: Parameters<typeof runCodexSettledTurnFinalization>[1] = {
-        pluginConfig: { appServer: { homeScope } },
-      };
-
-      await finalize(attempt, settledAttempt, options);
-
-      expect(resolveProfile).toHaveBeenCalledExactlyOnceWith({
-        store: attempt.authProfileStore,
-        profileId: "openai:captured",
-        agentDir: attempt.agentDir,
-      });
-      expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).toHaveBeenCalledWith(
-        expect.objectContaining({
-          homeScope: "agent",
-          authProfileId: "openai:captured",
-          authProfileStore: attempt.authProfileStore,
-          authRequirement: "subscription",
+it.each(["agent", "user"] as const)(
+  "uses the selected scoped subscription for a bounded side turn (ordinary home: %s)",
+  async (homeScope) => {
+    const attempt = createAttempt("subscription");
+    const token = [
+      Buffer.from(JSON.stringify({ alg: "none" })).toString("base64url"),
+      Buffer.from(
+        JSON.stringify({
+          "https://api.openai.com/auth": { chatgpt_account_id: "synthetic-account" },
         }),
-      );
-      expect(mocks.runBounded).toHaveBeenCalledWith(
-        expect.objectContaining({
-          isolation: "private-stdio",
-          options,
-          authRequirement: "subscription",
-          preparedAuth: {
-            kind: "profile",
-            profileId: "openai:captured",
-            store: attempt.authProfileStore,
-            snapshot: expect.objectContaining({
-              loginParams: {
-                type: "chatgptAuthTokens",
-                accessToken: token,
-                chatgptAccountId: "synthetic-account",
-                chatgptPlanType: null,
-              },
-            }),
+      ).toString("base64url"),
+      "synthetic-signature",
+    ].join(".");
+    attempt.authProfileStore.profiles["openai:captured"] = {
+      type: "token",
+      provider: "openai",
+      token,
+    };
+    const resolveProfile = vi.spyOn(agentAuth, "resolveApiKeyForProfile").mockResolvedValue({
+      apiKey: token,
+      provider: "openai",
+      profileId: "openai:captured",
+      profileType: "token",
+      readCurrentCredential: null,
+    });
+    const ordinaryNativeHome = homeScope === "user";
+    if (ordinaryNativeHome) {
+      attempt.runtimePlan!.auth.forwardedAuthProfileId = "openai:captured";
+    }
+    const settledAttempt = createSettledAttempt({
+      model: "gpt-5.6-luna",
+      authProfileId: ordinaryNativeHome ? undefined : "openai:captured",
+    });
+    const options: Parameters<typeof runCodexSettledTurnFinalization>[1] = {
+      pluginConfig: { appServer: { homeScope } },
+    };
+
+    await finalize(attempt, settledAttempt, options);
+
+    expect(resolveProfile).toHaveBeenCalledExactlyOnceWith({
+      store: attempt.authProfileStore,
+      profileId: "openai:captured",
+      agentDir: attempt.agentDir,
+    });
+    expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        homeScope: "agent",
+        authProfileId: "openai:captured",
+        authProfileStore: attempt.authProfileStore,
+        authRequirement: "subscription",
+      }),
+    );
+    expectBounded({
+      isolation: "private-stdio",
+      options,
+      authRequirement: "subscription",
+      preparedAuth: {
+        kind: "profile",
+        profileId: "openai:captured",
+        store: attempt.authProfileStore,
+        snapshot: expect.objectContaining({
+          loginParams: {
+            type: "chatgptAuthTokens",
+            accessToken: token,
+            chatgptAccountId: "synthetic-account",
+            chatgptPlanType: null,
           },
         }),
-      );
-      expect(mocks.runBounded.mock.calls[0]?.[0]).not.toHaveProperty("profile");
-    },
-  );
+      },
+    });
+    expect(mocks.runBounded.mock.calls[0]?.[0]).not.toHaveProperty("profile");
+  },
+);
 
-  it("rejects a missing native provider instead of using outer attribution", async () => {
-    const modelProvider = null;
+it("rejects a missing native provider instead of using outer attribution", async () => {
+  const modelProvider = null;
+  mocks.runBounded.mockResolvedValue({
+    ...boundedResult(),
+    nativeSelection: { model: "synthetic-summary-model", modelProvider },
+  });
+  await expect(finalize()).rejects.toThrow("did not report its native model provider");
+  expect(mocks.mirror).not.toHaveBeenCalled();
+});
+
+it.each([" NO_REPLY\n", " "])(
+  "preserves raw non-visible managed Stop-hook output %j",
+  async (text) => {
     mocks.runBounded.mockResolvedValue({
       ...boundedResult(),
-      nativeSelection: { model: "synthetic-summary-model", modelProvider },
-    });
-    await expect(finalize()).rejects.toThrow("did not report its native model provider");
-    expect(mocks.mirror).not.toHaveBeenCalled();
-  });
-
-  it.each([" NO_REPLY\n", " "])(
-    "preserves raw non-visible managed Stop-hook output %j",
-    async (text) => {
-      mocks.runBounded.mockResolvedValue({
-        ...boundedResult(),
-        text,
-        managedHooksEnabled: true,
-        items: managedHookItems(text),
-      });
-      const result = await finalize();
-      expect(result.assistant).toMatchObject({
-        provider: "openai",
-        model: "synthetic-summary-model",
-        content: [{ type: "text", text }],
-      });
-      expect(result.preparedTerminalReply?.terminalReply.disposition).toBe(
-        text.trim() ? "silent" : "empty",
-      );
-      expect(mocks.runBounded).toHaveBeenCalledOnce();
-      expect(mocks.mirror).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    {
-      label: "native execution",
+      text,
       managedHooksEnabled: true,
-      items: () => [{ id: "command", type: "commandExecution" }],
-      rejectedType: "commandExecution",
-    },
-    {
-      label: "unattested hook continuation",
-      managedHooksEnabled: undefined,
-      items: () => [managedHookPrompt],
-      rejectedType: "hookPrompt",
-    },
-    {
-      label: "mismatched prompt echo",
-      managedHooksEnabled: undefined,
-      items: () => [promptEcho("A different prompt.")],
-      rejectedType: "userMessage",
-    },
-    {
-      label: "duplicate prompt echo",
-      managedHooksEnabled: undefined,
-      items: (prompt: string) => [promptEcho(prompt), { ...promptEcho(prompt), id: "echo-2" }],
-      rejectedType: "userMessage",
-    },
-  ])(
-    "rejects $label before transcript mutation",
-    async ({ items, managedHooksEnabled, rejectedType }) => {
-      const attempt = createAttempt();
-      mocks.runBounded.mockResolvedValue({
-        ...boundedResult(),
-        managedHooksEnabled,
-        items: items(attempt.prompt),
-      });
-      await expect(finalize(attempt)).rejects.toThrow(`unexpected native item: ${rejectedType}`);
-      expect(mocks.mirror).not.toHaveBeenCalled();
-    },
-  );
-
-  it("rejects forged context before host auth or an isolated client can be used", async () => {
-    const settledAttempt = createSettledAttempt();
-    settledAttempt.settledTurnFinalizationContext = { source: "harness", data: [] };
-    const before = structuredClone(settledAttempt);
-    const clientFactory = vi.fn();
-    await expect(finalize(createAttempt(), settledAttempt, { clientFactory })).rejects.toThrow(
-      "finalization context is unavailable",
+      items: managedHookItems(text),
+    });
+    const result = await finalize();
+    expect(result.assistant).toMatchObject({
+      provider: "openai",
+      model: "synthetic-summary-model",
+      content: [{ type: "text", text }],
+    });
+    expect(result.preparedTerminalReply?.terminalReply.disposition).toBe(
+      text.trim() ? "silent" : "empty",
     );
-    expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).not.toHaveBeenCalled();
-    expect(mocks.runBounded).not.toHaveBeenCalled();
-    expect(clientFactory).not.toHaveBeenCalled();
+    expect(mocks.runBounded).toHaveBeenCalledOnce();
     expect(mocks.mirror).not.toHaveBeenCalled();
-    expect(structuredClone(settledAttempt)).toEqual(before);
-  });
+  },
+);
 
-  it.each([
-    "before auth",
-    "after auth",
-    "after inference",
-    "at mirror write",
-    "after mirror write",
-  ])("rejects cancellation %s without returning a stale final answer", async (stage) => {
+it.each([
+  [
+    "native execution",
+    true,
+    () => [{ id: "command", type: "commandExecution" }],
+    "commandExecution",
+  ],
+  ["unattested hook continuation", undefined, () => [managedHookPrompt], "hookPrompt"],
+  ["mismatched prompt echo", undefined, () => [promptEcho("A different prompt.")], "userMessage"],
+  [
+    "duplicate prompt echo",
+    undefined,
+    (prompt: string) => [promptEcho(prompt), { ...promptEcho(prompt), id: "echo-2" }],
+    "userMessage",
+  ],
+] as const)(
+  "rejects %s before transcript mutation",
+  async (_label, managedHooksEnabled, items, rejectedType) => {
+    const attempt = createAttempt();
+    mocks.runBounded.mockResolvedValue({
+      ...boundedResult(),
+      managedHooksEnabled,
+      items: items(attempt.prompt),
+    });
+    await expect(finalize(attempt)).rejects.toThrow(`unexpected native item: ${rejectedType}`);
+    expect(mocks.mirror).not.toHaveBeenCalled();
+  },
+);
+
+it("rejects forged context before host auth or an isolated client can be used", async () => {
+  const settledAttempt = createSettledAttempt();
+  settledAttempt.settledTurnFinalizationContext = { source: "harness", data: [] };
+  const before = structuredClone(settledAttempt);
+  await expect(finalize(createAttempt(), settledAttempt)).rejects.toThrow(
+    "finalization context is unavailable",
+  );
+  expect(authBridge.resolveCodexAppServerPreparedAuthHandoff).not.toHaveBeenCalled();
+  expect(mocks.runBounded).not.toHaveBeenCalled();
+  expect(mocks.mirror).not.toHaveBeenCalled();
+  expect(structuredClone(settledAttempt)).toEqual(before);
+});
+
+it.each(["before auth", "after auth", "after inference", "at mirror write", "after mirror write"])(
+  "rejects cancellation %s without returning a stale final answer",
+  async (stage) => {
     const caller = new AbortController();
     const attempt = { ...createAttempt(), abortSignal: caller.signal };
     const reason = new Error("finalizer cancelled");
@@ -453,27 +421,19 @@ describe("runCodexSettledTurnFinalization", () => {
       expect(mocks.runBounded).not.toHaveBeenCalled();
     }
     expect(mocks.mirror).toHaveBeenCalledTimes(stage.includes("mirror") ? 1 : 0);
-  });
+  },
+);
 
-  it("rejects a stale idempotency hit instead of delivering an unpersisted answer", async () => {
-    mocks.mirror.mockImplementation(
-      async (params: { messages: EmbeddedRunAttemptResult["messagesSnapshot"] }) => {
-        const staleAssistant = {
-          ...params.messages[0]!,
-          content: [{ type: "text", text: "An older final answer." }],
-        } as (typeof params.messages)[number];
-        return {
-          assistantMirrorIdentitiesOwned: ["settled-finalizer:run-1"],
-          messagesPresent: [
-            attachCodexMirrorAttestation(
-              staleAssistant,
-              fingerprintCodexMirrorSourceMessage(staleAssistant as never),
-            ),
-          ],
-        };
-      },
-    );
+it("rejects a stale idempotency hit instead of delivering an unpersisted answer", async () => {
+  mocks.mirror.mockImplementation(
+    async (params: { messages: EmbeddedRunAttemptResult["messagesSnapshot"] }) => {
+      const staleAssistant = {
+        ...params.messages[0]!,
+        content: [{ type: "text", text: "An older final answer." }],
+      } as (typeof params.messages)[number];
+      return mirrorReceipt(staleAssistant);
+    },
+  );
 
-    await expect(finalize()).rejects.toThrow("transcript attestation mismatch");
-  });
+  await expect(finalize()).rejects.toThrow("transcript attestation mismatch");
 });

@@ -8,7 +8,8 @@ import {
   type CommandPaletteInputHandoff,
   type CommandPaletteOpenInput,
 } from "../components/command-palette-contract.ts";
-import type { OpenClawModalDialog } from "../components/modal-dialog.ts";
+import type { OpenClawModalDialog } from "../components/modal-dialog.tsx";
+import { keepMobileReturnNative } from "../lib/browser-platform.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -28,7 +29,7 @@ import { lazyShellEvent, type LazyShellEvent } from "./lazy-shell-action.ts";
 type CommandPaletteShellHost = {
   readonly context?: Pick<ApplicationContext, "gateway"> &
     Partial<Pick<ApplicationContext, "config">>;
-  readonly commandPalette?: CommandPaletteElement;
+  readonly elements: { commandPalette?: CommandPaletteElement };
   readonly commandPaletteElement: OptionalCustomElement;
   readonly commandPaletteTarget?: CommandPaletteTargetDetail;
   chatNavigationOptions(face: "chat"): ApplicationNavigationOptions | undefined;
@@ -57,10 +58,10 @@ export class ShellCommandPaletteOwner {
   }
 
   readonly open = (): void => {
-    const palette = this.#host.commandPalette;
+    const palette = this.#host.elements.commandPalette;
     // Opening is an intent, not a prompt transport. Never persist event detail.
     const descriptor = lazyShellEvent(COMMAND_PALETTE_OPEN_EVENT);
-    if (palette) {
+    if (palette?.isConnected) {
       this.loading.handoff(() => {
         // The loader keeps keyboard custody until the replacement accepts focus.
         // Read its final value and recheck ownership at that boundary.
@@ -106,8 +107,8 @@ export class ShellCommandPaletteOwner {
       this.#host.lazyCustomElements.visibleState?.element === this.#host.commandPaletteElement
     ) {
       this.closePending();
-    } else if (this.#host.commandPalette) {
-      this.#host.commandPalette.togglePalette();
+    } else if (this.#host.elements.commandPalette?.isConnected) {
+      this.#host.elements.commandPalette.togglePalette();
     } else {
       this.open();
     }
@@ -154,7 +155,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
     defined: boolean;
   };
   let current: Presentation = { submitRequested: false, defined: false };
-  // Shell connection publishes under its restored Solid owner.
+  // Reentrant shell events can publish during a rendering computation.
   const [read, write] = createSignal(current, { ownedWrite: true });
   // Imperative custody reads the same receipt before Solid commits its publication.
   const presentation = () => {
@@ -251,7 +252,7 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       if (!defined) {
         void ensureCustomElementDefined(
           "openclaw-modal-dialog",
-          () => import("../components/modal-dialog.ts"),
+          () => import("../components/modal-dialog.tsx"),
         ).then(
           () => {
             if (active()) {
@@ -358,6 +359,9 @@ function createCommandPaletteLoading(host: Pick<CommandPaletteShellHost, "contex
       }
     },
     handleKeydown(event: KeyboardEvent): void {
+      if (keepMobileReturnNative(event)) {
+        return;
+      }
       if (composing || event.isComposing || event.keyCode === 229) {
         event.stopPropagation();
         return;
