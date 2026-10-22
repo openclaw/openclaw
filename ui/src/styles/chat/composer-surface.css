@@ -1309,10 +1309,6 @@
     --chat-footer-max-height: 100cqh;
   }
 
-  .chat-footer::before {
-    display: none;
-  }
-
   .agent-chat__input {
     --chat-composer-min-height: 0px;
   }
