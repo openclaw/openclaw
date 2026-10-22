@@ -2,6 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createChangedNodeTestShards,
+  createNodeWorkerE2eTestShards,
   hasControlUiPerformanceAffectingChange,
   resolveChangedNodeTestTargets,
 } from "../../scripts/lib/ci-changed-node-test-plan.mts";
@@ -72,16 +73,21 @@ it("keeps the aggressive fixed smoke within two Node rows", () => {
 });
 
 it("keeps the hybrid hourly plan within the main-tier cap", () => {
-  const hourly = createNodeTestShardBundles({
-    runnerBackend: "hybrid",
-    compactMode: "pull-request",
-    compactNodeJobCap: 77,
-    includeProofTests: true,
-    includeReleaseOnlyToolingShards: true,
-    includePrExemptRuntimeTests: true,
-    includeReleaseOnlyRuntimeTests: false,
-    includeReleaseOnlyPluginShards: false,
-  });
+  const workerRows = createNodeWorkerE2eTestShards();
+  const hourly = [
+    ...createNodeTestShardBundles({
+      runnerBackend: "hybrid",
+      compactMode: "pull-request",
+      compactNodeJobCap: 77 - workerRows.length,
+      mainValidation: true,
+      includeProofTests: true,
+      includeReleaseOnlyToolingShards: true,
+      includePrExemptRuntimeTests: true,
+      includeReleaseOnlyRuntimeTests: false,
+      includeReleaseOnlyPluginShards: false,
+    }),
+    ...workerRows,
+  ];
   expect(hourly.filter((job) => !job.requiresDist).length).toBeLessThanOrEqual(77);
   expect(hourly.length).toBeLessThanOrEqual(79);
 });
