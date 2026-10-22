@@ -43,13 +43,13 @@ import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
   AGENT_PROGRESS_CARD_SCHEMA_SQL,
 } from "./openclaw-agent-progress-card-schema.js";
+import { RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL } from "./openclaw-agent-schema-history.js";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import {
   AGENT_V14_ADDITIVE_SCHEMA_SQL,
   AGENT_V14_CORE_SCHEMA_SQL,
   AGENT_V14_SESSION_SHARING_SCHEMA_SQL,
-  RETIRED_AGENT_STATE_LEASE_SCHEMA_SQL,
-} from "./openclaw-agent-schema-history.js";
-import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
+} from "./openclaw-agent-session-sharing-schema.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 
 export {
