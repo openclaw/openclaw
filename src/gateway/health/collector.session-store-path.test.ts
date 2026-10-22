@@ -139,16 +139,33 @@ function createReadGate() {
       entered.resolve();
       await release.promise;
     },
-    async finish<P extends Promise<unknown>>(pending: P, change: () => void): Promise<Awaited<P>> {
+    async after<T>(pending: Promise<T>, hold = true) {
+      const result = await pending;
+      if (hold) {
+        await this.pause();
+      }
+      return result;
+    },
+    async run<T>(
+      pending: Promise<unknown> | undefined,
+      action: (resume: () => void) => Promise<T>,
+    ): Promise<T> {
       try {
-        await awaitGateBeforeSettlement(entered.promise, pending, "Read skipped publication gate");
-        change();
-        release.resolve();
-        return await pending;
+        if (pending) {
+          await awaitGateBeforeSettlement(entered.promise, pending, "Read skipped gate");
+        }
+        return await action(release.resolve);
       } finally {
         release.resolve();
-        await pending.catch(() => {});
+        await pending?.catch(() => {});
       }
+    },
+    finish<P extends Promise<unknown>>(pending: P, change: () => void): Promise<Awaited<P>> {
+      return this.run(pending, async (resume) => {
+        change();
+        resume();
+        return await pending;
+      });
     },
   };
 }
@@ -171,6 +188,16 @@ function writeSession(
   sessionId = key,
 ) {
   replaceSessionEntrySync({ agentId, sessionKey: key, storePath }, { sessionId, updatedAt });
+}
+
+function seedWindows(storePath: string, times: Record<string, number>, reverse = false) {
+  const suffixes = Array.from({ length: 12 }, (_, index) => String(index).padStart(2, "0"));
+  for (const [agentId, updatedAt] of Object.entries(times)) {
+    for (const suffix of reverse ? suffixes.toReversed() : suffixes) {
+      writeSession(agentId, `agent:${agentId}:${suffix}`, updatedAt, storePath);
+    }
+  }
+  return suffixes;
 }
 
 function sessionConfig(
@@ -353,23 +380,16 @@ it.for([
     }
     const preparedLocal =
       timing === "late-health" ? await collectStatusLocalSnapshot(cfg) : undefined;
-    const replied = createDeferred();
-    const release = createDeferred();
+    const gate = createReadGate();
     const read = sessionReadRuntime.withSessionStoreReaderInWorker;
     const laterRead = vi
       .spyOn(sessionReadRuntime, "withSessionStoreReaderInWorker")
-      .mockImplementation(async (...args) => {
-        const result = await read(...args);
-        if (late && args[0].agentId === "survivor") {
-          replied.resolve();
-          await release.promise;
-        }
-        return result;
-      });
+      .mockImplementation((...args) =>
+        gate.after(read(...args), late && args[0].agentId === "survivor"),
+      );
     holdWorkerSummary(async () => {
       if (timing === "during-read") {
-        replied.resolve();
-        await release.promise;
+        await gate.pause();
       }
     });
     const collect = () => collectGatewayHealthSnapshot({ audience: "admin", probe: false });
@@ -379,20 +399,12 @@ it.for([
         : undefined;
     const pendingHealth = timing === "late-health" ? collect() : undefined;
     const pending = pendingStatus ?? pendingHealth;
-    void pending?.catch(() => {});
-    try {
-      if (pending) {
-        await awaitGateBeforeSettlement(
-          replied.promise,
-          pending,
-          "Summary settled before the deletion gate",
-        );
-      }
+    await gate.run(pending, async (resume) => {
       deleteAgent(state, "health-deletion");
       await withAgentDatabaseCloseFence(
         { agentId: "deleting", rootPath: path.dirname(state.agentDir("deleting")) },
         async () => {
-          release.resolve();
+          resume();
           const expectedIds = timing === "only-agent" ? [] : ["survivor"];
           if (pendingStatus) {
             expectStatusSessions(await pendingStatus, expectedIds, shared);
@@ -437,11 +449,8 @@ it.for([
           );
         },
       );
-    } finally {
-      release.resolve();
-      await pending?.catch(() => {});
-      laterRead.mockRestore();
-    }
+    });
+    laterRead.mockRestore();
   },
 );
 
@@ -455,13 +464,9 @@ it.for(["desktop", "certificate"] as const)(
     const { getStatusSummary } = await import("../../status/summary.js");
     const gate = createReadGate();
     const inspect = desktop.inspectHostDesktop;
-    vi.spyOn(desktop, "inspectHostDesktop").mockImplementation(async (params) => {
-      const result = await inspect(params);
-      if (phase === "desktop") {
-        await gate.pause();
-      }
-      return result;
-    });
+    vi.spyOn(desktop, "inspectHostDesktop").mockImplementation((params) =>
+      gate.after(inspect(params), phase === "desktop"),
+    );
     vi.spyOn(certificate, "getSecretEgressCertificateStatus").mockImplementation(async () => {
       if (phase === "certificate") {
         await gate.pause();
@@ -516,11 +521,9 @@ it.for(["text", "json"] as const)(
     const jsonWrite = vi.spyOn(runtimeOutput, "writeRuntimeJson");
     const gate = createReadGate();
     const readBackup = backup.readBackupRunFreshness;
-    vi.spyOn(backup, "readBackupRunFreshness").mockImplementation(async (env) => {
-      const result = await readBackup(env);
-      await gate.pause();
-      return result;
-    });
+    vi.spyOn(backup, "readBackupRunFreshness").mockImplementation((env) =>
+      gate.after(readBackup(env)),
+    );
     // The regression owns session publication; unrelated service/engine I/O stays synthetic.
     vi.spyOn(engines, "resolveStatusDatabaseEngines").mockResolvedValue({
       source: "admitted",
@@ -642,17 +645,7 @@ it.for([true, false])(
     const storePath = state.statePath("shared.sqlite");
     const cfg = sessionConfig(configured ? ["survivor", "deleting"] : ["survivor"], storePath);
     setRuntimeConfigSnapshot(cfg);
-    for (const agentId of ["survivor", "deleting", "retired"]) {
-      for (let index = 0; index < 12; index++) {
-        const key = `agent:${agentId}:${String(index).padStart(2, "0")}`;
-        writeSession(
-          agentId,
-          key,
-          agentId === "deleting" ? 30 : agentId === "survivor" ? 20 : 10,
-          storePath,
-        );
-      }
-    }
+    seedWindows(storePath, { survivor: 20, deleting: 30, retired: 10 });
     deleteAgent(state, "shared-publication");
     const result = await readStatusSessionStores(cfg, resolveHealthAgentOrder(cfg).ordered, 10);
     expect(result.byAgent.map(({ agent }) => agent.id)).toEqual(["survivor"]);
@@ -676,8 +669,7 @@ it.for(["snapshot", "read-error"] as const)(
     const failure = new Error("invalid session state");
     const { calls } = spyOnSessionStoreSummaries();
     calls.mockImplementation(async (read) => {
-      const summary = await read();
-      await gate.pause();
+      const summary = await gate.after(read());
       if (outcome === "read-error") {
         throw failure;
       }
@@ -941,14 +933,8 @@ describe("resident session projection", () => {
     let cfg = sessionConfig(["main"], storePath, "main");
     setRuntimeConfigSnapshot(cfg);
     const agentIds = ["main", "worker"];
-    const suffixes = Array.from({ length: 12 }, (_, index) => String(index).padStart(2, "0"));
+    const suffixes = seedWindows(storePath, { main: 10, worker: 20 }, true);
     const sessionKeys = agentIds.flatMap((id) => suffixes.map((suffix) => `agent:${id}:${suffix}`));
-    for (const agentId of agentIds) {
-      for (const suffix of suffixes.toReversed()) {
-        const key = `agent:${agentId}:${suffix}`;
-        writeSession(agentId, key, agentId === "worker" ? 20 : 10, storePath);
-      }
-    }
     using projection = await createTestProjection({ cfg, getConfig: () => cfg });
     await settleProjection(projection);
     expect((await readHealth(cfg, projection)).map(({ agentId }) => agentId)).toEqual(["main"]);

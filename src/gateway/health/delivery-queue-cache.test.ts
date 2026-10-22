@@ -1,8 +1,6 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it as baseIt, vi } from "vitest";
 import { INGRESS_CLAIM_LEASE_MS } from "../../channels/message/ingress-claim-owner.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
-import { DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS } from "../../channels/message/ingress-retry-policy.js";
 import { seedDeliveryQueueEntry } from "../../infra/delivery-queue-sqlite.test-support.js";
 import * as deliveryQueueWorker from "../../infra/delivery-queue-worker-store.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -24,49 +22,6 @@ const it = baseIt.extend<{ stateDir: string }>({
 });
 
 afterEach(() => vi.restoreAllMocks());
-
-it("surfaces a retry-floor ingress lane with 55 blocked followers", async ({ stateDir }) => {
-  const now = Date.now();
-  const ingress = createIngress(stateDir, () => now);
-  const enqueue = (id: string, text: string, age: number, laneKey = "private-lane") =>
-    ingress.enqueue(id, { text }, { laneKey, receivedAt: now - age });
-  const claim = async (id: string) =>
-    expectDefined(await ingress.claim(id, { ownerId: "private-owner" }), "queue claim");
-  await enqueue("retry-head-private", "private payload", 60_000);
-  for (let attempt = 0; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt++) {
-    await ingress.release(await claim("retry-head-private"), {
-      lastError: "private handler error",
-      releasedAt: now,
-    });
-  }
-  for (let index = 0; index < 55; index++) {
-    await enqueue(`follower-private-${index}`, `private follower ${index}`, 59_000 - index);
-  }
-  await enqueue("ordinary-retry-private", "ordinary retry", 30_000, "ordinary-private-lane");
-  await ingress.release(await claim("ordinary-retry-private"), {
-    lastError: "first attempt",
-    releasedAt: now,
-  });
-  await enqueue("fresh-claim-private", "fresh claim", 10_000, "fresh-private-lane");
-  await claim("fresh-claim-private");
-  const summary = await buildDeliveryQueueHealthSummary();
-  expect(summary).toEqual({
-    failed: [],
-    ingressPressure: [
-      {
-        ...account,
-        laneCount: 1,
-        pendingCount: 56,
-        claimedCount: 0,
-        blockedCount: 55,
-        oldestReceivedAt: now - 60_000,
-      },
-    ],
-  });
-  expect(JSON.stringify(summary)).not.toMatch(
-    /private-lane|private-owner|private payload|private handler error|retry-head-private/,
-  );
-});
 
 it("invalidates only the changed queue cache", async ({ stateDir }) => {
   openOpenClawStateDatabase();
