@@ -48,7 +48,10 @@ async function collectReleaseConfiguredPluginIdsThroughDoctor(params: {
   await run(params);
   const call: MissingPluginInstallRepairCall | undefined =
     mocks.repairMissingPluginInstallsForIds.mock.calls[0]?.[0];
-  return { pluginIds: call?.pluginIds ?? [], channelIds: call?.channelIds ?? [] };
+  return {
+    pluginIds: Array.from(call?.pluginIds ?? []),
+    channelIds: Array.from(call?.channelIds ?? []),
+  };
 }
 
 vi.mock("../../../config/plugin-auto-enable.js", () => ({

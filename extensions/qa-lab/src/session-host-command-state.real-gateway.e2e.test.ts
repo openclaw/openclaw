@@ -1,13 +1,12 @@
+import crypto from "node:crypto";
 import { existsSync } from "node:fs";
 import path from "node:path";
-import type { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
+import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.ts";
-import { generateStoredDeviceIdentity as createDeviceIdentity } from "../../../src/infra/device-identity-material.ts";
-import { acquireGatewayTestClient } from "../../../test/helpers/gateway-client.ts";
 import {
   createControlUiE2eSuite,
   tooltipTitleText,
@@ -18,7 +17,7 @@ const COMMAND = "codex.exec-server.stdio.v1";
 const MODEL = "openai/gpt-5.6-luna";
 const REQUEST_TIMEOUT_MS = 20_000;
 const captureUiProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
-const helloCounts = new WeakMap<GatewayClient, { count: number }>();
+const helloCounts = new WeakMap<GatewayClient, number>();
 
 const gatewayOwners: ReturnType<typeof createQaGatewayChild>[] = [];
 type DeviceIdentity = ReturnType<typeof createDeviceIdentity>;
@@ -87,7 +86,13 @@ suite.define(() => {
           identity: DeviceIdentity,
           displayName: string,
           commands: string[] = [],
-        ) => ({ gateway, operator, identity, displayName, commands });
+        ) => ({
+          gateway,
+          operator,
+          identity,
+          displayName,
+          commands,
+        });
         const undeclaredNode = await connectPairedNode(
           nodeParams(undeclaredIdentity, "Undeclared command"),
         );
@@ -130,15 +135,6 @@ suite.define(() => {
             replacePaths: ["gateway.nodes.commands.allow", "gateway.nodes.commands.deny"],
           });
         };
-        const waitState = (...states: Parameters<typeof expectState>[]) =>
-          vi.waitFor(
-            async () => {
-              for (const state of states) {
-                await expectState(...state);
-              }
-            },
-            { interval: 250, timeout: 60_000 },
-          );
         await expectState(undeclaredIdentity, "undeclared", undeclaredMessage);
         await expectState(pendingIdentity, "pending-approval", pendingMessage);
         await expectState(unauthorizedIdentity, "invocable");
@@ -183,10 +179,13 @@ suite.define(() => {
             await capture("01-pending-approval.png");
             await page.keyboard.press("Escape");
 
-            const unauthorizedHelloCount = helloCounts.get(unauthorizedNode)?.count ?? 0;
+            const unauthorizedHelloCount = helloCounts.get(unauthorizedNode) ?? 0;
             await setCommands([], [COMMAND]);
-            await waitState([unauthorizedIdentity, "unauthorized", unauthorizedMessage]);
-            expect(helloCounts.get(unauthorizedNode)?.count).toBe(unauthorizedHelloCount);
+            await vi.waitFor(
+              () => expectState(unauthorizedIdentity, "unauthorized", unauthorizedMessage),
+              { interval: 250, timeout: 60_000 },
+            );
+            expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
 
             await page.reload();
             await page.locator("#new-session-where-trigger").click();
@@ -195,15 +194,18 @@ suite.define(() => {
               .poll(() => disabledReason(unauthorizedIdentity.deviceId))
               .toContain(unauthorizedMessage);
             await capture("02-unauthorized-after-hot-reload.png");
-            expect(helloCounts.get(unauthorizedNode)?.count).toBe(unauthorizedHelloCount);
+            expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
             await page.keyboard.press("Escape");
 
             await setCommands([COMMAND], []);
-            await waitState(
-              [unauthorizedIdentity, "invocable"],
-              [pendingIdentity, "pending-approval", pendingMessage],
+            await vi.waitFor(
+              async () => {
+                await expectState(unauthorizedIdentity, "invocable");
+                await expectState(pendingIdentity, "pending-approval", pendingMessage);
+              },
+              { interval: 250, timeout: 60_000 },
             );
-            expect(helloCounts.get(unauthorizedNode)?.count).toBe(unauthorizedHelloCount);
+            expect(helloCounts.get(unauthorizedNode)).toBe(unauthorizedHelloCount);
             await page.reload();
             await page.locator("#new-session-where-trigger").click();
             await row(unauthorizedIdentity.deviceId).waitFor();
@@ -263,9 +265,22 @@ function isPairingRequired(error: unknown): boolean {
 }
 
 async function connectClient(gateway: GatewayHandle, node?: Omit<NodeParams, "gateway">) {
-  const hellos = { count: 0 };
-  const client = await acquireGatewayTestClient(
-    {
+  return await new Promise<GatewayClient>((resolve, reject) => {
+    let settled = false;
+    const finish = (client: GatewayClient, error?: Error) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
+      clearTimeout(timeout);
+      if (error) {
+        client.stop();
+        reject(error);
+      } else {
+        resolve(client);
+      }
+    };
+    const client = new GatewayClient({
       role: node ? "node" : "operator",
       clientName: node ? GATEWAY_CLIENT_NAMES.NODE_HOST : GATEWAY_CLIENT_NAMES.GATEWAY_CLIENT,
       clientDisplayName: node?.displayName ?? "Session host picker proof operator",
@@ -280,18 +295,19 @@ async function connectClient(gateway: GatewayHandle, node?: Omit<NodeParams, "ga
       platform: node ? "linux" : process.platform,
       requestTimeoutMs: REQUEST_TIMEOUT_MS,
       onHelloOk: () => {
-        hellos.count += 1;
+        helloCounts.set(client, (helloCounts.get(client) ?? 0) + 1);
+        finish(client);
       },
-    },
-    {
-      timeoutMs: REQUEST_TIMEOUT_MS,
-      timeoutMessage: `Gateway client connection timed out:\n${gateway.logs()}`,
-      closeMessage: "Gateway closed",
-      unrefTimeout: true,
-    },
-  );
-  helloCounts.set(client, hellos);
-  return client;
+      onConnectError: (error) => finish(client, error),
+      onClose: (code, reason) => finish(client, new Error(`Gateway closed (${code}): ${reason}`)),
+    });
+    const timeout = setTimeout(
+      () => finish(client, new Error(`Gateway client connection timed out:\n${gateway.logs()}`)),
+      REQUEST_TIMEOUT_MS,
+    );
+    timeout.unref();
+    client.start();
+  });
 }
 
 async function approvePairing(
@@ -339,4 +355,14 @@ async function publishSessionHost(node: GatewayClient): Promise<void> {
       capacity: { total: 1, available: 1 },
     },
   });
+}
+
+function createDeviceIdentity() {
+  const { privateKey, publicKey } = crypto.generateKeyPairSync("ed25519");
+  const publicKeyRaw = publicKey.export({ format: "der", type: "spki" }).subarray(-32);
+  return {
+    deviceId: crypto.createHash("sha256").update(publicKeyRaw).digest("hex"),
+    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
+    publicKeyPem: publicKey.export({ format: "pem", type: "spki" }),
+  };
 }

@@ -1,4 +1,5 @@
 import { expect } from "vitest";
+import type { startQaMockOpenAiServer } from "./server.js";
 import {
   type MockServer,
   expectNonStreamingResponsesJson,
@@ -11,7 +12,11 @@ import {
 
 type Options = Record<string, unknown>;
 
-export function settleParent(server: MockServer, sessionId: string, key = "agent:qa:main") {
+export function settleParent(
+  server: Pick<Awaited<ReturnType<typeof startQaMockOpenAiServer>>, "terminalRequesters">,
+  sessionId: string,
+  key = "agent:qa:main",
+) {
   return server.terminalRequesters.settle({
     call: async () => ({
       sessions: [

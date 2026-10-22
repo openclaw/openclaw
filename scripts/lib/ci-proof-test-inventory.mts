@@ -592,6 +592,7 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "extensions/matrix/doctor-contract-api.test.ts",
   "extensions/matrix/index.test.ts",
   "extensions/matrix/src/approval-config.storage.test.ts",
+  "extensions/matrix/src/channel.message-adapter.test.ts",
   "extensions/matrix/src/cli-config-publication.test.ts",
   "extensions/matrix/src/delivery-trace.test.ts",
   "extensions/matrix/src/matrix/client/create-client.storage.test.ts",

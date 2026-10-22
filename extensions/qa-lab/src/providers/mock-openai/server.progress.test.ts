@@ -78,7 +78,7 @@ async function requestProgress(route: string, prompt: string, results: ProgressR
       content: responses ? [textBlock(prompt)] : prompt,
     },
   ];
-  const history = results.flatMap(({ tool, args, output, isError, callId }, index) => {
+  const history = results.flatMap<unknown>(({ tool, args, output, isError, callId }, index) => {
     const id = callId ?? `progress_${index}`;
     return responses
       ? [
@@ -327,7 +327,7 @@ it("distinguishes a successful CodeMode runner from its failed read", async () =
       content: [
         {
           type: "tool_result",
-          tool_use_id: plan.content[0].id,
+          tool_use_id: requireRecord(plan.content[0], "tool use").id,
           is_error: false,
           content: completedResult({ status: "error", error: "Access denied" }),
         },

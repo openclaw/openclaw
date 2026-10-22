@@ -204,6 +204,9 @@ it("honors protocol failure over accepted catalog details", async () => {
       messages,
     });
   const call = (await request()).content[0];
+  if (!call) {
+    throw new Error("Expected a tool call in the response");
+  }
   expect(call).toMatchObject({ type: "tool_use", name: "dispatch_action", id: expect.any(String) });
   messages.push(
     { role: "assistant", content: [call] },
