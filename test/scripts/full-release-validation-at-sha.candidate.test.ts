@@ -437,6 +437,45 @@ describe("candidate-owned full release dispatch entry point", () => {
     }
   });
 
+  it("refuses publish qualification when a squash left the contribution record target unreachable", () => {
+    const fixture = createDispatchFixture({
+      candidateOwned: true,
+      unreachableContributionRecord: true,
+    });
+    try {
+      const result = fixture.run([
+        "--workflow-sha",
+        fixture.targetSha,
+        "-f",
+        "validation_purpose=publish",
+        "-f",
+        `publication_selection_json=${JSON.stringify({
+          route: "normal",
+          npmDistTag: "beta",
+          publishOpenclawNpm: true,
+          pluginPublishScope: "all-publishable",
+          plugins: [],
+        })}`,
+      ]);
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        `Candidate ${fixture.targetSha} would fail the pnpm release:candidate changelog gates for v2026.8.1`,
+      );
+      expect(result.stderr).toMatch(
+        new RegExp(
+          `contribution record target [0-9a-f]{40} is not reachable from release tag ${fixture.targetSha}`,
+          "u",
+        ),
+      );
+      expect(
+        fixture.readCalls(fixture.ghCallsPath).filter((args) => ghApiMethod(args) !== "GET"),
+      ).toEqual([]);
+      expect(dispatches(fixture)).toEqual([]);
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
   it("reopens the original selected-plugin spelling after dispatch canonicalizes order and duplicates", () => {
     const fixture = createDispatchFixture({ candidateOwned: true });
     const original = JSON.stringify({

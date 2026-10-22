@@ -7,6 +7,7 @@ import { afterEach, expect, it } from "vitest";
 import { writePluginInstallIndexForE2E } from "../../scripts/e2e/lib/plugin-index-sqlite.mjs";
 import { awaitGateBeforeSettlement, withinTest } from "../helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readJson } from "./upgrade-survivor-io.test-support.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const version = "2026.10.5";
@@ -24,6 +25,17 @@ function json(file: string, value: unknown) {
   fs.writeFileSync(file, JSON.stringify(value));
 }
 
+const pluginManifest = (name: string, packageVersion: string) => ({
+  name,
+  version: packageVersion,
+  dependencies: { "fixture-dependency": "1.0.0" },
+  openclaw: {
+    build: { openclawVersion: packageVersion, bundledDist: false },
+    compat: { pluginApi: ">=2026.10.5" },
+    schemaVersions: { state: 1, agent: 1 },
+  },
+});
+
 function fixture() {
   const root = dirs.make("survivor-restart-cohort-");
   const registry = path.join(root, "sealed");
@@ -35,19 +47,8 @@ function fixture() {
     "@openclaw/whatsapp",
     "openclaw",
   ].map((name) => {
-    const build = { openclawVersion: version, bundledDist: false };
-    const manifest = {
-      name,
-      version,
-      dependencies: { "fixture-dependency": "1.0.0" },
-      openclaw: {
-        build,
-        compat: { pluginApi: ">=2026.10.5" },
-        schemaVersions: { state: 1, agent: 1 },
-      },
-    };
     const unpacked = path.join(root, name.replace("/", "-"));
-    json(path.join(unpacked, "package/package.json"), manifest);
+    json(path.join(unpacked, "package/package.json"), pluginManifest(name, version));
     fs.writeFileSync(
       path.join(unpacked, "package/index.js"),
       "export const payload = 'unchanged';\n",
@@ -221,8 +222,7 @@ NODE
           root,
           "restart-" + (id === "codex" ? "runtime" : id) + "-fixture.json",
         );
-        const receipt = JSON.parse(fs.readFileSync(receiptPath, "utf8"));
-        expect(receipt).toMatchObject({
+        expect(readJson(receiptPath)).toMatchObject({
           name: "@openclaw/" + id,
           sourceVersion: version,
           targetVersion: futureVersion,
@@ -234,17 +234,9 @@ NODE
             ],
           },
         });
-        const pluginManifest = JSON.parse(member("package.json").toString());
-        expect(pluginManifest).toEqual({
-          name: "@openclaw/" + id,
-          version: futureVersion,
-          dependencies: { "fixture-dependency": "1.0.0" },
-          openclaw: {
-            build: { openclawVersion: futureVersion, bundledDist: false },
-            compat: { pluginApi: ">=2026.10.5" },
-            schemaVersions: { state: 1, agent: 1 },
-          },
-        });
+        expect(JSON.parse(member("package.json").toString())).toEqual(
+          pluginManifest("@openclaw/" + id, futureVersion),
+        );
         expect(member("index.js").toString()).toBe("export const payload = 'unchanged';\n");
       }
     } finally {

@@ -116,7 +116,6 @@ export async function seedHeartbeatScratchForTest(params: {
       defaultAgentId: "main",
       log: { debug: noop, info: noop, warn: noop, error: noop },
       enqueueSystemEvent: () => false,
-      requestHeartbeat: noop,
       runIsolatedAgentJob: async () => ({ status: "skipped", error: "test" }),
     });
     const job = createJob(state, {

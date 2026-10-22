@@ -5,7 +5,11 @@ import { setImmediate } from "node:timers/promises";
 import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
+import {
+  listRegisteredAgentHarnesses,
+  registerAgentHarness,
+  resolveAgentHarnessQueueInputAdapter,
+} from "../agents/harness/registry.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { withCliCommandCleanup, withCliProcessScope } from "../cli/runtime-cleanup-scope.js";
 import {
@@ -917,4 +921,38 @@ describe("plugin registry runtime config scope", () => {
       }
     },
   );
+});
+
+it.each(["bundled", "global", "config", "workspace"] as const)(
+  "derives queue input semantics from the exact %s registrar owner, not its codex ID",
+  async (origin) => {
+    const { builder, api } = registered("codex", { origin });
+    api.registerAgentHarness(createHarness("codex"));
+    await withPluginRuntimeRegistryScope(builder.registry, async () => {
+      const registeredHarness = listRegisteredAgentHarnesses()[0]?.harness;
+      expect(registeredHarness).toBeDefined();
+      if (!registeredHarness) {
+        throw new Error("Expected registrar-owned fixture harness");
+      }
+      expect(resolveAgentHarnessQueueInputAdapter(registeredHarness)).toBe(
+        origin === "bundled" ? "human-and-question-permission" : "legacy-question-category",
+      );
+      // A replacement object with the same public fields is not that registration.
+      expect(() => resolveAgentHarnessQueueInputAdapter({ ...registeredHarness })).toThrow(
+        "changed during input adapter resolution",
+      );
+    });
+  },
+);
+
+it("keeps direct facade registrations legacy even beside a bundled same-ID record", async () => {
+  const { builder } = registered("codex", { origin: "bundled" });
+  await withPluginRuntimeRegistryScope(builder.registry, async () => {
+    registerAgentHarness(createHarness("codex"), { ownerPluginId: "codex" });
+    const harness = listRegisteredAgentHarnesses()[0]?.harness;
+    if (!harness) {
+      throw new Error("Expected direct facade harness");
+    }
+    expect(resolveAgentHarnessQueueInputAdapter(harness)).toBe("legacy-question-category");
+  });
 });

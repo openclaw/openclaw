@@ -203,6 +203,25 @@ async function checkAccessiblePins(page: Page, width: number) {
     await expect.poll(() => card.count()).toBe(0);
     expect(await sidebar.isVisible()).toBe(true);
   }
+  await link.focus();
+  await page.keyboard.press("Shift+F10");
+  const unpin = sidebar.getByRole("menuitem", { name: "Unpin", exact: true });
+  await unpin.waitFor();
+  expect(
+    (await sidebar.getByRole("menuitem").allTextContents()).map((label) => label.trim()),
+  ).toEqual(["Unpin", "Sessions", "Settings", "Delete"]);
+  await unpin.click();
+  await expectCounts(sidebar, { "[data-pinned-agent]": 0, '[data-agent-group="main"]': 1 });
+  await expectFocused(row);
+  await row.click({ button: "right" });
+  const pin = sidebar.getByRole("menuitem", { name: "Pin", exact: true });
+  await pin.waitFor();
+  expect(await pin.locator("svg").evaluate((icon) => getComputedStyle(icon).fill)).toBe("none");
+  if (width === 1440) {
+    await captureSidebarUiProof(suite, page, "agent-roster-pin-menu-after.png", sidebar);
+  }
+  await page.keyboard.press("Escape");
+  await expect.poll(() => pin.count()).toBe(0);
   await sidebar
     .locator('[data-agent-group="research"]')
     .getByRole("button", { name: "Options for Research and competitive intelligence" })
@@ -271,15 +290,25 @@ suite.define(() => {
         await page.mouse.move(-1, -1);
         await captureSidebarUiProof(suite, page, "claw-creator-pinned-before.png", pinnedAgent);
 
-        const trigger = pinnedAgent.getByRole("button", { name: "Options for Harbor" });
-        await page.mouse.move(-1, -1);
-        await trigger.focus();
-        await trigger.press("Enter");
+        await pinnedAgent.hover();
+        expect(await pinnedAgent.getByRole("button").count()).toBe(0);
+        await pinnedAgent.getByRole("link", { name: "Harbor", exact: true }).click({
+          button: "right",
+        });
         const menu = sidebar.getByRole("menu", { name: "Options for Harbor" });
         const createClawItem = menu.getByRole("menuitem", { name: "Create Claw" });
         await createClawItem.waitFor();
-        expect(await menu.getByRole("menuitem").allTextContents()).toEqual(["Create Claw"]);
-        await captureSidebarUiProof(suite, page, "claw-creator-pinned-menu-after.png", menu);
+        expect(
+          (await menu.getByRole("menuitem").allTextContents()).map((label) => label.trim()),
+        ).toEqual(["Unpin", "Sessions", "Create Claw", "Settings", "Delete"]);
+        // The pinned state fills the pin glyph; the unpinned Pin action keeps its outline.
+        expect(
+          await menu
+            .getByRole("menuitem", { name: "Unpin", exact: true })
+            .locator("svg")
+            .evaluate((icon) => getComputedStyle(icon).fill),
+        ).not.toBe("none");
+        await captureSidebarUiProof(suite, page, "claw-creator-pinned-menu-after.png", sidebar);
 
         await createClawItem.click();
         await gateway.waitForRequest("claws.drafts.create");

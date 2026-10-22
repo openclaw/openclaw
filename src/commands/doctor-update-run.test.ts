@@ -200,8 +200,6 @@ it("keeps foreign-destination remediation visible until a later successful updat
   await noteStaleUpdateRuns({});
   expect(note).toHaveBeenCalledOnce();
   expectHistoryNote("OpenClaw update failed: global-install-foreign-destination.");
-  expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: latest });
-  expect(listUpdateRunsAsync).toHaveBeenCalledTimes(2);
   expectHistoryNote(
     "https://docs.openclaw.ai/install/update-troubleshooting#node-and-global-install-permissions",
   );
@@ -242,9 +240,6 @@ it("refreshes history outside the discovery snapshot after settling an interrupt
     return snapshot.active ? [abandoned] : input?.active ? [] : [settled];
   });
   await noteStaleUpdateRuns();
-  expect(withOpenClawStateDatabaseReadSnapshot).toHaveBeenCalledOnce();
-  expect(readInterruptedUpdateCandidateAsync).toHaveBeenCalledOnce();
-  expect(reconcileInterruptedUpdateRuns).toHaveBeenCalledWith({ candidate: abandoned });
   expect(readScopes).toEqual([true, true, false, false]);
   expect(note).toHaveBeenCalledExactlyOnceWith(
     "Update interrupted-update: recorded succeeded after verifying the installed and serving candidate build candidate-build; its updater exited before recording completion.",

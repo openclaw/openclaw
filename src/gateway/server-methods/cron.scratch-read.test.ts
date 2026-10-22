@@ -29,7 +29,6 @@ it.each(["caller closes after read", "owner transfers before read"] as const)(
       cronEnabled: true,
       defaultAgentId: "main",
       enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: async () => ({ status: "skipped" }),
     });
     const entered = createDeferred();

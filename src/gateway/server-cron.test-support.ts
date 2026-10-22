@@ -9,7 +9,6 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import { resolveSelectedCronJobsStorePath } from "../cron/store/paths.js";
 import type { CronJobCreate } from "../cron/types.js";
-import type { HeartbeatRunResult } from "../infra/heartbeat-wake.js";
 import type { ManagedRun, RunExit } from "../process/supervisor/types.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 
@@ -20,8 +19,6 @@ type RunCronIsolatedAgentTurnMock = (params: {
 const {
   enqueueSystemEventMock,
   systemEventReceiptRemoveMock,
-  requestHeartbeatMock,
-  requestHeartbeatAndWaitMock,
   loadConfigMock,
   fetchWithSsrFGuardMock,
   sendCronAnnouncePayloadStrictMock,
@@ -40,10 +37,6 @@ const {
 } = vi.hoisted(() => ({
   enqueueSystemEventMock: vi.fn(),
   systemEventReceiptRemoveMock: vi.fn(() => true),
-  requestHeartbeatMock: vi.fn(),
-  requestHeartbeatAndWaitMock: vi.fn<(...args: unknown[]) => Promise<HeartbeatRunResult>>(
-    async () => ({ status: "ran", durationMs: 1 }),
-  ),
   loadConfigMock: vi.fn(),
   fetchWithSsrFGuardMock: vi.fn(),
   sendCronAnnouncePayloadStrictMock: vi.fn<
@@ -126,17 +119,6 @@ vi.mock("../infra/system-events.js", async (importOriginal) => {
   return {
     ...(await importOriginal<typeof import("../infra/system-events.js")>()),
     ...createCronSystemEventMocks(enqueueSystemEventMock, systemEventReceiptRemoveMock),
-  };
-});
-
-vi.mock("../infra/heartbeat-wake.js", async () => {
-  const actual = await vi.importActual<typeof import("../infra/heartbeat-wake.js")>(
-    "../infra/heartbeat-wake.js",
-  );
-  return {
-    ...actual,
-    requestHeartbeat: requestHeartbeatMock,
-    requestHeartbeatAndWait: requestHeartbeatAndWaitMock,
   };
 });
 
@@ -389,8 +371,6 @@ export function resetGatewayCronMocks() {
   resetActiveCronTaskRunsForTests();
   enqueueSystemEventMock.mockClear();
   systemEventReceiptRemoveMock.mockClear();
-  requestHeartbeatMock.mockClear();
-  requestHeartbeatAndWaitMock.mockReset();
   loadConfigMock.mockClear();
   fetchWithSsrFGuardMock.mockClear();
   sendCronAnnouncePayloadStrictMock.mockClear();

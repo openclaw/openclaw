@@ -14,7 +14,7 @@ const listRawChannelPluginCatalogEntriesMock = vi.hoisted(() =>
   vi.fn<() => ChannelPluginCatalogEntry[]>(() => []),
 );
 const channelsAddCommandMock = vi.hoisted(() =>
-  vi.fn<typeof import("../commands/channels.js").channelsAddCommand>(async () => undefined),
+  vi.fn<typeof import("../commands/channels/add.js").channelsAddCommand>(async () => undefined),
 );
 const channelsLogsCommandMock = vi.hoisted(() =>
   vi.fn(async (_options: { channel?: string }) => undefined),
@@ -46,11 +46,24 @@ vi.mock("../channels/plugins/catalog.js", () => ({
   listRawChannelPluginCatalogEntries: listRawChannelPluginCatalogEntriesMock,
 }));
 
-vi.mock("../commands/channels.js", () => ({
+// mock-isolation: Observe parsed add options without installing plugins or writing account config.
+vi.mock("../commands/channels/add.js", () => ({
   channelsAddCommand: channelsAddCommandMock,
+}));
+// mock-isolation: Observe parsed log options without reading operator logs.
+vi.mock("../commands/channels/logs.js", () => ({
   channelsLogsCommand: channelsLogsCommandMock,
+}));
+// mock-isolation: Observe parsed target options without calling channel directories.
+vi.mock("../commands/channels/resolve.js", () => ({
   channelsResolveCommand: channelsResolveCommandMock,
+}));
+// mock-isolation: Observe parsed capability options without loading channel runtimes.
+vi.mock("../commands/channels/capabilities.js", () => ({
   channelsCapabilitiesCommand: channelsCapabilitiesCommandMock,
+}));
+// mock-isolation: Observe parsed removal options without deleting account config.
+vi.mock("../commands/channels/remove.js", () => ({
   channelsRemoveCommand: channelsRemoveCommandMock,
 }));
 

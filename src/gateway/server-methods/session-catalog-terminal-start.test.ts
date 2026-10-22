@@ -7,17 +7,11 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { SessionCatalogProvider } from "../../plugins/session-catalog.js";
 import type { UserProfileIdentity } from "../../state/user-profiles.types.js";
 import { withEnvAsync } from "../../test-utils/env.js";
+import { catalogProvider } from "./session-catalog.fixtures.test-support.js";
 import { sessionCatalogHandlers } from "./session-catalog.js";
 
-function provider(overrides: Partial<SessionCatalogProvider> = {}): SessionCatalogProvider {
-  return {
-    id: "codex",
-    label: "Codex",
-    list: vi.fn(async () => []),
-    read: vi.fn(async ({ hostId, threadId }) => ({ hostId, threadId, items: [] })),
-    ...overrides,
-  };
-}
+const provider = (overrides: Partial<SessionCatalogProvider>) =>
+  catalogProvider("codex", { label: "Codex", ...overrides });
 
 let activeProvider: SessionCatalogProvider;
 let blockedStart = vi.fn();
@@ -304,14 +298,7 @@ describe("sessions.catalog.startTerminal", () => {
     const open = vi.fn();
     activeProvider = provider({ startTerminalSession });
     const target = { hostId: "node:remote", agentId: "main", cwd: "/remote/worktree" };
-    const respond = await call(request(target), enabled, admin, {
-      isTerminalEnabled: () => true,
-      terminalSessions: { open },
-      resolveTerminalLaunchPolicy: () => ({
-        ok: true,
-        plan: { agentId: "main", cwd: "/agent/workspace", shell: "/bin/zsh", args: [] },
-      }),
-    });
+    const respond = await call(request(target), enabled, admin, launchContext(open));
 
     expect(startTerminalSession).toHaveBeenCalledWith({
       ...target,

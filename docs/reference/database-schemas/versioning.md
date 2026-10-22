@@ -46,7 +46,10 @@ use its authenticated control socket first. The app closes the physical database
 between operations so existing maintenance custody can capture and restore it.
 A dispatched operation with a lost reply is never replayed offline. When no app
 received the request, clients acquire bounded exclusive custody and release it
-at completion, including when another CLI briefly owns the file.
+at completion, including when another CLI briefly owns the file. An app released
+before this route refuses it as an unknown operation before dispatch; clients
+treat that app as absent and use the same offline custody, so a newer CLI or
+Gateway still starts while an older app is running.
 iOS app and extension operations use the same Swift owner for a bounded
 operation and close before suspension. No owner selects an identity or token
 by comparing timestamps with another store. The existing maintenance lock blocks
@@ -900,6 +903,10 @@ integrity scan; the migration's source integrity admission runs a whole-database
 quick check plus full checks of affected tables, or a whole-database full check
 when `--full-integrity-check` is selected. AUTOINCREMENT, virtual/shadow tables, unsupported SQLite runtimes,
 or sources outside the active state directory fall back to full backups.
+Fresh credential capture also uses Doctor's full image when a legacy
+`sqlite_stat4` table cannot be recreated by the current runtime. The image must
+still contain the tables and rows being retired; a changed retry source preserves
+its original backup and reports a data-risk refusal instead of losing credentials.
 Historical migrations keep their full-file backup when no scoped backup is
 declared, while integrity admission uses the same quick-plus-affected-tables
 policy. Backup eligibility and integrity coverage are separate contracts.

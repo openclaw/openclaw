@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import type { checkScriptErasability } from "../../scripts/check-script-erasability.mjs";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { createScriptTestHarness } from "./test-helpers.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
 const { createTempDir } = createScriptTestHarness();
 const quietNode = "--disable-warning=ExperimentalWarning";
@@ -20,11 +21,7 @@ function checkNodeScriptErasability(root: string): ReturnType<typeof checkScript
 
 function writeScriptsTree(files: Record<string, string>): string {
   const scriptsRoot = path.join(createTempDir("openclaw-script-erasability-"), "scripts");
-  for (const [relativePath, content] of Object.entries(files)) {
-    const filePath = path.join(scriptsRoot, relativePath);
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(filePath, content);
-  }
+  writeFixtureFiles(scriptsRoot, files);
   return scriptsRoot;
 }
 

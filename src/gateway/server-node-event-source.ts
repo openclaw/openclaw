@@ -3,11 +3,13 @@ import { safeParseJson } from "@openclaw/normalization-core/json-coercion";
 import { asNullableObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
+import { getRuntimeConfigSnapshotMetadata } from "../config/runtime-snapshot.js";
 import {
   acquireSessionActorStorage,
   captureSessionActorStorageOwner,
   runWithSessionActorStorage,
 } from "../config/sessions/session-actor-storage-binding.js";
+import { truncateUtf16WithEllipsis } from "../shared/text-truncate.js";
 import type {
   NodeEvent,
   NodeEventHandlerOptions,
@@ -40,6 +42,23 @@ export function pairingChangedResult(event: string): NodeEventHandleResult {
 
 export function parseNodeEventPayload(payloadJSON?: string | null): Record<string, unknown> | null {
   return payloadJSON ? asNullableObjectRecord(safeParseJson(payloadJSON)) : null;
+}
+
+export function compactNodeEventText(raw: string, maxChars: number) {
+  return truncateUtf16WithEllipsis(raw.replace(/\s+/g, " ").trim(), maxChars);
+}
+
+export function captureNodeEventConfig() {
+  const cfg = getRuntimeConfig();
+  const publication = getRuntimeConfigSnapshotMetadata();
+  return {
+    cfg,
+    assertCurrent: () => {
+      if (getRuntimeConfigSnapshotMetadata() !== publication) {
+        throw new Error("Node event configuration changed during preparation");
+      }
+    },
+  };
 }
 
 /** Keep prepared private authority and every accepted consumer with the captured actor. */
