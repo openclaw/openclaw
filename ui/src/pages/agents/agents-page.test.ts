@@ -248,9 +248,35 @@ describe("AgentsPage gateway lifecycle", () => {
     const context = pageContext(gateway(snapshot(client)), agents);
     Object.assign(context.runtimeConfig, { save });
     const { page } = mountPage(client, "overview", context);
-    page.read().onConfigSave();
-    await waitForFast(() => expect(save).toHaveBeenCalledOnce());
+    context.runtimeConfig.state.lastError = "Synthetic config save refused";
+    await page.read().onConfigSave();
+    expect(save).toHaveBeenCalledOnce();
     expect(refreshList).not.toHaveBeenCalled();
+    expect(page.read().config.lastError).toBe("Synthetic config save refused");
+  });
+
+  it("keeps config save completion pending through the agent roster refresh", async () => {
+    const saved = deferred<boolean>();
+    const roster = deferred<typeof agentsList>();
+    const client = createTestGatewayClient(vi.fn(async () => ({ models: [] })));
+    const agents = agentsCapability(async () => files("main", "unused"));
+    agents.refreshList = vi.fn(() => roster.promise);
+    const context = pageContext(gateway(snapshot(client)), agents);
+    Object.assign(context.runtimeConfig, { save: () => saved.promise });
+    const { page } = mountPage(client, "overview", context);
+    let completed = false;
+    const completion = page
+      .read()
+      .onConfigSave()
+      .then(() => {
+        completed = true;
+      });
+    saved.resolve(true);
+    await waitForFast(() => expect(agents.refreshList).toHaveBeenCalledOnce());
+    expect(completed).toBe(false);
+    roster.resolve(agentsList);
+    await completion;
+    expect(completed).toBe(true);
   });
 
   it("loads the selected agent's configured model catalog once for the overview model picker", async () => {

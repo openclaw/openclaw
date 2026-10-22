@@ -860,8 +860,8 @@ export function createAgentsPageState(
       },
       onSelectPanel: (panel: AgentsPanel) =>
         navigateToAgentPanel(context, selectedAgentId, state.agentsPanel, panel),
-      onConfigReload: () => void context.runtimeConfig.discardDraft({ reloadOnly: true }),
-      onConfigSave: () => void refreshAgents("save"),
+      onConfigReload: () => context.runtimeConfig.discardDraft({ reloadOnly: true }),
+      onConfigSave: () => refreshAgents("save"),
       onOpenMemoryImport: () => context.navigate("memory-import"),
       onOpenMemorySettings: () => context.navigate("memory"),
       onOpenAgentDefaults: () => context.navigate("ai-agents"),

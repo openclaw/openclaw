@@ -25,6 +25,7 @@ export const inertAgentFileControls = {
 export function createAgentViewTestProps(
   overrides: Partial<AgentsViewProps> = {},
 ): AgentsViewProps {
+  const retired = Promise.withResolvers<void>().promise;
   const data: ReturnType<AgentsViewProps["readData"]> = {
     agentsList: {
       defaultId: "alpha",
@@ -57,7 +58,7 @@ export function createAgentViewTestProps(
   };
   return {
     readData: () => data,
-    presentationRetired: () => new Promise<void>(() => {}),
+    presentationRetired: () => retired,
     readChannels: () => ({
       channelsSnapshot: null,
       channelsRead: null,
@@ -154,8 +155,8 @@ export function createAgentViewTestProps(
     onRefresh: () => undefined,
     onCreateAgent: () => undefined,
     onSelectPanel: () => undefined,
-    onConfigReload: () => undefined,
-    onConfigSave: () => undefined,
+    onConfigReload: async () => undefined,
+    onConfigSave: async () => undefined,
     onSetDefault: async () => undefined,
     onTogglePinnedAgent: () => undefined,
     onOpenMemoryImport: () => undefined,

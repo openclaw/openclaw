@@ -100,6 +100,7 @@ export function Agents(props: AgentsProps) {
     configSaving: props.config.configSaving,
     configDirty: props.config.configFormDirty,
     canUpdateConfig: props.access.canUpdateConfig,
+    presentationRetired: props.presentationRetired(),
     onConfigReload: props.onConfigReload,
     onConfigSave: props.onConfigSave,
   });

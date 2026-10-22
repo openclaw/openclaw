@@ -10,6 +10,13 @@ import {
   projectSessionDeliveryFields,
 } from "./delivery-context.shared.js";
 
+const slackRoute = {
+  channel: "slack",
+  accountId: "work",
+  target: { to: "channel:C123", rawTo: "slack://C123", chatType: "channel" as const },
+  thread: { id: "177000.123", kind: "thread" as const, source: "target" as const },
+};
+
 describe("delivery context helpers", () => {
   it.each([["whitespace-only fields", { channel: " ", to: " " }, true]] as const)(
     "checks raw delivery target fields for %s",
@@ -128,10 +135,11 @@ describe("delivery context helpers", () => {
     expect(
       normalizeSessionDeliveryState({
         route: {
+          ...slackRoute,
           channel: "Slack",
           accountId: " work ",
-          target: { to: " channel:C123 ", rawTo: " slack://C123 ", chatType: "channel" },
-          thread: { id: " 177000.123 ", kind: "thread", source: "target" },
+          target: { ...slackRoute.target, to: " channel:C123 ", rawTo: " slack://C123 " },
+          thread: { ...slackRoute.thread, id: " 177000.123 " },
         },
         context: { channel: "discord", to: "channel:old" },
         origin: { label: "Support" },

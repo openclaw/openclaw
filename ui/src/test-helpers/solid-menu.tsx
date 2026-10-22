@@ -9,13 +9,10 @@ export const navigationItems: readonly MenuItem[] = [
   ...Object.entries({
     assign: ["Assign to", { ada: "Ada Rivera", grace: "Grace Kim" }],
     move: ["Move to group", { engineering: "Engineering", design: "Design" }],
-  } as const).map(([id, [label, children]]) => ({
-    id,
-    label,
-    children: Object.entries(children).map(([childId, childLabel]) => ({
-      id: childId,
-      label: childLabel,
-    })),
+  } as const).map(([branchId, [branchLabel, children]]) => ({
+    id: branchId,
+    label: branchLabel,
+    children: Object.entries(children).map(([id, label]) => ({ id, label })),
   })),
   { id: "disabled", label: "Unavailable", disabled: true },
   { id: "archive", label: "Archive" },
@@ -69,24 +66,15 @@ export function item(label: string, id = "people"): HTMLButtonElement {
 
 export async function phase(element: HTMLElement, value: "open" | "hidden"): Promise<void> {
   await expect
-    .poll(() => element.matches(":popover-open"), { message: `${element.id} native visibility` })
-    .toBe(value === "open");
-  if (element.dataset.phase === value) {
-    return;
-  }
-  return new Promise((resolve) => {
-    element.addEventListener(
-      value === "open" ? "overlay-after-show" : "overlay-after-hide",
-      () => resolve(),
-      { once: true },
-    );
-  });
+    .poll(() => [element.matches(":popover-open"), element.dataset.phase], {
+      message: `${element.id} native visibility and completed phase`,
+    })
+    .toEqual([value === "open", value]);
 }
 
 export async function openMenu(id = "people") {
   await userEvent.click(trigger(id));
   await phase(surface(id), "open");
-  expect(surface(id).matches(":popover-open")).toBe(true);
 }
 
 export function openSurfaces() {

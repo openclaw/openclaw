@@ -24,16 +24,6 @@ import type { HandleCommandsParams } from "./commands-types.js";
 
 const EXPORT_HTML_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), "export-html");
 
-interface SessionData {
-  header: SessionHeader | null;
-  entries: AgentSessionEntry[];
-  leafId: string | null;
-  hasLeafControl: boolean;
-  systemPrompt?: string;
-  tools?: Array<{ name: string; description?: string; parameters?: unknown }>;
-  warning?: string;
-}
-
 const BACKEND_DELEGATED_WARNING =
   "This session was handled by a backend runtime (e.g. CLI/ACP). Assistant replies, tool calls, and usage data are stored in the backend transcript and are not included in this export.";
 
@@ -91,27 +81,6 @@ async function hasPersistedAcpSession(params: {
   }
 }
 
-function isBackendDelegatedSession(
-  storedEntry: StoredSessionEntry,
-  entries: AgentSessionEntry[],
-  hasStoredAcpSession: boolean,
-): boolean {
-  const hasBackendSession =
-    hasStoredAcpSession ||
-    hasNonEmptyString(storedEntry.claudeCliSessionId) ||
-    Object.values(storedEntry.cliSessionBindings ?? {}).some((binding) =>
-      hasNonEmptyString(binding?.sessionId),
-    ) ||
-    Object.values(storedEntry.cliSessionIds ?? {}).some(hasNonEmptyString);
-  if (!hasBackendSession) {
-    return false;
-  }
-  return (
-    entries.some((entry) => entry.type === "message") &&
-    entries.every((entry) => entry.type !== "message" || entry.message.role === "user")
-  );
-}
-
 type SessionExportWarningSummary = {
   count: number;
   rows: number[];
@@ -119,49 +88,6 @@ type SessionExportWarningSummary = {
 
 async function loadTemplate(fileName: string): Promise<string> {
   return await fsp.readFile(path.join(EXPORT_HTML_DIR, fileName), "utf-8");
-}
-
-function replaceHtmlPlaceholder(template: string, name: string, value: string): string {
-  let replaced = false;
-  const placeholder = new RegExp(
-    `(<(?:script|style)\\b(?=[^>]*\\bdata-openclaw-export-placeholder="${name}")[^>]*>)(</(?:script|style)>)`,
-  );
-  const next = template.replace(
-    placeholder,
-    (_match: string, openTag: string, closeTag: string) => {
-      replaced = true;
-      const finalOpenTag = openTag.replace(/\sdata-openclaw-export-placeholder="[^"]*"/, "");
-      return `${finalOpenTag}${value}${closeTag}`;
-    },
-  );
-  if (!replaced) {
-    throw new Error(`Export HTML template missing ${name} placeholder`);
-  }
-  return next;
-}
-
-async function generateHtml(sessionData: SessionData): Promise<string> {
-  const [template, templateCss, templateJs, markedJs, hljsJs] = await Promise.all([
-    loadTemplate("template.html"),
-    loadTemplate("template.css"),
-    loadTemplate("template.js"),
-    loadTemplate(path.join("vendor", "marked.min.js")),
-    loadTemplate(path.join("vendor", "highlight.min.js")),
-  ]);
-
-  const sessionDataBase64 = Buffer.from(JSON.stringify(sessionData)).toString("base64");
-
-  const replacements: Array<[string, string]> = [
-    ["CSS", templateCss],
-    ["SESSION_DATA", sessionDataBase64],
-    ["MARKED_JS", markedJs],
-    ["HIGHLIGHT_JS", hljsJs],
-    ["JS", templateJs],
-  ];
-  return replacements.reduce(
-    (html, [name, value]) => replaceHtmlPlaceholder(html, name, value),
-    template,
-  );
 }
 
 function formatSessionExportWarning(summary: SessionExportWarningSummary): string {
@@ -172,54 +98,6 @@ function formatSessionExportWarning(summary: SessionExportWarningSummary): strin
   const entryDescription =
     summary.count === 1 ? "row that was not a session entry" : "rows that were not session entries";
   return `⚠️ Skipped ${summary.count.toLocaleString()} malformed transcript ${entryDescription}.${rows}`;
-}
-
-async function readSessionDataFromIdentity(params: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<
-  Pick<SessionData, "header" | "entries" | "leafId" | "hasLeafControl"> & {
-    warnings: SessionExportWarningSummary[];
-  }
-> {
-  const events = await loadTranscriptEvents(params);
-  const fileEntries: SessionFileEntry[] = [];
-  const skippedRows: SessionExportWarningSummary = { count: 0, rows: [] };
-  for (const [index, event] of events.entries()) {
-    if (isSessionFileEntry(event)) {
-      fileEntries.push(event);
-    } else {
-      skippedRows.count += 1;
-      if (skippedRows.rows.length < 20) {
-        skippedRows.rows.push(index + 1);
-      }
-    }
-  }
-  migrateSessionEntries(fileEntries);
-  const header =
-    fileEntries.find((entry): entry is SessionHeader => entry.type === "session") ?? null;
-  const rawEntries = fileEntries.filter(
-    (entry): entry is AgentSessionEntry => entry.type !== "session",
-  );
-  const tree = scanSessionTranscriptTree(rawEntries);
-  const hasLeafControl = tree.hasLeafControl;
-  const entries = hasLeafControl
-    ? rawEntries.map((entry) => {
-        const node = tree.byId.get(entry.id);
-        return node && entry.parentId !== node.parentId
-          ? { ...entry, parentId: node.parentId }
-          : entry;
-      })
-    : rawEntries;
-  return {
-    header,
-    entries,
-    leafId: tree.leafId,
-    hasLeafControl,
-    warnings: skippedRows.count > 0 ? [skippedRows] : [],
-  };
 }
 
 export async function buildExportSessionReply(params: HandleCommandsParams): Promise<ReplyPayload> {
@@ -238,12 +116,43 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
 
   // Active exports run after startup migration, so SQLite rows are canonical.
   // Do not read sessionFile here; a SQLite marker is an identifier, not a path.
-  const { entries, header, leafId, hasLeafControl, warnings } = await readSessionDataFromIdentity({
+  const events = await loadTranscriptEvents({
     agentId: sessionTarget.agentId,
     sessionId: sessionTarget.sessionId,
     sessionKey: sessionTarget.sessionKey,
     storePath: sessionTarget.storePath,
   });
+  const fileEntries: SessionFileEntry[] = [];
+  const skippedRows: SessionExportWarningSummary = { count: 0, rows: [] };
+  for (const [index, event] of events.entries()) {
+    if (isSessionFileEntry(event)) {
+      fileEntries.push(event);
+    } else {
+      skippedRows.count += 1;
+      if (skippedRows.rows.length < 20) {
+        skippedRows.rows.push(index + 1);
+      }
+    }
+  }
+  migrateSessionEntries(fileEntries);
+  const header =
+    fileEntries.find((fileEntry): fileEntry is SessionHeader => fileEntry.type === "session") ??
+    null;
+  const rawEntries = fileEntries.filter(
+    (fileEntry): fileEntry is AgentSessionEntry => fileEntry.type !== "session",
+  );
+  const tree = scanSessionTranscriptTree(rawEntries);
+  const hasLeafControl = tree.hasLeafControl;
+  const entries = hasLeafControl
+    ? rawEntries.map((fileEntry) => {
+        const node = tree.byId.get(fileEntry.id);
+        return node && fileEntry.parentId !== node.parentId
+          ? { ...fileEntry, parentId: node.parentId }
+          : fileEntry;
+      })
+    : rawEntries;
+  const leafId = tree.leafId;
+  const warnings = skippedRows.count > 0 ? [skippedRows] : [];
 
   const { systemPrompt, tools } = await resolveCommandsSystemPromptBundle({
     ...params,
@@ -255,10 +164,20 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     sessionKey: params.sessionKey,
     entry,
   });
-  const backendWarning = isBackendDelegatedSession(entry, entries, hasStoredAcpSession)
-    ? BACKEND_DELEGATED_WARNING
-    : undefined;
-  const sessionData: SessionData = {
+  const hasBackendSession =
+    hasStoredAcpSession ||
+    hasNonEmptyString(entry.claudeCliSessionId) ||
+    Object.values(entry.cliSessionBindings ?? {}).some((binding) =>
+      hasNonEmptyString(binding?.sessionId),
+    ) ||
+    Object.values(entry.cliSessionIds ?? {}).some(hasNonEmptyString);
+  const backendWarning =
+    hasBackendSession &&
+    entries.some((fileEntry) => fileEntry.type === "message") &&
+    entries.every((fileEntry) => fileEntry.type !== "message" || fileEntry.message.role === "user")
+      ? BACKEND_DELEGATED_WARNING
+      : undefined;
+  const sessionData = {
     header,
     entries,
     leafId,
@@ -272,7 +191,41 @@ export async function buildExportSessionReply(params: HandleCommandsParams): Pro
     warning: backendWarning,
   };
 
-  const html = await generateHtml(sessionData);
+  const [template, templateCss, templateJs, markedJs, hljsJs] = await Promise.all([
+    loadTemplate("template.html"),
+    loadTemplate("template.css"),
+    loadTemplate("template.js"),
+    loadTemplate(path.join("vendor", "marked.min.js")),
+    loadTemplate(path.join("vendor", "highlight.min.js")),
+  ]);
+
+  const sessionDataBase64 = Buffer.from(JSON.stringify(sessionData)).toString("base64");
+
+  const replacements: Array<[string, string]> = [
+    ["CSS", templateCss],
+    ["SESSION_DATA", sessionDataBase64],
+    ["MARKED_JS", markedJs],
+    ["HIGHLIGHT_JS", hljsJs],
+    ["JS", templateJs],
+  ];
+  const html = replacements.reduce((currentHtml, [name, value]) => {
+    let replaced = false;
+    const placeholder = new RegExp(
+      `(<(?:script|style)\\b(?=[^>]*\\bdata-openclaw-export-placeholder="${name}")[^>]*>)(</(?:script|style)>)`,
+    );
+    const next = currentHtml.replace(
+      placeholder,
+      (_match: string, openTag: string, closeTag: string) => {
+        replaced = true;
+        const finalOpenTag = openTag.replace(/\sdata-openclaw-export-placeholder="[^"]*"/, "");
+        return `${finalOpenTag}${value}${closeTag}`;
+      },
+    );
+    if (!replaced) {
+      throw new Error(`Export HTML template missing ${name} placeholder`);
+    }
+    return next;
+  }, template);
 
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
   const defaultFileName = `openclaw-session-${entry.sessionId.slice(0, 8)}-${timestamp}.html`;

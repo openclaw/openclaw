@@ -25,6 +25,7 @@ import {
   recordControlUiE2eFailureFacts,
 } from "../test-helpers/control-ui-e2e-diagnostics.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { clickBoardWidgetControl } from "../test-helpers/control-ui-e2e-widget.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -461,7 +462,10 @@ suite.define(() => {
         // Retain document identity across the real click; never replay it for diagnostics.
         const beforeClick = withTimeout(previewFacts("before"), 1_000).catch(() => ({}));
         try {
-          await document.getByRole("button", { name: "Count", exact: true }).click();
+          await clickBoardWidgetControl(
+            page,
+            document.getByRole("button", { name: "Count", exact: true }),
+          );
           await expect.poll(() => document.locator("output").textContent()).toBe("1");
         } catch (error) {
           recordControlUiE2eFailureFacts(page, {

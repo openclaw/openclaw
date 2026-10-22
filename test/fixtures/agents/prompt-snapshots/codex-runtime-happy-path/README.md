@@ -6,7 +6,7 @@ These fixtures capture the default OpenAI/Codex happy path for prompt review:
 
 - OpenAI model through the Codex harness and Codex app-server runtime.
 - Codex harness default coverage for tool-only visible source replies.
-- Telegram direct chat, Discord group chat, and a heartbeat turn with `heartbeat_respond` available through searchable dynamic tools.
+- Telegram direct chat, Discord group chat, and a legacy heartbeat trigger without the retired response tool.
 
 The materialized Markdown snapshots show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.
 

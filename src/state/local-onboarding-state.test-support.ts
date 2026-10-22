@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
-import { afterEach, describe, it } from "node:test";
+import { afterEach, it } from "node:test";
 import { isMainThread } from "node:worker_threads";
 import {
   readConfigFileSnapshot,
@@ -28,6 +28,7 @@ const SECURITY_ACKNOWLEDGED_AT = "2026-08-02T00:00:00.000Z";
 const acknowledgedConfig = {
   wizard: { securityAcknowledgedAt: SECURITY_ACKNOWLEDGED_AT },
 };
+const replacementAcknowledgement = "2026-08-03T00:00:00.000Z";
 
 function onboarding(state: OpenClawTestState) {
   const database = { env: state.env };
@@ -51,269 +52,222 @@ function onboarding(state: OpenClawTestState) {
       agents: { defaults: { workspace: state.workspaceDir }, entries: { main: {} } },
       ...acknowledgedConfig,
     });
-  return { database, begin, complete, read, recover, writeConfig };
+  const replace = (runId: string, expectedRunId: string) =>
+    begin({
+      workspace: state.path("replacement-workspace"),
+      securityAcknowledgedAt: replacementAcknowledgement,
+      runId,
+      replace: true,
+      expectedRunId,
+    });
+  return { database, begin, complete, read, recover, writeConfig, replace };
 }
 
-void describe("local onboarding state", () => {
-  void it("does not create persistent state when checking an unconfigured install", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-empty" }, async (state) => {
-      const { read, complete } = onboarding(state);
-      assert.equal(read(), undefined);
-      assert.equal(await complete("missing-run"), false);
-      assert.equal(fs.existsSync(state.statePath("state", "openclaw.sqlite")), false);
-    });
+function test(
+  name: string,
+  run: (context: ReturnType<typeof onboarding> & { state: OpenClawTestState }) => Promise<void>,
+) {
+  void it(name, () =>
+    withOpenClawTestState({ label: "local-onboarding" }, (state) =>
+      run({ ...onboarding(state), state }),
+    ),
+  );
+}
+
+test("does not create persistent state when checking an unconfigured install", async (context) => {
+  const { read, complete, state } = context;
+  assert.equal(read(), undefined);
+  assert.equal(await complete("missing-run"), false);
+  assert.equal(fs.existsSync(state.statePath("state", "openclaw.sqlite")), false);
+});
+
+test("isolates receipts by configuration path", async ({ database, begin, read, state }) => {
+  const first = begin({ runId: "first-run", nowMs: 100 });
+
+  assert.deepEqual(read(), first);
+  assert.equal(readLocalOnboardingState(state.path("other.json"), database), undefined);
+  assert.partialDeepStrictEqual(first, {
+    status: "pending",
+    runId: "first-run",
+    startedAtMs: 100,
+  });
+});
+
+test("preserves the pending owner across repeated activation commits", async (context) => {
+  const { database, begin, complete, read, state } = context;
+  const first = begin({ runId: "first-run", teamCoordinatorId: " Project Lead " });
+  closeOpenClawStateDatabaseForTest();
+  assert.partialDeepStrictEqual(read(), { teamCoordinatorId: "project-lead" });
+  const second = begin({
+    workspace: state.path("other-workspace"),
+    runId: "second-run",
+    teamCoordinatorId: "different-coordinator",
   });
 
-  void it("isolates receipts by configuration path", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-paths" }, async (state) => {
-      const { database, begin, read } = onboarding(state);
-      const first = begin({ runId: "first-run", nowMs: 100 });
+  assert.deepEqual(second, first);
+  assert.equal(await complete("wrong"), false);
+  assert.equal(read()?.status, "pending");
+  assert.equal(await complete("first-run", 200), true);
+  assert.partialDeepStrictEqual(
+    await readLocalOnboardingStateForConfigAsync(state.configPath, acknowledgedConfig, database),
+    { ...first, status: "completed", completedAtMs: 200 },
+  );
+});
 
-      assert.deepEqual(read(), first);
-      assert.equal(readLocalOnboardingState(state.path("other.json"), database), undefined);
-      assert.partialDeepStrictEqual(first, {
-        status: "pending",
-        runId: "first-run",
-        startedAtMs: 100,
-      });
-    });
-  });
+test("rejects an unrepresentable team coordinator before creating a receipt", async (context) => {
+  const { begin, read } = context;
+  assert.throws(() => begin({ runId: "invalid-team", teamCoordinatorId: "!!!" }), /coordinator/u);
+  assert.equal(read(), undefined);
+});
 
-  void it("preserves the pending owner across repeated activation commits", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-owner" }, async (state) => {
-      const { database, begin, complete, read } = onboarding(state);
-      const first = begin({ runId: "first-run", teamCoordinatorId: " Project Lead " });
-      closeOpenClawStateDatabaseForTest();
-      assert.partialDeepStrictEqual(read(), { teamCoordinatorId: "project-lead" });
-      const second = begin({
-        workspace: state.path("other-workspace"),
-        runId: "second-run",
-        teamCoordinatorId: "different-coordinator",
-      });
-
-      assert.deepEqual(second, first);
-      assert.equal(await complete("wrong"), false);
-      assert.equal(read()?.status, "pending");
-      assert.equal(await complete("first-run", 200), true);
-      assert.partialDeepStrictEqual(
-        await readLocalOnboardingStateForConfigAsync(
-          state.configPath,
-          acknowledgedConfig,
-          database,
-        ),
-        { ...first, status: "completed", completedAtMs: 200 },
-      );
-    });
-  });
-
-  void it("rejects an unrepresentable team coordinator before creating a receipt", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-invalid-team" }, async (state) => {
-      const { begin, read } = onboarding(state);
-      assert.throws(
-        () => begin({ runId: "invalid-team", teamCoordinatorId: "!!!" }),
-        /coordinator/u,
-      );
-      assert.equal(read(), undefined);
-    });
-  });
-
-  void it("prevents an interrupted pre-reset run from completing its replacement", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-reset" }, async (state) => {
-      const { begin, complete, read } = onboarding(state);
-      begin({ runId: "stale-run" });
-      const replacement = begin({
-        workspace: state.path("replacement-workspace"),
-        securityAcknowledgedAt: "2026-08-03T00:00:00.000Z",
-        runId: "new-run",
-        replace: true,
-        expectedRunId: "stale-run",
-      });
-
-      assert.equal(await complete("stale-run"), false);
-      assert.deepEqual(read(), replacement);
-      assert.equal(await complete("new-run"), true);
-    });
-  });
-
-  void it("completes the same run idempotently without changing its original timestamp", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-idempotent" }, async (state) => {
-      const { begin, complete, read } = onboarding(state);
-      begin({ runId: "completed-run" });
-
-      assert.equal(await complete("completed-run", 100), true);
-      assert.equal(await complete("completed-run", 200), true);
-      assert.equal(await complete("different-run", 300), false);
-      assert.partialDeepStrictEqual(read(), {
-        status: "completed",
-        runId: "completed-run",
-        completedAtMs: 100,
-      });
-    });
-  });
-
-  void it("completes its validated owner idempotently without rewriting the locked config", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-locked-completion" }, async (state) => {
-      const { begin, read, recover, writeConfig } = onboarding(state);
-      await writeConfig();
-      const owner = begin({ runId: "locked-owner" });
-      const originalConfig = fs.readFileSync(state.configPath, "utf8");
-
-      const first = await recover(owner);
-      const completed = read();
-      const second = await recover(owner);
-
-      assert.equal(first.path, state.configPath);
-      assert.equal(second.path, state.configPath);
-      assert.partialDeepStrictEqual(completed, { status: "completed", runId: owner.runId });
-      assert.deepEqual(read(), completed);
-      assert.equal(fs.readFileSync(state.configPath, "utf8"), originalConfig);
-    });
-  });
-
-  void it("rejects a canonical config mutation that wins the completion lock", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-config-lock-race" }, async (state) => {
-      const { begin, read, writeConfig } = onboarding(state);
-      await writeConfig();
-      const owner = begin({ runId: "racing-owner" });
-      const optimisticSnapshot = await readConfigFileSnapshot();
-      assert.equal(
-        optimisticSnapshot.sourceConfig.wizard?.securityAcknowledgedAt,
-        SECURITY_ACKNOWLEDGED_AT,
-      );
-      let notifyLockHeld!: () => void;
-      let releaseMutation!: () => void;
-      const lockHeld = new Promise<void>((resolve) => {
-        notifyLockHeld = resolve;
-      });
-      const mutationReleased = new Promise<void>((resolve) => {
-        releaseMutation = resolve;
-      });
-      const competingMutation = withConfigMutationExclusive(async (lockedConfig) => {
-        notifyLockHeld();
-        await mutationReleased;
-        await replaceConfigFile({
-          nextConfig: {
-            ...lockedConfig,
-            wizard: { ...lockedConfig.wizard, securityAcknowledgedAt: "2026-08-03T00:00:00.000Z" },
-          },
-        });
-      });
-      await lockHeld;
-      const completionFails = assert.rejects(
-        completeLocalSetupRecovery({ owner, appliedConfigPath: optimisticSnapshot.path }),
-        /onboarding configuration changed before setup could complete/u,
-      );
-
-      releaseMutation();
-      await competingMutation;
-      await completionFails;
-
-      assert.deepEqual(read(), owner);
-      assert.equal(
-        (await readConfigFileSnapshot()).sourceConfig.wizard?.securityAcknowledgedAt,
-        "2026-08-03T00:00:00.000Z",
-      );
-    });
-  });
-
-  void it("rejects another receipt owner and an applied config at a different path", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-locked-ownership" }, async (state) => {
-      const { begin, read, recover, writeConfig } = onboarding(state);
-      await writeConfig();
-      const owner = begin({ runId: "real-owner" });
-
-      await assert.rejects(
-        recover({ ...owner, runId: "different-owner" }),
-        /Another onboarding run replaced this setup operation/u,
-      );
-      await assert.rejects(
-        completeLocalSetupRecovery({ owner, appliedConfigPath: state.path("another-config.json") }),
-        /onboarding configuration changed before setup could complete/u,
-      );
-
-      assert.deepEqual(read(), owner);
-    });
-  });
-
-  void it("does not let a concurrent missing-config run replace the active owner", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-concurrent" }, async (state) => {
-      const { begin, read } = onboarding(state);
-      const active = begin({ runId: "active-run" });
-      const concurrent = begin({
-        workspace: state.path("concurrent-workspace"),
-        securityAcknowledgedAt: "2026-08-03T00:00:00.000Z",
-        runId: "concurrent-run",
-        replace: true,
-        expectedRunId: "stale-reset-run",
-      });
-
-      assert.deepEqual(concurrent, active);
-      assert.deepEqual(read(), active);
-    });
-  });
-
-  void it("does not let a delayed concurrent run reopen a completed owner", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-completed-owner" }, async (state) => {
-      const { begin, complete, read } = onboarding(state);
-      const first = begin({ runId: "completed-run" });
+for (const status of ["pending", "completed"] as const) {
+  test(`resets the observed ${status} owner and rejects stale completion`, async (context) => {
+    const { begin, complete, read, replace } = context;
+    const first = begin({ runId: "original-run" });
+    if (status === "completed") {
       assert.equal(await complete(first.runId), true);
-      const completed = read();
+    }
+    const replacement = replace("replacement-run", first.runId);
+    assert.partialDeepStrictEqual(replacement, { status: "pending", runId: "replacement-run" });
+    assert.equal(await complete(first.runId), false);
+    assert.deepEqual(read(), replacement);
+    assert.equal(await complete(replacement.runId), true);
+  });
+}
 
-      for (const replacement of [
-        {},
-        { replace: true },
-        { replace: true, expectedRunId: "other-run" },
-      ]) {
-        const concurrent = begin({
-          workspace: state.path("concurrent-workspace"),
-          securityAcknowledgedAt: "2026-08-03T00:00:00.000Z",
-          runId: "delayed-run",
-          ...replacement,
-        });
-        assert.deepEqual(concurrent, completed);
-        assert.deepEqual(read(), completed);
-      }
+test("completes the same run idempotently without changing its original timestamp", async (context) => {
+  const { begin, complete, read } = context;
+  begin({ runId: "completed-run" });
+
+  assert.equal(await complete("completed-run", 100), true);
+  assert.equal(await complete("completed-run", 200), true);
+  assert.equal(await complete("different-run", 300), false);
+  assert.partialDeepStrictEqual(read(), {
+    status: "completed",
+    runId: "completed-run",
+    completedAtMs: 100,
+  });
+});
+
+test("completes its validated owner idempotently without rewriting the locked config", async (context) => {
+  const { begin, read, recover, writeConfig, state } = context;
+  await writeConfig();
+  const owner = begin({ runId: "locked-owner" });
+  const originalConfig = fs.readFileSync(state.configPath, "utf8");
+
+  const first = await recover(owner);
+  const completed = read();
+  const second = await recover(owner);
+
+  assert.equal(first.path, state.configPath);
+  assert.equal(second.path, state.configPath);
+  assert.partialDeepStrictEqual(completed, { status: "completed", runId: owner.runId });
+  assert.deepEqual(read(), completed);
+  assert.equal(fs.readFileSync(state.configPath, "utf8"), originalConfig);
+});
+
+test("rejects a canonical config mutation that wins the completion lock", async (context) => {
+  const { begin, read, writeConfig } = context;
+  await writeConfig();
+  const owner = begin({ runId: "racing-owner" });
+  const optimisticSnapshot = await readConfigFileSnapshot();
+  assert.equal(
+    optimisticSnapshot.sourceConfig.wizard?.securityAcknowledgedAt,
+    SECURITY_ACKNOWLEDGED_AT,
+  );
+  const lockHeld = Promise.withResolvers<void>();
+  const mutationReleased = Promise.withResolvers<void>();
+  const competingMutation = withConfigMutationExclusive(async (lockedConfig) => {
+    lockHeld.resolve();
+    await mutationReleased.promise;
+    await replaceConfigFile({
+      nextConfig: {
+        ...lockedConfig,
+        wizard: { ...lockedConfig.wizard, securityAcknowledgedAt: replacementAcknowledgement },
+      },
     });
   });
+  await lockHeld.promise;
+  const completionFails = assert.rejects(
+    completeLocalSetupRecovery({ owner, appliedConfigPath: optimisticSnapshot.path }),
+    /onboarding configuration changed before setup could complete/u,
+  );
 
-  void it("replaces a completed owner only when reset observed its exact run", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-completed-reset" }, async (state) => {
-      const { begin, complete, read } = onboarding(state);
-      const first = begin({ runId: "observed-completed-run" });
-      assert.equal(await complete(first.runId), true);
+  mutationReleased.resolve();
+  await competingMutation;
+  await completionFails;
 
-      const replacement = begin({
-        workspace: state.path("replacement-workspace"),
-        securityAcknowledgedAt: "2026-08-03T00:00:00.000Z",
-        runId: "replacement-run",
-        replace: true,
-        expectedRunId: first.runId,
-      });
+  assert.deepEqual(read(), owner);
+  assert.equal(
+    (await readConfigFileSnapshot()).sourceConfig.wizard?.securityAcknowledgedAt,
+    replacementAcknowledgement,
+  );
+});
 
-      assert.partialDeepStrictEqual(replacement, { status: "pending", runId: "replacement-run" });
-      assert.deepEqual(read(), replacement);
+test("rejects another receipt owner and an applied config at a different path", async (context) => {
+  const { begin, read, recover, writeConfig, state } = context;
+  await writeConfig();
+  const owner = begin({ runId: "real-owner" });
+
+  await assert.rejects(
+    recover({ ...owner, runId: "different-owner" }),
+    /Another onboarding run replaced this setup operation/u,
+  );
+  await assert.rejects(
+    completeLocalSetupRecovery({ owner, appliedConfigPath: state.path("another-config.json") }),
+    /onboarding configuration changed before setup could complete/u,
+  );
+
+  assert.deepEqual(read(), owner);
+});
+
+test("does not let a concurrent missing-config run replace the active owner", async (context) => {
+  const { begin, read, replace } = context;
+  const active = begin({ runId: "active-run" });
+  const concurrent = replace("concurrent-run", "stale-reset-run");
+
+  assert.deepEqual(concurrent, active);
+  assert.deepEqual(read(), active);
+});
+
+test("does not let a delayed concurrent run reopen a completed owner", async (context) => {
+  const { begin, complete, read, state } = context;
+  const first = begin({ runId: "completed-run" });
+  assert.equal(await complete(first.runId), true);
+  const completed = read();
+
+  for (const replacement of [
+    {},
+    { replace: true },
+    { replace: true, expectedRunId: "other-run" },
+  ]) {
+    const concurrent = begin({
+      workspace: state.path("concurrent-workspace"),
+      securityAcknowledgedAt: replacementAcknowledgement,
+      runId: "delayed-run",
+      ...replacement,
     });
-  });
+    assert.deepEqual(concurrent, completed);
+    assert.deepEqual(read(), completed);
+  }
+});
 
-  void it("binds receipts to the acknowledged configuration identity", async () => {
-    await withOpenClawTestState({ label: "local-onboarding-config-identity" }, async (state) => {
-      const { database, begin, read } = onboarding(state);
-      const pending = begin({ runId: "original-run" });
+test("binds receipts to the acknowledged configuration identity", async (context) => {
+  const { database, begin, read, state } = context;
+  const pending = begin({ runId: "original-run" });
 
-      assert.deepEqual(
-        readLocalOnboardingStateForConfig(state.configPath, acknowledgedConfig, database),
-        pending,
-      );
-      assert.equal(
-        readLocalOnboardingStateForConfig(
-          state.configPath,
-          { wizard: { securityAcknowledgedAt: "2026-08-03T00:00:00.000Z" } },
-          database,
-        ),
-        undefined,
-      );
-      assert.equal(readLocalOnboardingStateForConfig(state.configPath, {}, database), undefined);
-      assert.deepEqual(read(), pending);
-    });
-  });
+  assert.deepEqual(
+    readLocalOnboardingStateForConfig(state.configPath, acknowledgedConfig, database),
+    pending,
+  );
+  assert.equal(
+    readLocalOnboardingStateForConfig(
+      state.configPath,
+      { wizard: { securityAcknowledgedAt: replacementAcknowledgement } },
+      database,
+    ),
+    undefined,
+  );
+  assert.equal(readLocalOnboardingStateForConfig(state.configPath, {}, database), undefined);
+  assert.deepEqual(read(), pending);
 });

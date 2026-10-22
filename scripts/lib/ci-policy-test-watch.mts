@@ -1089,19 +1089,6 @@ const policyTestWatches: readonly PolicyTestWatch[] = [
     ],
   },
   ...[
-    "src/infra/heartbeat-runner.clears-pending-final-delivery.test.ts",
-    "src/infra/heartbeat-runner.committed-work.test.ts",
-    "src/infra/heartbeat-runner.isolated-session-mirror.test.ts",
-    "src/infra/heartbeat-runner.typing.test.ts",
-  ].map((testFile): PolicyTestWatch => ({
-    testFile,
-    watchGlobs: [
-      "src/config/sessions/session-transcript-projection-publication.worker.ts",
-      "src/config/sessions/session-transcript.worker.ts",
-      "src/state/openclaw-agent-execution.worker.ts",
-    ],
-  })),
-  ...[
     "src/infra/outbound/conversation-delivery.queue-admission.test.ts",
     "src/infra/outbound/delivery-queue-entry-state.test.ts",
   ].map((testFile): PolicyTestWatch => ({

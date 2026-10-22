@@ -61,6 +61,7 @@ export async function createCanaryProcessFixture(
       selection: { kind: "explicit-tmpdir", directory: stateDir },
     },
     cleanupDirectories: [],
+    prepareRuntime: async (assertCurrent) => assertCurrent(),
     cleanup: async () => {},
   };
 }

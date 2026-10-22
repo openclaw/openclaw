@@ -85,9 +85,26 @@ it("keeps sharing busy through refresh and retires it for a same-key successor",
   const fixture = createMountedPanes(rows);
   const pane = fixture.mount(previous.key) as ReturnType<typeof fixture.mount> & {
     prepareSessionSharing: (row: GatewaySessionRow) => PreparedChatSessionSharing;
-    loadSessionSharing: (row: GatewaySessionRow) => Promise<void>;
     syncSelectedSessionSharing: (row: GatewaySessionRow) => void;
   };
+  const response = createDeferred<unknown>();
+  const refresh = createDeferred<SessionMembersListEvidenceResult>();
+  const refreshStarted = createDeferred();
+  let holdRefresh = false;
+  const originalRequest = pane.state.client!.request.bind(pane.state.client!);
+  vi.spyOn(pane.state.client!, "request").mockImplementation((method, params, options) => {
+    if (method === "session.visibility.set") {
+      return response.promise;
+    }
+    if (method === "session.members.listEvidence") {
+      if (holdRefresh) {
+        refreshStarted.resolve();
+        return refresh.promise;
+      }
+      return Promise.resolve(initial.state!.result);
+    }
+    return originalRequest(method, params, options);
+  });
   const snapshot = pane.context.gateway.snapshot;
   snapshot.phase = "connected";
   snapshot.hello = {
@@ -105,21 +122,10 @@ it("keeps sharing busy through refresh and retires it for a same-key successor",
     },
   } as typeof snapshot.hello;
   await refreshPane(pane);
-  const response = createDeferred<unknown>();
-  const refresh = createDeferred<SessionMembersListEvidenceResult>();
-  let reads = 0;
-  const originalRequest = pane.state.client!.request.bind(pane.state.client!);
-  vi.spyOn(pane.state.client!, "request").mockImplementation((method, params, options) => {
-    if (method === "session.visibility.set") {
-      return response.promise;
-    }
-    if (method === "session.members.listEvidence") {
-      reads += 1;
-      return reads === 2 ? refresh.promise : Promise.resolve(initial.state!.result);
-    }
-    return originalRequest(method, params, options);
-  });
-  await pane.loadSessionSharing(previous);
+  pane.syncSelectedSessionSharing(previous);
+  await waitForSolid(() =>
+    expect(pane.prepareSessionSharing(previous)?.state?.loading).toBe(false),
+  );
   const source = pane.prepareSessionSharing(previous);
   const operation = vi.spyOn(source, "onVisibilityChange");
   const view = accessFixture(source);
@@ -127,10 +133,16 @@ it("keeps sharing busy through refresh and retires it for a same-key successor",
   await waitForSolid(() =>
     expect(view.getByRole("button", { name: /Shared/ }).hasAttribute("disabled")).toBe(true),
   );
+  // A delayed header render may check hydration while the write is pending.
+  pane.syncSelectedSessionSharing(previous);
+  // Hold every post-write read, including any competing header hydration.
+  holdRefresh = true;
   response.resolve({});
-  await waitForSolid(() => expect(reads).toBe(2));
+  await refreshStarted.promise;
+  flush();
   expect(view.getByRole("button", { name: /Shared/ }).hasAttribute("disabled")).toBe(true);
   expect(view.applied).not.toHaveBeenCalled();
+  holdRefresh = false;
   rows[0] = replacement;
   fixture.emitGatewayEvent("sessions.changed", {
     sessionKey: previous.key,

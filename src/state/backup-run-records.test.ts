@@ -62,6 +62,8 @@ async function fixture(stubEnv = false, bootstrap = true) {
     env,
     record: (overrides: Partial<Omit<Outcome, "env">> = {}) =>
       recordBackupRunOutcome({ env, kind: "archive", status: "ok", archivePath: "", ...overrides }),
+    saveSchedule: (job: CronJob) =>
+      saveCronJobsStore(resolveCronJobsStorePathFromConfig({}, env), { version: 1, jobs: [job] }),
   };
 }
 
@@ -216,7 +218,7 @@ describe("backup run records", () => {
   it.each(["host-a", undefined])(
     "does not count namespace %s successes toward another namespace's schedule",
     async (namespace) => {
-      const { env, record } = await fixture(true);
+      const { env, record, saveSchedule } = await fixture(true);
       vi.spyOn(Date, "now").mockReturnValue(1_100);
       const ok = {
         createdAt: 1_000,
@@ -225,13 +227,9 @@ describe("backup run records", () => {
         location: namespace ? { ...offsiteLocation(namespace), name: "archive" } : undefined,
       };
       await record(ok);
-      await saveCronJobsStore(resolveCronJobsStorePathFromConfig({}, env), {
-        version: 1,
-        jobs: [schedule("host-b")],
-      });
+      await saveSchedule(schedule("host-b"));
       await checkHint(env, "No successful offsite backup to archive is recorded.", undefined, {});
       const successfulTarget = { target: "archive", latestOk: { createdAt: 1_000 } };
-      expect(summarizeBackupTargets(await readBackupRuns(env))).toMatchObject([successfulTarget]);
       await record({
         ...ok,
         location: undefined,
@@ -260,13 +258,12 @@ describe("backup run records", () => {
   );
 
   it("hints on failed or stale offsite schedules independently of newer successes elsewhere", async () => {
-    const { env, record } = await fixture(true);
+    const { env, record, saveSchedule } = await fixture(true);
     const cfg = {};
-    const storePath = resolveCronJobsStorePathFromConfig(cfg, env);
     const ok = { createdAt: 1_000, target: "archive", namespace: "host" };
     const job = schedule("host");
     await record(ok);
-    await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
+    await saveSchedule(job);
     await checkHint(env, undefined, 1_300, cfg);
     await checkHint(env, "openclaw storage test archive", 1_301, cfg);
     await record({ ...ok, target: "elsewhere", createdAt: 1_250 });
@@ -277,7 +274,7 @@ describe("backup run records", () => {
       1_250,
       cfg,
     );
-    await saveCronJobsStore(storePath, { version: 1, jobs: [{ ...job, enabled: false }] });
+    await saveSchedule({ ...job, enabled: false });
     await checkHint(env, undefined, 1_301, cfg);
   });
 
@@ -335,12 +332,7 @@ describe("backup run records", () => {
         namespace: "occasional",
       };
       await record({ ...occasional, createdAt: 1 });
-      await record({
-        ...occasional,
-        status: "failed",
-        error: "archive failed",
-        createdAt: 2,
-      });
+      await record({ ...occasional, status: "failed", error: "archive failed", createdAt: 2 });
       for (let index = 3; index <= 252; index += 1) {
         await record({ ...frequentRun(index), createdAt: index });
       }

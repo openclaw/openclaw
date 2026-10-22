@@ -1,5 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { withinTest } from "../../../test/helpers/promise.js";
 import { createTestReplyOperation } from "../../auto-reply/reply/reply-run-registry.test-helpers.js";
 import * as events from "../../auto-reply/reply/session-event-handoff.js";
 import { readSessionEventTargetOperatorAuthority } from "../../auto-reply/reply/session-event-target.js";
@@ -7,6 +8,9 @@ import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import * as transcript from "../../config/sessions/transcript.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { prepareGitHubPublicationRequesterV2 } from "../../gateway/github-publication-requester.js";
+import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { GatewayRequestHandler } from "../../gateway/server-methods/types.js";
 import { withOperatorToolGatewayAuthority } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
@@ -15,6 +19,7 @@ import {
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { readSessionMessagesAsync } from "../../gateway/session-transcript-readers.js";
 import * as exec from "../../infra/exec-request-context.js";
+import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { resetGatewayWorkAdmission } from "../../process/gateway-work-admission.js";
 import { withSessionControllerOwner } from "../../sessions/session-controller.context.js";
@@ -22,41 +27,88 @@ import { getSessionControllerEntryForOperation } from "../../sessions/session-co
 import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { readAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { wrapToolWithAbortSignal } from "../agent-tools.abort.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import { createCodeModeHarness } from "../code-mode.test-support.js";
 import { SESSIONS_YIELD_ABORT_REASON } from "../embedded-agent-runner/run/attempt-sessions-yield.js";
+import { runEmbeddedAgent } from "../embedded-agent.js";
 import { createOperationalRunInstanceRef } from "../operational-run-instance.js";
 import { createSandboxTestContext } from "../sandbox/test-fixtures.js";
 import { clearToolSearchCatalog } from "../tool-search.js";
 import {
   captureGatewayToolCallerAssertion,
+  createAdmittedGatewayToolCallerIdentity,
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "./gateway-caller-context.js";
 import { createGitHubPublishTool } from "./github-publish-tool.js";
+import { callAgentToolGatewayRequest } from "./in-process-gateway.js";
+
+// mock-isolation: Preserve real event admission and Gateway dispatch; replace only model execution.
+vi.mock("../embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
+const runEmbeddedAgentMock = vi.mocked(runEmbeddedAgent);
+await Promise.all([
+  import("../../auto-reply/dispatch.js"),
+  import("../../auto-reply/reply/get-reply-from-config.runtime.js").then((runtime) =>
+    runtime.prewarmConfigDrivenReplyRuntime(),
+  ),
+]);
 
 afterEach(() => {
   vi.restoreAllMocks();
   resetGatewayWorkAdmission();
+  resetSystemEventsForTest();
 });
 
-it.each(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
+it.for(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
   "hands PR preparation to its registered owner after cleanup: %s",
-  async (outcome) => {
+  async (outcome, { signal }) => {
     await withOpenClawTestState(
-      { scenario: "minimal", prepareProfileCatalog: true },
+      { scenario: "minimal", prepareProfileCatalog: true, env: { OPENCLAW_TEST_FAST: "0" } },
       async (state) => {
         const sessionKey = "agent:main:pr-handoff";
         const sessionId = "pr-handoff";
         const runId = "pr-handoff-run";
-        const config = { agents: { entries: { main: { workspace: state.workspaceDir } } } };
+        const scopes: OperatorScope[] = ["operator.sessions.read", "operator.sessions.write"];
+        const config: OpenClawConfig = {
+          agents: {
+            entries: { main: { workspace: state.workspaceDir } },
+            defaults: {
+              workspace: state.workspaceDir,
+              skipBootstrap: true,
+              model: { primary: "mock-openai/gpt-5.6-luna" },
+              models: { "mock-openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } } },
+            },
+          },
+          gateway: {
+            roles: {
+              default: "guest",
+              definitions: {
+                guest: { scopes, agents: ["main"], sessions: { others: "none" } },
+                blocked: { scopes: [], agents: [], sessions: { others: "none" } },
+              },
+            },
+          },
+          plugins: { enabled: false },
+          skills: { load: { watch: false } },
+        };
         setRuntimeConfigSnapshot(config);
+        await state.writeConfig(config);
         const client = createOperatorClient({
-          profileName: "pr-handoff-owner",
-          scopes: ["operator.sessions.write"],
+          profileName: "pr-handoff-guest",
+          scopes,
         });
         const profileId = client.authenticatedUserProfile!.profileId;
+        client.internal = {
+          authenticatedOperator: true,
+          operatorRoleActor: { kind: "operator", profileId },
+          operatorAccessAuthority: {
+            assertCurrent() {},
+            signal: new AbortController().signal,
+            gatewayAccessGrant: null,
+          },
+        };
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey },
           {
@@ -99,10 +151,79 @@ it.each(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             });
           }
         });
+        const publish = vi.fn<GatewayRequestHandler>(async (options) => {
+          const admitted = await prepareGitHubPublicationRequesterV2(options, {
+            agentId: "main",
+            sessionKey,
+          });
+          try {
+            admitted.requester.assertCurrent();
+            expect(
+              admitted.requester.snapshot,
+              JSON.stringify(admitted.requester.snapshot),
+            ).toMatchObject({
+              actor: { kind: "operator", profileId },
+              scopes,
+            });
+            expect(options.params).toMatchObject({ sessionKey, idempotencyKey: "resumed-publish" });
+            options.respond(true, { status: "requested", requestId: "synthetic-publication" });
+          } finally {
+            admitted.release();
+          }
+        });
+        const inspect = vi.fn<GatewayRequestHandler>(async ({ respond }) =>
+          respond(true, { admitted: true }),
+        );
+        const admin = vi.fn<GatewayRequestHandler>(async ({ respond }) =>
+          respond(true, { unexpectedAdminAccess: true }),
+        );
         const context = createContext(
-          [["sessions.github.action", "operator.sessions.write", "sessions", endpoint]],
+          [
+            ["sessions.github.action", "operator.sessions.write", "sessions", endpoint],
+            ["sessions.github.publish", "operator.sessions.write", "sessions", publish],
+            ["tools.effective", "operator.read", "tools", inspect],
+            ["plugins.reload", "operator.admin", "plugins", admin],
+          ],
           () => config,
         );
+        context.resolveGatewayContext = () => context;
+        runEmbeddedAgentMock.mockReset().mockImplementation(async (params) => {
+          const admission = expectDefined(params.preparedRunAdmission, "resumed guest admission");
+          const admittedRunContext = await admission.admit("gateway", params.runId);
+          params.onExecutionPhase?.({ phase: "model_call_started" });
+          await params.onExecutionStarted?.();
+          await params.onAgentEvent?.({ stream: "lifecycle", data: { phase: "start" } });
+          expect(params.senderIsOwner).not.toBe(true);
+          expect(readAdmittedRunOperatorAuthority(admittedRunContext)).toMatchObject({
+            profileId,
+            scopes,
+          });
+          const caller = expectDefined(
+            createAdmittedGatewayToolCallerIdentity({
+              admittedRunContext,
+              agentId: "main",
+              sessionKey,
+            }),
+            "resumed guest caller",
+          );
+          await withGatewayToolCallerIdentity(caller, async () => {
+            expect(
+              (await createGitHubPublishTool().execute("resumed-publish", {})).details,
+            ).toMatchObject({ status: "requested", requestId: "synthetic-publication" });
+            await expect(
+              callAgentToolGatewayRequest({
+                method: "tools.effective",
+                params: { agentId: "main", sessionKey },
+              }),
+            ).rejects.toThrow("operator.read");
+            await expect(
+              callAgentToolGatewayRequest({ method: "plugins.reload", params: {} }),
+            ).rejects.toThrow("operator.admin");
+          });
+          return { payloads: [{ text: "Guest publication admitted" }], meta: { durationMs: 1 } };
+        });
+        let receipt: ReturnType<typeof events.enqueueSessionEventForHost> | undefined;
+        const enqueueReal = events.enqueueSessionEventForHost;
         let resumedCaller: { identity: unknown; error?: unknown } | undefined;
         const noticed = createDeferredCore();
         const appendNotice = transcript.appendAssistantMessageToSessionTranscript;
@@ -124,7 +245,7 @@ it.each(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
               options.expectedTarget &&
               readSessionEventTargetOperatorAuthority(options.expectedTarget);
             expect(authority?.profileId).toBe(profileId);
-            expect(authority?.scopes).toEqual(["operator.sessions.write"]);
+            expect(authority?.scopes).toEqual(scopes);
             expect(text.length).toBeLessThan(4096);
             expect(
               getSessionControllerEntryForOperation(operation).successorBarrier,
@@ -139,6 +260,10 @@ it.each(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
             }
             order.push("resume");
             resumed.resolve(text);
+            if (outcome === "prepared") {
+              receipt = enqueueReal(text, options);
+              return receipt;
+            }
             return {
               id: "result",
               cancel: () => false,
@@ -170,7 +295,7 @@ it.each(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
               isWebchatConnect: () => false,
             },
             () =>
-              withOperatorToolGatewayAuthority({ scopes: ["operator.sessions.write"] }, () =>
+              withOperatorToolGatewayAuthority({ scopes }, () =>
                 exec.withExecRequestTurn(
                   { identity: { agentId: "main", sessionKey, sessionId, runId } },
                   () =>
@@ -253,6 +378,20 @@ it.each(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
                           expect(order).toEqual(["yield", "cleanup", "prepare", "resume"]);
                           expect(enqueue).toHaveBeenCalledOnce();
                           expect(resumedCaller).toEqual({ identity: undefined });
+                          if (outcome === "prepared") {
+                            const settled = await withinTest(
+                              expectDefined(receipt, "actual event receipt").settled,
+                              signal,
+                            );
+                            expect(settled, settled.error).toMatchObject({
+                              status: "completed",
+                              executionStarted: true,
+                            });
+                            expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
+                            expect(inspect).not.toHaveBeenCalled();
+                            expect(publish).toHaveBeenCalledOnce();
+                            expect(admin).not.toHaveBeenCalled();
+                          }
                         }
                         if (outcome === "undelivered") {
                           await noticed.promise;
@@ -302,6 +441,8 @@ it.each(["prepared", "failed", "stop", "undelivered", "reset"] as const)(
         } finally {
           cleanup.resolve(undefined);
           operation.complete();
+          receipt?.cancel();
+          await Promise.allSettled([receipt?.settled]);
           clearToolSearchCatalog(codeMode.ctx);
         }
       },

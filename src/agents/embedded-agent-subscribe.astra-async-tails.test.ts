@@ -8,7 +8,6 @@ import { Type } from "typebox";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { createResponsesAssistantOutput } from "../../packages/ai/src/providers/openai-responses-shared.js";
 import { processResponsesStream } from "../../packages/ai/src/transports/openai-responses-stream-internal.js";
-import { resolveHeartbeatReplyPayload } from "../auto-reply/heartbeat-reply-payload.js";
 import { buildReplyPayloads } from "../auto-reply/reply/agent-runner-payloads.js";
 import { createBlockReplyPipeline } from "../auto-reply/reply/block-reply-pipeline.js";
 import { createBlockReplyDeliveryHandler } from "../auto-reply/reply/reply-delivery.js";
@@ -129,7 +128,7 @@ type Scenario = {
   transcript: readonly string[];
   delivered: readonly string[];
   reply?: { disposition: "visible"; text: string } | { disposition: "empty" | "silent" };
-  heartbeat?: boolean;
+  trigger?: "cron";
   persistedFirst?: boolean;
   quiet?: boolean;
   reasoning?: boolean;
@@ -145,9 +144,9 @@ const scenario = (name: string, overrides: Partial<Omit<Scenario, "name">> = {})
 });
 it.each([
   scenario("a later NO_REPLY keeps the completed answer"),
-  scenario("a heartbeat turn without block streaming keeps the completed answer", {
+  scenario("an automation turn without block streaming keeps the completed answer", {
     delivery: "off",
-    heartbeat: true,
+    trigger: "cron",
   }),
   scenario("a live answer followed by commentary is not resent after NO_REPLY", {
     delivery: "live",
@@ -225,7 +224,7 @@ it.each([
     reasoning: true,
   }),
 ])("$name", async (row) => {
-  const { delivery, requests, transcript, delivered, heartbeat = false, quiet = false } = row;
+  const { delivery, requests, transcript, delivered, trigger = "user", quiet = false } = row;
   const sent: string[] = [];
   const show = (payload: { text?: string; mediaUrl?: string }) =>
     payload.text ?? payload.mediaUrl ?? "";
@@ -244,7 +243,7 @@ it.each([
     typingSignals: createTypingSignaler({
       typing: createTypingController({}),
       mode: "never",
-      isHeartbeat: heartbeat,
+      isHeartbeat: false,
     }),
     blockStreamingEnabled,
     reasoningPayloadsEnabled: row.reasoning === true,
@@ -358,10 +357,10 @@ it.each([
     workspaceDir: "/tmp/openclaw-test",
     prompt: "Where do I store my bag?",
     timeoutMs: 60_000,
-    trigger: heartbeat ? ("heartbeat" as const) : ("user" as const),
+    trigger,
     ...(quiet ? { sourceReplyDeliveryMode: "message_tool_only" as const } : {}),
     ...(row.reasoning ? { reasoningLevel: "on" as const } : {}),
-  };
+  } satisfies Parameters<typeof prepareEmbeddedRunTerminal>[0]["runParams"];
   const terminalState = {
     outcome: { reason: "completed", status: "ok", stopReason: "stop" } as const,
     signalOwnedInterruption: false,
@@ -389,15 +388,12 @@ it.each([
       visibleText,
     );
   }
-  if (heartbeat) {
-    expect(resolveHeartbeatReplyPayload(prepared.payloads)?.text).toBe("Use counter B.");
-  }
   const { replyPayloads } = await buildReplyPayloads({
     payloads: prepared.payloads,
-    isHeartbeat: heartbeat,
     blockStreamingEnabled,
     blockReplyPipeline: pipeline,
     replyToMode: "off",
+    isHeartbeat: false,
   });
   expect([...sent, ...replyPayloads.map(show)]).toEqual(delivered);
   if (row.reply) {
