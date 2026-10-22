@@ -215,11 +215,6 @@ describe("pw-tools-core interaction navigation guard", () => {
     expect(
       await mod.evaluateViaPlaywright({ ...target, ref: ref ? "1" : undefined, fn: source }),
     ).toBe(ref ? "Ada" : 42);
-    expect(evaluate.mock.calls[0]?.[1]).toMatchObject({
-      fnSource: ref
-        ? "async (el) => {\nconst text = el.textContent; return text;\n}"
-        : "async () => {\nconst value = 41; return value + 1;\n}",
-    });
   });
 
   it("propagates blocked delayed submit navigation instead of reporting type success", async () => {

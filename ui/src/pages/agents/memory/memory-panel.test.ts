@@ -40,6 +40,7 @@ afterEach(() => {
 
 const REPAIR = "doctor.memory.repairDreamingArtifacts";
 const PREVIEW = ".dreams-diary__preview-panel";
+const CONFIRM_BUTTON = ".exec-approval-actions button:last-child";
 const PREVIEW_TEXT = ".dreams-diary__preview-pre";
 
 function requestFor(
@@ -130,8 +131,8 @@ it.each(["rejected", "declined"] as const)(
     patch.mockReturnValueOnce(pending.promise);
     page.state.setEnabled(false);
     flush();
-    click(page.container, ".exec-approval-actions button");
-    await waitForSolid(() => expect(page.text(".exec-approval-actions button")).toBe("Saving…"));
+    click(page.container, CONFIRM_BUTTON);
+    await waitForSolid(() => expect(page.text(CONFIRM_BUTTON)).toBe("Saving…"));
     expect(page.toggle.onConfirm()).toBeUndefined();
     await waitForSolid(() => expect(patch).toHaveBeenCalledOnce());
     if (outcome === "rejected") {
@@ -141,11 +142,11 @@ it.each(["rejected", "declined"] as const)(
     }
     await waitForSolid(() => expect(page.query(".exec-approval-error")).not.toBeNull());
     expect(page.toggle.open).toBe(true);
-    expect(page.query<HTMLButtonElement>(".exec-approval-actions button")?.disabled).toBe(false);
+    expect(page.query<HTMLButtonElement>(CONFIRM_BUTTON)?.disabled).toBe(false);
     const retry = deferred<boolean>();
     patch.mockReturnValueOnce(retry.promise);
-    click(page.container, ".exec-approval-actions button");
-    await waitForSolid(() => expect(page.text(".exec-approval-actions button")).toBe("Saving…"));
+    click(page.container, CONFIRM_BUTTON);
+    await waitForSolid(() => expect(page.text(CONFIRM_BUTTON)).toBe("Saving…"));
     expect(page.query(".exec-approval-error")).toBeNull();
     retry.resolve(true);
     await waitForSolid(() => expect(page.toggle.open).toBe(false));
@@ -596,7 +597,7 @@ it("retains diary, preview and toggle drafts through reconnect while rejecting o
     "Loading wiki page…",
   );
   expect(page.toggle).toMatchObject({ open: true, disabled: true });
-  expect(page.query<HTMLButtonElement>(".exec-approval-actions button")?.disabled).toBe(true);
+  expect(page.query<HTMLButtonElement>(CONFIRM_BUTTON)?.disabled).toBe(true);
   refresh = true;
   context.emit({ phase: "connected", hello });
   await waitForSolid(() =>

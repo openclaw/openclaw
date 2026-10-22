@@ -104,12 +104,21 @@ export function gatewayTest(request: RequestFn, hello?: ApplicationGatewaySnapsh
 }
 
 export function updateStatusRequest(respond: (refreshCheckout: boolean) => unknown) {
-  return vi.fn<RequestFn>((method, params) =>
-    method === "update.status"
-      ? Promise.resolve(respond(Boolean((params as { refreshCheckout?: boolean }).refreshCheckout)))
-      : Promise.resolve({}),
+  return methodRequest("update.status", (_method, params) =>
+    respond(Boolean((params as { refreshCheckout?: boolean }).refreshCheckout)),
   );
 }
+
+export const requestCalls = (request: ReturnType<typeof vi.fn<RequestFn>>, method: string) =>
+  request.mock.calls.filter(([name]) => name === method);
+
+export const methodRequest = (
+  method: string,
+  respond: (...args: Parameters<RequestFn>) => unknown,
+) =>
+  vi.fn<RequestFn>((name, ...args) =>
+    Promise.resolve(name === method ? respond(name, ...args) : {}),
+  );
 
 export function updateHello(
   schedule?: ApplicationUpdateOverlaySnapshot["updateSchedule"],

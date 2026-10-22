@@ -6,6 +6,10 @@ import { Session } from "node:inspector/promises";
 import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as immediate, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
+import {
+  PROMETHEUS_FAMILY_RESERVES,
+  type PrometheusMetricName,
+} from "./prometheus-family-budget.js";
 import { createPrometheusMetricStore } from "./prometheus-metric-store.js";
 import { recordWorkerRequest } from "./service-worker.js";
 
@@ -84,9 +88,9 @@ try {
         index % 2
           ? { kind: "sqlite_read", phase: "completed" }
           : { phase: "completed", kind: "sqlite_read" };
-      store.counter("synthetic_count", "Synthetic count", labels);
-      store.gauge("synthetic_depth", "Synthetic depth", labels, 2);
-      store.histogram("synthetic_duration", "Synthetic duration", labels, 0.005);
+      store.counter("openclaw_worker_tasks_completed_total", "Synthetic count", labels);
+      store.gauge("openclaw_worker_queue_depth", "Synthetic depth", labels, 2);
+      store.histogram("openclaw_worker_request_seconds", "Synthetic duration", labels, 0.005);
     }
   };
   observe(2000);
@@ -116,10 +120,10 @@ try {
     { a: "one|two", z: "three" },
     { z: "two|three", a: "one" },
   ]) {
-    fixed.counter("fixture_total", "Synthetic \\ help\n", labels, 2);
-    fixed.counterValue("fixture_absolute", "Absolute", labels, 4);
-    fixed.gauge("fixture_depth", "Depth", labels, -2);
-    fixed.histogram("fixture_seconds", "Duration", labels, 0.015);
+    fixed.counter("openclaw_run_completed_total", "Synthetic \\ help\n", labels, 2);
+    fixed.counterValue("openclaw_worker_tasks_completed_total", "Absolute", labels, 4);
+    fixed.gauge("openclaw_worker_queue_depth", "Depth", labels, -2);
+    fixed.histogram("openclaw_run_duration_seconds", "Duration", labels, 0.015);
   }
   const scrape = fixed.render();
   const renders = Math.max(1000, Math.floor(iterations / 10));
@@ -134,23 +138,34 @@ try {
   const retainedStore = createPrometheusMetricStore();
   globalThis.gc!();
   const emptyHeap = process.memoryUsage().heapUsed;
-  for (let index = 0; index < 2048; index++) {
-    const labels = {
-      kind: `kind-${index % 8}`,
-      worker_slot: String(index),
-      ...(index % 3 ? { phase: "completed" } : {}),
-    };
-    const name = `retained_${index % 16}`;
-    if (index % 4 === 0) {
-      retainedStore.counter(name, "Retained counter", labels);
-    } else if (index % 4 === 1) {
-      retainedStore.gauge(name, "Retained gauge", labels, 2);
-    } else {
-      retainedStore.histogram(name, "Retained histogram", labels, 0.005);
+  const families = Object.keys(PROMETHEUS_FAMILY_RESERVES) as PrometheusMetricName[];
+  let series = 0;
+  // Populate every reserve before using shared capacity. Keep the retained-size
+  // workload at exactly 2048 entries under both old and partitioned admission.
+  for (let pass = 0; series < 2048; pass++) {
+    for (const [familyIndex, name] of families.entries()) {
+      const reserve = PROMETHEUS_FAMILY_RESERVES[name];
+      const label = pass < 64 ? pass : reserve + pass - 64;
+      if (pass < 64 && pass >= reserve) {
+        continue;
+      }
+      if (series === 2048) {
+        break;
+      }
+      const labels = { kind: `kind-${label % 8}`, worker_slot: String(label) };
+      if (familyIndex % 4 === 0) {
+        retainedStore.counter(name, "Retained counter", labels);
+      } else if (familyIndex % 4 === 1) {
+        retainedStore.gauge(name, "Retained gauge", labels, 2);
+      } else {
+        retainedStore.histogram(name, "Retained histogram", labels, 0.005);
+      }
+      series++;
     }
   }
   globalThis.gc!();
   const populatedHeap = process.memoryUsage().heapUsed;
+  assert(!retainedStore.render().includes("openclaw_prometheus_series_dropped_total"));
   // The reset keeps the same store strongly reachable and releases its series ownership.
   retainedStore.reset();
   globalThis.gc!();

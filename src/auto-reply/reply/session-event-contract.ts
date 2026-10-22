@@ -91,6 +91,8 @@ export type SessionEventOptions = {
   contextKey?: string;
   /** Stable identity for durable host producers across restart handoffs. */
   sourceTurnId?: string;
+  /** Run that started the producer's work; a provenance fact for this turn, never authority. */
+  sourceRunId?: string;
   deliveryContext?: DeliveryContext;
   abortSignal?: AbortSignal;
   expectedTarget?: SessionEventTarget;

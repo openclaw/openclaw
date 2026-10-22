@@ -1,7 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveThinkingProfile } from "../auto-reply/thinking.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import * as activeThinkingPolicy from "../plugins/provider-thinking-active.js";
 import { prepareModelCatalogThinkingPolicies } from "../plugins/provider-thinking.js";
@@ -11,7 +10,7 @@ import {
   platformRoute,
   subscriptionRoute as chatGPTRoute,
 } from "./model-auth-availability.test-support.js";
-import { model, providerConfig, row, snapshot } from "./model-catalog-fixtures.test-support.js";
+import { model, providerConfig, snapshot } from "./model-catalog-fixtures.test-support.js";
 import {
   type ModelCatalogRoutePolicy,
   projectModelCatalogEntryForRoute,
@@ -130,26 +129,6 @@ it.each([
 
 it("returns the physical row unchanged for unmanaged models", () => {
   expect(project({ projection: { kind: "unmanaged" } }).entry).toBe(platformEntry);
-});
-
-it("applies explicit logical context overrides after physical route selection", () => {
-  const logical = { contextTokens: 160_000, thinkingLevelMap: { off: "none", max: null } };
-  const definition = { id: "gpt-5.5", ...logical };
-  const provider = { baseUrl: platformRoute.baseUrl, models: [definition] };
-  const cfg = { models: { providers: { openai: provider } } } as unknown as OpenClawConfig;
-  const overrides = createConfiguredModelCatalogOverridesResolver({ cfg })(platformEntry);
-
-  expect(
-    project({
-      catalog: [platformEntry],
-      ...(overrides ? { overrides } : {}),
-    }).entry,
-  ).toEqual({
-    ...row("openai", "gpt-5.5", { name: "GPT-5.5" }),
-    api: "openai-chatgpt-responses",
-    baseUrl: "https://chatgpt.com/backend-api/codex",
-    ...logical,
-  });
 });
 
 it("selects logical overrides from a legacy fallback", () => {

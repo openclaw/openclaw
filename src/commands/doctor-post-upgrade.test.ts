@@ -20,6 +20,7 @@ import { pluginCacheExistsSync } from "../plugins/plugin-cache-files.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { VERSION } from "../version.js";
+import { createCurrentIndex } from "./doctor-plugin-registry.test-support.js";
 import { runPostUpgradeProbes } from "./doctor-post-upgrade.js";
 
 vi.mock("../version.js", async (importOriginal) => ({
@@ -49,23 +50,6 @@ afterEach(async () => {
     databasePath,
   );
 });
-
-function createIndex(
-  plugins: InstalledPluginIndex["plugins"],
-  installRecords: InstalledPluginIndex["installRecords"] = {},
-): InstalledPluginIndex {
-  return {
-    version: 1,
-    hostContractVersion: "test-host",
-    compatRegistryVersion: "test-compat",
-    migrationVersion: 1,
-    policyHash: "test-policy",
-    generatedAtMs: 1,
-    installRecords,
-    plugins,
-    diagnostics: [],
-  };
-}
 
 async function writePluginFixture(params: {
   id: string;
@@ -103,8 +87,9 @@ async function writePluginFixture(params: {
     await fs.writeFile(manifestPath, JSON.stringify(params.manifest ?? { id: params.id }), "utf-8");
   }
   await writePersistedInstalledPluginIndex(
-    createIndex(
-      [
+    {
+      ...createCurrentIndex(),
+      plugins: [
         {
           pluginId: params.id,
           rootDir: pluginDir,
@@ -122,8 +107,8 @@ async function writePluginFixture(params: {
           ...params.record,
         },
       ],
-      params.installRecord ? { [params.id]: params.installRecord } : {},
-    ),
+      installRecords: params.installRecord ? { [params.id]: params.installRecord } : {},
+    },
     { stateDir: root },
   );
   return { manifestPath };

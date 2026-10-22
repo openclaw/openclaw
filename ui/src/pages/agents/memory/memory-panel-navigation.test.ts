@@ -115,7 +115,7 @@ it.each(["maintenance", "confirmation"] as const)(
         await waitForSolid(() => expect(page.container.textContent).toContain("Working…"));
       } else {
         click(page.container, ".dreams__phase-toggle");
-        click(page.container, ".exec-approval-actions button");
+        click(page.container, ".exec-approval-actions button:last-child");
         await waitForSolid(() => expect(page.container.textContent).toContain("Saving…"));
         await waitForSolid(() => expect(context.runtimeConfig.patch).toHaveBeenCalledOnce());
       }
