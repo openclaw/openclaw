@@ -35,13 +35,13 @@ afterEach(() => {
 describe("beginMacOSSystemCaWarmupOnce", () => {
   let beginMacOSSystemCaWarmupOnce: typeof import("./system-ca-warmup.js").beginMacOSSystemCaWarmupOnce;
   let worker: FakeWorker;
-  let log: { warn: ReturnType<typeof vi.fn> };
+  let log: { warn: ReturnType<typeof vi.fn<(message: string) => void>> };
 
   beforeEach(async () => {
     vi.resetModules();
     ({ beginMacOSSystemCaWarmupOnce } = await import("./system-ca-warmup.js"));
     worker = new FakeWorker();
-    log = { warn: vi.fn() };
+    log = { warn: vi.fn<(message: string) => void>() };
     createWorker.mockReturnValue(worker);
   });
   it("shares Node's default CA warmup across concurrent and settled macOS calls", async () => {

@@ -4,14 +4,13 @@ import { deserialize } from "node:v8";
 import { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, vi } from "vitest";
-import { guestRole } from "../../extensions/visitor-access/test-api.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { createChannelIngressQueue } from "../channels/message/ingress-queue.js";
 import { resolveStateDir } from "../config/paths.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import * as mutationAdmission from "../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
-import type { OpenClawConfig } from "../plugin-sdk/plugin-entry.js";
+import type { OpenClawConfig, OpenClawPluginToolContext } from "../plugin-sdk/plugin-entry.js";
 import { loadAndActivateRootPluginRegistry } from "../plugins/loader.js";
 import { markPluginRegistryActive, revokePluginRecord } from "../plugins/registry-lifecycle.js";
 import type { PluginRecord } from "../plugins/registry-types.js";
@@ -28,7 +27,7 @@ import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.j
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resetPluginBlobStoreForTests } from "./plugin-blob-store.js";
-import { keyedStore, stateTest } from "./plugin-state-fixtures.test-support.js";
+import { stateTest } from "./plugin-state-fixtures.test-support.js";
 import {
   createPluginStateKeyedStore,
   createPluginStateKeyedStoreV2,
@@ -79,7 +78,8 @@ describe("plugin-state-store.authority", () => {
         createdAt: Date.now(),
         expiresAt: Date.now() + 1_000,
       };
-      const store = keyedStore<typeof previous>(pluginId, "visitor-grants", {
+      const store = createPluginStateKeyedStore<typeof previous>(pluginId, {
+        namespace: "visitor-grants",
         maxEntries: 500,
         overflowPolicy: "reject-new",
         env: state.env,
@@ -87,7 +87,19 @@ describe("plugin-state-store.authority", () => {
       await store.register(email, previous);
       const config: OpenClawConfig = {
         gateway: {
-          roles: { default: "guest", definitions: { guest: guestRole } },
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                accessPolicyPlugin: pluginId,
+                sessions: { others: "view" },
+                agents: ["main"],
+                scopes: ["operator.sessions.write"],
+                sandbox: "required",
+                modelPolicy: {},
+              },
+            },
+          },
         },
         plugins: {
           allow: [pluginId],
@@ -124,6 +136,10 @@ describe("plugin-state-store.authority", () => {
         }
         return Response.json({ success: true, result: url.search ? [policy] : policy });
       });
+      const toolContext: OpenClawPluginToolContext<2> = {
+        senderIsOwner: true,
+        assertInvocationCurrent() {},
+      };
       const gateway: PluginRuntime["gateway"] = {
         isAvailable: async () => true,
         openPluginPanel: unexpectedRuntimeCall,
@@ -158,6 +174,11 @@ describe("plugin-state-store.authority", () => {
       });
       let services: PluginServicesHandle | undefined;
       try {
+        const loaded = registry.plugins.find(({ id }) => id === pluginId);
+        expect(loaded, loaded?.error).toMatchObject({
+          origin: "bundled",
+          status: "loaded",
+        });
         await startPluginServices({
           registry,
           config,
@@ -170,13 +191,12 @@ describe("plugin-state-store.authority", () => {
         const registration = registry.tools.find(
           ({ pluginId: owner, names }) => owner === pluginId && names.includes("visitor_invite"),
         );
-        if (registration?.contextVersion !== 2) {
-          throw new Error("Expected the action-authorized Visitor invitation tool");
+        if (!registration || registration.contextVersion !== 2) {
+          throw new Error(
+            "Visitor Access did not register its invitation tool with action authority",
+          );
         }
-        const created = registration.factory({
-          senderIsOwner: true,
-          assertInvocationCurrent() {},
-        });
+        const created = registration.factory(toolContext);
         const invite = Array.isArray(created)
           ? created.find(({ name }) => name === "visitor_invite")
           : created;
@@ -194,17 +214,20 @@ describe("plugin-state-store.authority", () => {
         ) {
           let renewalJson: string | undefined;
           const operation = workerCommand(message);
-          const input = asOptionalRecord(operation?.input);
-          const isRenewal =
-            operation?.type === "pluginState.register" &&
-            input?.pluginId === pluginId &&
-            input.namespace === "visitor-grants";
-          if (isRenewal) {
-            expect([providerConfirmed, input.key]).toEqual([true, email]);
-            if (typeof input.valueJson !== "string") {
-              throw new Error("Expected the native visitor grant submission");
+          if (operation) {
+            const input = asOptionalRecord(operation?.input);
+            if (
+              operation?.type === "pluginState.register" &&
+              input?.pluginId === pluginId &&
+              input.namespace === "visitor-grants"
+            ) {
+              expect(providerConfirmed).toBe(true);
+              expect(input.key).toBe(email);
+              if (typeof input.valueJson !== "string") {
+                throw new Error("Expected the native visitor grant submission");
+              }
+              renewalJson = input.valueJson;
             }
-            renewalJson = input.valueJson;
           }
           nativePost.call(this, message, transferList);
           if (renewalJson !== undefined) {
@@ -233,7 +256,9 @@ describe("plugin-state-store.authority", () => {
           posting.mockRestore();
         }
 
-        expect(await invite.execute("reinvite", { email, days: 2 })).toMatchObject({ details: {} });
+        await expect(invite.execute("reinvite", { email, days: 2 })).resolves.toMatchObject({
+          details: {},
+        });
         const reissued = await store.lookup(email);
         expect(reissued).toMatchObject({
           grantId: expect.any(String),
@@ -331,7 +356,11 @@ describe("plugin-state-store.authority", () => {
   it.for(["update conflict", "delete conflict"] as const)(
     "withholds a %s observation when authority closes after transaction admission",
     async (operation, { state }) => {
-      const store = keyedStore<string>("private-records", "observations", { env: state.env });
+      const store = createPluginStateKeyedStore<string>("private-records", {
+        namespace: "observations",
+        maxEntries: 10,
+        env: state.env,
+      });
       await store.register("key", "before");
       const observed = await store.observe("key");
       await store.register("key", "private current value");
@@ -367,7 +396,12 @@ describe("plugin-state-store.runtime", () => {
     active = false,
     trustedOfficialInstall?: boolean,
   ) {
-    const record = pluginRecord({ id, origin, trustedOfficialInstall });
+    const record = pluginRecord({
+      id,
+      source: `/plugins/${id}/index.ts`,
+      origin,
+      trustedOfficialInstall,
+    });
     const registry = createPluginRegistry({
       logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
       runtime: {
@@ -384,7 +418,11 @@ describe("plugin-state-store.runtime", () => {
       markPluginRegistryActive(registry.registry);
     }
     function addPlugin(pluginId: string, pluginOrigin: PluginRecord["origin"]) {
-      const plugin = pluginRecord({ id: pluginId, origin: pluginOrigin });
+      const plugin = pluginRecord({
+        id: pluginId,
+        source: `/plugins/${pluginId}/index.ts`,
+        origin: pluginOrigin,
+      });
       registry.registry.plugins.push(plugin);
       return registry.createApi(plugin, { config: {} }).runtime.state;
     }
@@ -451,24 +489,26 @@ describe("plugin-state-store.runtime", () => {
     const observation = observeHostDataSql();
     const sql = observation.calls;
     try {
-      const store = runtime.openKeyedStore<string>(keyedOptions);
-      await expect(store.registerIfAbsent("k", "discord")).resolves.toBe(true);
-      await expect(store.registerIfAbsent("k", "duplicate")).resolves.toBe(false);
+      const store = runtime.openKeyedStore<{ plugin: string }>(keyedOptions);
+      await expect(store.registerIfAbsent("k", { plugin: "discord" })).resolves.toBe(true);
+      await expect(store.registerIfAbsent("k", { plugin: "duplicate" })).resolves.toBe(false);
 
-      const telegramStore = addPlugin("telegram", "workspace").openKeyedStore<string>(keyedOptions);
+      const telegramStore = addPlugin("telegram", "workspace").openKeyedStore<{ plugin: string }>(
+        keyedOptions,
+      );
       await expect(telegramStore.lookup("k")).resolves.toBeUndefined();
       await expect(telegramStore.count?.()).resolves.toBe(0);
       await expect(store.count?.()).resolves.toBe(1);
-      await expect(store.lookup("k")).resolves.toBe("discord");
+      await expect(store.lookup("k")).resolves.toEqual({ plugin: "discord" });
 
-      await store.register("temporary", "discord");
-      await expect(store.consume("temporary")).resolves.toBe("discord");
-      await store.register("deleted", "discord");
+      await store.register("temporary", { plugin: "discord" });
+      await expect(store.consume("temporary")).resolves.toEqual({ plugin: "discord" });
+      await store.register("deleted", { plugin: "discord" });
       await expect(store.delete("deleted")).resolves.toBe(true);
-      await telegramStore.register("retained", "telegram");
+      await telegramStore.register("retained", { plugin: "telegram" });
       await store.clear();
       await expect(store.entries()).resolves.toEqual([]);
-      await expect(telegramStore.lookup("retained")).resolves.toBe("telegram");
+      await expect(telegramStore.lookup("retained")).resolves.toEqual({ plugin: "telegram" });
       for (const method of sql) {
         expect(method).not.toHaveBeenCalled();
       }
@@ -476,12 +516,12 @@ describe("plugin-state-store.runtime", () => {
       observation.restore();
     }
 
-    const syncStore = runtime.openSyncKeyedStore<string>({
+    const syncStore = runtime.openSyncKeyedStore<{ plugin: string }>({
       namespace: "sync-runtime",
       maxEntries: 10,
     });
-    expect(syncStore.registerIfAbsent("k", "discord")).toBe(true);
-    expect(syncStore.lookup("k")).toBe("discord");
+    expect(syncStore.registerIfAbsent("k", { plugin: "discord" })).toBe(true);
+    expect(syncStore.lookup("k")).toEqual({ plugin: "discord" });
   });
 
   it("fences retained operations and range reads when the owning plugin closes", async ({
@@ -644,11 +684,13 @@ describe("plugin-state-store.runtime", () => {
 
   it("ignores plugin-supplied state directory overrides", async ({ state }) => {
     const { runtime } = setup("diffs", "global", false, true);
-    const store = runtime.openBlobStore<{ kind: string }>({
-      ...blobOptions,
-      namespace: "runtime-env",
-      env: { ...state.env, OPENCLAW_STATE_DIR: `${state.stateDir}-redirected` },
-    });
+    const redirectedEnv = {
+      ...state.env,
+      OPENCLAW_STATE_DIR: `${state.stateDir}-redirected`,
+    };
+
+    const options = { ...blobOptions, namespace: "runtime-env", env: redirectedEnv };
+    const store = runtime.openBlobStore<{ kind: string }>(options);
     await store.register("viewer", new Uint8Array([1]), { kind: "viewer" });
 
     await closeOpenClawStateDatabaseAsync();

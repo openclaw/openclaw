@@ -42,7 +42,10 @@ describe("program routes", () => {
 
   async function expectRunFalse(argv: string[]) {
     await expect(tryRouteCli(argv)).resolves.toBe(false);
-    expectNoCalls(applyCliExecutionStartupPresentation, ensureCliExecutionBootstrap);
+    expectNoCalls(
+      vi.mocked(applyCliExecutionStartupPresentation),
+      vi.mocked(ensureCliExecutionBootstrap),
+    );
   }
 
   async function expectRouted(args: string) {

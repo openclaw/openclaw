@@ -489,7 +489,7 @@ describe("dispatchReplyFromConfig visible admission recovery", () => {
     },
   );
 
-  it.each([
+  it.each<[boolean | undefined, boolean, boolean?, boolean?]>([
     [undefined, true],
     [false, true],
     [true, false],
@@ -706,7 +706,10 @@ describe("restart tombstone channel feedback", () => {
     if (change === "session") {
       sessionStoreMocks.currentEntry!.sessionId = "replacement-session";
     } else {
-      sessionStoreMocks.currentEntry!.mainRestartRecovery!.cycleId = "replacement-cycle";
+      sessionStoreMocks.currentEntry!.mainRestartRecovery = {
+        ...sessionStoreMocks.currentEntry!.mainRestartRecovery,
+        cycleId: "replacement-cycle",
+      };
     }
     await rejectInbound();
     expect(deliver).toHaveBeenCalledTimes(2);
