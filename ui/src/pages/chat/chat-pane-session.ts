@@ -72,9 +72,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
   protected get sessionPullRequestsBranch(): ControlUiSessionBranch | undefined {
     return this.readPullRequestSnapshot()?.branch;
   }
-  protected get githubRepo() {
-    return sessionGitHubRepository(this.readPullRequestSnapshot());
-  }
   protected get sessionPullRequestsStatus(): ControlUiSessionPullRequestSnapshot["status"] {
     return this.readPullRequestSnapshot()?.status ?? "ready";
   }
