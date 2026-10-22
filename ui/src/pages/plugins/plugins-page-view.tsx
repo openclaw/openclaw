@@ -89,7 +89,6 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       result: page().state.result,
       detail: page().state.detail,
       catalogDetail: page().state.catalogDetail,
-      installedDetailTab: page().state.installedDetailTab,
     });
     return page().help?.available ? page().help.ask : undefined;
   });
