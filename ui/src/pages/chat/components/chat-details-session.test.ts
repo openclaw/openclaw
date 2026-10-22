@@ -620,6 +620,7 @@ it.each([false, true])(
       sessionKey: "agent:main:details",
       currentAgentId: "main",
       messages: [],
+      selectedSession: undefined,
     };
     const view = mountSolid(() =>
       createComponent(mobile ? ChatDetailsEnvironmentMobile : ChatDetailsEnvironment, {
@@ -706,7 +707,12 @@ it("reloads missing branchless facts even when Environment was collapsed", async
   const retain = vi.fn(() => stop);
   const view = mountSolid(() =>
     createComponent(ChatDetailsEnvironment, {
-      details: { sessionKey: result.sessionKey, currentAgentId: "main", messages: [] },
+      details: {
+        sessionKey: result.sessionKey,
+        currentAgentId: "main",
+        messages: [],
+        selectedSession: undefined,
+      },
       presented: true,
       expanded: false,
       get uncommitted() {
