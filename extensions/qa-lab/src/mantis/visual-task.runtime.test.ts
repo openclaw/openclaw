@@ -139,18 +139,24 @@ describe("mantis visual task runtime", () => {
   });
 
   it("records a visible browser task and keeps screenshot/video artifacts", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-05-04T12:00:00.000Z"));
     const { commands, runner } = recordingRunner({ video: true });
 
-    const result = await runTask({ commandRunner: runner, duration: "12s" });
+    const result = await runTask({ commandRunner: runner, duration: "12s", outputDir: undefined });
 
     expect(result.status).toBe("pass");
+    expect(result.outputDir).toBe(
+      path.join(repoRoot, ".artifacts/qa-e2e/mantis/visual-task-2026-05-04T12-00-00-000Z"),
+    );
     const warmupArgs = commands.find((entry) => entry.args[0] === "warmup")?.args ?? [];
     expectArgsContainSequence(warmupArgs, ["--class", "beast"]);
     expect(commands.map((entry) => [entry.command, entry.args[0]])).toEqual(
       ["warmup", "inspect", "record", "stop"].map((action) => ["/tmp/crabbox", action]),
     );
     const recordArgs = commands.find((entry) => entry.args[0] === "record")?.args ?? [];
-    const finalVideoPath = path.join(repoRoot, outputDir, "visual-task.mp4");
+    const finalVideoPath = path.join(result.outputDir, "visual-task.mp4");
+    expect(requireArgAfter(recordArgs, "--output-dir")).toBe(result.outputDir);
     const stagedVideoPath = requireArgAfter(recordArgs, "--output");
     expectArgsContainSequence(recordArgs, ["--duration", "12s"]);
     expectArgsContainSequence(recordArgs, [

@@ -4,7 +4,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists, writeExternalFileWithinRoot } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { ensureRepoBoundDirectory, resolveTimestampedQaOutputDir } from "../cli-paths.js";
 import { toQaError } from "../errors.js";
 import {
   type CommandRunner,
@@ -93,19 +93,11 @@ const DEFAULT_VISION_TIMEOUT_MS = 120000;
 const CRABBOX_PROVIDER_ENV = "OPENCLAW_MANTIS_CRABBOX_PROVIDER";
 const CRABBOX_LEASE_ID_ENV = "OPENCLAW_MANTIS_CRABBOX_LEASE_ID";
 
-function defaultOutputDir(repoRoot: string, startedAt: Date) {
-  const stamp = startedAt.toISOString().replace(/[:.]/gu, "-");
-  return path.join(repoRoot, ".artifacts", "qa-e2e", "mantis", `visual-task-${stamp}`);
-}
-
 function resolveMantisOutputDir(repoRoot: string, outputDir: string | undefined, startedAt: Date) {
   const configured = trimToValue(outputDir);
-  if (!configured) {
-    return defaultOutputDir(repoRoot, startedAt);
-  }
-  return path.isAbsolute(configured)
+  return configured && path.isAbsolute(configured)
     ? configured
-    : (resolveRepoRelativeOutputDir(repoRoot, configured) ?? defaultOutputDir(repoRoot, startedAt));
+    : resolveTimestampedQaOutputDir(repoRoot, configured, startedAt, "mantis/visual-task");
 }
 
 async function nonEmptyFileExists(filePath: string) {

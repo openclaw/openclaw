@@ -300,6 +300,12 @@ continuation, or hook-requested revision paths. Finalization also skips plugin
 prompt mutation, `before_agent_run`, LLM input/output, terminal revision, and
 `agent_end` hooks. Core diagnostics still record the operation and its failure.
 
+When the settled turn stopped at the model's output token limit, the
+finalization prompt tells the model it was cut off and must say what was not
+finished. OpenClaw also adds a host notice under the recovered answer saying
+that the turn was cut off and some work may be unfinished, because a tool-free
+summary cannot show that the interrupted work completed.
+
 The callback returns `AgentHarnessSettledTurnFinalizationResult`, not an
 ordinary attempt result. Its public fields are limited to the completed
 assistant message, finalization-call usage, transcript-ownership metadata, and
