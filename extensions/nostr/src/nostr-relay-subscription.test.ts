@@ -18,9 +18,7 @@ function createHarness() {
         { once: true },
       );
       return {
-        close: vi.fn(async (reason?: string) => {
-          close(reason ?? "closed by caller");
-        }),
+        close: vi.fn(async (reason = "closed by caller") => close(reason)),
       };
     },
   );
@@ -60,39 +58,32 @@ describe("Nostr relay subscriptions", () => {
     expect(onBackfillComplete).toHaveBeenCalledWith(["wss://one.example", "wss://two.example"]);
   });
 
-  it("does not confirm timeout-synthesized EOSE", async () => {
-    vi.useFakeTimers();
+  it.each(["timeout", "same-turn close"])("rejects synthetic EOSE after %s", async (cause) => {
+    if (cause === "timeout") {
+      vi.useFakeTimers();
+    }
     const { handlers, onBackfillComplete } = setup();
-    await vi.advanceTimersByTimeAsync(10_000);
+    if (cause === "timeout") {
+      await vi.advanceTimersByTimeAsync(10_000);
+    }
     handlers[0]?.oneose?.();
+    if (cause === "same-turn close") {
+      handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay closed" }]);
+    }
     handlers[1]?.oneose?.();
     await Promise.resolve();
 
     expect(onBackfillComplete).not.toHaveBeenCalled();
   });
 
-  it("lets same-turn close veto the pool's synthetic EOSE", async () => {
-    const { handlers, onBackfillComplete } = setup();
-    handlers[0]?.oneose?.();
-    handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay closed" }]);
-    handlers[1]?.oneose?.();
-    await Promise.resolve();
-
-    expect(onBackfillComplete).not.toHaveBeenCalled();
-  });
-
-  it("does not report locally requested closes as relay failures", async () => {
-    const { abortController, group, onClose } = setup();
-    abortController.abort("closed by caller");
-    await group.close("closed by caller");
-
-    expect(onClose).not.toHaveBeenCalled();
-  });
-
-  it("still reports closes initiated by the relay", async () => {
-    const { handlers, onClose } = setup();
-    handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay unavailable" }]);
-
-    expect(onClose).toHaveBeenCalledWith("wss://one.example", ["relay unavailable"]);
+  it.each([true, false])("reports closure only for remote initiators (local=%s)", async (local) => {
+    const { abortController, group, handlers, onClose } = setup();
+    if (local) {
+      abortController.abort("closed by caller");
+      await group.close("closed by caller");
+    } else {
+      handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay unavailable" }]);
+    }
+    expect(onClose.mock.calls).toEqual(local ? [] : [["wss://one.example", ["relay unavailable"]]]);
   });
 });
