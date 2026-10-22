@@ -1,12 +1,16 @@
 import { onSettled, createMemo, merge, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { t } from "../../../lib/reactive/i18n.ts";
-import { EnvironmentChangeCounts } from "./chat-details-environment.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { createDocumentVisibility } from "../../../lib/reactive/platform.ts";
+import { EnvironmentAction, EnvironmentChangeCounts } from "./chat-details-environment.tsx";
 import type { ChatDetailsEnvironmentProps, ChatDetailsProps } from "./chat-details-types.ts";
 import {
   createChatMachinePresentation,
   type ChatPanePlacementProps,
 } from "./chat-pane-placement.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 export type ChatDetailsEnvironmentMobileProps = Omit<
   ChatDetailsEnvironmentProps,
@@ -18,8 +22,9 @@ export type ChatDetailsEnvironmentMobileProps = Omit<
 
 /** A controlled leaf: the mobile host owns routes, facts, and retained state. */
 export function ChatDetailsEnvironmentMobile(props: ChatDetailsEnvironmentMobileProps) {
+  const visible = createDocumentVisibility();
   const requestUncommitted = createMemo(() =>
-    props.presented ? props.onRequestUncommitted : undefined,
+    props.presented && visible() ? props.onRequestUncommitted : undefined,
   );
   const workspace = () => props.details.detailsWorkspace;
   const session = () => props.details.selectedSession;
@@ -55,56 +60,26 @@ export function ChatDetailsEnvironmentMobile(props: ChatDetailsEnvironmentMobile
         <div class="chat-environment-mobile__group">
           <Show when={host()}>
             <div class="chat-environment-mobile__row" aria-label={host()}>
-              <Show
-                when={props.onOpenMachine}
-                fallback={
+              <EnvironmentAction presented={props.presented} onOpen={props.onOpenMachine}>
+                {() => (
                   <>
                     <Icon name={machine()?.machineIcon === "cloud" ? "server" : "monitor"} />
                     <span>{host()}</span>
                   </>
-                }
-              >
-                <button
-                  class="chat-environment__action"
-                  type="button"
-                  onClick={() => {
-                    if (props.presented) {
-                      props.onOpenMachine?.();
-                    }
-                  }}
-                >
-                  <Icon name={machine()?.machineIcon === "cloud" ? "server" : "monitor"} />
-                  <span>{host()}</span>
-                  <Icon name="chevronRight" />
-                </button>
-              </Show>
+                )}
+              </EnvironmentAction>
             </div>
           </Show>
           <Show when={project() && !workspace()?.branch}>
             <div class="chat-environment-mobile__row" aria-label={project()}>
-              <Show
-                when={props.onOpenProject}
-                fallback={
+              <EnvironmentAction presented={props.presented} onOpen={props.onOpenProject}>
+                {() => (
                   <>
                     <Icon name="folder" />
                     <span>{project()}</span>
                   </>
-                }
-              >
-                <button
-                  class="chat-environment__action"
-                  type="button"
-                  onClick={() => {
-                    if (props.presented) {
-                      props.onOpenProject?.();
-                    }
-                  }}
-                >
-                  <Icon name="folder" />
-                  <span>{project()}</span>
-                  <Icon name="chevronRight" />
-                </button>
-              </Show>
+                )}
+              </EnvironmentAction>
             </div>
           </Show>
           <Show when={workspace()?.branch}>
@@ -127,31 +102,15 @@ export function ChatDetailsEnvironmentMobile(props: ChatDetailsEnvironmentMobile
           <Show when={changes()}>
             {(result) => (
               <div class="chat-environment-mobile__row">
-                <Show
-                  when={props.onOpenUncommitted}
-                  fallback={
+                <EnvironmentAction presented={props.presented} onOpen={props.onOpenUncommitted}>
+                  {() => (
                     <>
                       <Icon name="diff" />
                       <span>{t("chat.sessionDetails.changes")}</span>
                       <EnvironmentChangeCounts result={result()} mobile />
                     </>
-                  }
-                >
-                  <button
-                    class="chat-environment__action"
-                    type="button"
-                    onClick={() => {
-                      if (props.presented) {
-                        props.onOpenUncommitted?.();
-                      }
-                    }}
-                  >
-                    <Icon name="diff" />
-                    <span>{t("chat.sessionDetails.changes")}</span>
-                    <EnvironmentChangeCounts result={result()} mobile />
-                    <Icon name="chevronRight" />
-                  </button>
-                </Show>
+                  )}
+                </EnvironmentAction>
               </div>
             )}
           </Show>

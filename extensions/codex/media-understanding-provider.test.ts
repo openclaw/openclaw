@@ -17,7 +17,7 @@ import type { CodexServerNotification, JsonValue } from "./src/app-server/protoc
 import type { CodexAppServerClientFactory } from "./src/app-server/shared-client.js";
 
 const sharedClientMocks = vi.hoisted(() => ({
-  createIsolatedCodexAppServerClient: vi.fn(),
+  createIsolatedCodexAppServerClient: vi.fn<CodexAppServerClientFactory>(),
 }));
 
 const imageInput = { type: "image", url: "data:image/png;base64,aW1hZ2UtYnl0ZXM=" };
@@ -251,8 +251,9 @@ function createFakeClient(options?: {
     closeAndWait,
   } as unknown as CodexAppServerClient;
 
-  const clientFactory = vi.fn<CodexAppServerClientFactory>(async () => client);
-  const provider = buildCodexMediaUnderstandingProvider({ clientFactory });
+  const clientFactory =
+    sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);
+  const provider = buildCodexMediaUnderstandingProvider();
   return { client, clientFactory, provider, requests, approvalResponses, closeAndWait };
 }
 
@@ -264,8 +265,8 @@ describe("codex media understanding provider", () => {
   });
 
   it("does not start a bounded turn for an already-aborted media request", async () => {
-    const clientFactory = vi.fn();
-    const provider = buildCodexMediaUnderstandingProvider({ clientFactory });
+    const clientFactory = sharedClientMocks.createIsolatedCodexAppServerClient;
+    const provider = buildCodexMediaUnderstandingProvider();
     const controller = new AbortController();
     controller.abort(new Error("caller cancelled Codex media request"));
 
@@ -278,7 +279,7 @@ describe("codex media understanding provider", () => {
 
   it("abandons app-server startup when the media request aborts", async () => {
     const startupReady = createDeferred<void>();
-    const clientFactory = vi.fn<CodexAppServerClientFactory>(
+    const clientFactory = sharedClientMocks.createIsolatedCodexAppServerClient.mockImplementation(
       async (options) =>
         await new Promise<never>((_, reject) => {
           options?.abandonSignal?.addEventListener(
@@ -292,7 +293,7 @@ describe("codex media understanding provider", () => {
           startupReady.resolve();
         }),
     );
-    const provider = buildCodexMediaUnderstandingProvider({ clientFactory });
+    const provider = buildCodexMediaUnderstandingProvider();
     const controller = new AbortController();
     const result = provider.describeImage?.(imageRequest({ signal: controller.signal }));
 
@@ -339,7 +340,8 @@ describe("codex media understanding provider", () => {
 
   it("preserves configured WebSocket transport for media turns", async () => {
     const { client, requests } = createFakeClient();
-    const clientFactory = vi.fn<CodexAppServerClientFactory>(async () => client);
+    const clientFactory =
+      sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);
     const provider = buildCodexMediaUnderstandingProvider({
       pluginConfig: {
         appServer: {
@@ -347,7 +349,6 @@ describe("codex media understanding provider", () => {
           url: "ws://127.0.0.1:4501",
         },
       },
-      clientFactory,
     });
 
     await provider.describeImage?.(imageRequest());
@@ -376,9 +377,9 @@ describe("codex media understanding provider", () => {
       deferTurnCompletion: true,
       onTurnStart: () => setTimeout(() => controller.abort(new Error("media cancelled")), 0),
     });
+    sharedClientMocks.createIsolatedCodexAppServerClient.mockResolvedValue(client);
     const provider = buildCodexMediaUnderstandingProvider({
       pluginConfig: { appServer: { transport: "websocket", url: "ws://127.0.0.1:4501" } },
-      clientFactory: async () => client,
     });
 
     await expect(

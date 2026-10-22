@@ -23,10 +23,11 @@ type SessionWorkspaceOwner = {
   publish(): void;
 };
 
-const workspaceOwners = new WeakMap<SessionWorkspaceHost, SessionWorkspaceOwner>();
+type SessionWorkspaceSource = Pick<SessionWorkspaceHost, "sessionWorkspaceState">;
+const workspaceOwners = new WeakMap<SessionWorkspaceSource, SessionWorkspaceOwner>();
 
 /** Publishes workspace mutations without replacing the raw preview and editor identities. */
-export function sessionWorkspaceForHost(host: SessionWorkspaceHost): SessionWorkspaceOwner {
+export function sessionWorkspaceForHost(host: SessionWorkspaceSource): SessionWorkspaceOwner {
   let owner = workspaceOwners.get(host);
   if (!owner) {
     const listeners = createChangeListeners();

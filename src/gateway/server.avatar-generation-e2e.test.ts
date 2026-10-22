@@ -51,6 +51,17 @@ const design = {
   },
 };
 
+function respond(response: ServerResponse, id: string, content = JSON.stringify(design)) {
+  writeOpenAiResponsesSse(response, [
+    {
+      id,
+      object: "chat.completion.chunk",
+      model: "avatar-model",
+      choices: [{ index: 0, delta: { content }, finish_reason: "stop" }],
+    },
+  ]);
+}
+
 it(
   "generates through authenticated RPC and provider I/O, rejecting read-only and revoked callers",
   { timeout: 120_000 },
@@ -77,16 +88,7 @@ it(
       const index = responses.push(response) - 1;
       arrivals[index]?.resolve();
       if (index !== 1 || !holdSecond) {
-        writeOpenAiResponsesSse(response, [
-          {
-            id: `avatar-response-${index}`,
-            object: "chat.completion.chunk",
-            model: "avatar-model",
-            choices: [
-              { index: 0, delta: { content: JSON.stringify(design) }, finish_reason: "stop" },
-            ],
-          },
-        ]);
+        respond(response, `avatar-response-${index}`);
       }
     });
     await new Promise<void>((resolve, reject) => {
@@ -206,22 +208,33 @@ it(
       };
 
       const bootstrap = await connect({ scopes: ["operator.admin"], token });
+      const generate = (client: GatewayClient) =>
+        client.request<{ svg: string; name: string }>("agents.avatar.generate", {
+          agentId: "main",
+          prompt: "A gardener",
+        });
+      const revoke = async ({ identity, connection }: Awaited<ReturnType<typeof pair>>) => {
+        await bootstrap.client.request("device.token.revoke", {
+          deviceId: identity.deviceId,
+          role: "operator",
+        });
+        await withinTest(connection.closed, signal);
+      };
+      const observe = (pending: Promise<unknown>) =>
+        pending.then(
+          (value) => ({ value }),
+          (error: unknown) => ({ error }),
+        );
       const admin = await pair("admin", ["operator.admin"]);
       const reader = await pair("reader", ["operator.read"]);
-      const first = await admin.connection.client.request<{ svg: string; name: string }>(
-        "agents.avatar.generate",
-        { agentId: "main", prompt: "A gardener" },
-      );
+      const first = await generate(admin.connection.client);
       expect(first.svg).toContain("<svg");
       expect(first.name).toBe("Garden Keeper");
       expect(responses).toHaveLength(1);
 
-      await expect(
-        reader.connection.client.request("agents.avatar.generate", {
-          agentId: "main",
-          prompt: "A gardener",
-        }),
-      ).rejects.toThrow("missing scope: operator.admin");
+      await expect(generate(reader.connection.client)).rejects.toThrow(
+        "missing scope: operator.admin",
+      );
       expect(responses).toHaveLength(1);
 
       const revokedBeforeDispatch = await pair("revoked-before-dispatch", ["operator.admin"]);
@@ -231,48 +244,19 @@ it(
         routeEntered.resolve();
         await releaseRoute.promise;
       };
-      const beforeDispatch = revokedBeforeDispatch.connection.client.request(
-        "agents.avatar.generate",
-        { agentId: "main", prompt: "A gardener" },
-      );
-      const beforeSettled = beforeDispatch.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const beforeSettled = observe(generate(revokedBeforeDispatch.connection.client));
       await withinTest(routeEntered.promise, signal);
-      await bootstrap.client.request("device.token.revoke", {
-        deviceId: revokedBeforeDispatch.identity.deviceId,
-        role: "operator",
-      });
-      await withinTest(revokedBeforeDispatch.connection.closed, signal);
+      await revoke(revokedBeforeDispatch);
       releaseRoute.resolve();
       expect(await withinTest(beforeSettled, signal)).toHaveProperty("error");
       expect(responses).toHaveLength(1);
 
       const revoked = await pair("revoked", ["operator.admin"]);
       holdSecond = true;
-      const pending = revoked.connection.client.request("agents.avatar.generate", {
-        agentId: "main",
-        prompt: "A gardener",
-      });
-      const settled = pending.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
+      const settled = observe(generate(revoked.connection.client));
       await withinTest(arrivals[1]!.promise, signal);
-      await bootstrap.client.request("device.token.revoke", {
-        deviceId: revoked.identity.deviceId,
-        role: "operator",
-      });
-      await withinTest(revoked.connection.closed, signal);
-      writeOpenAiResponsesSse(responses[1]!, [
-        {
-          id: "avatar-revoked",
-          object: "chat.completion.chunk",
-          model: "avatar-model",
-          choices: [{ index: 0, delta: { content: "invalid design" }, finish_reason: "stop" }],
-        },
-      ]);
+      await revoke(revoked);
+      respond(responses[1]!, "avatar-revoked", "invalid design");
       expect(await withinTest(settled, signal)).toHaveProperty("error");
       await new Promise((resolve) => {
         setTimeout(resolve, 100);

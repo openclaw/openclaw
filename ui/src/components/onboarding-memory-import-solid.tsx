@@ -1,4 +1,4 @@
-import { createMemo, createSignal, createStore, For, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, createStore, For, onSettled, Show } from "solid-js";
 import type {
   MemoryMigrationProviderPlan,
   MigrationsMemoryApplyResult,
@@ -321,11 +321,13 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
       }
     });
   };
-  const stopDisconnect = listen(host, "onboarding-memory-disconnect", disconnect);
-  onCleanup(() => {
-    disposed = true;
-    abortPlan?.abort();
-    stopDisconnect();
+  onSettled(() => {
+    const stopDisconnect = listen(host, "onboarding-memory-disconnect", disconnect);
+    return () => {
+      disposed = true;
+      abortPlan?.abort();
+      stopDisconnect();
+    };
   });
 
   function Provider(providerProps: { provider: MemoryMigrationProviderPlan }) {
@@ -386,7 +388,7 @@ function OnboardingMemoryImportContent(props: Props, host: OnboardingMemoryImpor
     );
   const busy = () => applying() !== null;
   const hasSelected = () => providers().some((provider) => selection()[provider.providerId]);
-  const actions = (): ImportAction[] => (isDone() ? ["continue"] : ["import", "skip", "review"]);
+  const actions = (): ImportAction[] => (isDone() ? ["continue"] : ["review", "skip", "import"]);
   const actionLabels = () => ({
     continue: t("common.continue"),
     import: t(busy() ? "common.importing" : "onboarding.memoryImport.import"),

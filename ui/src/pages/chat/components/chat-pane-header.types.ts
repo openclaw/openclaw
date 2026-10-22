@@ -95,7 +95,6 @@ export type ChatPaneHeaderProps = ChatPaneLayoutMenuProps & {
   onMenuAction: (action: ChatPaneHeaderAction) => void;
   onOpenParentSession: (sessionKey: string) => void;
   onOpenAgentSettings?: (agentId: string) => void;
-  onCreateClaw?: () => void;
   onBranchSelect: (leafEntryId: string) => void;
 };
 

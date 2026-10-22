@@ -1,9 +1,14 @@
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
+import { createPageOpener } from "./new-session-page.scenario.test-support.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
   pollLocatorText,
+  pollCount,
+  pollValue,
+  pollDisabled,
+  pollAttribute,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
@@ -48,25 +53,24 @@ async function setTheme(page: Page, mode: "dark" | "light") {
   }, mode);
 }
 
-async function identityPage(options: Parameters<typeof installMockGateway>[1] = {}) {
-  const context = await suite.browser.newContext(CONTEXT);
-  const page = await context.newPage();
-  const gateway = await installMockGateway(page, {
-    defaultAgentId: "main",
-    ...options,
-    methodResponses: {
-      "agent.identity.get": agentIdentities,
-      "agents.list": agentsList,
-      ...options.methodResponses,
-    },
-  });
-  const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
-  return { context, page, gateway, picker };
-}
-
 suite.define(() => {
+  const openPage = createPageOpener(suite);
+  async function identityPage(options: Parameters<typeof installMockGateway>[1] = {}) {
+    const page = await openPage(CONTEXT);
+    const gateway = await installMockGateway(page, {
+      defaultAgentId: "main",
+      ...options,
+      methodResponses: {
+        "agent.identity.get": agentIdentities,
+        "agents.list": agentsList,
+        ...options.methodResponses,
+      },
+    });
+    const picker = page.locator(".new-session-page__select--agent openclaw-agent-select");
+    return { page, gateway, picker };
+  }
   it("drops a pending skill completion after an agent switch", async () => {
-    const { context, page, gateway, picker } = await identityPage({
+    const { page, gateway, picker } = await identityPage({
       deferredMethods: ["commands.list"],
       featureMethods: [
         "chat.metadata",
@@ -79,92 +83,80 @@ suite.define(() => {
         "chat.metadata": { models: [] },
       },
     });
+    await page.goto(`${suite.server.baseUrl}new?agent=main`);
+    await gateway.waitForRequest("agent.identity.get");
+    const composer = page.locator(".new-session-page__composer textarea");
+    await composer.fill("$");
+    await composer.press("End");
+    await composer.dispatchEvent("select");
+    await gateway.waitForRequest("commands.list");
 
-    try {
-      await page.goto(`${suite.server.baseUrl}new?agent=main`);
-      await gateway.waitForRequest("agent.identity.get");
-      const composer = page.locator(".new-session-page__composer textarea");
-      await composer.fill("$");
-      await composer.press("End");
-      await composer.dispatchEvent("select");
-      await gateway.waitForRequest("commands.list");
+    await picker.evaluate((element) => {
+      (element as HTMLElement & { onSelect: (agentId: string) => void }).onSelect("research");
+    });
+    await gateway.resolveDeferred("commands.list", {
+      commands: [
+        {
+          name: "main_only",
+          source: "skill",
+          skillModelVisible: true,
+        },
+      ],
+    });
 
-      await picker.evaluate((element) => {
-        (element as HTMLElement & { onSelect: (agentId: string) => void }).onSelect("research");
-      });
-      await gateway.resolveDeferred("commands.list", {
-        commands: [
-          {
-            name: "main_only",
-            source: "skill",
-            skillModelVisible: true,
-          },
-        ],
-      });
-
-      await pollLocatorText(picker.locator(".agent-select__label")).toBe("research");
-      await expect
-        .poll(() => page.getByRole("listbox", { name: "Skill references" }).count())
-        .toBe(0);
-      await expect.poll(() => composer.inputValue()).toBe("$");
-    } finally {
-      await context.close();
-    }
+    await pollLocatorText(picker.locator(".agent-select__label")).toBe("research");
+    await pollCount(page.getByRole("listbox", { name: "Skill references" })).toBe(0);
+    await pollValue(composer).toBe("$");
   });
 
   it.each(["dark", "light"] as const)(
     "uses resolved identity in the New Session hero and picker in %s mode",
     async (theme) => {
-      const { context, page, gateway, picker } = await identityPage();
+      const { page, gateway, picker } = await identityPage();
+      await setTheme(page, theme);
+      await page.goto(`${suite.server.baseUrl}new?agent=main`);
+      await gateway.waitForRequest("agent.identity.get");
 
-      try {
-        await setTheme(page, theme);
-        await page.goto(`${suite.server.baseUrl}new?agent=main`);
-        await gateway.waitForRequest("agent.identity.get");
+      const hero = page.locator(".agent-chat__welcome h2");
+      const sidebar = page.locator("openclaw-app-sidebar");
+      await pollLocatorText(sidebar.locator(".sidebar-agent-card__name")).toContain("Pacino");
+      await hero.waitFor();
+      const welcomeEmoji = page.locator(".agent-chat__welcome-avatar .identity-avatar__text");
+      await pollAttribute(welcomeEmoji, "data-avatar").toBe("🎬");
+      await expect
+        .poll(() => welcomeEmoji.evaluate((element) => getComputedStyle(element).fontSize))
+        .toBe("56px");
+      await picker.locator(".agent-select__label").waitFor();
+      await page.waitForLoadState("networkidle");
+      const identityRequests = await gateway.getRequests("agent.identity.get");
+      expect(identityRequests).toMatchObject([{ params: { agentId: "main" } }]);
+      await picker.locator(".agent-select__trigger").click();
+      await pollLocatorText(hero).toBe("Pacino");
+      await pollLocatorText(picker.locator(".agent-select__label")).toBe("Pacino");
+      const selectedAgent = picker.locator(
+        ".agent-select__option[data-agent-option][data-selected]",
+      );
+      await pollLocatorText(selectedAgent).toContain("Pacino");
+      await expect
+        .poll(() => selectedAgent.evaluate((element) => document.activeElement === element))
+        .toBe(true);
+      const unnamedAgent = picker.getByRole("menuitemradio", {
+        name: "research",
+        exact: true,
+      });
+      await pollLocatorText(unnamedAgent).toContain("research");
+      const longName = "Deployment Safety and Release Verification Agent";
+      const longNameAgent = picker.getByRole("menuitemradio", { name: longName, exact: true });
+      await pollLocatorText(longNameAgent).toContain(longName);
+      await longNameAgent.hover();
 
-        const hero = page.locator(".agent-chat__welcome h2");
-        const sidebar = page.locator("openclaw-app-sidebar");
-        await pollLocatorText(sidebar.locator(".sidebar-agent-card__name")).toContain("Pacino");
-        await hero.waitFor();
-        const welcomeEmoji = page.locator(".agent-chat__welcome-avatar .identity-avatar__text");
-        await expect.poll(() => welcomeEmoji.getAttribute("data-avatar")).toBe("🎬");
-        await expect
-          .poll(() => welcomeEmoji.evaluate((element) => getComputedStyle(element).fontSize))
-          .toBe("56px");
-        await picker.locator(".agent-select__label").waitFor();
-        await page.waitForLoadState("networkidle");
-        const identityRequests = await gateway.getRequests("agent.identity.get");
-        expect(identityRequests).toMatchObject([{ params: { agentId: "main" } }]);
-        await picker.locator(".agent-select__trigger").click();
-        await pollLocatorText(hero).toBe("Pacino");
-        await pollLocatorText(picker.locator(".agent-select__label")).toBe("Pacino");
-        const selectedAgent = picker.locator(
-          ".agent-select__option[data-agent-option][data-selected]",
-        );
-        await pollLocatorText(selectedAgent).toContain("Pacino");
-        await expect
-          .poll(() => selectedAgent.evaluate((element) => document.activeElement === element))
-          .toBe(true);
-        const unnamedAgent = picker.getByRole("menuitemradio", {
-          name: "research",
-          exact: true,
-        });
-        await pollLocatorText(unnamedAgent).toContain("research");
-        const longName = "Deployment Safety and Release Verification Agent";
-        const longNameAgent = picker.getByRole("menuitemradio", { name: longName, exact: true });
-        await pollLocatorText(longNameAgent).toContain(longName);
-        await longNameAgent.hover();
-
-        await unnamedAgent.click();
-        await pollLocatorText(hero).toBe("research");
-        await pollLocatorText(picker.locator(".agent-select__label")).toBe("research");
-        await picker.evaluate((element) => {
-          (element as HTMLElement & { disabled: boolean }).disabled = true;
-        });
-        await expect.poll(() => picker.locator(".agent-select__trigger").isDisabled()).toBe(true);
-      } finally {
-        await context.close();
-      }
+      await unnamedAgent.click();
+      await pollLocatorText(hero).toBe("research");
+      await pollLocatorText(picker.locator(".agent-select__label")).toBe("research");
+      await picker.evaluate((element) => {
+        (element as HTMLElement & { disabled: boolean }).disabled = true;
+      });
+      await pollDisabled(picker.locator(".agent-select__trigger")).toBe(true);
     },
   );
 });

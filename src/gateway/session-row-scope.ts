@@ -227,6 +227,9 @@ export function selectMatchingSessionRows<T extends SessionRowScopeTarget>(
     scope,
   } = params;
   const storePaths = resolveSessionRowScopePaths(query, scope);
+  if (!query.key && !storePaths && !query.agentId) {
+    return Array.from(rows.values());
+  }
   const candidates = query.key
     ? byKey.get(`${kind}:${query.key}`)
     : storePaths
@@ -235,7 +238,7 @@ export function selectMatchingSessionRows<T extends SessionRowScopeTarget>(
         : new Set(storePaths.flatMap((storePath) => Array.from(byStore.get(storePath) ?? [])))
       : query.agentId
         ? byAgent.get(query.agentId)
-        : rows;
+        : undefined;
   if (!candidates) {
     return [];
   }

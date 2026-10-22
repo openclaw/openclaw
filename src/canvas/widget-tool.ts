@@ -533,7 +533,6 @@ export function createShowWidgetTool(options: ShowWidgetToolOptions = {}): AnyAg
         (document ??= await createCanvasDocument({
           title,
           html: wrappedDocument,
-          surface: "assistant_message",
           retentionScope: resolveRetentionScope(options),
           // Direct navigation must not run widget script as the Control UI origin.
           cspSandbox: "scripts",

@@ -1,6 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { For, Show, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
+import { For, Show, createMemo, createSignal, onSettled } from "solid-js";
 import { formatApprovalDisplayPath } from "../../../src/infra/approval-display-paths.ts";
 import { normalizeCommandSpans } from "../../../src/shared/exec-approval-command-spans.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
@@ -13,14 +13,17 @@ import type {
   ExecApprovalRequest,
   ExecApprovalRequestPayload,
 } from "../app/exec-approval.ts";
+import { registerApprovalsEnglish } from "../i18n/locales/en-approvals.ts";
 import { formatCountdown } from "../lib/format.ts";
-import { t } from "../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import type { JSX as SolidJSX } from "../types/solid-elements.d.ts";
 import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 import { useScrollState } from "./solid/scroll-state.ts";
+
+registerEnglishCatalog(registerApprovalsEnglish);
 
 declare module "@solidjs/web" {
   namespace JSX {
@@ -35,6 +38,16 @@ const DEFAULT_EXEC_APPROVAL_DECISIONS = [
   "allow-once",
   "allow-always",
   "deny",
+] as const satisfies readonly ExecApprovalDecision[];
+const MOBILE_DECISION_ORDER = [
+  "allow-always",
+  "deny",
+  "allow-once",
+] as const satisfies readonly ExecApprovalDecision[];
+const MODAL_DECISION_ORDER = [
+  "deny",
+  "allow-always",
+  "allow-once",
 ] as const satisfies readonly ExecApprovalDecision[];
 
 export type ExecApprovalCardProps = {
@@ -245,7 +258,7 @@ function MobileExecApprovalBody(props: { request: ExecApprovalRequestPayload }) 
     };
   }
 
-  onCleanup(() => animation?.cancel());
+  onSettled(() => () => animation?.cancel());
 
   return (
     <>
@@ -502,9 +515,13 @@ function ExecApprovalCardContent(props: ExecApprovalCardProps) {
   );
   const decisions = createMemo(() => {
     const eligible = resolveApprovalDecisions(active());
-    return mobile()
-      ? (["allow-always", "deny", "allow-once"] as const).filter((item) => eligible.includes(item))
-      : eligible;
+    // Right-aligned footers keep the primary decision at the trailing edge.
+    const order = mobile()
+      ? MOBILE_DECISION_ORDER
+      : props.variant === "modal"
+        ? MODAL_DECISION_ORDER
+        : undefined;
+    return order ? order.filter((item) => eligible.includes(item)) : eligible;
   });
   const reviewOnlyMessage = () => t("execApproval.reviewOnly");
   const grantError = () => !props.canGrant && props.error === reviewOnlyMessage();

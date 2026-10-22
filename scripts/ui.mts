@@ -538,6 +538,7 @@ async function buildAndPublishUi(
       cache?.restoreBuildStepCacheOutputs(cacheState, {
         rootDir: repoRoot,
         artifactRoot: staging,
+        staging: true,
       });
     if (reuseOutput) {
       const { runnerImport } = await import("vite");
@@ -556,6 +557,13 @@ async function buildAndPublishUi(
             [
               {
                 ...toolCall,
+                options: {
+                  ...toolCall.options,
+                  env: {
+                    ...toolCall.options.env,
+                    OPENCLAW_CONTROL_UI_PREPARED_SETTINGS_ROOT: repoRoot,
+                  },
+                },
                 args: distArtifactEntryArgs(
                   toolCall.args[0]!,
                   [...toolCall.args.slice(1), "--outDir", staging],
@@ -575,7 +583,8 @@ async function buildAndPublishUi(
         return result;
       }
     }
-    if (cache && cacheState) {
+    // A cache hit refreshes identity only in staging; its validated seed is immutable.
+    if (cache && cacheState && !reuseOutput) {
       const consumedInputs: string[] = JSON.parse(
         fs.readFileSync(path.join(staging, ".build-inputs.json"), "utf8"),
       );

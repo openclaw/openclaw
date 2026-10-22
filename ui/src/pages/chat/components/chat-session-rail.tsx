@@ -10,9 +10,10 @@ import { markdownBlocksRef } from "../../../components/markdown-element-refs-sol
 import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatTimeMs } from "../../../lib/format.ts";
 import { cancelLayout, scheduleLayout } from "../../../lib/layout-frame.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type {
@@ -26,6 +27,8 @@ import { MessageMarkdown } from "./chat-message-text-view.tsx";
 import type { ChatModelControlsProps } from "./chat-model-controls.tsx";
 import { SessionRailComposer, sessionRailQuestion } from "./chat-session-rail-composer.tsx";
 import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 function checksSummary(pullRequest: ControlUiSessionPullRequest): string | null {
   const checks = pullRequest.checks;
@@ -71,6 +74,7 @@ type ChatSessionRailProps = {
   onAttachmentsChange?: ChatAttachmentControlsProps["onAttachmentsChange"];
   attachmentLimits?: ChatAttachmentControlsProps["attachmentLimits"];
   uploadConfig?: ChatAttachmentControlsProps["uploadConfig"];
+  onOpenImage?: ChatAttachmentControlsProps["onOpenImage"];
   presented: boolean;
   focusRequest?: () => boolean;
 };
@@ -109,6 +113,7 @@ function ChatSessionRailContent(props: ChatSessionRailProps, host: ChatSessionRa
       imagesOnly: true,
       disabled: !props.connected,
       onAttachmentsChange: props.onAttachmentsChange,
+      onOpenImage: props.onOpenImage,
       onPendingReadsChange: (delta) => {
         if (readSignal) {
           reads?.updatePending(readSignal, delta);
@@ -380,6 +385,7 @@ defineSolidBridge<ChatSessionRailProps>("openclaw-chat-session-rail", ChatSessio
     onSubmit: { default: undefined, attribute: false },
     onDraftChange: { default: undefined, attribute: false },
     onAttachmentsChange: { default: undefined, attribute: false },
+    onOpenImage: { default: undefined, attribute: false },
     attachmentLimits: { default: undefined, attribute: false },
     uploadConfig: { default: undefined, attribute: false },
     presented: { default: false, type: Boolean },

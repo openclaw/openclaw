@@ -33,7 +33,7 @@ async function collectSkillDirs(
   if (!dir) {
     return;
   }
-  const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+  const entries = await fs.readdir(dir, { withFileTypes: true });
   for (const entry of entries) {
     if (!entry.isDirectory()) {
       continue;

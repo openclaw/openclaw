@@ -7,7 +7,6 @@ import {
   withSessionTranscriptWriteLock,
 } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import type { CodexSteeringQueueOptions } from "./attempt-steering.js";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { TURN_TERMINAL_SETTLEMENT_TIMEOUT_MS } from "./attempt-timeouts.js";
 import { nativeCommandItem } from "./codex-app-server.test-fixtures.js";
@@ -23,6 +22,7 @@ import {
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
+import { createSteeringRecorder } from "./run-attempt.steering.test-support.js";
 import {
   attachSqliteSessionTarget,
   readTranscriptMessagesByIdentity,
@@ -59,27 +59,17 @@ async function createFixture() {
     idempotencyKey: "steer-source:user",
   };
   let persisted = false;
-  const recorder = {
+  const recorder = createSteeringRecorder(
     message,
-    resolveMessage: async () => message,
-    getAdmissionReceipt: () => undefined,
-    markRuntimePersistencePending: vi.fn(),
-    markRuntimePersisted: vi.fn(),
-    markBlocked: vi.fn(),
-    isBlocked: () => false,
-    hasRuntimePersistencePending: () => false,
-    waitForRuntimePersistence: async () => {},
-    persistBlocked: async () => undefined,
-    persistFallback: async () => undefined,
-    hasPersisted: () => persisted,
-    persistApproved: vi.fn(async () => {
+    async () => {
       if (!persisted) {
         const committed = await appendSessionTranscriptMessageByIdentity({ ...target, message });
         persisted = Boolean(committed);
       }
       return undefined;
-    }),
-  } satisfies NonNullable<CodexSteeringQueueOptions["userTurnTranscriptRecorder"]>;
+    },
+    () => persisted,
+  );
   const started = createDeferred<void>();
   const prefixCompleted = createDeferred<void>();
   const abort = new AbortController();

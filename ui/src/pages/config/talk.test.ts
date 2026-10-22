@@ -294,6 +294,78 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("Talk catalog boundaries", () => {
+  it("keeps the trigger editor mounted through catalog failure and focus recovery", async () => {
+    const initial = createDeferred<TalkCatalogResult>();
+    const refresh = createDeferred();
+    const { page, request } = createTalkMutationHarness({
+      voiceWakeRequest: async () => ({ triggers: ["openclaw"] }),
+      catalogRequest: (index, catalog) =>
+        index === 1 ? initial.promise : index === 2 ? catalog : refresh.promise.then(() => catalog),
+    });
+    await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("openclaw"));
+    const input = page.querySelector("textarea");
+    initial.reject(new Error("catalog temporarily unavailable"));
+    await waitForSolid(() => expect(page.textContent).toContain(t("talkPage.status.unavailable")));
+    expect(page.textContent).toContain("gpt-realtime-2.1");
+    expect(page.querySelector("textarea")).toBe(input);
+
+    window.dispatchEvent(new Event("focus"));
+    await waitForSolid(() => expect(page.querySelector("openclaw-select-picker")).not.toBeNull());
+    expect(page.querySelector("textarea")).toBe(input);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    const picker = page.querySelector("openclaw-select-picker");
+    window.dispatchEvent(new Event("focus"));
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(3));
+    expect(page.querySelector("openclaw-select-picker")).toBe(picker);
+    expect(page.querySelector("textarea")).toBe(input);
+    expect(page.textContent).not.toContain(t("common.loading"));
+    refresh.resolve();
+    await request.mock.results[2]?.value;
+  });
+
+  it("keeps a retired connection's catalog out of provider display and mutation policy", async () => {
+    const old = createDeferred();
+    const current = createDeferred();
+    const { page, request, runtimeConfig, setGatewayConnection } = createTalkMutationHarness({
+      defaultModel: "realtime-model",
+      transport: "provider-websocket",
+      catalogRequest: (index, catalog) =>
+        (index === 1 ? old.promise : current.promise).then<TalkCatalogResult>(() => ({
+          ...catalog,
+          realtime: {
+            ...catalog.realtime,
+            providers: catalog.realtime.providers.map((provider) =>
+              provider.id === "openai"
+                ? {
+                    ...provider,
+                    label: index === 1 ? "Old provider" : "Current provider",
+                    transports: index === 1 ? ["webrtc"] : ["provider-websocket"],
+                  }
+                : provider,
+            ),
+          },
+        })),
+    });
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(1));
+    setGatewayConnection(true, "wss://replacement.example.test");
+    await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+    current.resolve();
+    await waitForSolid(() => expect(page.textContent).toContain("Current provider"));
+    old.resolve();
+    await request.mock.results[0]?.value;
+    flush();
+    expect(page.textContent).not.toContain("Old provider");
+    page.changeProvider("openai");
+    expect(runtimeConfig.removeFormValue).not.toHaveBeenCalledWith([
+      "talk",
+      "realtime",
+      "transport",
+    ]);
+  });
+});
+
 describe("Talk device and voice wake settings", () => {
   it.each([true])(
     "renders only published iOS voice controls and routes edits to native owners (minimal: %s)",
@@ -350,6 +422,30 @@ describe("Talk device and voice wake settings", () => {
       expect(section.querySelector("select, button")).toBeNull();
     },
   );
+
+  it.each(["retry", "replacement"])("isolates trigger reads on %s", async (mode) => {
+    const pending = createDeferred<{ triggers: string[] }>();
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(pending.promise)
+      .mockResolvedValue({ triggers: ["new trigger"] });
+    const { page, setGatewayConnection } = createTalkMutationHarness({ voiceWakeRequest: request });
+    const alert = () => page.querySelector("[role='alert']");
+    await waitForSolid(() => expect(page.querySelector(".model-picker")).not.toBeNull());
+    expect(page.querySelector("textarea")).toBeNull();
+    if (mode === "retry") {
+      pending.reject(new Error("trigger read unavailable"));
+      await waitForSolid(() => expect(alert()?.textContent).toContain("trigger read unavailable"));
+      alert()?.querySelector<HTMLButtonElement>("button")?.click();
+    } else {
+      setGatewayConnection(false);
+      setGatewayConnection(true, "wss://replacement-gateway.example.test");
+      pending.reject(new Error("retired Gateway read"));
+    }
+    await waitForSolid(() => expect(page.querySelector("textarea")?.value).toBe("new trigger"));
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(alert()).toBeNull();
+  });
 
   it("retains rejected trigger edits and gives a visible retry action", async () => {
     const voiceWakeRequest = vi.fn(async (method: string) => {

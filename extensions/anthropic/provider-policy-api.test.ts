@@ -7,6 +7,7 @@ import {
   deprecatedProfileIds,
   normalizeConfig,
   resolveThinkingProfile,
+  resolveProactiveCadenceMs,
 } from "./provider-policy-api.js";
 
 function createModel(id: string, name: string): ModelDefinitionConfig {
@@ -110,4 +111,16 @@ describe("anthropic provider policy public artifact", () => {
   it("does not expose Anthropic thinking profiles for unrelated providers", () => {
     expect(resolveThinkingProfile({ provider: "openai", modelId: "claude-opus-4-7" })).toBeNull();
   });
+});
+
+it.each([
+  ["api_key", 1_800_000],
+  ["oauth", 3_600_000],
+] as const)("resolves %s proactive cadence without writing retired config", (mode, cadence) => {
+  const config: OpenClawConfig = {
+    auth: { profiles: { "anthropic:default": { provider: "anthropic", mode } } },
+    agents: { defaults: {} },
+  };
+  expect(resolveProactiveCadenceMs({ config, env: {} })).toBe(cadence);
+  expect(applyConfigDefaults({ config, env: {} }).agents?.defaults).not.toHaveProperty("heartbeat");
 });

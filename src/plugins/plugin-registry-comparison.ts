@@ -23,9 +23,16 @@ export function isContainedPluginPath(
     const target = path.resolve(inputPath);
     for (let cursor = target; ; cursor = path.dirname(cursor)) {
       try {
-        fs.lstatSync(cursor);
+        // Successful realpath facts already establish existence within this comparison.
+        if (!cache.has(cursor)) {
+          fs.lstatSync(cursor);
+        }
         const realCursor = safeRealpathSync(cursor, cache);
-        return realCursor ? path.resolve(realCursor, path.relative(cursor, target)) : null;
+        return realCursor
+          ? cursor === target
+            ? realCursor
+            : path.resolve(realCursor, path.relative(cursor, target))
+          : null;
       } catch {
         if (cursor === path.dirname(cursor)) {
           return null;

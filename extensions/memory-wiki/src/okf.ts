@@ -15,6 +15,7 @@ import { appendMemoryWikiLog } from "./log.js";
 import { forEachMarkdownCodeRange } from "./markdown-links.js";
 import {
   createWikiPageFilename,
+  extractHumanNotesBlock,
   HUMAN_START_MARKER,
   HUMAN_END_MARKER,
   preserveHumanNotesBlock,
@@ -364,9 +365,12 @@ async function removeStaleOkfConceptPages(params: {
     if (params.currentPagePaths.has(pagePath)) {
       continue;
     }
-    const raw = await vault.readText(pagePath).catch(() => "");
+    const raw = await readExistingWikiPageUtf8(vault, pagePath, () => "");
     const parsed = parseWikiMarkdown(raw);
-    if (asNullableRecord(parsed.frontmatter.okf)?.bundleKey === params.bundleKey) {
+    if (
+      asNullableRecord(parsed.frontmatter.okf)?.bundleKey === params.bundleKey &&
+      !extractHumanNotesBlock(raw, { producerMarkdown: true })
+    ) {
       await vault.remove(pagePath);
       removedPagePaths.push(pagePath);
     }

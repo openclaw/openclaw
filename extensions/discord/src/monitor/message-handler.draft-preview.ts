@@ -4,6 +4,7 @@ import {
   type ChannelProgressDraftLine,
   createChannelProgressDraftCompositor,
   createLivePreviewLifecycle,
+  resolveChannelPreviewStreamMode,
   resolveChannelDraftStreamingChunking,
   resolveChannelStreamingBlockEnabled,
   resolveChannelStreamingPreviewCommandText,
@@ -27,7 +28,6 @@ import {
   withDiscordRequestAuthority,
 } from "../internal/request-authority.js";
 import { DISCORD_TEXT_CHUNK_LIMIT } from "../outbound-adapter.js";
-import { resolveDiscordPreviewStreamMode } from "../preview-streaming.js";
 import { retainDiscordProgressDraft } from "./message-handler.progress-continuation.js";
 
 type DraftReplyReference = {
@@ -55,7 +55,7 @@ export function createDiscordDraftPreviewController(params: {
   // Retained work restores this scope, never a settled requester or child tool scope.
   const runInChannelScope = AsyncLocalStorage.snapshot();
   const assertChannelAuthority = captureDiscordRequestAuthority();
-  const discordStreamMode = resolveDiscordPreviewStreamMode(params.discordConfig);
+  const discordStreamMode = resolveChannelPreviewStreamMode(params.discordConfig, "progress");
   // Provider drafts are visible before outbound modifiers run. Keep them off whenever a hook
   // can rewrite or cancel so the original payload cannot flash before durable delivery.
   const hookRunner = getGlobalHookRunner();

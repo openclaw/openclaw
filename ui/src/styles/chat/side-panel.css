@@ -349,7 +349,7 @@ openclaw-chat-detail-panel,
   flex: 1 1 auto;
   overflow: hidden;
   color: var(--text);
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -544,6 +544,12 @@ openclaw-chat-detail-panel,
 
 .sidebar-region--desktop .side-panel__frame-action {
   color: var(--muted);
+}
+
+.sidebar-region--desktop .side-panel__frame-action > .oc-menu-item__label {
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .sidebar-region--desktop .side-panel__frame-action:is(:hover, :focus-visible) {

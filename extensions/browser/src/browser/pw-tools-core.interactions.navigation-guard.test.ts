@@ -23,7 +23,7 @@ const privateFrameUrl = "http://169.254.169.254/latest/meta-data/";
 const localPageUrl = "http://127.0.0.1:9222/json/version";
 const strictClick = () => mod.clickViaPlaywright({ ...strict(), ref: "1" });
 const hoverAction = { kind: "hover", ref: "1" } as const;
-const downloadGrace = { firstEventGraceMs: 250, maxWaitMs: 1_000, quietMs: 250 };
+const downloadGrace = { firstEventGraceMs: 250 };
 function act(
   action: Parameters<typeof executeActViaPlaywright>[0]["action"],
   options: Pick<Parameters<typeof executeActViaPlaywright>[0], "signal" | "evaluateEnabled"> = {},

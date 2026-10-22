@@ -375,6 +375,9 @@ function Confirmation(props: { view: MemoryImportViewProps; backfill?: boolean }
             )}
           </div>
           <openclaw-modal-actions class="exec-approval-actions">
+            <button class="btn" disabled={busy()} onClick={cancel}>
+              {t("common.cancel")}
+            </button>
             <button
               class={["btn", { danger: props.backfill, primary: !props.backfill }]}
               data-test-id={
@@ -388,9 +391,6 @@ function Confirmation(props: { view: MemoryImportViewProps; backfill?: boolean }
               }
             >
               {t(props.backfill ? "memoryImport.backfill.rollback" : "memoryImport.confirmImport")}
-            </button>
-            <button class="btn" disabled={busy()} onClick={cancel}>
-              {t("common.cancel")}
             </button>
           </openclaw-modal-actions>
         </div>
@@ -412,7 +412,7 @@ function IntroSection(props: { view: MemoryImportViewProps }) {
         <button
           class="btn btn--sm"
           disabled={!props.view.connected || busy()}
-          onClick={props.view.onRefresh}
+          onClick={() => props.view.onRefresh()}
         >
           {t(props.view.loading ? "common.refreshing" : "common.refresh")}
         </button>
@@ -497,7 +497,7 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
                   class="btn"
                   data-test-id="memory-backfill-preview"
                   disabled={!props.view.connected || busy()}
-                  onClick={props.view.onBackfillPreview}
+                  onClick={() => props.view.onBackfillPreview()}
                 >
                   {t(
                     props.view.backfillBusy === "preview"
@@ -509,7 +509,7 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
                   class="btn primary"
                   data-test-id="memory-backfill-apply"
                   disabled={!props.view.connected || busy()}
-                  onClick={props.view.onBackfillApply}
+                  onClick={() => props.view.onBackfillApply()}
                 >
                   {t(
                     props.view.backfillBusy === "apply"
@@ -521,7 +521,7 @@ function BackfillSection(props: { view: MemoryImportViewProps }) {
                   class="btn danger"
                   data-test-id="memory-backfill-rollback"
                   disabled={!props.view.connected || busy()}
-                  onClick={props.view.onBackfillRollbackRequest}
+                  onClick={() => props.view.onBackfillRollbackRequest()}
                 >
                   {t("memoryImport.backfill.rollback")}
                 </button>

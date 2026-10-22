@@ -21,6 +21,8 @@ import {
   createTestProjection,
   holdForeground,
 } from "./session-row-projection.read-fixture.test-support.js";
+import { requestSessionRow } from "./session-row-projection.test-support.js";
+import { replaceSessionRowFacts } from "./session-utils-row.js";
 import { projectWorkerSessionPlacement } from "./worker-environments/placement-projector.js";
 import type { WorkerSessionPlacementProjection } from "./worker-environments/placement-read-projection.types.js";
 import {
@@ -86,14 +88,15 @@ function describeSession(
   respond = vi.fn(),
 ) {
   const completion = Promise.resolve(
-    sessionByKeyReadHandlers["sessions.describe"]!({
-      req: { type: "req", id, method: "sessions.describe" },
-      params: { key },
-      client: null,
+    requestSessionRow(
+      sessionByKeyReadHandlers["sessions.describe"]!,
       context,
-      isWebchatConnect: () => false,
+      "sessions.describe",
+      { key },
       respond,
-    }),
+      null,
+      id,
+    ),
   );
   return { respond, completion };
 }
@@ -595,20 +598,22 @@ it("prepares only the private response's child selections before consumption", a
       if (!row) {
         throw new Error("Expected the private parent fixture");
       }
-      row.materialized.row.swarm = {
-        otherActiveGroups: 0,
-        groups: [
-          {
-            groupId: "private-group",
-            createdAt: 1,
-            queued: 0,
-            running: 1,
-            done: 0,
-            failed: 0,
-            children: [{ sessionKey: childKey, status: "running" }],
-          },
-        ],
-      };
+      row.materialized = replaceSessionRowFacts(row.materialized, {
+        swarm: {
+          otherActiveGroups: 0,
+          groups: [
+            {
+              groupId: "private-group",
+              createdAt: 1,
+              queued: 0,
+              running: 1,
+              done: 0,
+              failed: 0,
+              children: [{ sessionKey: childKey, status: "running" }],
+            },
+          ],
+        },
+      });
       return row;
     });
     const select = vi.spyOn(projection, "selectEntries").mockImplementation(() => {

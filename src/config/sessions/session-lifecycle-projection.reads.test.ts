@@ -10,19 +10,21 @@ import type { SessionLifecycleProjectionCommit } from "./session-lifecycle-proje
 import { bindSqliteWorkerBackend } from "./session-lifecycle-projection.worker.js";
 import { SessionEntryLifecycleUpsertConflictError } from "./session-mutation-conflict-error.js";
 
+function bindBackend(
+  { db: database, path: databasePath }: ReturnType<typeof openOpenClawAgentDatabase>,
+  environment: Parameters<typeof runWithSqliteWorkerStateContext>[0]["environment"],
+) {
+  return runWithSqliteWorkerStateContext({ environment }, () =>
+    bindSqliteWorkerBackend({ agentId: "main" }, { database, databasePath }),
+  );
+}
+
 it("keeps upsert preparation current without a read transaction and retains removal snapshots", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const database = openOpenClawAgentDatabase({ agentId: "main" });
     const sessionKey = "agent:main:lifecycle-planning";
     writeSessionEntry(database, sessionKey, { sessionId: "original", updatedAt: 1 });
-    const backend = runWithSqliteWorkerStateContext(
-      { environment: { ...state.env, OPENCLAW_STATE_DIR: state.stateDir } },
-      () =>
-        bindSqliteWorkerBackend(
-          { agentId: "main" },
-          { database: database.db, databasePath: database.path },
-        ),
-    );
+    const backend = bindBackend(database, { ...state.env, OPENCLAW_STATE_DIR: state.stateDir });
     const input = { removals: [], upserts: [{ sessionKey }], archiveDirectory: state.root };
     backend.execute({ type: "prepare", input });
     writeSessionEntry(database, sessionKey, { sessionId: "current", updatedAt: 2 });
@@ -39,9 +41,7 @@ it("keeps upsert preparation current without a read transaction and retains remo
         input: { ...input, removals: [{ sessionKey, expectedSessionId: "current" }] },
       });
       expect(removal).toMatchObject({
-        selected: {
-          projectedRemovals: [{ sessionKey, expectedEntry: { sessionId: "current" } }],
-        },
+        selected: { projectedRemovals: [{ sessionKey, expectedEntry: { sessionId: "current" } }] },
       });
       expect(exec.mock.calls.map(([sql]) => sql)).toEqual(["BEGIN", "COMMIT"]);
       backend.assertSettled?.();
@@ -56,14 +56,10 @@ it("reuses lifecycle actor facts and falls back after another writer or actor re
   await withActor(async (f) => {
     const sessionKey = f.target.sessionKey;
     const original = f.read().entry!;
-    const backend = runWithSqliteWorkerStateContext(
-      { environment: { ...process.env, OPENCLAW_STATE_DIR: resolveStateDir() } },
-      () =>
-        bindSqliteWorkerBackend(
-          { agentId: "main" },
-          { database: f.database.db, databasePath: f.database.path },
-        ),
-    );
+    const backend = bindBackend(f.database, {
+      ...process.env,
+      OPENCLAW_STATE_DIR: resolveStateDir(),
+    });
     const input = {
       removals: [],
       upserts: [{ sessionKey, relatedSessionKeys: [] }],
@@ -85,17 +81,17 @@ it("reuses lifecycle actor facts and falls back after another writer or actor re
         ? "entries"
         : null,
     );
-    try {
+    const expectPrepared = (entry: Partial<typeof original>) =>
       expect(backend.execute({ type: "prepare", input })).toMatchObject({
-        store: { [sessionKey]: original },
+        store: { [sessionKey]: entry },
       });
+    try {
+      expectPrepared(original);
       f.commitLifecycle(commit);
       expect(reads.counts.entries).toBe(0);
 
       writeSessionEntry(f.database, sessionKey, { ...original, label: "concurrent winner" });
-      expect(backend.execute({ type: "prepare", input })).toMatchObject({
-        store: { [sessionKey]: { label: "concurrent winner" } },
-      });
+      expectPrepared({ label: "concurrent winner" });
       expect(reads.counts.entries).toBeGreaterThan(0);
       expect(() => f.commitLifecycle(commit)).toThrow(SessionEntryLifecycleUpsertConflictError);
       expect(f.nativeEntry()?.label).toBe("concurrent winner");
@@ -116,9 +112,7 @@ it("reuses lifecycle actor facts and falls back after another writer or actor re
       expect(f.read().entry?.label).toBe("lifecycle winner");
       const beforeRestart = reads.counts.entries;
       f.restartActor();
-      expect(backend.execute({ type: "prepare", input })).toMatchObject({
-        store: { [sessionKey]: { label: "lifecycle winner" } },
-      });
+      expectPrepared({ label: "lifecycle winner" });
       expect(reads.counts.entries).toBeGreaterThan(beforeRestart);
       backend.assertSettled?.();
     } finally {

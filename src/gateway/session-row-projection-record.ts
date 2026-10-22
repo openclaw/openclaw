@@ -20,7 +20,7 @@ import { resolveSessionPinnedHarnessId } from "../sessions/agent-harness-session
 import type { OpenClawAgentDatabaseIdentity } from "../state/openclaw-agent-db-identity.js";
 import type { SessionRepositoryWorkspaceRecord } from "../state/session-repository-workspaces.types.js";
 import type { readSessionRowFacts } from "./server-methods/session-placement-read-projection.js";
-import { compareSessionEntryPairs } from "./session-list-order.js";
+import { compareSessionEntries } from "./session-list-order.js";
 import { readSessionListSelectionFacts } from "./session-list-target.js";
 import { selectStoredSessionLineage } from "./session-store-key.js";
 import { sessionTitleRequests } from "./session-title-state.js";
@@ -168,7 +168,7 @@ export type Query = {
   key?: string;
   sessionIdOrKey?: string;
   parentSessionKey?: string;
-  sortBy?: Parameters<typeof compareSessionEntryPairs>[2] | null;
+  sortBy?: Parameters<typeof compareSessionEntries>[4] | null;
 };
 export type Inputs = Parameters<typeof rowProjection.readSessionRowInputs>[0];
 export type SnapshotOptions = Pick<Inputs, "now" | "excludedChildKeys"> & {
@@ -412,17 +412,20 @@ export function publishTranscriptFields(
     lastAssistantMessage: fields.lastAssistantMessage,
     fallbackModel,
   });
-  row.materialized.source.lastMessagePreview = fields.lastMessagePreview;
-  row.materialized.row.lastMessagePreview = fields.lastMessagePreview;
-  row.materialized.source.lastAssistantMessage = fields.lastAssistantMessage;
-  row.materialized.row.lastAssistantMessage = fields.lastAssistantMessage;
+  const transcript = {
+    lastMessagePreview: fields.lastMessagePreview,
+    lastAssistantMessage: fields.lastAssistantMessage,
+  };
+  row.materialized = rowProjection.replaceSessionRowFacts(row.materialized, transcript, transcript);
   return true;
 }
 
 export function sort<T extends EntryRow>(rows: T[], sortBy: Query["sortBy"]): T[] {
   return sortBy === null
     ? rows
-    : rows.toSorted((a, b) => compareSessionEntryPairs([a.key, a.entry], [b.key, b.entry], sortBy));
+    : rows.toSorted((a, b) =>
+        compareSessionEntries(a.key, a.selection, b.key, b.selection, sortBy),
+      );
 }
 
 function sameFallbackModelFacts(previous: Row["storedEntry"], current: SessionEntry) {

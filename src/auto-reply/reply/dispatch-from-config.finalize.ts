@@ -77,6 +77,12 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
   const finalReplies = Array.isArray(finalResult) ? finalResult : finalResult ? [finalResult] : [];
   const replies =
     explicitSilence && !heartbeatReply ? retainSilentFinalPayloads(finalReplies) : finalReplies;
+  const scheduledPayload = state.params.replyOptions?.scheduledAutomation?.job.payload;
+  // Automation result assembly already requires a successful, meaningful final.
+  // This opt-in must not enable reasoning blocks before that outcome is known.
+  const finalReasoningEnabled = scheduledPayload
+    ? scheduledPayload.kind === "agentTurn" && scheduledPayload.includeReasoning === true
+    : state.reasoningPayloadsEnabled;
   const queueAdmission = state.replyOperationRunState.admission;
   const collaborativeSteeringRefused =
     queueAdmission?.status === "skipped" &&
@@ -159,10 +165,8 @@ export async function finalizeDispatchAndAudit(state: ExecuteDispatchReadyState)
         reply.text =
           "Your queued message was dropped because the session queue is full. It hasn’t changed the work already in progress. Please send it again after the current response finishes.";
       }
-      // Durable reasoning is a channel-owned lane; generic channels keep the
-      // historical suppression unless they explicitly opt in.
       const laneSuppressed =
-        (reply.isReasoning === true && !state.reasoningPayloadsEnabled) ||
+        (reply.isReasoning === true && !finalReasoningEnabled) ||
         (reply.isCommentary === true && !state.commentaryPayloadsEnabled);
       const sourceSuppressed =
         !laneSuppressed &&

@@ -106,14 +106,14 @@ await runWithFailedTrailer("macos-native", async () => {
     | {
         executable: string;
         testBundle: string;
-        filters: [string, string];
+        filters: string[];
       }
     | undefined;
   if (appHost) {
-    const [appPath, testBundle, retryFilter, relaunchFilter] = args;
-    if (args.length !== 4 || !appPath || !testBundle || !retryFilter || !relaunchFilter) {
+    const [appPath, testBundle, ...filters] = args;
+    if (!appPath || !testBundle || filters.length === 0 || filters.some((filter) => !filter)) {
       throw new Error(
-        "App-host mode requires a staged app, built test bundle, Retry filter, and relaunch filter.",
+        "App-host mode requires a staged app, built test bundle, and at least one test filter.",
       );
     }
     const app = fs.realpathSync(appPath);
@@ -123,7 +123,7 @@ await runWithFailedTrailer("macos-native", async () => {
     appHostConfiguration = {
       executable: path.join(app, "Contents/MacOS/OpenClawRecoveryTestHost"),
       testBundle,
-      filters: [retryFilter, relaunchFilter],
+      filters,
     };
   }
   if (profileMode !== "default" && profileMode !== "named" && !appHost) {

@@ -321,10 +321,21 @@ The client retries ordinary connection loss automatically with randomized backof
 retry waits 800–960 ms, and sustained failures spread retries across 12.5–15 seconds.
 Server retry hints remain minimum waits and can extend beyond that normal cap, with up to
 20% additional spread. The Gateway's WebSocket ping/pong keepalive detects dead
-transports. Delayed application heartbeats on a busy Gateway do not by themselves
-reconnect an open tab. Returning to a suspended tab still recovers a connection
-after two advertised heartbeat intervals of silence. An individual request
-timeout does not reset the socket. Reconnecting does not replay
+peers on the server, but browsers cannot observe those frames or receive a close
+over a silently dead link. A connected, visible tab checks inbound silence every
+five seconds. After two advertised heartbeat intervals (60 seconds by default),
+or 15 seconds after the first request sent since the last inbound frame, it sends
+one read-only `health` request without active integration probing. Sent requests
+still count after they time out; any inbound event or response resets that clock.
+It reconnects only if no event or response
+arrives during the next 10 seconds. A locally closed socket is retired immediately;
+recovery does not wait for an unreachable peer to finish the WebSocket closing handshake.
+Any inbound traffic proves the link is alive;
+a responsive but busy Gateway is not reconnected just because application ticks
+are delayed. Hidden tabs do not probe; returning to a suspended tab uses the
+existing wake recovery after two advertised heartbeat intervals of silence.
+An individual request timeout does not reset a socket that is receiving traffic.
+Reconnecting does not replay
 arbitrary requests; read owners retry their reads, and write owners reconcile
 uncertain outcomes. Gateway startup hints keep their separate bounded timing
 (100–2000 ms), with up to 20% additional spread across reconnecting tabs.
@@ -511,9 +522,11 @@ while the connection is available, without sending the message again. Timed-out
 receipt reads retry with backoff; they do not release later queued messages ahead
 of the uncertain input or overwrite a newer draft.
 
-If the connection drops before a send is acknowledged, reconnect checks the transcript and
-the session's active or last run ID for delivery proof. A matching run confirms receipt even
-before its transcript row appears. Without proof, an attempted message stays in the conversation
+If the connection drops before a send is acknowledged, reconnect checks delivery proof.
+Ordinary chat sends require an exact input receipt or a user transcript row whose
+idempotency key is the submission's `runId` or `runId:user`. A matching active or
+last run ID alone confirms only commands, not ordinary chat sends.
+Without proof, an attempted message stays in the conversation
 with an amber **Delivery unconfirmed** footer, **Retry**, and **Discard**. Check the conversation and retry only
 if the message did not arrive. Discard removes the pending copy from this browser's outbox; it does not
 undo or cancel work the Gateway already accepted. Later queued messages stay paused until the earlier

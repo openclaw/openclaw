@@ -18,6 +18,7 @@ import {
   sessionPullRequestsForGateway,
 } from "../../lib/session-pull-requests.ts";
 import { createSessionCapability, type SessionCapability } from "../../lib/sessions/index.ts";
+import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createApplicationGateway } from "../../test-helpers/application-context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -41,15 +42,16 @@ import {
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import { reduceChatSessionProjection } from "./history-merge.ts";
 
+const repository = { owner: "openclaw", repo: "openclaw" };
+const branch = { ...repository, branch: "feature/demo" };
+
 function pullRequest(
   number: number,
   state: ControlUiSessionPullRequest["state"],
 ): ControlUiSessionPullRequest {
   return {
     number,
-    owner: "openclaw",
-    repo: "openclaw",
-    branch: "feature/demo",
+    ...branch,
     title: `Pull request ${number}`,
     url: `https://github.com/openclaw/openclaw/pull/${number}`,
     state,
@@ -171,12 +173,8 @@ function createPublicationPane(
   state.assistantAgentId = agentId;
   state.sessionsResultAgentId = agentId;
   state.sessionsResult = {
-    ts: 1,
-    path: "",
-    count: 1,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
     // Scoped lists may carry the owner only at the result/route level.
-    sessions: [
+    ...sessionsResult([
       {
         key: sessionKey,
         sessionId: "publication",
@@ -188,7 +186,8 @@ function createPublicationPane(
         kind: scope ? "global" : "direct",
         updatedAt: 1,
       },
-    ],
+    ]),
+    path: "",
   };
   const settled = async () => {
     await vi.waitFor(() => {
@@ -287,12 +286,11 @@ it.each(["unavailable", "rate-limited"] as const)(
   async (status) => {
     const { pane, push, epoch, setPullRequestSummary } = createPullRequestPane();
     const key = "agent:main:current";
-    const repository = { owner: "openclaw", repo: "openclaw" };
     pane.refreshSessionPullRequests();
     await Promise.resolve();
     push({
       repository,
-      branch: { ...repository, branch: "feature/demo" },
+      branch,
       pullRequests: [pullRequest(111532, "open")],
     });
     const failure = { pullRequests: [], rateLimited: status === "rate-limited", status };
@@ -316,7 +314,7 @@ it.each(["ready", "rate-limited"] as const)(
     pane.refreshSessionPullRequests();
     await Promise.resolve();
     emitSnapshot(emitGatewayEvent, state.sessionKey, {
-      repository: { owner: "openclaw", repo: "openclaw" },
+      repository,
       pullRequests: [],
       rateLimited: status === "rate-limited",
       status,
@@ -339,7 +337,7 @@ it.each(["ready", "rate-limited"] as const)(
     }
     await catalog.refresh();
     pane.render();
-    expect(pane.chatProps?.githubRepo).toEqual({ owner: "openclaw", repo: "openclaw" });
+    expect(pane.chatProps?.githubRepo).toEqual(repository);
     expect(pane.chatProps?.pullRequestsStatus).toBe(status);
     if (status === "ready") {
       expect(pane.chatProps?.githubRepositories).toEqual([{ aliases: ["ClawSweeper"] }]);
@@ -431,11 +429,12 @@ it.each(["shared", "personal"] as const)(
   },
 );
 
-it.each(["truncated history", "merged", "empty rate-limited"])(
+it.each(["truncated history", "merged", "empty rate-limited", "withdrawn rate-limited"])(
   "publishes pushed PR summaries: %s",
   async (mode) => {
     const refresh = mode === "truncated history";
-    const rateLimited = mode === "empty rate-limited";
+    const discardPrevious = mode === "withdrawn rate-limited";
+    const rateLimited = mode === "empty rate-limited" || discardPrevious;
     const pullRequests = refresh
       ? [
           pullRequest(999, "draft"),
@@ -444,9 +443,11 @@ it.each(["truncated history", "merged", "empty rate-limited"])(
       : rateLimited
         ? []
         : [pullRequest(111532, "merged")];
-    const summary = refresh
-      ? { numbers: [...Array.from({ length: 19 }, (_, i) => i + 1), 999], state: "draft" }
-      : { numbers: [111532], state: "merged" };
+    const summary = discardPrevious
+      ? undefined
+      : refresh
+        ? { numbers: [...Array.from({ length: 19 }, (_, i) => i + 1), 999], state: "draft" }
+        : { numbers: [111532], state: "merged" };
     const { pane, request, push, epoch, setPullRequestSummary } = createPullRequestPane();
     pane.refreshSessionPullRequests({ refresh });
     await Promise.resolve();
@@ -462,9 +463,10 @@ it.each(["truncated history", "merged", "empty rate-limited"])(
       pullRequests,
       rateLimited,
       status: rateLimited ? "rate-limited" : "ready",
+      discardPrevious: discardPrevious ? true : undefined,
     });
     await Promise.resolve();
-    if (rateLimited) {
+    if (rateLimited && !discardPrevious) {
       expect(setPullRequestSummary).not.toHaveBeenCalled();
     } else {
       expect(setPullRequestSummary).toHaveBeenCalledWith("agent:main:current", summary, epoch);
@@ -481,16 +483,14 @@ it.each(["session switch", "disconnect", "branch switch"] as const)(
     await Promise.resolve();
     push({
       branch: {
-        owner: "openclaw",
-        repo: "openclaw",
-        branch: "feature/demo",
+        ...branch,
         createUrl: "https://github.com/openclaw/openclaw/pull/new/feature/demo",
       },
       pullRequests: [pullRequest(111532, "open")],
     });
     await Promise.resolve();
     expect(pane.sessionPullRequests).toHaveLength(1);
-    expect(pane.githubRepo).toEqual({ owner: "openclaw", repo: "openclaw" });
+    expect(pane.githubRepo).toEqual(repository);
     if (change === "disconnect") {
       pane.applyGatewaySnapshot({ ...pane.context.gateway.snapshot, phase: "reconnecting" });
     } else {

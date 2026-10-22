@@ -24,7 +24,7 @@
   display: block;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 
@@ -57,7 +57,6 @@
   flex: 1;
   color: var(--text);
   text-overflow: clip;
-  mask-image: linear-gradient(to right, currentColor calc(100% - 8px), transparent);
 }
 
 .chat-details[data-desktop] .chat-pr--unpublished .chat-pr__diff {
@@ -85,11 +84,6 @@
 
 .chat-pr-branch-menu .chat-pr__create:hover {
   background: var(--bg-hover);
-}
-
-/* Legacy Details keeps its inline title and ellipsis outside the desktop host. */
-.chat-details:not([data-desktop]) .chat-pr__title > .hover-marquee__text {
-  display: contents;
 }
 
 .chat-details .chat-pr.chat-pr--summary .chat-pr__icon {

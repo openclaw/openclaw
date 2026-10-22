@@ -189,8 +189,18 @@ function expectRead(widgetClient: WidgetClient, docId: string) {
 }
 
 function expectRecovering(view: OpenClawCanvasWidgetView) {
-  expect(view.querySelector('[role="alert"]')).toBeNull();
-  expect(view.querySelector('[role="status"]')?.textContent).toContain("recover automatically");
+  expect(alert(view)).toBeNull();
+  expect(notice(view)).toContain("recover automatically");
+}
+
+const alert = (view: Element) => view.querySelector('[role="alert"]');
+const notice = (view: Element) => view.querySelector('[role="status"]')?.textContent;
+function commitWidget(view: OpenClawCanvasWidgetView, sessionKey = view.sessionKey) {
+  gateways.get(view)!.emit({
+    type: "event",
+    event: "session.message",
+    payload: { sessionKey, message: { role: "toolResult", toolName: "show_widget" } },
+  });
 }
 
 describe("Canvas widget view", () => {
@@ -363,7 +373,7 @@ describe("Canvas widget view", () => {
     await transition(view, "reconnecting");
     expect(view.querySelector("iframe")).toBe(frame);
     expect(view.documentHtml).toBe(documentView.html);
-    expect(view.querySelector('[role="alert"]')).toBeNull();
+    expect(alert(view)).toBeNull();
     expect(client.request).toHaveBeenCalledOnce();
     expect(replacement.request).not.toHaveBeenCalled();
     await transition(view, "connected");
@@ -476,7 +486,6 @@ describe("Canvas widget view", () => {
     const pending = createDeferred<CanvasDocumentViewResult>();
     client.request.mockReturnValueOnce(pending.promise);
     const view = mount(client, "cv_inline", document.body, ["operator.sessions.read"]);
-    const gateway = gateways.get(view)!;
     await settle(view);
     expect(client.request).toHaveBeenLastCalledWith(
       "canvas.document.view",
@@ -492,31 +501,15 @@ describe("Canvas widget view", () => {
       }),
     );
     await settle(view);
-    expect(view.querySelector('[role="status"]')?.textContent).toContain(
-      "Waiting for the widget result",
-    );
-    expect(view.querySelector('[role="alert"]')).toBeNull();
-    gateway.emit({
-      type: "event",
-      event: "session.message",
-      payload: {
-        sessionKey: "agent:main:another",
-        message: { role: "toolResult", toolName: "show_widget" },
-      },
-    });
+    expect(notice(view)).toContain("Waiting for the widget result");
+    expect(alert(view)).toBeNull();
+    commitWidget(view, "agent:main:another");
     expect(client.request).toHaveBeenCalledOnce();
-    gateway.emit({
-      type: "event",
-      event: "session.message",
-      payload: {
-        sessionKey: view.sessionKey,
-        message: { role: "toolResult", toolName: "show_widget" },
-      },
-    });
+    commitWidget(view);
     await settle(view);
     expect(client.request).toHaveBeenCalledTimes(2);
     expect(view.documentHtml).toBe(documentView.html);
-    expect(view.querySelector('[role="alert"]')).toBeNull();
+    expect(alert(view)).toBeNull();
   });
 
   it("replaces an in-flight guest lookup when its result commits", async () => {
@@ -524,34 +517,19 @@ describe("Canvas widget view", () => {
     const stale = createDeferred<CanvasDocumentViewResult>();
     client.request.mockReturnValueOnce(stale.promise);
     const view = mount(client, "cv_inline", document.body, ["operator.sessions.read"]);
-    const gateway = gateways.get(view)!;
     await settle(view);
-    gateway.emit({
-      type: "event",
-      event: "session.message",
-      payload: {
-        sessionKey: view.sessionKey,
-        message: { role: "toolResult", toolName: "show_widget" },
-      },
-    });
+    commitWidget(view);
     await settle(view);
     stale.reject(new GatewayProtocolRequestError({ code: "FORBIDDEN", message: "Access denied" }));
     await settle(view);
     expect(client.request).toHaveBeenCalledTimes(2);
     expect(view.documentHtml).toBe(documentView.html);
-    expect(view.querySelector('[role="alert"]')).toBeNull();
+    expect(alert(view)).toBeNull();
   });
 
   it("preserves a loaded full-access frame when a result commits", async () => {
     const { view, frame } = await loaded();
-    gateways.get(view)!.emit({
-      type: "event",
-      event: "session.message",
-      payload: {
-        sessionKey: view.sessionKey,
-        message: { role: "toolResult", toolName: "show_widget" },
-      },
-    });
+    commitWidget(view);
     await settle(view);
     expect(view.querySelector("iframe")).toBe(frame);
     expect(client.request).toHaveBeenCalledOnce();
@@ -581,7 +559,7 @@ describe("Canvas widget view", () => {
       expect(view.querySelector("iframe")).toBeNull();
       expect(frame.isConnected).toBe(false);
       expect(view.documentHtml).toBeUndefined();
-      expect(view.querySelector('[role="alert"]')?.textContent).toContain("Access denied");
+      expect(alert(view)?.textContent).toContain("Access denied");
       expect(view.querySelector("button")).toBeNull();
     },
   );
@@ -618,7 +596,7 @@ describe("Canvas widget view", () => {
     view.preferredHeight = 520;
     await settle(view);
     await vi.advanceTimersByTimeAsync(10_000);
-    expect(view.querySelector('[role="status"]')?.textContent).toContain("recover automatically");
+    expect(notice(view)).toContain("recover automatically");
     expect(view.querySelector<HTMLElement>('[role="status"]')?.style.minHeight).toBe("520px");
     await vi.advanceTimersByTimeAsync(5_000);
     slowRead.resolve(documentView);
@@ -700,9 +678,7 @@ describe("Canvas widget view", () => {
         sessionKey: view.sessionKey,
         text: `Inline widget "${expectedTitle}" (${docId}) threw a script error after rendering: ${expectedMessage}, line 12, column 7. Fix the script and show the widget again; if show_widget is unavailable in this turn, reply with the corrected widget code and show it on the next turn.`,
       });
-      expect(view.querySelector('[role="status"]')?.textContent).toBe(
-        `Script error: ${expectedMessage}`,
-      );
+      expect(notice(view)).toBe(`Script error: ${expectedMessage}`);
       expect(view.querySelector("iframe")).toBe(frame);
       view.remove();
       const remount = await frameFor(mount(client, docId));
@@ -743,9 +719,7 @@ describe("Canvas widget view", () => {
       const frame = await frameFor(view);
       message(frame, { type: "openclaw:widget-runtime-error", message: "Missing element" });
       await view.updateComplete;
-      expect(view.querySelector('[role="status"]')?.textContent).toBe(
-        "Script error: Missing element",
-      );
+      expect(notice(view)).toBe("Script error: Missing element");
       expect(client.request.mock.calls.filter(([method]) => method === "wake")).toHaveLength(0);
       expect(view.querySelector("iframe")).toBe(frame);
     },

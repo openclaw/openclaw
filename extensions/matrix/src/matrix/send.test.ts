@@ -240,7 +240,7 @@ describe("Matrix formatted chunk boundaries", () => {
     const markdown = `\`<ins>\` \\<u> [x](https://example.test "literal <u>") ${"plain ".repeat(8)}`;
     const chunks = chunksFor(markdown, 20);
 
-    expect(chunks.join("")).toBe(markdown.trim());
+    expect(chunks.join("")).toBe(markdown);
     expect(chunks.join("")).not.toContain("</u>");
   });
 

@@ -82,16 +82,25 @@ describe("worktree Git maintenance", () => {
         ...overrides,
       }),
     );
+  const materialize = (repoRoot: string, names: string[], stateDir = path.dirname(repoRoot)) =>
+    materializeManagedWorktreeFixtures({ env, repoRoot, stateDir, names, now: 1 });
+  async function partialClone(root: string, name = "partial") {
+    const source = await initRepo(root);
+    await requireGit(source, ["config", "uploadpack.allowFilter", "true"]);
+    const repo = path.join(root, name);
+    await requireGit(root, [
+      "clone",
+      "--filter=blob:none",
+      "--no-checkout",
+      pathToFileURL(source).href,
+      repo,
+    ]);
+    return { source, repo };
+  }
   async function fixture(name: string) {
     const root = tempDirs.make(`worktree-${name}-`);
     const repo = await initRepo(root);
-    const [record] = await materializeManagedWorktreeFixtures({
-      env,
-      repoRoot: repo,
-      stateDir: root,
-      names: [name],
-      now: 1,
-    });
+    const [record] = await materialize(repo, [name], root);
     return { root, repo, worktree: record! };
   }
 
@@ -112,13 +121,7 @@ describe("worktree Git maintenance", () => {
     const root = tempDirs.make("worktree-removal-pack-maintenance-");
     const repo = await initRepo(root);
     await requireGit(repo, ["repack", "-a", "-d"]);
-    const records = await materializeManagedWorktreeFixtures({
-      env,
-      repoRoot: repo,
-      stateDir: root,
-      names: ["first", "last"],
-      now: 1,
-    });
+    const records = await materialize(repo, ["first", "last"], root);
     const service = new ManagedWorktreeService({ env });
     const execute = gitExec.executeGitCommand;
     const commands = vi
@@ -299,13 +302,7 @@ describe("worktree Git maintenance", () => {
     await requireGit(repo, ["repack", "-a", "-d"]);
     const currentPacks = (await fs.readdir(packDirectory)).filter((name) => name.endsWith(".idx"));
     expect(currentPacks.every((name) => !oldPacks.has(name))).toBe(true);
-    const [record] = await materializeManagedWorktreeFixtures({
-      env,
-      repoRoot: repo,
-      stateDir: path.dirname(repo),
-      names: ["repair"],
-      now: 1,
-    });
+    const [record] = await materialize(repo, ["repair"]);
     // Reproduce an interrupted pack replacement without removing any reachable objects.
     await fs.writeFile(indexPath, staleIndex);
     await createWorktreeGitMaintenance(env)({});
@@ -420,33 +417,13 @@ describe("worktree Git maintenance", () => {
 
   it("maintains partial clones without fetching missing historical heads", async () => {
     const root = tempDirs.make("worktree-maintenance-partial-clone-");
-    const source = await initRepo(root);
-    await requireGit(source, ["config", "uploadpack.allowFilter", "true"]);
-    const clone = path.join(root, "clone");
-    await requireGit(root, [
-      "clone",
-      "--filter=blob:none",
-      "--no-checkout",
-      pathToFileURL(source).href,
-      clone,
-    ]);
+    const { source, repo: clone } = await partialClone(root, "clone");
     await requireGit(source, ["commit", "--allow-empty", "-m", "historical head"]);
     const missing = await requireGit(source, ["rev-parse", "HEAD"]);
     // A retained branch can outlive the partial clone's locally available objects.
     await fs.writeFile(path.join(clone, ".git", "refs", "heads", "historical"), `${missing}\n`);
     await requireGit(clone, ["config", "maintenance.commit-graph.auto", "-1"]);
-    await insertRegistryWorktree(env, {
-      id: "partial-clone",
-      name: "partial-clone",
-      repoFingerprint: "partial-clone",
-      repoRoot: clone,
-      path: clone,
-      branch: "main",
-      baseRef: "HEAD",
-      ownerKind: "manual",
-      createdAt: 1,
-      lastActiveAt: 1,
-    });
+    await register(clone, "partial-clone", { path: clone, branch: "main" });
     const trace = path.join(root, "maintenance-trace.jsonl");
     vi.stubEnv("GIT_TRACE2_EVENT", trace);
     vi.stubEnv("GIT_NO_LAZY_FETCH", undefined);
@@ -454,13 +431,7 @@ describe("worktree Git maintenance", () => {
     try {
       expect((await new ManagedWorktreeService({ env }).gc()).outcome).toBe("completed");
       expect(await fs.readFile(trace, "utf8")).not.toContain("upload-pack");
-      expect(
-        (
-          await runGit(clone, ["cat-file", "-e", missing], {
-            env: { GIT_NO_LAZY_FETCH: "1", GIT_ALLOW_PROTOCOL: "" },
-          })
-        ).code,
-      ).not.toBe(0);
+      expect((await runGit(clone, ["cat-file", "-e", missing], offlineGit)).code).not.toBe(0);
       await fs.access(
         path.join(clone, ".git", "objects", "info", "commit-graphs", "commit-graph-chain"),
       );
@@ -488,16 +459,7 @@ describe("worktree Git maintenance", () => {
 
   it("consolidates indexed promisor packs without fetching, losing local objects, or removing kept packs", async () => {
     const root = tempDirs.make("worktree-pack-consolidation-");
-    const source = await initRepo(root);
-    await requireGit(source, ["config", "uploadpack.allowFilter", "true"]);
-    const repo = path.join(root, "partial");
-    await requireGit(root, [
-      "clone",
-      "--filter=blob:none",
-      "--no-checkout",
-      pathToFileURL(source).href,
-      repo,
-    ]);
+    const { repo } = await partialClone(root);
     const packDirectory = path.join(repo, ".git", "objects", "pack");
     const missing = await requireGit(repo, ["rev-list", "--objects", "--all", "--missing=print"]);
     expect(missing).toContain("?");
@@ -613,13 +575,7 @@ describe("worktree Git maintenance", () => {
     const repo = await initRepo(root);
     const git = (cwd: string, ...args: string[]) => requireGit(cwd, args);
     await git(repo, "config", "gc.auto", "0");
-    const [survivor, removed] = await materializeManagedWorktreeFixtures({
-      env,
-      stateDir: root,
-      repoRoot: repo,
-      names: ["survivor", "removed"],
-      now: 1,
-    });
+    const [survivor, removed] = await materialize(repo, ["survivor", "removed"], root);
     const base = await git(repo, "rev-parse", "HEAD");
     await git(survivor!.path, "checkout", "--detach");
     await git(survivor!.path, "commit", "--allow-empty", "-m", "reflog-only commit");

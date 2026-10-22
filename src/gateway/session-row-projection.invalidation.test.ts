@@ -302,7 +302,7 @@ it("reuses descendants after parent progress while keeping inherited models curr
             undefined,
             context.resolveGatewayContext,
           ),
-        ).snapshot({
+        ).presentation.snapshot({
           agentId: "main",
           key,
         }).row!;

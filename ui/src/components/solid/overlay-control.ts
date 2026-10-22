@@ -107,5 +107,5 @@ export function useOverlayControl(
       stopHidden?.();
     };
   };
-  return { connect, mountBody, bodyMounted: () => Boolean(disposeBody) };
+  return { connect, bodyMounted: () => Boolean(disposeBody) };
 }

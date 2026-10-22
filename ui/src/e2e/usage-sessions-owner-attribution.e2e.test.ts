@@ -13,7 +13,10 @@ import {
 } from "../../../src/test-utils/openclaw-test-state.ts";
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { evaluateControlUiContext } from "../test-helpers/control-ui-e2e-context.ts";
-import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
+import {
+  controlUiE2eWaitTimeoutMs,
+  waitForControlUiGatewayReady,
+} from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -241,6 +244,8 @@ suite.define(() => {
                   name: `Molty (agent:${agentId})`,
                   exact: true,
                 });
+                // Usage rows can render before the agent-name roster finishes.
+                await chip.waitFor({ state: "attached", timeout: controlUiE2eWaitTimeoutMs });
                 await expect.poll(() => chip.getAttribute("data-agent-id")).toBe(agentId);
                 await expect.poll(() => ownerRow.locator(".agent-row-chip").count()).toBe(1);
               }

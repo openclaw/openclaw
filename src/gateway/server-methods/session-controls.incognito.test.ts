@@ -1,13 +1,21 @@
 import "./tools-effective.test-support.js";
 import "../../test-utils/prepare-compiled-subprocesses.js";
 import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import path from "node:path";
 import { Type } from "typebox";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import {
+  admitModelTurn,
+  completionConfig,
+} from "../../agents/bash-tools.lifecycle.test-support.js";
 import { buildPreparedCliRunContext } from "../../agents/cli-runner.test-helpers.js";
+import { runEmbeddedAgent } from "../../agents/embedded-agent.js";
+import * as sessionEventHandoff from "../../auto-reply/reply/session-event-handoff.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -23,10 +31,15 @@ import { NODE_CLAUDE_SKILLS_CAPABILITY } from "../../infra/node-claude-skill-pro
 import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../../infra/node-commands.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../../infra/system-events.js";
 import { resolveNodeHostGatewayPlatformIdentity } from "../../node-host/gateway-platform-identity.js";
+import { preparePluginMetadataMachineStateAsync } from "../../plugins/installed-plugin-index-record-state.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { tryBeginGatewayRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db-lifecycle.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { resolveApprovalSessionAudienceWithFallback } from "../approval-session-audience.js";
 import { prepareNodeClaudeSkillRuntime } from "../node-claude-skill-runtime.js";
 import { NodeRegistry } from "../node-registry.js";
@@ -44,24 +57,21 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 const { toolsEffectiveInventoryMocks } = await import("./tools-effective.test-support.js");
 const { testing, toolsEffectiveHandlers } = await import("./tools-effective.js");
 
-const { cfg, heartbeat, prepareRegistry, ingress } = vi.hoisted(() => ({
+const { cfg, prepareRegistry, ingress } = vi.hoisted(() => ({
   cfg: {
     agents: { entries: { main: {}, native: {}, sibling: {} } },
     gateway: { terminal: { enabled: true } },
   },
-  heartbeat: vi.fn(),
   ingress: vi.fn(async () => {}),
   prepareRegistry: vi.fn(async () => false),
 }));
-// mock-isolation: Exercise Gateway admission and actor persistence without running a model turn.
+// mock-isolation: Node ingress and model I/O are synthetic; wake admission and actor storage stay real.
 vi.mock("../../commands/agent.js", () => ({ agentCommandFromIngress: ingress }));
+// mock-isolation: Keep model I/O synthetic while the real dispatcher owns wake admission and settlement.
+vi.mock("../../agents/embedded-agent-runner/run.js", () => ({ runEmbeddedAgent: vi.fn() }));
 vi.mock("../../config/io.js", async (original) => ({
   ...(await original<typeof import("../../config/io.js")>()),
   getRuntimeConfig: () => cfg,
-}));
-vi.mock("../../infra/heartbeat-wake.js", async (original) => ({
-  ...(await original<typeof import("../../infra/heartbeat-wake.js")>()),
-  requestHeartbeat: heartbeat,
 }));
 vi.mock("../../agents/subagents/registry/subagent-registry-state.js", async (original) => ({
   ...(await original<
@@ -69,6 +79,15 @@ vi.mock("../../agents/subagents/registry/subagent-registry-state.js", async (ori
   >()),
   prepareOptionalSubagentSessionListReadCache: prepareRegistry,
 }));
+
+await Promise.all([
+  import("../../auto-reply/dispatch.js"),
+  import("../../auto-reply/reply/get-reply-from-config.runtime.js").then((runtime) =>
+    runtime.prewarmConfigDrivenReplyRuntime(),
+  ),
+]);
+const model = vi.mocked(runEmbeddedAgent);
+const wakeReceipts: ReturnType<typeof sessionEventHandoff.enqueueSessionEventForHost>[] = [];
 
 const dirs = useAutoCleanupTempDirTracker(afterAll);
 let env: NodeJS.ProcessEnv;
@@ -88,19 +107,40 @@ function request(method: string, params: Record<string, unknown>): GatewayReques
   };
 }
 
-beforeAll(() => {
+beforeAll(async () => {
   env = { OPENCLAW_STATE_DIR: dirs.make("incognito-session-controls-") };
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
+  const configPath = path.join(env.OPENCLAW_STATE_DIR!, "openclaw.json");
+  vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
+  const completion = completionConfig(path.join(env.OPENCLAW_STATE_DIR!, "workspace"));
+  Object.assign(cfg, {
+    ...completion,
+    agents: { ...completion.agents, entries: cfg.agents.entries },
+  });
+  await fs.writeFile(configPath, JSON.stringify(cfg));
+  openOpenClawStateDatabase();
 });
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv("OPENCLAW_STATE_DIR", env.OPENCLAW_STATE_DIR);
   setRuntimeConfigSnapshot(cfg);
+  // Shared cleanup retires plugin facts, so each case repeats Gateway startup preparation.
+  await preparePluginMetadataMachineStateAsync({ env: process.env });
+  const enqueue = sessionEventHandoff.enqueueSessionEventForHost;
+  vi.spyOn(sessionEventHandoff, "enqueueSessionEventForHost").mockImplementation((...args) => {
+    const receipt = enqueue(...args);
+    wakeReceipts.push(receipt);
+    return receipt;
+  });
+  model.mockReset();
 });
-afterEach(() => {
+afterEach(async () => {
+  for (const receipt of wakeReceipts) {
+    receipt.cancel();
+  }
+  await Promise.allSettled(wakeReceipts.splice(0).map((receipt) => receipt.settled));
   clearRuntimeConfigSnapshot();
   testing.resetToolsEffectiveCacheForTest();
   toolsEffectiveInventoryMocks.resolveEffectiveToolInventory.mockClear();
-  heartbeat.mockClear();
   ingress.mockClear();
   resetSystemEventsForTest();
   vi.restoreAllMocks();
@@ -109,8 +149,37 @@ afterEach(() => {
 afterAll(async () => {
   memorySessionActorOwners.reset();
   await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   vi.unstubAllEnvs();
 });
+
+async function processWake(
+  options: GatewayRequestHandlerOptions,
+  sessionKey: string,
+  text: string,
+) {
+  const original = loadSessionEntry({ sessionKey });
+  assert(original);
+  model.mockImplementationOnce(async (params) => {
+    await admitModelTurn(params);
+    return { payloads: [{ text: "NO_REPLY" }], meta: { durationMs: 1 } };
+  });
+  await systemHandlers["system-event"]!(options);
+  expect(wakeReceipts).toHaveLength(1);
+  await expect(wakeReceipts[0]!.settled).resolves.toMatchObject({
+    status: "completed",
+    executionStarted: true,
+  });
+  expect(options.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
+  expect(model).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      sessionKey,
+      sessionId: original.sessionId,
+      prompt: expect.stringContaining(text),
+    }),
+  );
+  expect(peekSystemEvents(sessionKey)).toEqual([]);
+}
 
 it.each([false, true])(
   "guards actor tool disclosure after catalogue preparation (replaced=%s)",
@@ -260,15 +329,12 @@ it("routes actor system wakes and parent approval audiences without host SQL", a
   });
   const host = observeHostDataSql();
   try {
-    await systemHandlers["system-event"]!(options);
+    await processWake(options, child, "Synthetic wake");
     expect(await resolveApprovalSessionAudienceWithFallback(child, "main")).toEqual([
       child,
       parent,
       grandparent,
     ]);
-    expect(options.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(peekSystemEvents(child)).toEqual(["Synthetic wake"]);
-    expect(heartbeat).toHaveBeenCalledWith(expect.objectContaining({ sessionKey: child }));
     expect(host.queries).toEqual([]);
   } finally {
     host.restore();
@@ -317,13 +383,11 @@ it.each(["agent:native:dashboard:incognito-native-controls"])(
   async (sessionKey) => {
     await replaceSessionEntry(
       { agentId: "native", sessionKey },
-      { sessionId: sessionKey, updatedAt: 1 },
+      { sessionId: sessionKey, updatedAt: Date.now() },
     );
     const before = memorySessionActorOwners.list();
     const options = request("system-event", { text: "Native wake", sessionKey, wake: true });
-    await systemHandlers["system-event"]!(options);
-    expect(options.respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(peekSystemEvents(sessionKey)).toEqual(["Native wake"]);
+    await processWake(options, sessionKey, "Native wake");
     expect(memorySessionActorOwners.list()).toEqual(before);
   },
 );

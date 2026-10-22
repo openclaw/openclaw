@@ -119,6 +119,10 @@ function readHistory(client: Client, sessionKey: string, agentId = REQUESTER_AGE
   });
 }
 
+const poll = <T>(callback: () => T, timeout: number) =>
+  vi.waitFor(callback, { interval: 50, timeout });
+const successfulExecution = { status: "terminal", outcome: { status: "ok" } };
+
 function expectRun(instance: OpenClawTestInstance, expected: object, runId?: string) {
   const runs = loadSubagentRegistryFromSqlite();
   if (!runId) {
@@ -135,7 +139,7 @@ function waitForRun(
   timeout: number,
   runId?: string,
 ) {
-  return vi.waitFor(() => expectRun(instance, expected, runId), { interval: 50, timeout });
+  return poll(() => expectRun(instance, expected, runId), timeout);
 }
 
 afterEach(async () => {
@@ -184,23 +188,20 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
           parentSettled = true;
         };
         void parent.then(onSettled, onSettled);
-        await vi.waitFor(
-          () => {
-            expect(modelServer.requestCount(), instance.logs()).toBe(3);
-            const bodies = modelServer.bodies();
-            expect(
-              bodies.filter(
-                (body) => body.includes(PARENT_PROMPT) && body.includes("function_call_output"),
-              ),
-            ).toHaveLength(1);
-            expect(
-              bodies.filter(
-                (body) => body.includes(CHILD_TASK) && !body.includes("function_call_output"),
-              ),
-            ).toHaveLength(1);
-          },
-          { interval: 50, timeout: 60_000 },
-        );
+        await poll(() => {
+          expect(modelServer.requestCount(), instance.logs()).toBe(3);
+          const bodies = modelServer.bodies();
+          expect(
+            bodies.filter(
+              (body) => body.includes(PARENT_PROMPT) && body.includes("function_call_output"),
+            ),
+          ).toHaveLength(1);
+          expect(
+            bodies.filter(
+              (body) => body.includes(CHILD_TASK) && !body.includes("function_call_output"),
+            ),
+          ).toHaveLength(1);
+        }, 60_000);
         const run = expectRun(instance, {
           requesterAgentId: REQUESTER_AGENT_ID,
           requesterSessionKey: sessionKey,
@@ -240,7 +241,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         await waitForRun(
           instance,
           {
-            execution: { status: "terminal", outcome: { status: "ok" } },
+            execution: successfulExecution,
             completion: { resultText: CHILD_MARKER },
             delivery: { status: "pending" },
           },
@@ -256,7 +257,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         await waitForRun(
           instance,
           {
-            execution: { status: "terminal", outcome: { status: "ok" } },
+            execution: successfulExecution,
             delivery: { status: "delivered" },
           },
           30_000,
@@ -333,29 +334,23 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
         const parent = startParent(client, sessionKey, "private-yield-parent-turn");
         void parent.catch(() => {});
         instance.state.applyEnv();
-        await vi.waitFor(
-          () => {
-            expectRun(instance, {
-              completionTarget: "parent",
-              requesterTurnRunId: "private-yield-parent-turn",
-              execution: { status: "terminal", outcome: { status: "ok" } },
-              completion: { resultText: CHILD_MARKER },
-            });
-            expect(modelServer.countRequestsContaining(CHILD_MARKER)).toBe(0);
-          },
-          { interval: 50, timeout: 60_000 },
-        );
+        await poll(() => {
+          expectRun(instance, {
+            completionTarget: "parent",
+            requesterTurnRunId: "private-yield-parent-turn",
+            execution: successfulExecution,
+            completion: { resultText: CHILD_MARKER },
+          });
+          expect(modelServer.countRequestsContaining(CHILD_MARKER)).toBe(0);
+        }, 60_000);
         // The parent checks the finished child through its real tool before yielding.
         yieldGate.resolve();
         expect(await parent, instance.logs()).toMatchObject({ status: "ok" });
-        const settledRun = await vi.waitFor(
-          () => {
-            const run = expectRun(instance, { delivery: { status: "delivered" } });
-            expect(run.requesterSettleWake).toBeUndefined();
-            return run;
-          },
-          { interval: 50, timeout: 30_000 },
-        );
+        const settledRun = await poll(() => {
+          const run = expectRun(instance, { delivery: { status: "delivered" } });
+          expect(run.requesterSettleWake).toBeUndefined();
+          return run;
+        }, 30_000);
         const receipts = readSessionRows((db) =>
           db
             .selectFrom("session_input_completions")
@@ -434,27 +429,24 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
           if (!restored) {
             const parent = startParent(client, sessionKey, "requester-owner-parent-turn");
             void parent.catch(() => {});
-            await vi.waitFor(
+            await poll(
               () => expect(modelServer.countRequestsContaining(marker)).toBeGreaterThan(0),
-              { interval: 50, timeout: 90_000 },
+              90_000,
             );
             expect(await parent).toMatchObject({ status: "ok" });
           }
           instance.state.applyEnv();
-          await vi.waitFor(
-            () => {
-              const run = expectRun(
-                instance,
-                { delivery: { status: "delivered" } },
-                restored ? RESTORED_RUN_ID : undefined,
-              );
-              if (restored) {
-                expect(run.execution.outcome).toMatchObject({ status: "ok" });
-                expect(run.requesterSettleWake).toBeUndefined();
-              }
-            },
-            { interval: 50, timeout: 25_000 },
-          );
+          await poll(() => {
+            const run = expectRun(
+              instance,
+              { delivery: { status: "delivered" } },
+              restored ? RESTORED_RUN_ID : undefined,
+            );
+            if (restored) {
+              expect(run.execution.outcome).toMatchObject({ status: "ok" });
+              expect(run.requesterSettleWake).toBeUndefined();
+            }
+          }, 25_000);
           const requester = await readHistory(client, sessionKey);
           const other = await readHistory(client, sessionKey, OTHER_AGENT_ID);
           expect(
@@ -489,7 +481,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
           restored ? RESTORED_RUN_ID : undefined,
         );
         if (!restored) {
-          expect(run.execution).toMatchObject({ status: "terminal", outcome: { status: "ok" } });
+          expect(run.execution).toMatchObject(successfulExecution);
           expect(run.requesterSettleWake, logs).toBeUndefined();
         }
       } finally {
@@ -603,11 +595,11 @@ function createTestConfig(baseUrl: string): OpenClawConfig {
   return {
     logging: { file: "${OPENCLAW_STATE_DIR}/logs/requester-owner-e2e.log" },
     plugins: { enabled: false },
+    cron: { enabled: false },
     agents: {
       ownership: "explicit",
       entries: { [OTHER_AGENT_ID]: {}, [REQUESTER_AGENT_ID]: {} },
       defaults: {
-        heartbeat: { every: "0m" },
         maxConcurrent: 8,
         model: { primary: MODEL_REF },
         models: { [MODEL_REF]: { agentRuntime: { id: "openclaw" } } },

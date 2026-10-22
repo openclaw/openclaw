@@ -257,7 +257,6 @@ describe("parent Swarm outcome projection", () => {
       ).not.toHaveProperty("swarm");
       const snapshot = buildGatewaySessionSnapshot({
         sessionRow: { key, kind: "global", updatedAt: 0, swarm },
-        includeSession: true,
       });
       expect(snapshot).not.toHaveProperty("swarm");
       expect(snapshot.session).not.toHaveProperty("swarm");

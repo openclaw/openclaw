@@ -38,7 +38,7 @@ if (!live) {
         config: {
           gateway: { controlUi: { enabled: true } },
           agents: {
-            defaults: { model: "deepseek/deepseek-v4-flash", heartbeat: { every: "0m" } },
+            defaults: { model: "deepseek/deepseek-v4-flash" },
             entries: { main: {} },
           },
           models: { catalogRefresh: { enabled: false } },

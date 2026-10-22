@@ -17,11 +17,8 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const NOW = 10_000;
 const invocation = { agentId: "agent-a", sessionKey: "session-a", sessionId: "conversation-a" };
 
-function grantKey(agentId: string, slug: string) {
-  return createHash("sha256")
-    .update(JSON.stringify([agentId, slug]))
-    .digest("hex");
-}
+const hash = (parts: string[]) => createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+const grantKey = (agentId: string, slug: string) => hash([agentId, slug]);
 
 function configured(slugs: string[]): OnePasswordConfig {
   return {
@@ -45,9 +42,7 @@ function grant(slug: string, agentId = invocation.agentId): StandingGrant {
     slug,
     grantedAtMs: NOW - 1,
     expiresAtMs: NOW + 60_000,
-    targetFingerprint: createHash("sha256")
-      .update(JSON.stringify(["Automation", slug, "credential"]))
-      .digest("hex"),
+    targetFingerprint: hash(["Automation", slug, "credential"]),
   };
 }
 

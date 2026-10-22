@@ -102,13 +102,21 @@ export function invalidateChatMetadataStore(
   commandsChanged = true,
 ): void {
   // Catalog readers share this lifecycle; retire their copies before metadata listeners reload.
+  let matchesCatalog: ChatMetadataInvalidation["matchesCatalog"];
   if (catalogInvalidation === "clear") {
     clearModelCatalogCache(client, { requireSnapshot: true });
+  } else if (catalogInvalidation === "pending") {
+    matchesCatalog = invalidateModelCatalogCache(
+      client,
+      { ...scope, pendingOnly: true },
+      sessionDefaults,
+    );
   } else if (catalogInvalidation === "refresh") {
     invalidateModelCatalogCache(client, scope, sessionDefaults);
   }
   chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults, {
     commandsChanged,
+    matchesCatalog: commandsChanged ? undefined : matchesCatalog,
     retireCatalog: catalogInvalidation === "clear",
   });
 }
@@ -120,6 +128,11 @@ export function invalidateChatMetadataForSessionEvent(
 ): void {
   const source = asNullableRecord(payload);
   const changed = readSessionChangedEvent(source);
+  // Deletion publishes its exact key first. The following broad notice refreshes
+  // roster membership and ancestors, not model choices in unrelated chats.
+  if (!changed && source?.reason === "delete") {
+    return;
+  }
   const session = asNullableRecord(source?.session);
   const agent = session?.agentId ?? source?.agentId;
   const agentId = typeof agent === "string" ? agent : undefined;

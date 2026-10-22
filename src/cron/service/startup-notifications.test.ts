@@ -51,13 +51,11 @@ it.each([
         .get(storeKey, job.id)?.enabled;
     let currentDefault = route === "default" ? "original-agent" : undefined;
     const order: string[] = [];
-    const enqueueSystemEvent = vi.fn(() => {
+    const enqueueSessionEvent = vi.fn(() => {
       expect(readEnabled()).toBe(0);
       order.push("notify");
     });
-    const requestHeartbeat = vi.fn(() => {
-      order.push("heartbeat");
-    });
+    const requestHeartbeat = vi.fn();
     const warn = vi.fn();
     const runner = vi.fn(async () => ({ status: "ok" as const }));
     const resolveDefaultAgentId = vi.fn(() => {
@@ -74,7 +72,7 @@ it.each([
       maxMissedJobsPerRestart: 0,
       // Exercise the actual startup-settlement auto-disable producer on Date overflow.
       missedJobStaggerMs: Number.MAX_SAFE_INTEGER,
-      enqueueSystemEvent,
+      enqueueSessionEvent,
       requestHeartbeat,
       runIsolatedAgentJob: runner,
     });
@@ -115,15 +113,15 @@ it.each([
       expect(state.store?.jobs.find((entry) => entry.id === job.id)?.enabled).toBe(false);
       if (route === "absence") {
         expect(order).toEqual(["commit"]);
-        expect(enqueueSystemEvent).not.toHaveBeenCalled();
+        expect(enqueueSessionEvent).not.toHaveBeenCalled();
         expect(requestHeartbeat).not.toHaveBeenCalled();
         expect(warn).toHaveBeenCalledWith(
           { error: CRON_AGENT_SELECTION_REQUIRED_MESSAGE },
           "cron: post-persist notification failed",
         );
       } else {
-        expect(order).toEqual(["commit", "notify", "heartbeat"]);
-        expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+        expect(order).toEqual(["commit", "notify"]);
+        expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
           expect.stringContaining("was auto-disabled"),
           expect.objectContaining({
             agentId,
@@ -131,9 +129,7 @@ it.each([
             contextKey: `cron:${job.id}:auto-disabled`,
           }),
         );
-        expect(requestHeartbeat).toHaveBeenCalledExactlyOnceWith(
-          expect.objectContaining({ agentId, sessionKey: job.sessionKey, intent: "immediate" }),
-        );
+        expect(requestHeartbeat).not.toHaveBeenCalled();
         if (route !== "default") {
           expect(resolveDefaultAgentId).not.toHaveBeenCalled();
         }

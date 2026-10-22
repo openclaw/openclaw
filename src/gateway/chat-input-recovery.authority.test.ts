@@ -192,7 +192,6 @@ it.for(["steer", "followup"] as const)(
           defaults: {
             workspace: state.workspaceDir,
             skipBootstrap: false,
-            heartbeat: { every: "0m" },
             model: { primary: provider.modelRef },
             models: { [provider.modelRef]: { agentRuntime: { id: "openclaw" } } },
           },

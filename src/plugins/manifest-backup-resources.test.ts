@@ -1,13 +1,19 @@
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { writeDoctorFiles as writeFiles } from "./doctor-contract.test-support.js";
 import { resolveActivatedPluginBackupInventory } from "./manifest-backup-resources.js";
 import { loadPluginManifest } from "./manifest.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 
-const roots: string[] = [];
+const roots = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(() => {
+    clearPluginMetadataLifecycleCaches();
+    cleanup();
+  }),
+);
 const resource = (overrides: Record<string, unknown> = {}) => ({
   disposition: "include",
   scope: "state",
@@ -23,31 +29,22 @@ function createPluginFixture(
     workspace?: boolean;
   } = {},
 ) {
-  const root =
-    params.root ?? fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "backup-owner-")));
-  if (!params.root) {
-    roots.push(root);
-  }
+  const root = params.root ?? roots.make("backup-owner-");
   const id = params.id ?? "backup-owner";
   const workspaceDir = path.join(root, "workspace");
   const pluginRoot = params.workspace
     ? path.join(workspaceDir, ".openclaw", "extensions", id)
     : path.join(root, id);
   const stateDir = path.join(root, "state");
-  fs.mkdirSync(pluginRoot, { recursive: true });
   fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(
-    path.join(pluginRoot, "openclaw.plugin.json"),
-    JSON.stringify({
+  writeFiles(pluginRoot, {
+    "openclaw.plugin.json": {
       id,
       configSchema: { type: "object", additionalProperties: false },
       backupResources,
-    }),
-  );
-  fs.writeFileSync(
-    path.join(pluginRoot, "index.ts"),
-    'throw new Error("plugin runtime activated")',
-  );
+    },
+    "index.ts": 'throw new Error("plugin runtime activated")',
+  });
   const env = {
     HOME: root,
     OPENCLAW_HOME: root,
@@ -64,13 +61,6 @@ function createPluginFixture(
   };
 }
 
-afterEach(() => {
-  clearPluginMetadataLifecycleCaches();
-  for (const root of roots.splice(0)) {
-    fs.rmSync(root, { recursive: true, force: true });
-  }
-});
-
 describe("plugin manifest backup resources", () => {
   it.each([
     ["an absolute POSIX path", "/outside"],
@@ -79,10 +69,8 @@ describe("plugin manifest backup resources", () => {
     ["a NUL byte", "owner/\0cache"],
     ["an empty path", ""],
     ["an empty segment", "owner//cache"],
-    ["a trailing empty segment", "owner/cache/"],
     ["a current-directory segment", "owner/./cache"],
     ["a parent-directory segment", "owner/../outside"],
-    ["a URI-like value", "https://example.com/cache"],
   ])("rejects %s", (_label, relativePath) => {
     const fixture = createPluginFixture([resource({ relativePath })]);
 

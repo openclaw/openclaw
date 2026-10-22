@@ -1,9 +1,7 @@
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { AssistantMessage } from "../llm/types.js";
-import {
-  createTextEndBlockReplyHarness,
-  emitToolRun,
-} from "./embedded-agent-subscribe.e2e-harness.js";
+import { createDeliveryHarness } from "./embedded-agent-subscribe.delivery.test-support.js";
+import { emitToolRun } from "./embedded-agent-subscribe.e2e-harness.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
 
 function ollamaAssistant(text: string, extra?: AssistantMessage["content"]): AssistantMessage {
@@ -15,20 +13,13 @@ function ollamaAssistant(text: string, extra?: AssistantMessage["content"]): Ass
 }
 
 function setup(runId: string) {
-  const onBlockReply = vi.fn();
-  const { emit, subscription } = createTextEndBlockReplyHarness({
+  const harness = createDeliveryHarness({
     runId,
-    onBlockReply,
     blockReplyChunking: { minChars: 4, maxChars: 200 },
   });
-  onTestFinished(() => subscription.unsubscribe());
   return {
-    emit,
-    subscription,
-    onBlockReply,
-    texts: () => onBlockReply.mock.calls.map(([payload]) => payload.text),
-    update: (message: AssistantMessage, assistantMessageEvent: object) =>
-      emit({ type: "message_update", message, assistantMessageEvent }),
+    ...harness,
+    texts: () => harness.onBlockReply.mock.calls.map(([payload]) => payload.text),
   };
 }
 

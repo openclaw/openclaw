@@ -76,7 +76,7 @@ it(
         },
         config: () => ({
           agents: {
-            defaults: { heartbeat: { every: "0m" }, skipBootstrap: true },
+            defaults: { skipBootstrap: true },
             entries: { main: { tools: { allow: ["canvas"] } } },
           },
           plugins: { allow: ["canvas"], entries: { canvas: { enabled: true } } },

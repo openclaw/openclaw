@@ -543,11 +543,9 @@ describe("subagent registry persistence", () => {
         "acknowledged runtime lock remains held; decoded durable row is restart-ready",
       ).toBe(true);
       expect(
-        held?.delivery?.attemptCount,
+        [held?.delivery?.attemptCount, held?.delivery?.payload, held?.delivery?.nextAttemptAt],
         "no deferral before announcement settles",
-      ).toBeUndefined();
-      expect(held?.delivery?.payload).toBeUndefined();
-      expect(held?.delivery?.nextAttemptAt).toBeUndefined();
+      ).toEqual([undefined, undefined, undefined]);
       expect(retryReady, "retry readiness must remain pending while announcement is held").toBe(
         false,
       );
