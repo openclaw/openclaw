@@ -111,6 +111,7 @@ export function CommandPaletteInput(props: CommandPaletteInputProps) {
           ]}
           autofocus
           rows={1}
+          enterkeyhint="enter"
           id={COMMAND_PALETTE_INPUT_ID}
           class="cmd-palette__input"
           aria-label={props.placeholder}

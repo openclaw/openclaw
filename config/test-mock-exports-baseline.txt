@@ -6051,7 +6051,6 @@
 ["src/infra/outbound/delivery-queue.reconnect-drain.test.ts","./delivery-queue-migration.js","eedaf5d7baa742148f63111b642774fa0ada1e6a029d80d1b49f4aade7a1ec54",1]
 ["src/infra/outbound/delivery-queue.recovery.test.ts","../../utils/sleep.js","dc28ab20c0ea2e1d7b667ff01659f615677b92186d572e556be7ebc1c00ffe42",1]
 ["src/infra/outbound/delivery-queue.recovery.test.ts","./channel-resolution.js","59260642b6c0c6cb78034113e06a86cd37901711a965fc06434f19418c4bb6f5",1]
-["src/infra/outbound/format.test.ts","../../channels/plugins/index.js","e375df69ab18c48a55924c1982d58a92f23e0c4c4bc2bba9cf1c8ba35354cb6c",1]
 ["src/infra/outbound/identity.test.ts","../../agents/identity-avatar.js","63dfab994398e67450d97f02d75db1165e253fa8b304ad71f44ba3591245adb8",1]
 ["src/infra/outbound/identity.test.ts","../../agents/identity.js","a5646f91b1a075eff6d0de39a0905e450b17139d5a7ecd1520c1c5c8f1e0157d",1]
 ["src/infra/outbound/message-action-execution.source-reply.test.ts","../../tts/tts.runtime.js","12583d29ff95b807d024eaedea007d3737529b441803c378673ab8a8f6747155",1]

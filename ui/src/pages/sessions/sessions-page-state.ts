@@ -1,4 +1,3 @@
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { onSettled } from "solid-js";
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
@@ -369,17 +368,12 @@ export function createSessionsPage(
   }
 
   function sessionListOptions(context: ApplicationContext, search = state.searchQuery) {
-    return buildSessionsListQuery(context, {
-      activeMinutes: parseStrictPositiveInteger(state.activeMinutes),
-      // The Limit box is an explicit page size, so an unparseable entry falls
-      // back to the page default rather than to the shared roster page size.
-      limit: parseStrictPositiveInteger(state.limit) ?? SESSIONS_PAGE_DEFAULT_LIMIT,
-      includeGlobal: state.includeGlobal,
-      includeUnknown: state.includeUnknown,
-      statusFilter: state.statusFilter,
+    return buildSessionsListQuery(
+      context.agentSelection.state.scopeId,
+      state,
       deepLinkSessionKey,
       search,
-    });
+    );
   }
 
   function bindSessionList(refreshMissing = true): SessionsPageListBinding | undefined {

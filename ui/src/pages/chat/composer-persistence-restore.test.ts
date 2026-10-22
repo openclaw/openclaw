@@ -221,6 +221,25 @@ it.each([false, true])(
   },
 );
 
+it("retires pending restoration on stop and restores again after restart", async () => {
+  const state = createState();
+  const { pending, read, persistence } = pendingRestore(state);
+  await settleStorage();
+  expect(read).toHaveBeenCalledOnce();
+
+  persistence.stop();
+  pending.resolve(foundDraft("Saved draft"));
+  await settleStorage();
+  expect(state.chatMessage).toBe("");
+  expect(load(state, state.sessionKey).snapshot).toBeNull();
+
+  persistence.start();
+  await settleStorage();
+  expect(state.chatMessage).toBe("Saved draft");
+  expect(load(state, state.sessionKey).snapshot?.draft).toBe("Saved draft");
+  expect(read).toHaveBeenCalledTimes(2);
+});
+
 it("captures once per restore admission while pending, settled, reset, and switching scope", async () => {
   const capture = vi.spyOn(durableComposer, "captureDurableChatAttachments");
   const state = createState({ chatMessage: "Saved draft" });
