@@ -44,16 +44,10 @@ describe("waitForTransportReady", () => {
     let attempts = 0;
     const readyPromise = wait({
       timeoutMs: 220,
-      // Deterministic: first attempt at t=0 won't log; second attempt at t=50 will.
+      // First attempt at t=0 won't log; second attempt at t=50 will.
       logAfterMs: 1,
       logIntervalMs: 1_000,
-      check: async () => {
-        attempts += 1;
-        if (attempts > 2) {
-          return { ok: true };
-        }
-        return { ok: false, error: "not ready" };
-      },
+      check: async () => (++attempts > 2 ? { ok: true } : { ok: false, error: "not ready" }),
     });
 
     await vi.advanceTimersByTimeAsync(200);
