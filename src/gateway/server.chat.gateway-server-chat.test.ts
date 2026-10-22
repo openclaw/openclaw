@@ -1,3 +1,5 @@
+// Gateway server chat tests cover WebSocket chat flow, history construction,
+// NO_REPLY handling, agent events, and connected control-UI delivery.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -33,6 +35,7 @@ import { removeChatTestDirectory as removeTempDir } from "./session-test-directo
 import {
   dispatchInboundMessageMock,
   mockGetReplyFromConfigOnce,
+  onceMessage,
   prepareGatewayReplyRuntimeForTest,
   rpcReq,
   testState,
@@ -53,49 +56,37 @@ const gatewaySuite = installGatewayServerChatTestSuite((started) => {
 });
 const {
   expectRecordFields,
-  request,
-  readHistory,
-  sendChat,
   sendChatAndExpectStarted,
   settleGatewayFixture,
   waitForAgentRunDrained,
-  waitForEvent,
   withMainSessionStore,
 } = gatewaySuite;
 
-async function withSessionEntries(
-  entries: Parameters<typeof writeSessionStore>[0]["entries"],
-  run: () => Promise<void>,
-) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-"));
-  testState.sessionStorePath = path.join(dir, "sessions.json");
-  try {
-    await writeSessionStore({ entries });
-    await run();
-  } finally {
-    // Detached work must finish before retiring its store, including after failed assertions.
-    await settleGatewayFixture();
-    testState.sessionStorePath = undefined;
-    await removeTempDir(dir);
-  }
-}
-
 describe("gateway server chat", () => {
   const waitForChatEvent = (runId: string, state = "final") =>
-    waitForEvent("chat", { runId, state });
+    onceMessage(
+      ws,
+      (event) =>
+        event.type === "event" &&
+        event.event === "chat" &&
+        event.payload?.state === state &&
+        event.payload?.runId === runId,
+      8_000,
+    );
 
   test("chat.send rejects archived sessions before dispatch", async () => {
     await withMainSessionStore(
       async () => {
         dispatchInboundMessageMock.mockClear();
-        expect(
-          await sendChat("proof-chat-archived-session", "blocked while archived"),
-        ).toMatchObject({
-          ok: false,
-          error: {
-            code: "INVALID_REQUEST",
-            message: 'Session "agent:main:main" is archived. Restore it before starting new work.',
-          },
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "blocked while archived",
+          idempotencyKey: "proof-chat-archived-session",
+        });
+        expect(res.ok).toBe(false);
+        expect(res.error).toMatchObject({
+          code: "INVALID_REQUEST",
+          message: 'Session "agent:main:main" is archived. Restore it before starting new work.',
         });
         expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
       },
@@ -105,35 +96,36 @@ describe("gateway server chat", () => {
 
   test("chat.send fences the admitted session settings", async () => {
     await withMainSessionStore(async () => {
-      await request("sessions.patch", {
+      const set = await rpcReq(ws, "sessions.patch", {
         key: "main",
         permissionMode: "guarded",
         toolOverrides: { webSearch: false },
       });
-      const accepted = await sendChat(
-        "idem-chat-settings-cas-success",
-        "use the matched settings",
-        {
-          expectedPermissionMode: "guarded",
-          expectedToolOverrides: { webSearch: false },
-        },
-      );
+      expect(set.ok).toBe(true);
+
+      const accepted = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "use the matched settings",
+        expectedPermissionMode: "guarded",
+        expectedToolOverrides: { webSearch: false },
+        idempotencyKey: "idem-chat-settings-cas-success",
+      });
       expect(accepted.ok).toBe(true);
       await waitForAgentRunDrained("idem-chat-settings-cas-success");
 
-      await request("sessions.patch", {
+      const changed = await rpcReq(ws, "sessions.patch", {
         key: "main",
         permissionMode: "read-only",
         toolOverrides: { skills: { release: false } },
       });
-      const rejected = await sendChat(
-        "idem-chat-settings-cas-conflict",
-        "do not use stale settings",
-        {
-          expectedPermissionMode: "guarded",
-          expectedToolOverrides: { webSearch: false },
-        },
-      );
+      expect(changed.ok).toBe(true);
+      const rejected = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "do not use stale settings",
+        expectedPermissionMode: "guarded",
+        expectedToolOverrides: { webSearch: false },
+        idempotencyKey: "idem-chat-settings-cas-conflict",
+      });
       expect(rejected).toMatchObject({
         ok: false,
         error: {
@@ -154,16 +146,33 @@ describe("gateway server chat", () => {
         await releaseDispatch.promise;
         return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
       });
-      await request("sessions.patch", {
-        key: "main",
-        permissionMode: "guarded",
-        toolOverrides: { webSearch: false },
+      expect(
+        (
+          await rpcReq(ws, "sessions.patch", {
+            key: "main",
+            permissionMode: "guarded",
+            toolOverrides: { webSearch: false },
+          })
+        ).ok,
+      ).toBe(true);
+
+      const accepted = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "keep admitted authority",
+        idempotencyKey: "idem-chat-settings-final-freeze",
       });
-      const accepted = await sendChat("idem-chat-settings-final-freeze", "keep admitted authority");
       expect(accepted.ok).toBe(true);
       const admittedOptions = await dispatchEntered.promise;
 
-      await request("sessions.patch", { key: "main", permissionMode: "full", toolOverrides: null });
+      expect(
+        (
+          await rpcReq(ws, "sessions.patch", {
+            key: "main",
+            permissionMode: "full",
+            toolOverrides: null,
+          })
+        ).ok,
+      ).toBe(true);
       expect(admittedOptions?.admittedSessionSettings).toEqual({
         permissionMode: "guarded",
         toolOverrides: { webSearch: false },
@@ -198,7 +207,14 @@ describe("gateway server chat", () => {
       });
       const finalPromise = waitForChatEvent("idem-chat-detached-root");
 
-      await sendChatAndExpectStarted("idem-chat-detached-root", "prove detached root transfer");
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "prove detached root transfer",
+        idempotencyKey: "idem-chat-detached-root",
+      });
+
+      expect(res.ok).toBe(true);
+      expect(res.payload?.status).toBe("started");
       await waitForFast(() => {
         expect(subordinateAdmissionClosed).toBe(false);
       });
@@ -219,20 +235,26 @@ describe("gateway server chat", () => {
       });
       const runId = "idem-chat-accepted-session-projection";
       try {
-        const accepted = await sendChat(runId, "hold before backend execution");
+        const accepted = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "hold before backend execution",
+          idempotencyKey: runId,
+        });
         expect(accepted).toMatchObject({ ok: true, payload: { runId, status: "started" } });
         await dispatchEntered.promise;
         expect(isRpcSourceExecuting(getRpcSource(runId))).toBe(false);
 
         const listed = await rpcReq<{ sessions?: unknown[] }>(ws, "sessions.list", {});
         expect(listed.ok).toBe(true);
-        expect(listed.payload?.sessions).toContainEqual(
-          expect.objectContaining({
-            key: "agent:main:main",
-            hasActiveRun: true,
-            activeRunIds: [runId],
-            status: "queued",
-          }),
+        expect(listed.payload?.sessions).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              key: "agent:main:main",
+              hasActiveRun: true,
+              activeRunIds: [runId],
+              status: "queued",
+            }),
+          ]),
         );
       } finally {
         releaseDispatch.resolve();
@@ -272,11 +294,14 @@ describe("gateway server chat", () => {
           content: [{ type: "text", text: "stale aborted partial" }],
         });
         await dispatchFinalizing.promise;
-        await request(
-          "chat.abort",
-          { sessionKey: "main", runId },
-          { ok: true, aborted: false, runIds: [] },
-        );
+        const abort = await rpcReq(ws, "chat.abort", {
+          sessionKey: "main",
+          runId,
+        });
+        expect(abort).toMatchObject({
+          ok: true,
+          payload: { ok: true, aborted: false, runIds: [] },
+        });
 
         releaseDispatch.resolve();
         await waitForAgentRunDrained(runId);
@@ -285,7 +310,11 @@ describe("gateway server chat", () => {
         await waitForAgentRunDrained(`${runId}-successor`);
         await settleGatewayFixture();
 
-        expect(collectHistoryTextValues((await readHistory())?.messages ?? [])).not.toContain(
+        const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", {
+          sessionKey: "main",
+        });
+        expect(history.ok).toBe(true);
+        expect(collectHistoryTextValues(history.payload?.messages ?? [])).not.toContain(
           "stale aborted partial",
         );
       } finally {
@@ -302,33 +331,46 @@ describe("gateway server chat", () => {
     async ({ method, message }) => {
       const sessionKey = `agent:main:dashboard:test-${method}`;
       const runId = `idem-sessions-${method}-1`;
-      await withSessionEntries(
-        {
-          [sessionKey]: { sessionId: `sess-dashboard-${method}`, updatedAt: Date.now() },
-        },
-        async () => {
-          const res = await request(
-            `sessions.${method}`,
-            {
-              key: sessionKey,
-              message,
-              idempotencyKey: runId,
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), `openclaw-sessions-${method}-`));
+      testState.sessionStorePath = path.join(dir, "sessions.json");
+      try {
+        await writeSessionStore({
+          entries: {
+            [sessionKey]: {
+              sessionId: `sess-dashboard-${method}`,
+              updatedAt: Date.now(),
             },
-            { runId, status: "started", messageSeq: 1 },
-          );
-          await waitForAgentRunDrained(runId);
+          },
+        });
 
-          const users = ((await readHistory(sessionKey))?.messages ?? []).filter(
-            (entry) => expectRecordFields(entry, {}).role === "user",
-          );
-          expect(users).toHaveLength(1);
-          expect(users[0]).toMatchObject({
-            role: "user",
-            __openclaw: { seq: res.payload?.messageSeq, idempotencyKey: `${runId}:user` },
-          });
-          expect(collectHistoryTextValues(users)).toEqual([message]);
-        },
-      );
+        const res = await rpcReq(ws, `sessions.${method}`, {
+          key: sessionKey,
+          message,
+          idempotencyKey: runId,
+        });
+        expect(res.ok).toBe(true);
+        // Direct operator input commits through restart-safe admission before the ACK.
+        expectRecordFields(res.payload, { runId, status: "started", messageSeq: 1 });
+        await waitForAgentRunDrained(runId);
+
+        const history = await rpcReq<{ messages?: unknown[] }>(ws, "chat.history", { sessionKey });
+        expect(history.ok).toBe(true);
+        const users = (history.payload?.messages ?? []).filter(
+          (entry) => expectRecordFields(entry, {}).role === "user",
+        );
+        expect(users).toHaveLength(1);
+        const user = expectRecordFields(users[0], { role: "user" });
+        expectRecordFields(user["__openclaw"], {
+          seq: res.payload?.messageSeq,
+          idempotencyKey: `${runId}:user`,
+        });
+        expect(collectHistoryTextValues(users)).toEqual([message]);
+      } finally {
+        // A failed ACK assertion must not retire storage before detached work finishes.
+        await settleGatewayFixture();
+        testState.sessionStorePath = undefined;
+        await removeTempDir(dir);
+      }
     },
   );
 
@@ -350,7 +392,11 @@ describe("gateway server chat", () => {
       producer.settled = true;
       return undefined;
     });
-    const active = await sendChat(runId, "captured active turn");
+    const active = await rpcReq(ws, "chat.send", {
+      sessionKey: "main",
+      message: "captured active turn",
+      idempotencyKey: runId,
+    });
     expect(active.ok).toBe(true);
     await activeRunStarted.promise;
     return producer;
@@ -416,8 +462,11 @@ describe("gateway server chat", () => {
         isStreaming: () => true,
       });
 
-      const res = await sendChat("idem-chat-interrupt-throw-new", "replace the captured turn", {
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "replace the captured turn",
         queueMode: "interrupt",
+        idempotencyKey: "idem-chat-interrupt-throw-new",
       });
       expect(res).toMatchObject({
         ok: true,
@@ -432,13 +481,64 @@ describe("gateway server chat", () => {
       await gatewaySuite.requestExecution.waitForCompletion("idem-chat-interrupt-throw-new");
       expect(getActiveGatewayRootWorkCount()).toBe(0);
 
-      await request("sessions.reset", { key: "main", reason: "new" });
+      const reset = await rpcReq(ws, "sessions.reset", { key: "main", reason: "new" });
+      expect(reset.ok).toBe(true);
+    });
+  });
+
+  test("chat.send interrupt ignores subordinate session-effect interruption hooks", async () => {
+    await withMainSessionStore(async () => {
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("session store path was not initialized");
+      }
+      const onInterrupt = vi.fn(() => {
+        throw new Error("session interruption failed");
+      });
+      const activeAdmission = await beginSessionEffect({
+        scope: storePath,
+        identities: ["agent:main:main", "sess-main"],
+        assertAllowed: () => {},
+        onInterrupt,
+      });
+
+      try {
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "replace non-reply session work",
+          queueMode: "interrupt",
+          idempotencyKey: "idem-chat-interrupt-non-reply-throw",
+        });
+
+        expect(res).toMatchObject({
+          ok: true,
+          payload: {
+            runId: "idem-chat-interrupt-non-reply-throw",
+            status: "started",
+          },
+        });
+        expect(res.payload).not.toHaveProperty("interruptedActiveRun");
+        expect(onInterrupt).not.toHaveBeenCalled();
+        await gatewaySuite.requestExecution.waitForCompletion(
+          "idem-chat-interrupt-non-reply-throw",
+        );
+      } finally {
+        activeAdmission.release();
+      }
+      await waitForFast(() => expect(getSessionControllerWorkCount()).toBe(0));
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+
+      const reset = await rpcReq(ws, "sessions.reset", { key: "main", reason: "new" });
+      expect(reset.ok).toBe(true);
     });
   });
 
   test("chat.send interrupt leaves a subordinate session effect with its owner", async () => {
     await withMainSessionStore(async () => {
-      const storePath = expectDefined(testState.sessionStorePath, "session store path");
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("session store path was not initialized");
+      }
       const onInterrupt = vi.fn();
       const interrupted = createDeferred();
       const activeAdmission = await beginSessionEffect({
@@ -456,18 +556,18 @@ describe("gateway server chat", () => {
       });
 
       try {
-        const res = await sendChat(
-          "idem-chat-interrupt-non-reply",
-          "replace non-reply session work",
-          {
-            queueMode: "interrupt",
-          },
-        );
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "replace non-reply session work",
+          queueMode: "interrupt",
+          idempotencyKey: "idem-chat-interrupt-non-reply",
+        });
 
+        expect(res.ok).toBe(true);
         expect(onInterrupt).not.toHaveBeenCalled();
-        expect(res).toMatchObject({
-          ok: true,
-          payload: { runId: "idem-chat-interrupt-non-reply", status: "started" },
+        expect(res.payload).toMatchObject({
+          runId: "idem-chat-interrupt-non-reply",
+          status: "started",
         });
         expect(res.payload).not.toHaveProperty("interruptedActiveRun");
         await waitForAgentRunDrained("idem-chat-interrupt-non-reply");
@@ -481,89 +581,149 @@ describe("gateway server chat", () => {
   });
 
   test("sessions.send creates a configured agent main session before sending", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-send-agent-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
     testState.agentsConfig = {
       entries: { main: {}, orion: {} },
     };
     try {
-      await withSessionEntries({}, async () => {
-        await prepareGatewayReplyRuntimeForTest({ force: true });
+      await writeSessionStore({ entries: {} });
+      await prepareGatewayReplyRuntimeForTest({ force: true });
 
-        await request(
-          "sessions.send",
-          {
-            key: "agent:orion:main",
-            message: "hello orion",
-            idempotencyKey: "idem-sessions-send-orion",
-          },
-          { runId: "idem-sessions-send-orion" },
-        );
-
-        expect(
-          loadSessionEntry({
-            sessionKey: "agent:orion:main",
-            storePath: testState.sessionStorePath,
-          })?.sessionId,
-        ).toBeTypeOf("string");
-        await waitForAgentRunDrained("idem-sessions-send-orion");
+      const res = await rpcReq(ws, "sessions.send", {
+        key: "agent:orion:main",
+        message: "hello orion",
+        idempotencyKey: "idem-sessions-send-orion",
       });
+      expect(res.ok).toBe(true);
+      expect(res.payload?.runId).toBe("idem-sessions-send-orion");
+
+      expect(
+        loadSessionEntry({
+          sessionKey: "agent:orion:main",
+          storePath: testState.sessionStorePath,
+        })?.sessionId,
+      ).toBeTypeOf("string");
+      await waitForAgentRunDrained("idem-sessions-send-orion");
     } finally {
+      await settleGatewayFixture();
       testState.agentsConfig = undefined;
+      await removeTempDir(dir);
     }
   });
 
-  test.each([true, false])(
-    "sessions.abort resolves an active dashboard run with session key=%s",
-    async (includeKey) => {
-      const key = "agent:main:dashboard:test-abort";
-      const runId = `idem-sessions-abort-${includeKey ? "key" : "runid"}`;
-      await withSessionEntries(
-        { [key]: { sessionId: "sess-dashboard-abort", updatedAt: Date.now() } },
-        async () => {
-          await request("sessions.send", {
-            key,
-            message: "hello",
-            idempotencyKey: runId,
-            timeoutMs: 30_000,
-          });
-          const cancelledEventP = waitForEvent("agent", {
-            runId,
-            stream: "lifecycle",
-            data: expect.objectContaining({ phase: "end", stopReason: "rpc" }),
-          });
-          void cancelledEventP.catch(() => undefined);
-
-          const abortRes = await request("sessions.abort", {
-            ...(includeKey ? { key } : {}),
-            runId,
-          });
-          expect(["aborted", "no-active-run"]).toContain(abortRes.payload?.status);
-          if (abortRes.payload?.status === "aborted") {
-            expect(abortRes.payload?.abortedRunId).toBe(runId);
-            const cancelledEvent = await cancelledEventP;
-            expectRecordFields(cancelledEvent.payload?.data, {
-              phase: "end",
-              status: "cancelled",
-              aborted: true,
-              stopReason: "rpc",
-            });
-            await request(
-              "agent.wait",
-              { runId, timeoutMs: 0 },
-              {
-                runId,
-                status: "error",
-                stopReason: "rpc",
-              },
-            );
-          } else {
-            expect(abortRes.payload?.abortedRunId).toBeNull();
-          }
-          await gatewaySuite.requestExecution.waitForCompletion(runId);
-          expect(getActiveGatewayRootWorkCount()).toBe(0);
+  test("sessions.abort stops active dashboard runs", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-abort-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    try {
+      await writeSessionStore({
+        entries: {
+          "agent:main:dashboard:test-abort": {
+            sessionId: "sess-dashboard-abort",
+            updatedAt: Date.now(),
+          },
         },
+      });
+
+      const sendRes = await rpcReq(ws, "sessions.send", {
+        key: "agent:main:dashboard:test-abort",
+        message: "hello",
+        idempotencyKey: "idem-sessions-abort-1",
+        timeoutMs: 30_000,
+      });
+      expect(sendRes.ok).toBe(true);
+
+      const cancelledEventP = onceMessage(
+        ws,
+        (o) => {
+          const data =
+            o.payload?.data && typeof o.payload.data === "object"
+              ? (o.payload.data as Record<string, unknown>)
+              : {};
+          return (
+            o.type === "event" &&
+            o.event === "agent" &&
+            o.payload?.runId === "idem-sessions-abort-1" &&
+            o.payload?.stream === "lifecycle" &&
+            data.phase === "end" &&
+            data.stopReason === "rpc"
+          );
+        },
+        8000,
       );
-    },
-  );
+      void cancelledEventP.catch(() => undefined);
+
+      const abortRes = await rpcReq(ws, "sessions.abort", {
+        key: "agent:main:dashboard:test-abort",
+        runId: "idem-sessions-abort-1",
+      });
+      expect(abortRes.ok, JSON.stringify(abortRes.error)).toBe(true);
+      expect(["aborted", "no-active-run"]).toContain(abortRes.payload?.status);
+      if (abortRes.payload?.status === "aborted") {
+        expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-1");
+        const cancelledEvent = await cancelledEventP;
+        expectRecordFields(cancelledEvent.payload?.data, {
+          phase: "end",
+          status: "cancelled",
+          aborted: true,
+          stopReason: "rpc",
+        });
+        const waitRes = await rpcReq(ws, "agent.wait", {
+          runId: "idem-sessions-abort-1",
+          timeoutMs: 0,
+        });
+        expect(waitRes.ok).toBe(true);
+        expectRecordFields(waitRes.payload, {
+          runId: "idem-sessions-abort-1",
+          status: "error",
+          stopReason: "rpc",
+        });
+      } else {
+        expect(abortRes.payload?.abortedRunId).toBeNull();
+      }
+      await gatewaySuite.requestExecution.waitForCompletion("idem-sessions-abort-1");
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      await settleGatewayFixture();
+      await removeTempDir(dir);
+    }
+  });
+  test("sessions.abort resolves active runs by runId without a caller session key", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-sessions-abort-runid-"));
+    testState.sessionStorePath = path.join(dir, "sessions.json");
+    try {
+      await writeSessionStore({
+        entries: {
+          "agent:main:dashboard:test-abort-runid": {
+            sessionId: "sess-dashboard-abort-runid",
+            updatedAt: Date.now(),
+          },
+        },
+      });
+
+      const sendRes = await rpcReq(ws, "sessions.send", {
+        key: "agent:main:dashboard:test-abort-runid",
+        message: "hello",
+        idempotencyKey: "idem-sessions-abort-runid-1",
+        timeoutMs: 30_000,
+      });
+      expect(sendRes.ok).toBe(true);
+
+      const abortRes = await rpcReq(ws, "sessions.abort", {
+        runId: "idem-sessions-abort-runid-1",
+      });
+      expect(abortRes.ok).toBe(true);
+      expect(["aborted", "no-active-run"]).toContain(abortRes.payload?.status);
+      if (abortRes.payload?.status === "aborted") {
+        expect(abortRes.payload?.abortedRunId).toBe("idem-sessions-abort-runid-1");
+      }
+      await gatewaySuite.requestExecution.waitForCompletion("idem-sessions-abort-runid-1");
+      expect(getActiveGatewayRootWorkCount()).toBe(0);
+    } finally {
+      await settleGatewayFixture();
+      await removeTempDir(dir);
+    }
+  });
 
   test("persists a failed chat dispatch before restart drain can finish", async ({ signal }) => {
     await withMainSessionStore(async (dir) => {
@@ -577,7 +737,8 @@ describe("gateway server chat", () => {
           },
         },
       });
-      await request("sessions.subscribe", {});
+      const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
+      expect(subscribeRes.ok).toBe(true);
       const rejectDispatch = createDeferred();
       const releasePersistence = createDeferred();
       const dispatchStarted = createDeferred();
@@ -604,14 +765,23 @@ describe("gateway server chat", () => {
           });
           const errorPromise = waitForChatEvent("idem-dispatch-error-1", "error");
           messagePromises.push(errorPromise);
-          const sessionChangedPromise = waitForEvent("sessions.changed", {
-            sessionKey: "agent:main:main",
-            status: "failed",
-            lastRunId: "idem-dispatch-error-1",
-            hasActiveRun: false,
-          });
+          const sessionChangedPromise = onceMessage(
+            ws,
+            (o) =>
+              o.type === "event" &&
+              o.event === "sessions.changed" &&
+              o.payload?.sessionKey === "agent:main:main" &&
+              o.payload?.status === "failed" &&
+              o.payload?.lastRunId === "idem-dispatch-error-1" &&
+              o.payload?.hasActiveRun === false,
+            8_000,
+          );
           messagePromises.push(sessionChangedPromise);
-          const res = await sendChat("idem-dispatch-error-1", "run: pwd");
+          const res = await rpcReq(ws, "chat.send", {
+            sessionKey: "main",
+            message: "run: pwd",
+            idempotencyKey: "idem-dispatch-error-1",
+          });
           expect(res.ok).toBe(true);
           await withinTest(dispatchStarted.promise, signal);
           rejectDispatch.resolve();
@@ -669,14 +839,14 @@ describe("gateway server chat", () => {
       const session = sessionsRes.payload?.sessions?.find(
         (row) => isRecord(row) && row.key === "agent:main:main",
       );
-      expectRecordFields(session, {
+      const actualSession = expectRecordFields(session, {
         status: "failed",
         lastRunId: "idem-dispatch-error-1",
         hasActiveRun: false,
-        startedAt: expect.any(Number),
-        endedAt: expect.any(Number),
-        runtimeMs: expect.any(Number),
       });
+      expect(typeof actualSession.startedAt).toBe("number");
+      expect(typeof actualSession.endedAt).toBe("number");
+      expect(typeof actualSession.runtimeMs).toBe("number");
     });
   });
 });

@@ -12,13 +12,18 @@ import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent, onAgentEvent } from "../infra/agent-events.js";
 import * as agentEvents from "../infra/agent-events.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-request-scope.js";
+import { enqueueCommandInLane } from "../process/command-queue.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
 } from "../process/gateway-work-admission.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { acquireTestPortBlock, type TestPortClaim } from "../test-utils/port-claims.js";
-import { expectDeclaredHttpOwnerIdentity } from "./http-authority.test-support.js";
+import {
+  expectDeclaredHttpOwnerIdentity,
+  expectHttpForeignSessionAuthority,
+  expectSharedSecretHttpOwnerIdentity,
+} from "./http-authority.test-support.js";
 import * as httpCommon from "./http-common.js";
 import {
   registerOpenResponsesHttpUploadTests,
@@ -37,7 +42,6 @@ import {
 import * as httpUtils from "./http-utils.js";
 import type { ResponseResource } from "./open-responses.schema.js";
 import { registerOpenResponsesContinuationTests } from "./openresponses-http.continuation.test-support.js";
-import { registerOpenResponsesFileInputTests } from "./openresponses-http.media.test-support.js";
 import { buildAssistantDeltaResult } from "./test-helpers.agent-results.js";
 import {
   agentCommandMock,
@@ -127,32 +131,7 @@ async function postResponses(
 }
 
 function post(body: Record<string, unknown> = {}, headers?: Record<string, string>) {
-  return postAt(enabledPort, body, headers);
-}
-
-function postAt(
-  port: number,
-  body: Record<string, unknown> = {},
-  headers?: Record<string, string>,
-) {
-  return postResponses(port, { model: "openclaw", input: "hi", ...body }, headers);
-}
-
-function mockRun(run: (runId: string) => unknown) {
-  agentCommandMock.mockClear();
-  agentCommandMock.mockImplementationOnce(((opts: unknown) => {
-    const runId = (opts as { runId?: string }).runId;
-    if (!runId) {
-      throw new Error("expected a streaming response run ID");
-    }
-    return run(runId);
-  }) as never);
-}
-
-function mockDelta(text: string) {
-  agentCommandMock.mockClear();
-  agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
-    buildAssistantDeltaResult({ opts, emit: emitAgentEvent, deltas: [text], text })) as never);
+  return postResponses(enabledPort, { model: "openclaw", input: "hi", ...body }, headers);
 }
 
 function responseEvent(events: ReturnType<typeof parseSseEvents>, name = "response.completed") {
@@ -384,7 +363,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
     ),
   )("fails an official SDK Responses stream when streamed text is $name", async (scenario) => {
     const { previousText = "draft answer" } = scenario;
-    mockRun(async (runId) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string }).runId;
+      if (!runId) {
+        throw new Error("expected a streaming response run ID");
+      }
       return {
         ...emitIncompatibleAssistantReplacement(
           runId,
@@ -393,7 +377,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         ),
         meta: { agentMeta: { usage: { input: 11, output: 7, total: 18 } } },
       };
-    });
+    }) as never);
 
     const stream = createStream();
     const deltas: string[] = [];
@@ -418,7 +402,11 @@ describe("OpenResponses HTTP API (e2e)", () => {
       meta?: unknown,
     ) {
       mockAgentOnce([{ text: "hello" }], meta);
-      const res = await post(body, headers);
+      const res = await postResponses(
+        enabledPort,
+        { model: "openclaw", input: "hi", ...body },
+        headers,
+      );
       expect(res.status).toBe(200);
       await ensureResponseConsumed(res);
       expect(firstAgentOpts()).toMatchObject(expected);
@@ -506,6 +494,10 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(await conflict.json()).toMatchObject({
         error: { code: "invalid_request_error", message: "invalid tool configuration" },
       });
+      await accept(
+        { user: "alice" },
+        { sessionKey: expect.stringContaining("openresponses-user:alice") },
+      );
       await accept(
         {
           instructions: "Always respond in French.",
@@ -633,7 +625,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
     let now = 1_700_000_000_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
     try {
-      mockDelta("hello");
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
+        buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["hello"],
+          text: "hello",
+        })) as never);
 
       const response = await post({ stream: true });
       expect(response.status).toBe(200);
@@ -657,7 +656,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
   });
 
   it("flushes same-turn assistant microtasks before completing a tool stream", async () => {
-    mockRun((runId) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce(((opts: unknown) => {
+      const runId = (opts as { runId?: string }).runId;
+      if (!runId) {
+        throw new Error("expected a streaming response run ID");
+      }
       emitAgentEvent({
         runId,
         stream: "assistant",
@@ -694,7 +698,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         });
       });
       return result;
-    });
+    }) as never);
 
     const stream = createStream();
     const deltas: string[] = [];
@@ -715,8 +719,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
     const created = createDeferred();
     let runId: string | undefined;
     let lateEventEmitted = false;
-    mockRun((admittedRunId) => {
-      runId = admittedRunId;
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce(((opts: unknown) => {
+      runId = (opts as { runId?: string }).runId;
+      if (!runId) {
+        throw new Error("expected a streaming response run ID");
+      }
       emitAgentEvent({ runId, stream: "assistant", data: { delta: "start " } });
       emitAgentEvent({
         runId,
@@ -724,7 +732,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         data: { text: "incompatible correction", replace: true },
       });
       return completion.promise;
-    });
+    }) as never);
 
     try {
       const stream = createStream();
@@ -763,7 +771,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
   });
 
   it("keeps a failed SDK stream failed when the output budget is exhausted", async () => {
-    mockRun(async (runId) => {
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+      const runId = (opts as { runId?: string }).runId;
+      if (!runId) {
+        throw new Error("expected a streaming response run ID");
+      }
       emitAgentEvent({ runId, stream: "assistant", data: { delta: "partial answer" } });
       emitAgentEvent({
         runId,
@@ -779,7 +792,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
         payloads: [{ text: "partial answer" }],
         meta: { stopReason: "length", agentMeta: { usage: { input: 11, output: 7, total: 18 } } },
       };
-    });
+    }) as never);
 
     const stream = createStream();
     let completedEvents = 0;
@@ -835,8 +848,12 @@ describe("OpenResponses HTTP API (e2e)", () => {
         });
       });
 
-      mockRun(async (runId) => {
-        activeRunId = runId;
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
+        activeRunId = (opts as { runId?: string }).runId;
+        if (!activeRunId) {
+          throw new Error("expected a streaming response run ID");
+        }
         await continueAgent.promise;
         emitAgentEvent({ runId: activeRunId, stream: "assistant", data: { delta: "answer" } });
         if (providerTerminal) {
@@ -853,7 +870,7 @@ describe("OpenResponses HTTP API (e2e)", () => {
           payloads: [{ text: "answer" }],
           meta: { agentMeta: { usage: { input: 3, output: 2, total: 5 } } },
         };
-      });
+      }) as never);
 
       try {
         const client = new OpenAI({
@@ -914,12 +931,17 @@ describe("OpenResponses HTTP API (e2e)", () => {
     "closes the response stream for $label without reporting completion",
     async ({ createError, emitErrorLifecycle, expectedCode, expectedMessage, tools }) => {
       const idleRootCount = getActiveGatewayRootWorkCount();
-      mockRun(async (runId) => {
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) => {
         if (emitErrorLifecycle) {
+          const runId = (opts as { runId?: string }).runId;
+          if (!runId) {
+            throw new Error("expected a streaming response run ID");
+          }
           emitAgentEvent({ runId, stream: "lifecycle", data: { phase: "error" } });
         }
         throw createError();
-      });
+      }) as never);
 
       const res = await postResponses(
         enabledPort,
@@ -951,6 +973,49 @@ describe("OpenResponses HTTP API (e2e)", () => {
       expect(failedResponse?.error?.message).toContain(expectedMessage);
       expect(agentCommandMock).toHaveBeenCalledTimes(1);
       await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
+    },
+  );
+
+  it("preserves declared owner identity for streaming and non-streaming private callers", async () => {
+    await expectDeclaredHttpOwnerIdentity({
+      post: (stream, headers) =>
+        postResponses(enabledPort, { stream, model: "openclaw", input: "hi" }, headers),
+      consume: async (response, stream) => {
+        const body = await response.text();
+        if (stream) {
+          expect(parseSseEvents(body).map((event) => event.event)).toContain("response.completed");
+        }
+      },
+      senderIsOwner: () => firstAgentOpts().senderIsOwner,
+    });
+  });
+
+  it.each(["trusted-proxy", "token"] as const)(
+    "preserves %s authority when mutating another operator response session",
+    async (authMethod) => {
+      await expectHttpForeignSessionAuthority({
+        authMethod,
+        ownerEmail: "response-owner@example.test",
+        sessionKey: "agent:main:foreign-openresponses-http",
+        sessionId: "foreign-openresponses-http",
+        closeReason: "openresponses operator role session sharing test done",
+        startServer: async (port, auth) => {
+          const { startGatewayServer } = await import("./server.js");
+          return await startGatewayServer(port, {
+            host: "127.0.0.1",
+            auth,
+            controlUiEnabled: false,
+            openResponsesEnabled: true,
+          });
+        },
+        writeGatewayConfig,
+        post: (port, headers) =>
+          postResponses(
+            port,
+            { model: "openclaw", input: "mutate foreign response session" },
+            headers,
+          ),
+      });
     },
   );
 
@@ -1000,27 +1065,37 @@ describe("OpenResponses HTTP API (e2e)", () => {
             },
           );
 
+          await expectDeclaredHttpOwnerIdentity({
+            post: (stream, headers) =>
+              postResponses(
+                port,
+                { stream, model: "openclaw", input: "hi" },
+                {
+                  "x-forwarded-for": "198.51.100.42",
+                  "x-forwarded-proto": "https",
+                  "x-forwarded-user": "operator@example.com",
+                  ...headers,
+                },
+              ),
+            consume: ensureResponseConsumed,
+            senderIsOwner: () => firstAgentOpts().senderIsOwner,
+          });
+
           const trustedProxyHeaders = {
             "x-forwarded-for": "198.51.100.42",
             "x-forwarded-proto": "https",
             "x-forwarded-user": "operator@example.com",
           };
-          function trustedPost(body: Record<string, unknown>, headers?: Record<string, string>) {
-            return postAt(port, body, { ...trustedProxyHeaders, ...headers });
-          }
-          await expectDeclaredHttpOwnerIdentity({
-            post: (stream, headers) => trustedPost({ stream }, headers),
-            consume: ensureResponseConsumed,
-            senderIsOwner: () => firstAgentOpts().senderIsOwner,
-          });
           for (const requestedSessionKey of [
             incognitoSessionKey,
             "dashboard:incognito-openresponses-http",
           ]) {
             agentCommandMock.mockClear();
-            const denied = await trustedPost(
-              {},
+            const denied = await postResponses(
+              port,
+              { model: "openclaw", input: "hi" },
               {
+                ...trustedProxyHeaders,
                 "x-openclaw-scopes": "operator.write",
                 "x-openclaw-session-key": requestedSessionKey,
               },
@@ -1031,18 +1106,31 @@ describe("OpenResponses HTTP API (e2e)", () => {
           }
 
           agentCommandMock.mockResolvedValueOnce({ payloads: [{ text: "hello" }] } as never);
-          const privateHeaders = {
-            "x-openclaw-scopes": "operator.admin, operator.write",
-            "x-openclaw-session-key": "dashboard:incognito-openresponses-http",
-          };
-          const allowed = await trustedPost({}, privateHeaders);
+          const allowed = await postResponses(
+            port,
+            { model: "openclaw", input: "hi" },
+            {
+              ...trustedProxyHeaders,
+              "x-openclaw-scopes": "operator.admin, operator.write",
+              "x-openclaw-session-key": "dashboard:incognito-openresponses-http",
+            },
+          );
           expect(allowed.status).toBe(200);
           const privateResponse = (await allowed.json()) as { id: string };
           expect(agentCommandMock).toHaveBeenCalledTimes(1);
 
-          const privateContinuation = await trustedPost(
-            { input: "continue privately", previous_response_id: privateResponse.id },
-            privateHeaders,
+          const privateContinuation = await postResponses(
+            port,
+            {
+              model: "openclaw",
+              input: "continue privately",
+              previous_response_id: privateResponse.id,
+            },
+            {
+              ...trustedProxyHeaders,
+              "x-openclaw-scopes": "operator.admin, operator.write",
+              "x-openclaw-session-key": "dashboard:incognito-openresponses-http",
+            },
           );
           await expectInvalidRequest(privateContinuation, /previous_response_id/);
           expect(agentCommandMock).toHaveBeenCalledTimes(1);
@@ -1054,9 +1142,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
             "x-forwarded-proto": "https",
             authorization: "Bearer forwarded-untrusted",
           };
-          const aliceResponse = await postAt(
+          const aliceResponse = await postResponses(
             port,
-            { user: "alice", input: "private alice history" },
+            { model: "openclaw", user: "alice", input: "private alice history" },
             { ...forwardedHeaders, "x-forwarded-user": "Alice@example.com" },
           );
           expect(aliceResponse.status).toBe(200);
@@ -1072,9 +1160,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
             ["bob@example.com", "missing", undefined],
           ] as const) {
             agentCommandMock.mockClear();
-            const continuation = await postAt(
+            const continuation = await postResponses(
               port,
-              { previous_response_id: previousId, input: "continue history" },
+              { model: "openclaw", previous_response_id: previousId, input: "continue history" },
               {
                 ...forwardedHeaders,
                 authorization: "Bearer different-forwarded-untrusted",
@@ -1096,9 +1184,9 @@ describe("OpenResponses HTTP API (e2e)", () => {
           }
 
           agentCommandMock.mockClear();
-          const unauthorized = await postAt(
+          const unauthorized = await postResponses(
             port,
-            {},
+            { model: "openclaw", input: "hi" },
             {
               "x-forwarded-for": "198.51.100.42",
               "x-forwarded-proto": "https",
@@ -1117,6 +1205,58 @@ describe("OpenResponses HTTP API (e2e)", () => {
         }
       },
     );
+  });
+
+  it.each(["token", "password"] as const)(
+    "preserves owner identity for streaming and non-streaming %s-authenticated callers",
+    async (mode) => {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const port = portClaim.port;
+      const server = await startServer(
+        portClaim,
+        mode === "token" ? { mode, token: "secret" } : { mode, password: "secret" },
+      );
+      try {
+        await expectSharedSecretHttpOwnerIdentity({
+          post: (stream, headers) =>
+            postResponses(
+              port,
+              { ...(stream === undefined ? {} : { stream }), model: "openclaw", input: "hi" },
+              headers,
+            ),
+          consume: ensureResponseConsumed,
+          senderIsOwner: () => firstAgentOpts().senderIsOwner,
+        });
+      } finally {
+        await server.close({ reason: `openresponses ${mode} auth owner test done` });
+      }
+    },
+  );
+
+  it("keeps streamed agent work admitted after the HTTP handler returns", async () => {
+    const idleRootCount = getActiveGatewayRootWorkCount();
+    const continueAgent = createDeferred();
+    agentCommandMock.mockClear();
+    agentCommandMock.mockImplementationOnce((async () => {
+      await continueAgent.promise;
+      const queued = await enqueueCommandInLane(
+        "openresponses-http-admission-probe",
+        async () => true,
+      );
+      return { payloads: [{ text: queued ? "answer queued" : "unreachable" }] };
+    }) as never);
+
+    const res = await post({ stream: true });
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    continueAgent.resolve();
+
+    const events = parseSseEvents(await res.text());
+    expect(collectSseEventTypes(events)).toContain("response.completed");
+    expect(collectSseEventTypes(events)).not.toContain("response.failed");
+    expect(findSseEvent(events, "response.completed").data).toContain("answer queued");
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(idleRootCount));
   });
 
   it("returns a tool-only response without empty commentary", async () => {
@@ -1172,7 +1312,14 @@ describe("OpenResponses HTTP API (e2e)", () => {
   it.each([false, true])(
     "rejects an unsatisfied required tool choice (stream=%s)",
     async (stream) => {
-      mockDelta("plain text despite required");
+      agentCommandMock.mockClear();
+      agentCommandMock.mockImplementationOnce((async (opts: unknown) =>
+        buildAssistantDeltaResult({
+          opts,
+          emit: emitAgentEvent,
+          deltas: ["plain text despite required"],
+          text: "plain text despite required",
+        })) as never);
       const res = await post({ stream, tools: WEATHER_TOOL, tool_choice: "required" });
       expect(res.status).toBe(stream ? 200 : 502);
       const text = await res.text();
@@ -1536,6 +1683,4 @@ describe("OpenResponses HTTP API (e2e)", () => {
     }
   });
 });
-
-registerOpenResponsesFileInputTests(post);
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

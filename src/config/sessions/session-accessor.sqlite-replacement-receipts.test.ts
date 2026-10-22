@@ -90,7 +90,10 @@ it("sheds aggregate optional snapshots while committing every required receipt r
     expect(result.replacement.source?.writeToken).toBeUndefined();
     expect([...result.replacement.current.keys()]).toEqual(keys);
     expect(result.metadata).toHaveLength(keys.length);
-    const identity = durableIdentity(database);
+    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+    if (typeof identity !== "string") {
+      throw new Error("Expected durable snapshot fixture");
+    }
     for (const [index, key] of keys.entries()) {
       expect(readExactSessionEntryRow(database, key, "list")?.entry.label).toBe(key);
       const metadata = result.metadata[index]!;
@@ -103,15 +106,15 @@ it("sheds aggregate optional snapshots while committing every required receipt r
       expect(metadata.source.writeToken).toBeUndefined();
       expect(result.replacement.current.get(key)).toMatchObject({ label: key });
       expect(result.replacement.current.get(key)?.skillsSnapshot).toBeUndefined();
-      const predicate = retainPredicate({
+      const predicate = retainPreparedSessionEntryPredicate({
         databaseIdentity: `file:${identity}`,
         sessionKey: key,
-        entry: readEntry(database, key, "full")!.entry,
+        entry: readExactSessionEntryRow(database, key, "full")!.entry,
         projection: ["skillsSnapshot"],
         matches: (before, after) =>
           isDeepStrictEqual(before?.skillsSnapshot, after?.skillsSnapshot),
       });
-      const publication = retainPublication({
+      const publication = retainSessionEntryWorkerPublication({
         agentId: "main",
         storePath: database.path,
         databaseIdentity: identity,
@@ -130,8 +133,16 @@ it("sheds aggregate optional snapshots while committing every required receipt r
 });
 
 it("preserves retained snapshot authority through title writes and revokes library changes", async () => {
-  await withReceipts(async (database, _state, clean) => {
-    const { scope, entry } = seed(database, "snapshot-authority", {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const scope = {
+      agentId: "main",
+      storePath: database.path,
+      sessionKey: "agent:main:snapshot-authority",
+    };
+    const entry: SessionEntry = {
+      sessionId: "snapshot-authority",
+      updatedAt: 1,
       skillsSnapshot: {
         prompt: "",
         skills: [],
@@ -144,10 +155,16 @@ it("preserves retained snapshot authority through title writes and revokes libra
           },
         ],
       },
-    });
-    const retainedScope = retained(database, scope.sessionKey, entry);
-    const snapshot = retainPredicate({
-      ...retainedScope,
+    };
+    replaceSessionEntrySync(scope, entry);
+    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
+    if (typeof identity !== "string") {
+      throw new Error("Expected durable snapshot fixture");
+    }
+    const retained = { databaseIdentity: `file:${identity}`, sessionKey: scope.sessionKey };
+    const snapshot = retainPreparedSessionEntryPredicate({
+      ...retained,
+      entry,
       projection: ["skillsSnapshot"],
       matches: (before, after) =>
         before?.sessionId === after?.sessionId &&
@@ -156,38 +173,55 @@ it("preserves retained snapshot authority through title writes and revokes libra
           after?.skillsSnapshot?.librarySelections,
         ),
     });
-    const list = retainPredicate({
-      ...retainedScope,
-      entry: readEntry(database, scope.sessionKey, "list")!.entry,
+    const list = retainPreparedSessionEntryPredicate({
+      ...retained,
+      entry: readExactSessionEntryRow(database, scope.sessionKey, "list")!.entry,
       projection: "list",
       matches: (before, after) =>
         before?.sessionId === after?.sessionId && after?.skillsSnapshot === undefined,
     });
-    clean(snapshot.release, list.release);
-    replaceSessionEntrySync(scope, { ...entry, displayName: "Native title" });
-    expect(snapshot.isCurrent()).toBe(true);
-    expect(list.isCurrent()).toBe(true);
-    await upsertSessionEntryCore(scope, { displayName: "Worker title" });
-    expect(snapshot.isCurrent()).toBe(true);
-    let pendingCurrent: boolean | undefined;
-    delivery.afterResult = () => {
-      pendingCurrent = snapshot.isCurrent();
-    };
-    await replaceFields(scope, { displayName: "Replacement title" });
-    expect(pendingCurrent).toBe(true);
-    expect(snapshot.isCurrent()).toBe(true);
-    expect(snapshot.readRetainedEntry()?.skillsSnapshot).toEqual(entry.skillsSnapshot);
-    await recordParticipant(scope, {
-      identity: { type: "agent", id: "other" },
-      promptedAt: 1,
-    });
-    expect(snapshot.isCurrent()).toBe(true);
-    await upsertSessionEntryCore(scope, {
-      skillsSnapshot: { prompt: "", skills: [], librarySelections: [] },
-    });
-    expect(snapshot.isCurrent()).toBe(false);
-    expect(snapshot.canRefresh()).toBe(false);
-    expect(list.isCurrent()).toBe(true);
+    try {
+      replaceSessionEntrySync(scope, { ...entry, displayName: "Native title" });
+      expect(snapshot.isCurrent()).toBe(true);
+      expect(list.isCurrent()).toBe(true);
+      await upsertSessionEntryCore(scope, { displayName: "Worker title" });
+      expect(snapshot.isCurrent()).toBe(true);
+      let pendingCurrent: boolean | undefined;
+      delivery.afterResult = () => {
+        pendingCurrent = snapshot.isCurrent();
+      };
+      await applySessionEntryExactReplacements({
+        storePath: database.path,
+        sessionKeys: [scope.sessionKey],
+        update: ([row]) => ({
+          result: undefined,
+          replacements: [
+            {
+              sessionKey: scope.sessionKey,
+              entry: { ...row!.entry, displayName: "Replacement title" },
+            },
+          ],
+        }),
+      });
+      expect(pendingCurrent).toBe(true);
+      expect(snapshot.isCurrent()).toBe(true);
+      expect(snapshot.readRetainedEntry()?.skillsSnapshot).toEqual(entry.skillsSnapshot);
+      await recordSessionParticipantInWorker(scope, {
+        identity: { type: "agent", id: "other" },
+        promptedAt: 1,
+      });
+      expect(snapshot.isCurrent()).toBe(true);
+      await upsertSessionEntryCore(scope, {
+        skillsSnapshot: { prompt: "", skills: [], librarySelections: [] },
+      });
+      expect(snapshot.isCurrent()).toBe(false);
+      expect(snapshot.canRefresh()).toBe(false);
+      expect(list.isCurrent()).toBe(true);
+    } finally {
+      delivery.afterResult = undefined;
+      snapshot.release();
+      list.release();
+    }
   });
 });
 

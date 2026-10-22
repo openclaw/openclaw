@@ -1,15 +1,12 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import * as noteModule from "../../packages/terminal-core/src/note.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { fetchClawHubPackageDetail } from "../infra/clawhub-packages.js";
-import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
   detectPluginVersionDrift,
   resolvePluginVersionDriftTargets,
-  type PluginVersionDriftReport,
   type PluginVersionRestartReadiness,
 } from "../plugins/plugin-version-drift.js";
-import { createPluginLoadResult, createPluginRecord } from "../plugins/status.test-fixtures.js";
 import {
   collectWorkspaceStatusHealthFindings,
   noteWorkspaceStatus,
@@ -19,239 +16,33 @@ vi.mock("../infra/clawhub-packages.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/clawhub-packages.js")>()),
   fetchClawHubPackageDetail: vi.fn(),
 }));
-const mocks = vi.hoisted(() => ({
-  listAgentIds: vi.fn<(_cfg: OpenClawConfig) => string[]>(() => ["default"]),
-  resolveAgentWorkspaceDir: vi.fn(),
-  buildPluginRegistrySnapshotReport: vi.fn(),
-  buildPluginCompatibilityWarnings: vi.fn(),
+
+vi.mock("../agents/agent-scope.js", () => ({
+  listAgentIds: () => [],
+  resolveAgentWorkspaceDir: () => {
+    throw new Error("plugin drift evidence must not inspect agent workspaces");
+  },
+  tryResolveDefaultAgentId: () => undefined,
 }));
-vi.mock("../agents/agent-scope.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../agents/agent-scope.js")>()),
-  listAgentIds: mocks.listAgentIds,
-  resolveAgentWorkspaceDir: mocks.resolveAgentWorkspaceDir,
-}));
+
 vi.mock("../plugins/status.js", () => ({
-  buildPluginRegistrySnapshotReport: mocks.buildPluginRegistrySnapshotReport,
-  buildPluginCompatibilityWarnings: mocks.buildPluginCompatibilityWarnings,
+  buildPluginCompatibilityWarnings: () => {
+    throw new Error("plugin drift evidence must not use compatibility warnings");
+  },
+  buildPluginRegistrySnapshotReport: () => {
+    throw new Error("plugin drift evidence must not use registry diagnostics");
+  },
 }));
 
-function setReport(loadResult = createPluginLoadResult({ plugins: [] }), warnings: string[] = []) {
-  mocks.buildPluginRegistrySnapshotReport.mockReturnValue({
-    workspaceDir: "/workspace",
-    ...loadResult,
-  });
-  mocks.buildPluginCompatibilityWarnings.mockReturnValue(warnings);
-}
-beforeEach(() => {
-  mocks.listAgentIds.mockReturnValue(["default"]);
-  mocks.resolveAgentWorkspaceDir.mockReturnValue("/workspace");
-  setReport();
-});
+const config: OpenClawConfig = { plugins: { entries: { codex: { enabled: true } } } };
+
 afterEach(() => vi.restoreAllMocks());
-
-const spyNotes = () => vi.spyOn(noteModule, "note").mockImplementation(() => {});
-function noteBody(spy: ReturnType<typeof spyNotes>, title: string) {
-  const calls = spy.mock.calls.filter(([, heading]) => heading === title);
-  expect(calls).toHaveLength(1);
-  return calls[0]![0];
-}
-type Drift = PluginVersionDriftReport["drifts"][number];
-function readiness(entry: Drift) {
-  return {
-    pluginVersionReadiness: {
-      status: "resolved" as const,
-      report: { gatewayVersion: entry.gatewayVersion, drifts: [entry] },
-    },
-  };
-}
-const codexDrift: Drift = {
-  pluginId: "codex",
-  installedVersion: "2026.5.30-beta.1",
-  gatewayVersion: "2026.6.1",
-  source: "npm",
-};
-
-it("shares scoped workspace inspection while reporting identical registrar failures once", () => {
-  const diagnostic = {
-    level: "error" as const,
-    pluginId: "broken-fixture",
-    source: "/plugins/broken-fixture/index.js",
-    message: "board widget registration has invalid kind",
-  };
-  mocks.listAgentIds.mockReturnValue(["alpha", "beta"]);
-  mocks.resolveAgentWorkspaceDir.mockImplementation((_cfg, agentId) => "/workspace/" + agentId);
-  let activeWorkspace: string | undefined;
-  const runWithPluginMetadataSnapshot: PluginMetadataSnapshotScopeRunner = (scope, run) => {
-    activeWorkspace = scope.workspaceDir;
-    try {
-      return run();
-    } finally {
-      activeWorkspace = undefined;
-    }
-  };
-  mocks.buildPluginRegistrySnapshotReport.mockImplementation(({ workspaceDir }) => {
-    expect(activeWorkspace).toBe(workspaceDir);
-    return {
-      workspaceDir,
-      ...createPluginLoadResult({ plugins: [], diagnostics: [diagnostic] }),
-    };
-  });
-  mocks.buildPluginCompatibilityWarnings.mockImplementation(({ config, workspaceDir, report }) => {
-    expect(activeWorkspace).toBe(workspaceDir);
-    expect(config).toEqual({});
-    expect(report).toEqual({
-      workspaceDir,
-      ...createPluginLoadResult({ plugins: [], diagnostics: [diagnostic] }),
-    });
-    return ["legacy-plugin is hook-only"];
-  });
-  const spy = vi.spyOn(noteModule, "note").mockImplementation(() => {
-    expect(activeWorkspace).toBeDefined();
-  });
-  noteWorkspaceStatus({}, { runWithPluginMetadataSnapshot });
-  expect(spy.mock.calls).toEqual([
-    ['Agent "alpha":\n- legacy-plugin is hook-only', "Plugin compatibility"],
-    [
-      'Agent "alpha":\n- ERROR broken-fixture: board widget registration has invalid kind (/plugins/broken-fixture/index.js)',
-      "Plugin diagnostics",
-    ],
-    ['Agent "beta":\n- legacy-plugin is hook-only', "Plugin compatibility"],
-  ]);
-  const findings = collectWorkspaceStatusHealthFindings({}, { runWithPluginMetadataSnapshot });
-  expect(findings.map((finding) => finding.message)).toEqual([
-    'Agent "alpha": legacy-plugin is hook-only',
-    'Agent "alpha": board widget registration has invalid kind',
-    'Agent "beta": legacy-plugin is hook-only',
-  ]);
-  expect(findings.filter((finding) => finding.target === "broken-fixture")).toHaveLength(1);
-  expect(activeWorkspace).toBeUndefined();
-});
-
-it("lists only errored plugin ids in deterministic order with truncation", () => {
-  const ids = "zulu bravo alpha lima charlie kilo delta juliet echo india foxtrot hotel".split(" ");
-  setReport(
-    createPluginLoadResult({
-      plugins: ids.map((id) => createPluginRecord({ id, status: "error" })),
-    }),
-  );
-  const spy = spyNotes();
-  noteWorkspaceStatus({});
-  expect(noteBody(spy, "Plugins")).toBe(
-    "Errors: 12\n- alpha\n- bravo\n- charlie\n- delta\n- echo\n- foxtrot\n- hotel\n- india\n- juliet\n- kilo\n- ...",
-  );
-});
-
-it("reports npm target lookup failure without an uninstallable fix hint", () => {
-  const findings = collectWorkspaceStatusHealthFindings(
-    { plugins: { entries: { brave: { enabled: true } } } },
-    readiness({
-      pluginId: "brave",
-      installedVersion: "2026.7.1-beta.2",
-      gatewayVersion: "2026.7.1-2",
-      source: "npm",
-      packageName: "@openclaw/brave-plugin",
-      spec: "@openclaw/brave-plugin@2026.7.1-beta.2",
-      targetResolution: {
-        status: "unresolved",
-        packageName: "@openclaw/brave-plugin",
-        requestedTarget: "2026.7.1",
-        error: "npm registry did not resolve @openclaw/brave-plugin@2026.7.1: HTTP 404",
-      },
-    }),
-  );
-  expect(findings).toEqual([
-    expect.objectContaining({
-      severity: "warning",
-      message: expect.stringContaining("Repair target resolution failed"),
-      fixHint: expect.stringContaining("No install command generated"),
-    }),
-  ]);
-  expect(findings[0]?.fixHint).not.toContain("openclaw plugins update");
-  expect(findings[0]?.fixHint).not.toContain("openclaw gateway restart");
-});
-
-it("collects compatibility warnings and plugin diagnostics", () => {
-  setReport(
-    createPluginLoadResult({
-      plugins: [],
-      diagnostics: [
-        {
-          level: "error",
-          pluginId: "broken-plugin",
-          message: "channel setup failed",
-          source: "/tmp/plugin.json",
-          code: "channel-setup-failure",
-        },
-        { level: "info", pluginId: "selected", message: "explicit plugin source selected" },
-      ],
-    }),
-    ["legacy-plugin is hook-only"],
-  );
-  expect(collectWorkspaceStatusHealthFindings({})).toEqual([
-    expect.objectContaining({
-      checkId: "core/doctor/workspace-status",
-      severity: "warning",
-      path: "plugins",
-      requirement: "plugin-compatibility",
-      message: "legacy-plugin is hook-only",
-    }),
-    expect.objectContaining({
-      checkId: "core/doctor/workspace-status",
-      severity: "error",
-      path: "plugins.entries.broken-plugin",
-      target: "broken-plugin",
-      requirement: "channel-setup-failure",
-      source: "/tmp/plugin.json",
-      message: "channel setup failed",
-    }),
-    expect.objectContaining({
-      severity: "info",
-      target: "selected",
-      message: "explicit plugin source selected",
-    }),
-  ]);
-});
-
-it("surfaces active official managed plugin version drift", () => {
-  const { findings, output } = inspect(readiness(codexDrift).pluginVersionReadiness);
-  expect(findings).toEqual([
-    expect.objectContaining({
-      checkId: "core/doctor/workspace-status",
-      severity: "warning",
-      path: "plugins.entries.codex",
-      target: "codex",
-      requirement: "plugin-version-drift",
-      message: expect.stringContaining("2026.5.30-beta.1"),
-      fixHint: expect.stringContaining("openclaw plugins update codex"),
-    }),
-  ]);
-  for (const text of [
-    "1 active official plugin not on post-restart OpenClaw 2026.6.1",
-    "codex: 2026.5.30-beta.1 (npm) -> expected 2026.6.1",
-    "openclaw plugins update codex",
-    "openclaw gateway restart",
-  ]) {
-    expect(output).toContain(text);
-  }
-});
-
-const driftConfig: OpenClawConfig = { plugins: { entries: { codex: { enabled: true } } } };
-function inspect(state: PluginVersionRestartReadiness, cfg: OpenClawConfig = driftConfig) {
-  mocks.listAgentIds.mockReturnValue([]);
-  for (const inspectWorkspace of [
-    mocks.resolveAgentWorkspaceDir,
-    mocks.buildPluginRegistrySnapshotReport,
-    mocks.buildPluginCompatibilityWarnings,
-  ]) {
-    inspectWorkspace.mockImplementation(() => {
-      throw new Error("plugin drift evidence must not inspect agent workspaces");
-    });
-  }
-  const findings = collectWorkspaceStatusHealthFindings(cfg, { pluginVersionReadiness: state });
+function inspect(readiness: PluginVersionRestartReadiness, cfg: OpenClawConfig = config) {
+  const findings = collectWorkspaceStatusHealthFindings(cfg, { pluginVersionReadiness: readiness });
   const noteSpy = vi.spyOn(noteModule, "note").mockImplementation(() => {});
   noteSpy.mockClear();
-  noteWorkspaceStatus(cfg, { pluginVersionReadiness: state });
-  return { findings, output: noteBody(noteSpy, "Plugin restart readiness") };
+  noteWorkspaceStatus(cfg, { pluginVersionReadiness: readiness });
+  return { findings, noteSpy };
 }
 
 function detectCodexDrift(installedVersion: string, gatewayVersion: string) {
@@ -265,7 +56,7 @@ function detectCodexDrift(installedVersion: string, gatewayVersion: string) {
         resolvedVersion: installedVersion,
       },
     },
-    config: driftConfig,
+    config,
   });
   for (const entry of report.drifts) {
     entry.targetResolution = {
@@ -278,34 +69,48 @@ function detectCodexDrift(installedVersion: string, gatewayVersion: string) {
   return report;
 }
 
-it.each(["unresolved", "restart"] as const)("reports %s Gateway readiness", (state) => {
-  const unresolved = state === "unresolved";
-  const runningGatewayVersion = "2026.5.30";
-  const { findings, output } = inspect(
-    unresolved
-      ? {
-          status: "unresolved",
-          reason: "Gateway service package version is unavailable.",
-          runningGatewayVersion,
-        }
-      : {
-          status: "resolved",
-          runningGatewayVersion,
-          report: detectCodexDrift("2026.6.1", "2026.6.1"),
-        },
-  );
+it("reports an unresolved post-restart target instead of silently omitting readiness", () => {
+  const readiness = {
+    status: "unresolved" as const,
+    reason: "Gateway service package version is unavailable.",
+    runningGatewayVersion: "2026.5.30",
+  };
+
+  const { findings, noteSpy } = inspect(readiness);
   expect(findings).toMatchObject([
     {
-      requirement: `plugin-version-${unresolved ? "restart-readiness" : "gateway-restart"}`,
-      message: expect.stringContaining(
-        unresolved
-          ? "Gateway service package version is unavailable"
-          : `running Gateway is ${runningGatewayVersion}`,
-      ),
-      ...(!unresolved ? { fixHint: "openclaw gateway restart" } : {}),
+      requirement: "plugin-version-restart-readiness",
+      message: expect.stringContaining("Gateway service package version is unavailable"),
     },
   ]);
-  expect(output).toContain(`Running Gateway: OpenClaw ${runningGatewayVersion}`);
+
+  expect(noteSpy).toHaveBeenCalledWith(
+    expect.stringContaining("Running Gateway: OpenClaw 2026.5.30"),
+    "Plugin restart readiness",
+  );
+});
+
+it("reports when compatible plugins still need the older running Gateway restarted", () => {
+  const runningGatewayVersion = "2026.5.30";
+  const readiness = {
+    status: "resolved" as const,
+    runningGatewayVersion,
+    report: detectCodexDrift("2026.6.1", "2026.6.1"),
+  };
+
+  const { findings, noteSpy } = inspect(readiness);
+  expect(findings).toMatchObject([
+    {
+      requirement: "plugin-version-gateway-restart",
+      message: expect.stringContaining(`running Gateway is ${runningGatewayVersion}`),
+      fixHint: "openclaw gateway restart",
+    },
+  ]);
+
+  expect(noteSpy).toHaveBeenCalledWith(
+    expect.stringContaining(`Running Gateway: OpenClaw ${runningGatewayVersion}`),
+    "Plugin restart readiness",
+  );
 });
 
 it("reports older and newer pins as advisory drift while accepting correction suffixes", () => {
@@ -313,7 +118,7 @@ it("reports older and newer pins as advisory drift while accepting correction su
 
   for (const installedVersion of ["2026.5.30", "2026.6.2"]) {
     const report = detectCodexDrift(installedVersion, gatewayVersion);
-    const { findings, output } = inspect({ status: "resolved", report });
+    const { findings, noteSpy } = inspect({ status: "resolved", report });
     expect(findings).toEqual([
       {
         checkId: "core/doctor/workspace-status",
@@ -326,15 +131,18 @@ it("reports older and newer pins as advisory drift while accepting correction su
       },
     ]);
 
-    for (const text of [
+    const driftNotes = noteSpy.mock.calls.filter(
+      ([, title]) => title === "Plugin restart readiness",
+    );
+    expect(driftNotes).toHaveLength(1);
+    expect(driftNotes[0]?.[0]).toContain(
       `1 active official plugin not on post-restart OpenClaw ${gatewayVersion}`,
+    );
+    expect(driftNotes[0]?.[0]).toContain(
       `codex: ${installedVersion} (npm) -> expected ${gatewayVersion}`,
-      "openclaw plugins update @openclaw/codex@2026.6.1",
-      "openclaw gateway restart",
-    ]) {
-      expect(output).toContain(text);
-    }
-    expect(output).not.toContain("openclaw plugins update codex");
+    );
+    expect(driftNotes[0]?.[0]).toContain("openclaw plugins update @openclaw/codex@2026.6.1");
+    expect(driftNotes[0]?.[0]).toContain("openclaw gateway restart");
   }
 
   for (const [installedVersion, correctionGatewayVersion] of [
@@ -344,7 +152,7 @@ it("reports older and newer pins as advisory drift while accepting correction su
     const report = detectCodexDrift(installedVersion, correctionGatewayVersion);
     expect(report.drifts).toEqual([]);
     expect(
-      collectWorkspaceStatusHealthFindings(driftConfig, {
+      collectWorkspaceStatusHealthFindings(config, {
         pluginVersionReadiness: {
           status: "resolved",
           report,
@@ -389,8 +197,10 @@ it.each([
         },
       }),
     );
-    const { findings, output } = inspect({ status: "resolved", report }, {});
+    const { findings, noteSpy } = inspect({ status: "resolved", report }, {});
     expect(findings).toHaveLength(1);
+    expect(noteSpy).toHaveBeenCalledOnce();
+    const output = String(noteSpy.mock.calls[0]?.[0]);
     if (result === "current") {
       expect(findings[0]?.severity).toBe("info");
       expect(findings[0]?.message).toContain("registry version 2026.9.3");

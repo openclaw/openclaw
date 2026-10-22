@@ -103,7 +103,7 @@ const cases: Array<{
   healthy?: boolean;
   activeSibling?: boolean;
   idleSibling?: "incognito" | "persistent";
-  shutdown?: "unconfirmed";
+  shutdown?: "delayed" | "cancelled" | "unconfirmed";
 }> = [
   {
     name: "recovers on the same client while an active sibling continues",
@@ -112,6 +112,8 @@ const cases: Array<{
   { name: "reloads a healthy thread", healthy: true },
   { name: "preserves an idle Incognito sibling", idleSibling: "incognito" },
   { name: "preserves an idle persistent sibling", idleSibling: "persistent" },
+  { name: "waits for physical exit before recovery", shutdown: "delayed" },
+  { name: "cancels during physical exit without reacquisition", shutdown: "cancelled" },
   {
     name: "preserves its binding when physical exit is unconfirmed",
     shutdown: "unconfirmed",
@@ -338,6 +340,7 @@ module.exports = {
     };
     const readyThreads = new Map<string, ReadyThread>();
     const lifecycleErrors = new Map<string, string[]>();
+    const abortedRuns = new Set<string>();
     const gateway = await startNativeGatewayWithClient({
       cfg,
       configPath: values.OPENCLAW_CONFIG_PATH,
@@ -347,6 +350,9 @@ module.exports = {
           return;
         }
         const { runId, stream, data } = payload;
+        if (event === "chat" && payload.state === "aborted") {
+          abortedRuns.add(runId);
+        }
         if (event !== "agent" || !isRecord(data)) {
           return;
         }
@@ -476,38 +482,58 @@ module.exports = {
     }
 
     await fs.writeFile(instruction, "NEW_POLICY_BETA");
-    const exitGate = shutdown ? holdNativeExit(nativeProcesses, previous.threadId) : undefined;
+    const exitGate = shutdown
+      ? holdNativeExit(nativeProcesses, previous.threadId, shutdown === "unconfirmed")
+      : undefined;
     if (exitGate) {
       onTestFinished(exitGate.release);
     }
     const beforeRecoveryProcesses = nativeProcesses.size;
     const continued = await start("Continue with changed instructions.", "second");
+    let abortRequest: ReturnType<typeof gateway.client.request> | undefined;
     if (exitGate) {
       await withTestTimeout(exitGate.waiting, 10_000, "startup did not wait for physical exit");
       expect(exitGate.child).toMatchObject({ exitCode: null, signalCode: null });
       expect(nativeProcesses.size).toBe(beforeRecoveryProcesses);
       expect(primaryRequests).toHaveLength(1);
       await assertOriginalBinding();
-      expect(await wait(continued.runId)).toMatchObject({
-        status: "error",
-        error: RECOVERY_FAILURE_TEXT,
-      });
-      expect(lifecycleErrors.get(continued.runId)).toEqual(
-        expect.arrayContaining([expect.stringContaining(SHUTDOWN_FAILURE_DETAIL)]),
-      );
+      if (shutdown === "cancelled") {
+        abortRequest = gateway.client.request("chat.abort", { sessionKey, runId: continued.runId });
+        void abortRequest.catch(() => {});
+        await vi.waitFor(() => expect(abortedRuns.has(continued.runId)).toBe(true));
+        expect(exitGate.child).toMatchObject({ exitCode: null, signalCode: null });
+        expect(nodeProcess.kill(exitGate.pid, 0)).toBe(true);
+      } else if (shutdown === "unconfirmed") {
+        expect(await wait(continued.runId)).toMatchObject({
+          status: "error",
+          error: RECOVERY_FAILURE_TEXT,
+        });
+        expect(lifecycleErrors.get(continued.runId)).toEqual(
+          expect.arrayContaining([expect.stringContaining(SHUTDOWN_FAILURE_DETAIL)]),
+        );
+      }
       exitGate.release();
       await withTestTimeout(exitGate.exited, 10_000, "old native process did not exit");
-      await wait(continued.runId);
-      expect(nativeProcesses.size).toBe(beforeRecoveryProcesses);
-      expect(readyThreads.has(continued.runId)).toBe(false);
-      expect(primaryRequests).toHaveLength(1);
-      await assertOriginalBinding();
-      return;
+      if (abortRequest) {
+        expect(await abortRequest).toEqual({
+          ok: true,
+          aborted: true,
+          runIds: [continued.runId],
+        });
+      }
+      if (shutdown !== "delayed") {
+        await wait(continued.runId);
+        expect(nativeProcesses.size).toBe(beforeRecoveryProcesses);
+        expect(readyThreads.has(continued.runId)).toBe(false);
+        expect(primaryRequests).toHaveLength(1);
+        await assertOriginalBinding();
+        return;
+      }
     }
     expect(await wait(continued.runId)).toMatchObject({ status: "ok" });
     const recovered = await ready(continued.runId);
     expect(recovered).toMatchObject({ threadId: previous.threadId, action: "resumed" });
-    expect(recovered.clientId).toBe(previous.clientId);
+    expect(recovered.clientId === previous.clientId).toBe(!shutdown);
     expect(primaryRequests).toHaveLength(2);
     expect(primaryRequests[1]).toMatchObject({
       threadId: previous.threadId,
@@ -517,6 +543,9 @@ module.exports = {
     const history = await gateway.client.request("chat.history", { sessionKey, limit: 20 });
     expect(JSON.stringify(history)).toContain("HISTORY_ALPHA NEW_POLICY_BETA");
 
+    if (exitGate) {
+      expect(nativeProcesses.size).toBe(beforeRecoveryProcesses + 1);
+    }
     if (siblingRunId) {
       releaseSibling.resolve();
       expect(await wait(siblingRunId)).toMatchObject({ status: "ok" });
@@ -530,7 +559,11 @@ module.exports = {
 );
 
 /** Hold only the observed native child's exit; protocol, writer lock and run cancellation stay real. */
-function holdNativeExit(processes: Map<ChildProcess, { output: string }>, threadId: string) {
+function holdNativeExit(
+  processes: Map<ChildProcess, { output: string }>,
+  threadId: string,
+  withholdExitConfirmation: boolean,
+) {
   const matches = [...processes].filter(([, captured]) => captured.output.includes(threadId));
   expect(matches).toHaveLength(1);
   const child = matches[0]?.[0];
@@ -550,33 +583,45 @@ function holdNativeExit(processes: Map<ChildProcess, { output: string }>, thread
   };
   child.on("newListener", onListener);
   const end = vi.spyOn(stdin, "end").mockImplementation(() => {
+    // Pause only controls that release the child explicitly. Missing-exit proof
+    // needs real deadlines across asynchronous native containment.
+    if (!closing && !withholdExitConfirmation) {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    }
     closing = true;
     return stdin;
   });
   const destroy = vi.spyOn(stdin, "destroy").mockImplementation(() => stdin);
   // Lost exit notification and stale child status must not become a successful
   // shutdown receipt. Keep actual Node exit state separately for teardown.
-  const restoreStatus = (["exitCode", "signalCode"] as const).map((key) => {
-    let value = child[key];
-    const descriptor = Object.getOwnPropertyDescriptor(child, key);
-    assert(descriptor);
-    Object.defineProperty(child, key, {
-      configurable: true,
-      get: () => null,
-      set: (next: typeof value) => {
-        value = next;
-      },
+  let restoreExitConfirmation = () => {};
+  if (withholdExitConfirmation) {
+    const restoreStatus = (["exitCode", "signalCode"] as const).map((key) => {
+      let value = child[key];
+      const descriptor = Object.getOwnPropertyDescriptor(child, key);
+      assert(descriptor);
+      Object.defineProperty(child, key, {
+        configurable: true,
+        get: () => null,
+        set: (next: typeof value) => {
+          value = next;
+        },
+      });
+      return () => Object.defineProperty(child, key, { ...descriptor, value });
     });
-    return () => Object.defineProperty(child, key, { ...descriptor, value });
-  });
-  const once = child.once.bind(child);
-  const receipt = vi.spyOn(child, "once").mockImplementation((event, listener) => {
-    if (event === "exit" && closing) {
-      waiting.resolve();
-      return child;
-    }
-    return once(event, listener);
-  });
+    const once = child.once.bind(child);
+    const receipt = vi.spyOn(child, "once").mockImplementation((event, listener) => {
+      if (event === "exit" && closing) {
+        waiting.resolve();
+        return child;
+      }
+      return once(event, listener);
+    });
+    restoreExitConfirmation = () => {
+      receipt.mockRestore();
+      restoreStatus.forEach((restore) => restore());
+    };
+  }
   // Containment stops the launcher before killing its native child. Keep it
   // stopped after stdin closes: on resume it mirrors the child's fatal signal.
   const kill = nodeProcess.kill.bind(nodeProcess);
@@ -607,9 +652,9 @@ function holdNativeExit(processes: Map<ChildProcess, { output: string }>, thread
         return;
       }
       released = true;
+      vi.useRealTimers();
       child.off("newListener", onListener);
-      receipt.mockRestore();
-      restoreStatus.forEach((restore) => restore());
+      restoreExitConfirmation();
       end.mockRestore();
       destroy.mockRestore();
       signal.mockRestore();

@@ -14,7 +14,8 @@ import {
 } from "./doctor.e2e-harness.js";
 
 const providerRuntimeMocks = vi.hoisted(() => ({
-  resolvePluginProvidersCore: vi.fn<(_params?: unknown) => ProviderPlugin[] | undefined>(),
+  useMockProviders: false,
+  resolvePluginProvidersCore: vi.fn((_params?: unknown): ProviderPlugin[] => []),
 }));
 
 vi.mock("../plugins/providers.runtime.js", async () => {
@@ -26,8 +27,9 @@ vi.mock("../plugins/providers.runtime.js", async () => {
     resolvePluginProvidersCore: (
       params: Parameters<typeof actual.resolvePluginProvidersCore>[0],
     ): ProviderPlugin[] =>
-      providerRuntimeMocks.resolvePluginProvidersCore(params) ??
-      actual.resolvePluginProvidersCore(params),
+      providerRuntimeMocks.useMockProviders
+        ? providerRuntimeMocks.resolvePluginProvidersCore(params)
+        : actual.resolvePluginProvidersCore(params),
   };
 });
 
@@ -56,7 +58,8 @@ beforeEach(async () => {
   ({ doctorCommand } = await import("./doctor.js"));
   ({ healthCommand } = await import("./health.js"));
   vi.clearAllMocks();
-  providerRuntimeMocks.resolvePluginProvidersCore.mockReset();
+  providerRuntimeMocks.useMockProviders = false;
+  providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([]);
 });
 
 it("runs legacy state migrations in yes mode without prompting", async () => {
@@ -65,7 +68,9 @@ it("runs legacy state migrations in yes mode without prompting", async () => {
     runtime,
     runLegacyStateMigrations,
   } = await arrangeLegacyStateMigrationTest();
-  await runDoctor(runtime, { yes: true });
+  await (runDoctor as (runtime: unknown, opts: Record<string, unknown>) => Promise<void>)(runtime, {
+    yes: true,
+  });
   expect(runLegacyStateMigrations).toHaveBeenCalledTimes(1);
   expect(confirm).not.toHaveBeenCalled();
 }, 30_000);
@@ -113,6 +118,7 @@ it("migrates anthropic oauth config profile id when only email profile exists", 
       },
     },
   });
+  providerRuntimeMocks.useMockProviders = true;
   providerRuntimeMocks.resolvePluginProvidersCore.mockReturnValue([
     {
       id: "anthropic",
