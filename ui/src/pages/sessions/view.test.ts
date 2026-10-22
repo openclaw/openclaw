@@ -1,9 +1,11 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRoot, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createOverlay, type Overlay } from "../../components/overlay-lifecycle.ts";
 import { registerModalSurface } from "../../components/overlay-registry.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import {
   disposeSessionViews,
   renderSessionsView,
@@ -103,7 +105,32 @@ describe("sessions view", () => {
         selectedKeys: new Set(bulk ? ["archived"] : []),
         searchQuery: bulk ? "" : "missing",
       } satisfies Partial<ReturnType<typeof buildProps>>;
-      renderView(result, { ...shared, ...initial });
+      const [handlers, setHandlers] = createRoot((dispose) => {
+        onTestFinished(dispose);
+        return createSignal(initial);
+      });
+      renderSessionsView(
+        {
+          ...buildProps(result),
+          ...shared,
+          get onDeselectAll() {
+            return handlers().onDeselectAll;
+          },
+          get onDeleteSelected() {
+            return handlers().onDeleteSelected;
+          },
+          get onLoadMore() {
+            return handlers().onLoadMore;
+          },
+          get onDeleteAllArchived() {
+            return handlers().onDeleteAllArchived;
+          },
+          get onClearFilters() {
+            return handlers().onClearFilters;
+          },
+        },
+        container,
+      );
       await Promise.resolve();
       const selectors = bulk
         ? ([
@@ -118,7 +145,8 @@ describe("sessions view", () => {
         selector,
         button: expectDefined(getButton(selector), name),
       }));
-      renderView(result, { ...shared, ...current });
+      setHandlers(current);
+      flush();
       for (const { name, selector, button } of buttons) {
         expect(query(selector)).toBe(button);
         button.click();

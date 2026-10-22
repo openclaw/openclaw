@@ -452,7 +452,10 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     }
   });
 
-  it("disposal rejects pending calls without cancellation", async () => {
+  it.each([
+    ["disposal", "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP proxy is stopping"],
+    ["timeout", "COMPUTER_DRIVER_UNAVAILABLE: CUA MCP tools/call timed out after 120000ms"],
+  ])("%s rejects pending calls without cancellation", async (trigger, message) => {
     const held: RpcRequest[] = [];
     const endpoint = await createSessionEndpoint((request, fake) => {
       if (request.params?.arguments?.hold) {
@@ -463,16 +466,28 @@ describe.runIf(process.platform !== "win32")("CUA MCP proxy transport", () => {
     });
     const driver = managedDriver(endpoint);
     await driver.callTool("list_windows", {});
-    const settled = Promise.allSettled([
-      driver.callTool("list_windows", { hold: true }),
-      driver.callTool("list_windows", { hold: true }),
-    ]);
-    await vi.waitFor(() => expect(held).toHaveLength(2));
+    if (trigger === "timeout") {
+      vi.useFakeTimers();
+    }
+    try {
+      const settled = Promise.allSettled([
+        driver.callTool("list_windows", { hold: true }),
+        driver.callTool("list_windows", { hold: true }),
+      ]);
+      await vi.waitFor(() => expect(held).toHaveLength(2));
+      if (trigger === "timeout") {
+        await vi.advanceTimersByTimeAsync(120_000);
+      } else {
+        await driver.dispose();
+      }
+      expect(await settled).toEqual(rejectedPair(message));
+      expect(driver.isAvailable()).toBe(false);
+    } finally {
+      if (trigger === "timeout") {
+        vi.useRealTimers();
+      }
+    }
     await driver.dispose();
-    expect(await settled).toEqual(
-      rejectedPair("COMPUTER_DRIVER_UNAVAILABLE: CUA MCP proxy is stopping"),
-    );
-    expect(driver.isAvailable()).toBe(false);
     expect(received(endpoint, "notifications/cancelled")).toBe(false);
   });
 

@@ -116,6 +116,21 @@ describe("web media loading", () => {
     fetchMock.mockRestore();
   });
 
+  it("respects maxBytes for raw URL fetches", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array(2048), { headers: { "content-type": "image/png" } }),
+      );
+    try {
+      await expect(loadWebMediaRaw("https://example.com/too-big.png", 1024)).rejects.toThrow(
+        /exceeds maxBytes 1024/i,
+      );
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
   it.each([
     [loadWebMedia, false],
     [loadWebMediaRaw, true],
