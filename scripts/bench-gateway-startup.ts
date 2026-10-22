@@ -1351,6 +1351,7 @@ async function seedTeamBootPublication(root: string, delayMs: number, agentId: s
       worktree,
       identity: {
         source: "system-configured",
+        profileId: "startup-fixture",
         account: { accountId: 1, login: "startup-fixture", avatarUrl: null },
       },
       assertCurrent() {},
