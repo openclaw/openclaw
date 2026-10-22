@@ -26,20 +26,18 @@ it("preserves a contract-declared provider and its identity metadata", async ({
     restoreRegisteredEmbeddingProviders(embeddingProvidersSnapshot);
   });
   clearEmbeddingProviders();
+  const id = "virtual-generic";
   const cacheKey = (model: string, dimensions: number | undefined) => ({
-    provider: "virtual-generic",
+    provider: id,
     model,
     dimensions,
   });
   const aliases = (dimensions: number | undefined) => [
-    {
-      model: "virtual-model-legacy",
-      cacheKeyData: cacheKey("virtual-model-legacy", dimensions),
-    },
+    { model: "virtual-model-legacy", cacheKeyData: cacheKey("virtual-model-legacy", dimensions) },
   ];
   const identity = { cacheKeyData: cacheKey("virtual-model", 7), aliases: aliases(7) };
   const runtime = {
-    id: "virtual-generic",
+    id,
     inlineQueryTimeoutMs: 1234,
     inlineBatchTimeoutMs: 5678,
     cacheKeyData: identity.cacheKeyData,
@@ -53,7 +51,7 @@ it("preserves a contract-declared provider and its identity metadata", async ({
   const providerOptions = {
     config,
     agentDir: "/tmp/openclaw-agent",
-    provider: "virtual-generic",
+    provider: id,
     fallback: "none",
     model: "virtual-model",
     outputDimensionality: 7,
@@ -64,26 +62,23 @@ it("preserves a contract-declared provider and its identity metadata", async ({
     config,
     id: "virtual-generic-plugin",
     name: "Virtual Generic Embeddings",
-    contracts: {
-      embeddingProviders: ["virtual-generic"],
-    },
+    contracts: { embeddingProviders: [id] },
     register(api) {
       api.registerEmbeddingProvider({
-        id: "virtual-generic",
+        id,
         transport: "remote",
         defaultModel: "virtual-default",
-        resolveIndexIdentity: (options) => ({
-          model: options.model,
-          cacheKeyData: cacheKey(options.model, options.dimensions),
-          aliases: aliases(options.dimensions),
+        resolveIndexIdentity: ({ model, dimensions }) => ({
+          model,
+          cacheKeyData: cacheKey(model, dimensions),
+          aliases: aliases(dimensions),
         }),
         create: async (options) => {
-          expect(options.model).toBe("virtual-model");
-          expect(options.dimensions).toBe(7);
+          expect(options).toMatchObject({ model: "virtual-model", dimensions: 7 });
           expect(options.config).toBe(config);
           return {
             provider: {
-              id: "virtual-generic",
+              id,
               model: options.model,
               dimensions: options.dimensions,
               maxInputTokens: 2048,
@@ -115,12 +110,9 @@ it("preserves a contract-declared provider and its identity metadata", async ({
 
   const result = await createEmbeddingProvider(providerOptions);
 
-  expect(result.requestedProvider).toBe("virtual-generic");
-  expect(result.provider).toMatchObject({
-    id: "virtual-generic",
-    model: "virtual-model",
-    dimensions: 7,
-    maxInputTokens: 2048,
+  expect(result).toMatchObject({
+    requestedProvider: id,
+    provider: { id, model: "virtual-model", dimensions: 7, maxInputTokens: 2048 },
   });
   expect(result.runtime).toEqual(runtime);
 

@@ -1,16 +1,30 @@
-// Memory Core tests cover MMR behavior through the production result adapter.
 import { describe, expect, it } from "vitest";
 import { mergeHybridResults } from "./hybrid.js";
 import { applyMMRToHybridResults } from "./mmr.js";
 import { prepareSimilarityText, preparedTextSimilarity } from "./tokenize.js";
 
+function candidates(rows: [string, number, string][]) {
+  return rows.map(([path, score, snippet]) => ({
+    path,
+    score,
+    snippet,
+    startLine: 1,
+    endLine: 1,
+    source: "memory",
+  }));
+}
+
 describe("memory MMR", () => {
-  it.each([{ text: "中文🙂今天", expected: ["中文", "今天", "中", "文", "今", "天"] }])(
-    "tokenizes $text in stable term order",
-    ({ text, expected }) => {
-      expect([...prepareSimilarityText(text).tokens]).toEqual(expected);
-    },
-  );
+  it("tokenizes CJK in stable term order", () => {
+    expect([...prepareSimilarityText("中文🙂今天").tokens]).toEqual([
+      "中文",
+      "今天",
+      "中",
+      "文",
+      "今",
+      "天",
+    ]);
+  });
 
   it("compares token sets and falls back to literal equality for empty token sets", () => {
     const similarity = (a: string, b: string) =>
@@ -40,80 +54,58 @@ describe("memory MMR", () => {
       ],
       expected: ["/first.md", "/second.md", "/third.md"],
     },
-  ])("$name", ({ results, expected }) => {
-    const candidates = results.map(([path, score, snippet]) => ({
-      path: String(path),
-      startLine: 1,
-      endLine: 1,
-      score: Number(score),
-      snippet: String(snippet),
-    }));
-    const scores = new Map(candidates.map((result) => [result.path, result.score]));
+  ] satisfies { name: string; results: [string, number, string][]; expected: string[] }[])(
+    "$name",
+    ({ results, expected }) => {
+      const input = candidates(results);
+      const reranked = applyMMRToHybridResults(input, 0.7);
+      expect(reranked.map((result) => result.path)).toEqual(expected);
+      for (const result of reranked) {
+        expect(result).toBe(input.find((candidate) => candidate.path === result.path));
+        expect(result.score).toBe(results.find(([path]) => path === result.path)![1]);
+      }
+    },
+  );
 
-    const reranked = applyMMRToHybridResults(candidates, 0.7);
+  it("retains distinct mixed-script memories sharing an ASCII term", () => {
+    const results = candidates([
+      ["/primary.md", 1, "server Москва резервная копия"],
+      ["/distinct.md", 0.98, "server Берлин погода сегодня"],
+      ["/weak.md", 0.9, "database connection pool"],
+      ["/tail.md", 0.1, "garden compost schedule"],
+    ]);
 
-    expect(reranked.map((result) => result.path)).toEqual(expected);
-    expect(reranked.map((result) => result.score)).toEqual(
-      expected.map((path) => scores.get(path)),
-    );
-    for (const result of reranked) {
-      expect(result).toBe(candidates.find((candidate) => candidate.path === result.path));
-    }
+    expect(applyMMRToHybridResults(results, 0.7).map((entry) => entry.path)).toEqual([
+      "/primary.md",
+      "/distinct.md",
+      "/weak.md",
+      "/tail.md",
+    ]);
   });
 
-  it.each([["server Москва резервная копия", "server Берлин погода сегодня"]])(
-    "retains distinct mixed-script memories sharing an ASCII term: %s",
-    (primary, distinct) => {
-      const results = [
-        { path: "/primary.md", startLine: 1, score: 1, snippet: primary },
-        { path: "/distinct.md", startLine: 1, score: 0.98, snippet: distinct },
-        { path: "/weak.md", startLine: 1, score: 0.9, snippet: "database connection pool" },
-        { path: "/tail.md", startLine: 1, score: 0.1, snippet: "garden compost schedule" },
-      ];
-
-      expect(applyMMRToHybridResults(results, 0.7).map((entry) => entry.path)).toEqual([
-        "/primary.md",
-        "/distinct.md",
-        "/weak.md",
-        "/tail.md",
-      ]);
-    },
-  );
-
-  it.each([{ mmr: { enabled: true, lambda: 0.7 }, paths: ["/a", "/c", "/b", "/d"] }])(
-    "applies configured hybrid MMR for $mmr",
-    async ({ mmr, paths }) => {
-      const results = [
-        { path: "/a", startLine: 1, endLine: 1, score: 1, snippet: "same", source: "memory" },
-        { path: "/b", startLine: 1, endLine: 1, score: 0.9, snippet: "same", source: "memory" },
-        {
-          path: "/c",
-          startLine: 1,
-          endLine: 1,
-          score: 0.85,
-          snippet: "different",
-          source: "memory",
-        },
-        { path: "/d", startLine: 1, endLine: 1, score: 0.1, snippet: "tail", source: "memory" },
-      ];
-
-      const merged = await mergeHybridResults({
-        vector: results.map((result) => ({
-          ...result,
-          id: result.path,
-          vectorScore: result.score,
-        })),
-        keyword: [],
-        vectorWeight: 1,
-        textWeight: 0,
-        mmr,
-        temporalDecay: { enabled: false, halfLifeDays: 30 },
-      });
-      expect(merged).toEqual(
-        paths.map((path) =>
-          expect.objectContaining(results.find((result) => result.path === path)!),
-        ),
-      );
-    },
-  );
+  it("applies configured hybrid MMR", async () => {
+    const results = candidates([
+      ["/a", 1, "same"],
+      ["/b", 0.9, "same"],
+      ["/c", 0.85, "different"],
+      ["/d", 0.1, "tail"],
+    ]);
+    const merged = await mergeHybridResults({
+      vector: results.map((result) => ({
+        ...result,
+        id: result.path,
+        vectorScore: result.score,
+      })),
+      keyword: [],
+      vectorWeight: 1,
+      textWeight: 0,
+      mmr: { enabled: true, lambda: 0.7 },
+      temporalDecay: { enabled: false, halfLifeDays: 30 },
+    });
+    expect(merged).toEqual(
+      ["/a", "/c", "/b", "/d"].map((path) =>
+        expect.objectContaining(results.find((result) => result.path === path)!),
+      ),
+    );
+  });
 });
