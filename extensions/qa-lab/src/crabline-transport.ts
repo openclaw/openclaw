@@ -7,11 +7,9 @@ import {
   type OpenClawCrablineChannelDriverSelection,
 } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  buildQaTarget as buildQaConversationTarget,
-  parseQaTarget,
-  type QaBusInboundMessageInput,
-  type QaBusMessage,
+import type {
+  QaBusInboundMessageInput,
+  QaBusMessage,
 } from "openclaw/plugin-sdk/qa-channel-protocol";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
@@ -32,6 +30,7 @@ import {
 import { cleanupCrablineResources } from "./crabline-resource-cleanup.js";
 import { createCrablineSlackIngress } from "./crabline-slack-ingress.js";
 import { readQaJsonResponse } from "./ignored-response-body.js";
+import { buildQaConversationTarget, parseQaTarget } from "./qa-bus-protocol.js";
 import {
   createQaTransportStateMethods,
   sendQaTransportNativeCommand,

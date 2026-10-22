@@ -9,20 +9,9 @@ import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import { isBuiltInModelProviderOverlayId } from "../config/model-provider-overlay-ids.js";
 import { resolveIsNixMode } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  normalizePluginsConfig,
-  resolveEffectivePluginActivationState,
-} from "../plugins/config-state.js";
-import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
-import { loadPluginManifestRegistryCore } from "../plugins/manifest-registry.js";
-import {
-  getOfficialExternalPluginCatalogEntryForPackage,
-  isOfficialExternalPluginId,
-  resolveOfficialExternalPluginId,
-  resolveOfficialExternalProviderPluginIds,
-} from "../plugins/official-external-plugin-catalog.js";
-import type { PluginRecord } from "../plugins/registry-types.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
+import { resolveOfficialExternalProviderPluginIds } from "../plugins/official-external-plugin-catalog.js";
+import { isPubliclyKnownPluginId } from "../plugins/plugin-public-identity.js";
+import { listEnabledPluginRecords } from "../plugins/plugin-runtime-inventory.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -81,11 +70,6 @@ let inFlightUpdate: Promise<TelemetryUpdate | null> | undefined;
 const pendingSuccesses = new Map<string, SuccessfulTelemetryState>();
 
 type TelemetryStorage = { databasePath: string; worker?: OpenClawStateWorkerContext };
-
-type EnabledPluginRecord = Pick<
-  PluginRecord,
-  "id" | "origin" | "packageName" | "trustedOfficialInstall" | "channelIds"
->;
 
 function captureTelemetryStorage(): TelemetryStorage {
   const databasePath = path.resolve(resolveOpenClawStateSqlitePath());
@@ -229,49 +213,8 @@ async function prepareTelemetryPayload(
   options: { surface: TelemetrySurface },
   context: TelemetryStorage,
 ): Promise<TelemetryPayload> {
-  const registry = getActivePluginRegistry();
-  let enabledPlugins: EnabledPluginRecord[];
-  if (registry) {
-    enabledPlugins = registry.plugins.filter(
-      (plugin) =>
-        plugin.enabled &&
-        plugin.status === "loaded" &&
-        (plugin.format === "bundle" || plugin.imported !== false),
-    );
-  } else {
-    const normalizedConfig = normalizePluginsConfig(config.plugins);
-    enabledPlugins = loadPluginManifestRegistryCore({ config })
-      .plugins.filter(
-        (plugin) =>
-          resolveEffectivePluginActivationState({
-            id: plugin.id,
-            origin: plugin.origin,
-            channelIds: plugin.channels,
-            config: normalizedConfig,
-            rootConfig: config,
-            enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
-          }).enabled,
-      )
-      .map((plugin) => ({
-        id: plugin.id,
-        origin: plugin.origin,
-        packageName: plugin.packageName,
-        trustedOfficialInstall: plugin.trustedOfficialInstall,
-        channelIds: plugin.channels,
-      }));
-  }
-  const publicPlugins = enabledPlugins.filter((plugin) => {
-    if (plugin.origin === "bundled" || plugin.trustedOfficialInstall === true) {
-      return true;
-    }
-    if (!isOfficialExternalPluginId(plugin.id)) {
-      return false;
-    }
-    const catalogEntry = getOfficialExternalPluginCatalogEntryForPackage(plugin.packageName);
-    return (
-      catalogEntry !== undefined && resolveOfficialExternalPluginId(catalogEntry) === plugin.id
-    );
-  });
+  const enabledPlugins = listEnabledPluginRecords(config);
+  const publicPlugins = enabledPlugins.filter(isPubliclyKnownPluginId);
   const publicChannelIds = new Set(publicPlugins.flatMap((plugin) => plugin.channelIds));
   const channels = Object.entries(config.channels ?? {})
     .filter(

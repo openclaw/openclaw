@@ -1409,6 +1409,7 @@ src/canvas/widget-tool.ts	2
 src/channels/account-snapshot-fields.ts	1
 src/channels/allowlist-match.ts	1
 src/channels/allowlists/resolve-utils.ts	3
+src/channels/chat-meta-shared.ts	1
 src/channels/direct-dm.ts	1
 src/channels/draft-stream-loop.ts	1
 src/channels/draft-streaming-chunking.ts	1

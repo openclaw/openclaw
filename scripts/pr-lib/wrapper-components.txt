@@ -445,6 +445,7 @@ src/auto-reply/tokens.ts
 src/bootstrap/node-compiler-args.ts
 src/channels/bundled-channel-catalog-read.ts
 src/channels/bundled-channel-ids.generated.ts
+src/channels/chat-meta-shared.ts
 src/channels/chat-meta.ts
 src/channels/chat-type.ts
 src/channels/config-metadata.ts

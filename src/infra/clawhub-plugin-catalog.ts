@@ -24,7 +24,6 @@ import {
   resolveClawHubBaseUrl,
   type ClawHubRequestParams,
 } from "./clawhub-client.js";
-import { parseClawHubPackageSecurityResponse } from "./clawhub-packages.js";
 import {
   parseClawHubPluginCapabilities,
   parseClawHubPluginMcpServer,
@@ -32,6 +31,10 @@ import {
   type ClawHubPluginCompatibility,
   type ClawHubPluginCapabilities,
 } from "./clawhub-plugin-manifest.js";
+import {
+  readClawHubPluginReleaseFacts,
+  type ClawHubPluginSecurity,
+} from "./clawhub-plugin-release.js";
 
 export type ClawHubPluginCatalogEntry = {
   packageName: string;
@@ -79,15 +82,6 @@ export type ClawHubPluginDetail = ClawHubPluginCatalogEntry &
   };
 
 type ClawHubPluginVersion = PluginDiscoveryDetail["versions"][number];
-
-type ClawHubPluginSecurity = {
-  status: string;
-  auditUrl?: string;
-  verdict?: string;
-  summary?: string;
-  guidance?: string;
-  checkedAt?: number;
-};
 
 type ClawHubPluginVerification = NonNullable<SchemaContract<PluginDiscoveryDetail["verification"]>>;
 
@@ -581,102 +575,13 @@ export async function fetchClawHubPluginDetail(
     : undefined;
 
   const versionRecord = readOptionalRecord(value, "version", "plugin detail response");
-  const selectedRelease: ClawHubSelectedRelease | null = versionRecord
-    ? {
-        version: readRequiredClawHubStringField(
-          versionRecord,
-          "version",
-          "selected plugin release",
-        ),
-        ...(versionRecord.createdAt != null
-          ? {
-              createdAt: readRequiredClawHubNumberField(
-                versionRecord,
-                "createdAt",
-                "selected plugin release",
-              ),
-            }
-          : {}),
-        ...(versionRecord.changelog != null
-          ? {
-              changelog:
-                readClawHubStringField(versionRecord, "changelog", "selected plugin release") ??
-                undefined,
-            }
-          : {}),
-        tags:
-          readClawHubStringArrayField(versionRecord, "distTags", "selected plugin release") ?? [],
-      }
-    : null;
-  if (params.version && selectedRelease?.version !== params.version) {
-    throw new Error("ClawHub did not return the requested plugin release.");
-  }
-  const readme = readClawHubStringField(value, "readme", "plugin detail response");
-  if (readme && Buffer.byteLength(readme, "utf8") > 512 * 1024) {
-    throw new Error("ClawHub plugin README exceeded 524288 bytes.");
-  }
-  let security: ClawHubPluginSecurity | undefined;
-  let trust: PluginInstallTrust | undefined;
-  let downloadability: ClawHubDownloadability = selectedRelease
-    ? {
-        status: "unknown",
-        reason: "ClawHub does not expose artifact storage availability for this release.",
-      }
-    : { status: "unavailable", reason: "The listing has no selected release." };
-  if (value.security != null) {
-    try {
-      const parsedSecurity = parseClawHubPackageSecurityResponse(value.security);
-      if (
-        !selectedRelease ||
-        (parsedSecurity.package?.name && parsedSecurity.package.name !== catalog.packageName) ||
-        (parsedSecurity.release?.version &&
-          parsedSecurity.release.version !== selectedRelease.version)
-      ) {
-        throw new Error("ClawHub security metadata does not describe the selected release.");
-      }
-      const { assessClawHubTrust } = await import("./clawhub-install-trust.js");
-      const disposition = assessClawHubTrust(parsedSecurity);
-      const securityTrust = parsedSecurity.trust;
-      const moderationStatus =
-        securityTrust.moderationState && securityTrust.moderationState !== "approved"
-          ? securityTrust.moderationState
-          : undefined;
-      const trustStatus = securityTrust.pending
-        ? "pending"
-        : securityTrust.stale
-          ? "stale"
-          : (moderationStatus ?? securityTrust.scanStatus ?? "unknown");
-      const normalizedTrustStatus = trustStatus.trim().toLowerCase();
-      const status =
-        disposition === "blocked"
-          ? "blocked"
-          : disposition !== "clean" &&
-              (normalizedTrustStatus === "clean" || normalizedTrustStatus === "benign")
-            ? "review"
-            : trustStatus;
-      security = {
-        status,
-        ...(parsedSecurity.verdict ? { verdict: parsedSecurity.verdict } : {}),
-        auditUrl: parsedSecurity.securityAuditUrl,
-        summary: parsedSecurity.overview,
-      };
-      trust = {
-        disposition,
-        reasons: parsedSecurity.trust.reasons,
-        pending: parsedSecurity.trust.pending,
-        stale: parsedSecurity.trust.stale,
-      };
-      if (parsedSecurity.trust.blockedFromDownload) {
-        downloadability = {
-          status: "unavailable",
-          reason:
-            parsedSecurity.trust.reasons.join("; ") || "ClawHub blocks downloads of this release.",
-        };
-      }
-    } catch {
-      // Security metadata is optional; malformed audit data must not hide the package.
-    }
-  }
+  const { selectedRelease, readme, security, trust, downloadability } =
+    await readClawHubPluginReleaseFacts({
+      value,
+      versionRecord,
+      packageName: catalog.packageName,
+      version: params.version,
+    });
   const manifestRecord = versionRecord
     ? readOptionalRecord(versionRecord, "pluginManifestSummary", "plugin version")
     : undefined;
