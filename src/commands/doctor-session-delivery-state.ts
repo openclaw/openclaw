@@ -252,42 +252,52 @@ export async function repairLegacySessionEntryStates(params: {
       params.onInspectedTargets?.(plan.inspectedTargets);
       return report;
     }
+    const runWithAuthority = async (authority: DoctorSqliteMaintenanceAuthority) => {
+      const identities = new Map(plan.pending.map(({ target, identity }) => [target, identity]));
+      const assertTargetCurrent = (target: ExistingAgentDatabaseTarget) => {
+        authority.assertCurrent();
+        const identity = identities.get(target)!;
+        assertExistingDatabaseIdentity(target.sqlitePath, identity.key, identity.birthtime);
+      };
+      const assertCurrent = () => {
+        for (const target of identities.keys()) {
+          assertTargetCurrent(target);
+        }
+      };
+      assertCurrent();
+      const backup = await backupDoctorSqliteDatabases({
+        env: params.env,
+        pendingDatabasePaths: plan.pending.map(({ target }) => target.sqlitePath),
+        databasePaths: (params.deferToMediaPreparation ? plan.inspectedTargets : plan.targets).map(
+          (target) => target.sqlitePath,
+        ),
+        authority: { assertCurrent },
+      });
+      assertCurrent();
+      note(backup.changes.map((change) => `- ${change}`).join("\n"), "Session SQLite backups");
+      report.repaired = plan.apply(assertTargetCurrent);
+      params.onInspectedTargets?.(plan.inspectedTargets);
+      note(
+        `- Canonicalized entry state for ${report.repaired} durable session row(s).`,
+        "Session SQLite",
+      );
+      return report;
+    };
     const maintenance = getOpenClawDatabaseMaintenanceScope();
     const authority =
       params.authority ??
       (maintenance?.ownsSchemaMaintenance
         ? { assertCurrent: () => maintenance.assertAdmission() }
         : undefined);
-    if (!authority) {
-      throw new Error("Session entry state repair requires Doctor maintenance ownership.");
+    if (authority) {
+      return await runWithAuthority(authority);
     }
-    const identities = new Map(plan.pending.map(({ target, identity }) => [target, identity]));
-    const assertTargetCurrent = (target: ExistingAgentDatabaseTarget) => {
-      authority.assertCurrent();
-      const identity = identities.get(target)!;
-      assertExistingDatabaseIdentity(target.sqlitePath, identity.key, identity.birthtime);
-    };
-    const assertCurrent = () => {
-      for (const target of identities.keys()) {
-        assertTargetCurrent(target);
-      }
-    };
-    assertCurrent();
-    const backup = await backupDoctorSqliteDatabases({
+    const { withDoctorSqliteMaintenanceLock } = await import("./doctor-sqlite-maintenance-lock.js");
+    return await withDoctorSqliteMaintenanceLock({
       env: params.env,
-      pendingDatabasePaths: plan.pending.map(({ target }) => target.sqlitePath),
-      databasePaths: plan.targets.map((target) => target.sqlitePath),
-      authority: { assertCurrent },
+      operation: "session entry state repair",
+      run: runWithAuthority,
     });
-    assertCurrent();
-    note(backup.changes.map((change) => `- ${change}`).join("\n"), "Session SQLite backups");
-    report.repaired = plan.apply(assertTargetCurrent);
-    params.onInspectedTargets?.(plan.inspectedTargets);
-    note(
-      `- Canonicalized entry state for ${report.repaired} durable session row(s).`,
-      "Session SQLite",
-    );
-    return report;
   } catch (error) {
     const endpoints = [{ kind: "owner" as const, id: "session-entry-state" }];
     throw new DoctorStateMigrationRefusalError([

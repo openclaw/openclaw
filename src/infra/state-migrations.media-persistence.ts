@@ -76,6 +76,7 @@ import { readSqliteUserVersion } from "./sqlite-user-version.js";
 import { createMigrationDatabaseHandle } from "./state-migrations.agent-database.js";
 import { formatAgentDatabaseCorruptionRepairHint } from "./state-migrations.agent-owner-guidance.js";
 import { recoverMisplacedAgentDatabaseCopies } from "./state-migrations.agent-owner-recovery.js";
+import { archiveSourceMatches } from "./state-migrations.media-persistence-archive-source.js";
 import {
   scanTranscriptRows,
   scanTrajectoryRows,
@@ -439,24 +440,6 @@ async function migrateAgentDatabase(params: {
     };
   } finally {
     database.close();
-  }
-}
-
-function archiveSourceMatches(
-  filePath: string,
-  expected: ReturnType<typeof readRegularFileSync>,
-): boolean {
-  try {
-    const current = readRegularFileSync({ filePath });
-    return (
-      current.exactIdentity.dev === expected.exactIdentity.dev &&
-      current.exactIdentity.ino === expected.exactIdentity.ino &&
-      current.stat.mtimeMs === expected.stat.mtimeMs &&
-      current.stat.size === expected.stat.size &&
-      current.buffer.equals(expected.buffer)
-    );
-  } catch {
-    return false;
   }
 }
 
