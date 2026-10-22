@@ -334,3 +334,20 @@ describe("command palette paste-only images", () => {
     loadingView.unmount();
   });
 });
+
+it("keeps mobile palette Return native and starts only from its button", async () => {
+  vi.spyOn(navigator, "userAgent", "get").mockReturnValue("Android");
+  const { palette, input, start, context } = await mount();
+  input.value = "A mobile prompt";
+  input.dispatchEvent(new Event("input", { bubbles: true }));
+  await vi.waitFor(() => expect(start().disabled).toBe(false));
+  for (const modifiers of [{}, { ctrlKey: true }, { metaKey: true }]) {
+    const event = key(input, { key: "Enter", ...modifiers });
+    expect(event.defaultPrevented).toBe(false);
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(palette.isOpen).toBe(true);
+  }
+  expect(start().querySelector("kbd")).toBeNull();
+  start().click();
+  await vi.waitFor(() => expect(context.sessions.createResult).toHaveBeenCalledOnce());
+});

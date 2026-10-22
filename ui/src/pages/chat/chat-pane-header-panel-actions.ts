@@ -19,8 +19,7 @@ export function buildHeaderPanelActions(input: {
     () => void
   >;
   desktopPanelAvailable: boolean;
-  discussion: { label: string; active?: boolean; onToggle: () => void } | null | undefined;
-  usesMobileHost: boolean;
+  discussion: { label: string; active?: boolean } | null | undefined;
   sessionRailVisible: boolean;
   subagentsVisible: boolean;
   processesVisible: boolean;
@@ -37,7 +36,6 @@ export function buildHeaderPanelActions(input: {
     callbacks,
     desktopPanelAvailable,
     discussion,
-    usesMobileHost,
     sessionRailVisible,
     subagentsVisible,
     processesVisible,
@@ -79,12 +77,7 @@ export function buildHeaderPanelActions(input: {
       "monitor",
       desktopPanelAvailable && sessionWorkspace.onToggleDesktop && callbacks.desktop,
     ],
-    [
-      "discussion",
-      discussion?.label ?? "",
-      "messageSquare",
-      discussion && (usesMobileHost ? discussion.onToggle : callbacks.discussion),
-    ],
+    ["discussion", discussion?.label ?? "", "messageSquare", discussion && callbacks.discussion],
     [
       "changes",
       t("chat.sessionDiff.show"),

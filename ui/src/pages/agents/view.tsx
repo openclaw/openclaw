@@ -92,8 +92,11 @@ export function Agents(props: AgentsProps) {
       : (props.readData().agentsList?.defaultId ?? null);
   const selectedAgent = createMemo(
     () =>
-      props.readData().agentsList?.agents.find((agent) => agent.id === props.selectedAgentId) ??
-      null,
+      props
+        .readData()
+        .agentsList?.agents.find(
+          (agent) => agent.kind !== "system" && agent.id === props.selectedAgentId,
+        ) ?? null,
   );
   const configActions = () => ({
     configForm: config(),
