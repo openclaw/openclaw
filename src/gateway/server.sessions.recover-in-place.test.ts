@@ -1,7 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
+import { afterEach, beforeEach, expect, onTestFinished, test, vi } from "vitest";
 import type { SessionsRecoverResult } from "../../packages/gateway-protocol/src/index.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
+import { createSubagentRunRecord } from "../agents/subagent-test-fixtures.test-helpers.js";
+import { mutateSubagentRuns } from "../agents/subagents/registry/subagent-registry-persistence.js";
+import { resetSubagentRegistryForTests } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { getRuntimeConfig } from "../config/io.js";
 import {
   loadSessionEntry,
@@ -31,6 +34,7 @@ import {
 import * as sessionRuntime from "./worker-environments/placement-session-runtime.js";
 
 afterEach(() => drainGlobalSingletonLifecycleState());
+afterEach(() => resetSubagentRegistryForTests({ persist: false }));
 const { createSessionStoreDir } = setupGatewaySessionsHandlerTestHarness();
 const prepareProfiles = useUserProfileCatalogForTest();
 const emptyDispatch = () => ({ queuedFinal: false, counts: { block: 0, final: 0, tool: 0 } });
@@ -169,9 +173,10 @@ async function recover(
     client?: GatewayRequestHandlerOptions["client"];
     hasCurrentClientAuthority?: () => boolean;
     mode?: "in-place" | "new-session";
+    automaticIdentity?: boolean;
   } = {},
 ) {
-  const { mode = "in-place", ...requestOptions } = options;
+  const { mode = "in-place", automaticIdentity, ...requestOptions } = options;
   const respond = vi.fn<Parameters<typeof handleGatewayRequest>[0]["respond"]>();
   await handleGatewayRequest({
     req: {
@@ -181,9 +186,9 @@ async function recover(
       params: {
         agentId: "main",
         key: current.key,
-        mode,
-        sessionId: current.sessionId,
-        recoveryCycleId: current.recoveryCycleId,
+        ...(!automaticIdentity
+          ? { mode, sessionId: current.sessionId, recoveryCycleId: current.recoveryCycleId }
+          : {}),
       },
     },
     ...requestOptions,
@@ -195,6 +200,115 @@ async function recover(
   const [ok, payload, error] = expectDefined(respond.mock.lastCall, "sessions.recover response");
   return { ok, payload: payload as SessionsRecoverResult | undefined, error };
 }
+
+test.for([
+  "interrupted",
+  "settled",
+  "cancelled",
+  "replacement",
+  "cli-full",
+  "cli-restricted",
+] as const)(
+  "sessions.recover resumes only the original restart-interrupted native child (%s)",
+  async (scenario, { signal }) => {
+    const cli = scenario === "cli-full" || scenario === "cli-restricted";
+    const current = await fixture(`child-recovery-${scenario}`, cli ? "claude-cli" : undefined);
+    if (cli) {
+      const previousRegistry = { ...getTestPluginRegistry() };
+      setTestPluginRegistry({
+        ...previousRegistry,
+        cliBackends: [
+          ...previousRegistry.cliBackends,
+          {
+            pluginId: "anthropic",
+            source: "test",
+            backend: {
+              id: "claude-cli",
+              modelProvider: "anthropic",
+              config: { command: "unused-fixture" },
+            },
+          },
+        ],
+      });
+      onTestFinished(() => setTestPluginRegistry(previousRegistry));
+    }
+    const runId = `child-run-${scenario}`;
+    const lifecycleRevision = `child-revision-${scenario}`;
+    await patchSessionEntryCore(current.scope, () => ({
+      mainRestartRecovery: undefined,
+      status: scenario === "cancelled" ? "killed" : "interrupted",
+      abortedLastRun: true,
+      lastRunId: runId,
+      lifecycleRevision,
+      spawnedBy: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      spawnDepth: 1,
+      subagentRole: "leaf",
+      permissionMode: scenario === "cli-full" ? "full" : "guarded",
+      restartRecoveryForceSafeTools: true,
+      restartRecoveryDeliveryRunId: runId,
+      restartRecoveryDeliverySourceRunId: `${runId}:user`,
+      restartRecoveryDeliveryContext: { channel: "webchat", to: current.key },
+      restartRecoverySourceIngress: "channel",
+    }));
+    const interrupted = createSubagentRunRecord({
+      runId,
+      childSessionKey: current.key,
+      childAgentId: "main",
+      childSessionIdentity: {
+        sessionId: scenario === "replacement" ? "retired-child-session" : current.sessionId,
+        lifecycleRevision,
+      },
+      requesterAgentId: "main",
+      execution: {
+        status: scenario === "settled" ? "terminal" : "interrupted",
+        startedAt: 1,
+        interruptionReason: "gateway-restart",
+        ...(scenario === "settled"
+          ? { endedAt: 2, outcome: { status: "error", error: "Interrupted by Gateway restart" } }
+          : {}),
+      },
+      ...(scenario === "settled"
+        ? { endedReason: "subagent-error", terminalOwner: "interrupted-recovery" }
+        : {}),
+    });
+    await mutateSubagentRuns([runId], () => ({
+      value: undefined,
+      postimages: new Map([[runId, interrupted]]),
+    }));
+    const before = await current.transcript();
+    const entryBefore = current.entry();
+    const response = await recover(current, { automaticIdentity: true });
+    if (scenario === "cancelled" || scenario === "replacement") {
+      expect(response).toMatchObject({ ok: false });
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(await current.transcript()).toEqual(before);
+      return;
+    }
+    if (scenario === "cli-restricted") {
+      expectContinuation(current, response, {
+        status: "rejected",
+        error: { details: { reason: "restart-safe-tools-unavailable" } },
+      });
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(current.entry()).toEqual(entryBefore);
+      expect(await current.transcript()).toEqual(before);
+      expect((await listSessionPendingInputs(current.scope)).items).toEqual([]);
+      return;
+    }
+    expectContinuation(current, response, { status: "started", runId: expect.any(String) });
+    await withinTest(current.drain(), signal);
+    expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+    expect(dispatchInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
+      ctx: { SessionKey: current.key },
+      replyOptions: { forceRestartSafeTools: scenario !== "cli-full" },
+    });
+    expect(current.entry()).toMatchObject({ sessionId: current.sessionId, lifecycleRevision });
+    expect(current.entry()?.mainRestartRecovery).toBeUndefined();
+    expect(current.entry()?.archivedAt).toBeUndefined();
+    expect(current.entry()?.restartRecoveryTerminalRunIds).toContain(`${runId}:user`);
+  },
+);
 
 function expectContinuation(
   current: Awaited<ReturnType<typeof fixture>>,
