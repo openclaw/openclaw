@@ -7,7 +7,7 @@ import { buildSessionEventContext } from "./session-event-context.js";
 it("keeps scheduled conversation prompts attributable through chat history projection", () => {
   const sessionKey = "agent:main:scheduled-review";
   const job = makeCronJob({
-    sessionTarget: "session:" + sessionKey,
+    sessionTarget: `session:${sessionKey}`,
     state: { runningAtMs: 1_000 },
   });
   const text = "Check the review and continue the authorized task.";
