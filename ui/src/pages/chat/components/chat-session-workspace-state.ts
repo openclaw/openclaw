@@ -198,6 +198,7 @@ export function loadSessionWorkspaceArtifacts(
       }
     }
   })();
+  artifacts.readResult = request;
   artifactLoads.set(artifacts, request);
   sessionWorkspaceForHost(state).publish();
   return request;
@@ -264,6 +265,7 @@ export function loadSessionWorkspaceDirectory(
       }
     }
   })();
+  directory.readResult = request;
   requests.set(path, request);
   sessionWorkspaceForHost(state).publish();
   return request;
@@ -336,8 +338,7 @@ export function loadSessionWorkspace(
     workspace.directories === directories &&
     workspace.browserPath === browserPath &&
     workspace.browserSearch === browserSearch;
-  sessionWorkspaceForHost(state).publish();
-  void (async () => {
+  workspace.readResult = (async () => {
     try {
       const [files] = await Promise.all([
         requestWorkspaceFiles(state, workspace, browserSearch ? "" : browserPath, browserSearch),
@@ -378,6 +379,7 @@ export function loadSessionWorkspace(
       }
     }
   })();
+  sessionWorkspaceForHost(state).publish();
 }
 
 /** Refresh workspace facts after a run, which may have created a git checkout. */

@@ -232,6 +232,37 @@ it("does not publish a catalog descriptor after the chat changes its session", a
   expect(state.sessionsResult).toBe(replacement);
 });
 
+it("keeps a pending descriptor when only catalog hints change", async () => {
+  const facts = createDeferred<{ session: GatewaySessionRow }>();
+  const before = sessionRow("agent:work:current", { agentId: "work" });
+  const after = { ...before, contextTokens: 262144 };
+  const request = makeRequestMock({
+    "chat.metadata": { commands: [] },
+    "sessions.describe": () => facts.promise,
+    "sessions.list": () => sessionsResult([before], 1),
+  });
+  const { client, sessions, state } = metadataHost(request, before.key, {
+    sessionsResultAgentId: "work",
+  });
+  onTestFinished(() => facts.resolve({ session: after }));
+  await sessions.refresh({ agentId: "work" });
+  state.sessionsResult = sessions.state.result;
+  await refreshChatMetadata(state);
+  invalidateChatMetadataStore(client);
+  await vi.waitFor(() => expect(requestCalls(request, "sessions.describe")).toHaveLength(1));
+
+  invalidateChatMetadataStore(client, { agentId: "work" }, undefined, "refresh", {
+    commandsChanged: false,
+    refreshSessionFacts: false,
+  });
+  facts.resolve({ session: after });
+  await refreshChatMetadata(state);
+
+  expect(state.sessionsResult?.sessions[0]?.contextTokens).toBe(262144);
+  expect(sessions.state.result?.sessions[0]?.contextTokens).toBe(262144);
+  expect(requestCalls(request, "sessions.describe")).toHaveLength(1);
+});
+
 it.each(["direct command revalidation", "scoped invalidation"] as const)(
   "converges pending descriptor facts after %s retires the old read",
   async (retirement) => {

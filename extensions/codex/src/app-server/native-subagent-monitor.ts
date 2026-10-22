@@ -17,6 +17,7 @@ import {
   readCodexNativeSubagentRunId,
   type NativeSubagentAssignment,
 } from "./native-subagent-assignment.js";
+import { captureNativeCancellationSelection } from "./native-subagent-cancellation-selection.js";
 import { waitForNativeCancellationWork } from "./native-subagent-cancellation-wait.js";
 import {
   CodexNativeSubagentCloseOwner,
@@ -531,42 +532,11 @@ class Monitor {
     if (!parent) {
       return run(async () => ({ killed: 0, cancelledRequesters: [] }));
     }
-    const matchesOwner = (owner: ParentOwner) =>
-      owner.requesterAgentId === params.agentId &&
-      owner.requesterSessionKey === params.sessionKey &&
-      owner.requesterSessionId === params.sessionId &&
-      owner.requesterLifecycleRevision === params.lifecycleRevision &&
-      params.acceptsRequest(owner.requestCustody);
-    const preparingOwners = new Map<ParentState, ParentOwner>();
-    for (const state of this.parentStates.values()) {
-      if (state.preparing && !state.agentId && !state.historyOwner) {
-        const owner = [...(state.pendingRegistrations ?? [])].find(matchesOwner);
-        if (owner) {
-          preparingOwners.set(state, owner);
-        }
-      }
-    }
-    const matches = (state: ParentState) => {
-      if (state.agentId || state.historyOwner) {
-        return (
-          state.agentId === params.agentId &&
-          state.requesterSessionKey === params.sessionKey &&
-          state.historyOwner?.sessionId === params.sessionId &&
-          state.historyOwner?.lifecycleRevision === params.lifecycleRevision
-        );
-      }
-      const owner = preparingOwners.get(state);
-      return Boolean(
-        state.preparing &&
-        owner &&
-        matchesOwner(owner) &&
-        (state.pendingRegistrations?.has(owner) || owner.descendantsCancelled),
-      );
-    };
-    if (!matches(parent)) {
-      throw new Error("Codex descendant cancellation requester generation changed");
-    }
-    const states = [...this.parentStates.values()].filter(matches);
+    const { matchesOwner, matches, states } = captureNativeCancellationSelection(
+      parent,
+      this.parentStates.values(),
+      params,
+    );
     const assertCustodyCurrent = () => {
       params.assertCurrent();
       if (

@@ -1,5 +1,7 @@
 import { expect, it } from "vitest";
 import { awaitGateBeforeSettlement, withTestTimeout } from "../../test/helpers/promise.js";
+import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
+import { createMainThreadStallMonitor, runWithMainThreadTask } from "../infra/main-thread-stall.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createSessionRowPlacementProjection } from "./session-row-placement-projection.js";
@@ -65,6 +67,55 @@ function placementSnapshot(reconciling: readonly string[]): WorkerSessionPlaceme
     workspaceRecoveryPendingSessionIds: new Set(),
   };
 }
+
+it.each(["gateway:rpc:sessions.list", "scheduler:maintenance:session-refresh"])(
+  "attributes prepared-row work after readiness waits to %s",
+  async (task) => {
+    const { read, query } = placementReadView();
+    let now = 0;
+    const monitor = createMainThreadStallMonitor(() => now);
+    let ready = false;
+    const owner = createSessionRowPlacementProjection(undefined, () => {
+      if (ready) {
+        return undefined;
+      }
+      return Promise.resolve().then(() => {
+        now += 5_000;
+        ready = true;
+      });
+    });
+    try {
+      await runWithMainThreadTask(task, async () => {
+        await Promise.resolve();
+        await read(
+          owner,
+          () => {
+            now += 300;
+            return [query("synthetic")];
+          },
+          () => {
+            now += 400;
+            withAgentRosterFactsBatch({}, () => {
+              now += 500;
+            });
+          },
+          () => {
+            now += 350;
+            return undefined;
+          },
+        );
+      });
+      expect(monitor.drain().stalls).toEqual([
+        { elapsedMs: 300, task: `${task}:session-rows:select`, taskMs: 300 },
+        { elapsedMs: 350, task: `${task}:session-rows:prepare`, taskMs: 350 },
+        { elapsedMs: 900, task: `${task}:agent-roster`, taskMs: 500 },
+      ]);
+    } finally {
+      owner.dispose();
+      monitor.stop();
+    }
+  },
+);
 
 it.each([false, true])(
   "settles native results before later topology changes (placement reader: %s)",

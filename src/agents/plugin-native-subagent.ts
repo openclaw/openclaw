@@ -5,6 +5,7 @@ import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-
 import type {
   NativeSubagentAccepted,
   NativeSubagentRuntime,
+  NativeSubagentSelection,
 } from "../plugins/runtime/types-native-subagent.js";
 import { normalizeAcceptedSessionSpawnResult } from "./accepted-session-spawn.js";
 import type { AdmittedRunContext, AdmittedRunOperatorAuthority } from "./admitted-run-context.js";
@@ -15,7 +16,10 @@ import { matchesSubagentRequesterSession } from "./subagents/registry/subagent-r
 import {
   getSwarmRunByLaunchReplayKey,
   initSubagentRegistry,
+  prepareSubagentRunsByRunIds,
+  type SubagentRunRecord,
 } from "./subagents/registry/subagent-registry.js";
+import { loadSubagentSessionEntry } from "./subagents/registry/subagent-session-reconciliation.js";
 import {
   SWARM_CODE_MODE_IDEMPOTENCY_KEY,
   SWARM_CODE_MODE_REQUEST_FINGERPRINT,
@@ -46,7 +50,7 @@ export type NativeSubagentRequestSource = {
 export function createRequestNativeSubagentRuntime(
   source: NativeSubagentRequestSource,
   guard: { pluginId: string; assertCurrent: () => void },
-): NativeSubagentRuntime {
+): NativeSubagentRuntime & { prepareCommand: () => Promise<boolean> } {
   const scope = getPluginRuntimeGatewayRequestScope();
   const resolveGatewayContext =
     scope?.resolveGatewayContext ?? scope?.context?.resolveGatewayContext;
@@ -60,6 +64,69 @@ export function createRequestNativeSubagentRuntime(
     source.options.abortSignal?.throwIfAborted();
     if (!resolveGatewayContext()) {
       throw new Error("Native subagent Gateway binding is no longer active.");
+    }
+  };
+  const readSelection = async (
+    runId: string,
+    childSessionKey: string,
+    requested: NativeSubagentSelection["requested"] = {},
+    records?: ReadonlyMap<string, SubagentRunRecord>,
+  ): Promise<NativeSubagentSelection> => {
+    try {
+      assertCurrent();
+      let record = records?.get(runId);
+      if (!records) {
+        const prepared = await prepareSubagentRunsByRunIds([runId]);
+        assertCurrent();
+        const read = prepared.consume((runs) => runs.get(runId));
+        record = read.ready ? read.value : undefined;
+      }
+      if (
+        !record?.collect ||
+        record.childSessionKey !== childSessionKey ||
+        record.requesterSessionKey !== source.options.sessionKey ||
+        !matchesSubagentRequesterSession(record, {
+          sessionId: source.options.sessionId,
+          lifecycleRevision: source.lifecycleRevision,
+        })
+      ) {
+        return { requested };
+      }
+      // Optional descriptive reads cannot undo a native acceptance or completion.
+      // In particular, neither tool-result hooks nor request echoes establish resolution.
+      let child;
+      try {
+        child = await loadSubagentSessionEntry({
+          childSessionKey,
+          childAgentId: record.childAgentId,
+          cfg: source.options.config,
+          assertCurrent,
+        });
+      } catch {
+        return { requested };
+      }
+      assertCurrent();
+      const identity = record.childSessionIdentity;
+      if (
+        !child ||
+        !identity ||
+        child.sessionId !== identity.sessionId ||
+        child.lifecycleRevision !== identity.lifecycleRevision
+      ) {
+        return { requested };
+      }
+      const resolved: NonNullable<NativeSubagentSelection["resolved"]> = {
+        ...(child.modelProvider && child.model
+          ? { model: `${child.modelProvider}/${child.model}` }
+          : {}),
+        ...(child.thinkingLevel !== undefined ? { thinking: child.thinkingLevel } : {}),
+        ...(child.fastMode !== undefined ? { fastMode: child.fastMode } : {}),
+      };
+      // Session controls are not provider telemetry: do not infer observed facts.
+      return { requested, ...(Object.keys(resolved).length > 0 ? { resolved } : {}) };
+    } catch {
+      // Descriptive metadata cannot revoke IDs already transferred to native custody.
+      return { requested };
     }
   };
   let admitted: AdmittedRunContext | undefined;
@@ -115,6 +182,18 @@ export function createRequestNativeSubagentRuntime(
     return result;
   };
   return {
+    async prepareCommand() {
+      const surface = await tools();
+      if (
+        !surface.some((tool) => tool.name === "sessions_spawn") ||
+        !surface.some((tool) => tool.name === "agents_wait")
+      ) {
+        return false;
+      }
+      admitted = await (preparedAdmission ??= source.prepareSpawn(assertCurrent));
+      assertCurrent();
+      return true;
+    },
     async spawn(params) {
       assertCurrent();
       if (!params.requestId?.trim()) {
@@ -142,6 +221,11 @@ export function createRequestNativeSubagentRuntime(
         mode: "run",
         collect: true,
       };
+      const requested: NativeSubagentSelection["requested"] = {
+        ...(args.model !== undefined ? { model: args.model } : {}),
+        ...(args.thinking !== undefined ? { thinking: args.thinking } : {}),
+        ...(args.fastMode !== undefined ? { fastMode: args.fastMode } : {}),
+      };
       const replayKey = createHash("sha256")
         .update(
           JSON.stringify([
@@ -158,9 +242,9 @@ export function createRequestNativeSubagentRuntime(
         throw new Error("Native subagent replay does not match the admitted request.");
       }
       if (inFlight) {
-        const accepted = await inFlight.result;
-        assertCurrent();
-        return accepted;
+        // The shared result still checks authority before acceptance. Once accepted,
+        // descriptive-read cancellation cannot hide native IDs from joining callers.
+        return await inFlight.result;
       }
       const result = (async (): Promise<NativeSubagentAccepted> => {
         let existing = await getSwarmRunByLaunchReplayKey(
@@ -200,6 +284,7 @@ export function createRequestNativeSubagentRuntime(
             runId: existing.swarmRunId ?? existing.runId,
             childSessionKey: existing.childSessionKey,
             completionMode: "collect",
+            selection: await readSelection(existing.runId, existing.childSessionKey, requested),
           };
         }
         const toolCallId = randomUUID();
@@ -248,13 +333,12 @@ export function createRequestNativeSubagentRuntime(
           runId: accepted.runId,
           childSessionKey: accepted.childSessionKey,
           completionMode: "collect",
+          selection: await readSelection(accepted.runId, accepted.childSessionKey, requested),
         };
       })();
       inFlightSpawns.set(replayKey, { fingerprint, result });
       try {
-        const accepted = await result;
-        assertCurrent();
-        return accepted;
+        return await result;
       } finally {
         inFlightSpawns.delete(replayKey);
       }
@@ -293,7 +377,29 @@ export function createRequestNativeSubagentRuntime(
         ),
       );
       assertCurrent();
-      return readNativeSubagentCollection(result.details);
+      const collection = readNativeSubagentCollection(result.details);
+      let records: ReadonlyMap<string, SubagentRunRecord> = new Map();
+      if (collection.completed.length > 0) {
+        try {
+          const prepared = await prepareSubagentRunsByRunIds(
+            collection.completed.map((item) => item.runId),
+          );
+          assertCurrent();
+          const read = prepared.consume((runs) => new Map(runs));
+          if (read.ready) {
+            records = read.value;
+          }
+        } catch {
+          // Completion is authoritative even when optional metadata is unavailable.
+        }
+      }
+      const completed = await Promise.all(
+        collection.completed.map(async (completion) => ({
+          ...completion,
+          selection: await readSelection(completion.runId, completion.sessionKey, {}, records),
+        })),
+      );
+      return { ...collection, completed };
     },
   };
 }

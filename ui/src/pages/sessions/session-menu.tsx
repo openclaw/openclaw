@@ -41,7 +41,7 @@ export type SessionsPageMenuProps = {
   groups: string[];
   work: Promise<SessionMenuWork | null> | null;
   onClose: () => void;
-  onAction: (action: SessionsPageMenuAction) => void;
+  onAction: (action: SessionsPageMenuAction) => Promise<unknown> | void;
 };
 
 export function SessionManagementMenu(props: SessionsPageMenuProps) {
@@ -132,7 +132,7 @@ export function SessionManagementMenu(props: SessionsPageMenuProps) {
         onAction={(action: SessionMenuAction) => {
           // Snooze controls belong to the sidebar; the page retains its existing action contract.
           if (action.kind !== "snooze" && action.kind !== "wake") {
-            props.onAction(action);
+            void props.onAction(action);
           }
         }}
       />
