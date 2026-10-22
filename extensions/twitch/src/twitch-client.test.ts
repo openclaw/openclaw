@@ -11,11 +11,19 @@ import {
   removeClientManager,
 } from "./client-manager-registry.js";
 import { twitchOutbound } from "./outbound.js";
-import { probeTwitch } from "./probe.js";
+import { twitchPlugin } from "./plugin.js";
 import { makeTwitchTestConfig } from "./test-fixtures.js";
 import { resolveTwitchToken } from "./token.js";
 import { TwitchClientManager } from "./twitch-client.js";
 import type { ChannelAccountSnapshot, ChannelLogSink, TwitchAccountConfig } from "./types.js";
+
+function probeTwitch(account: TwitchAccountConfig, timeoutMs: number) {
+  return twitchPlugin.status!.probeAccount!({
+    account: { ...account, accountId: "default" },
+    timeoutMs,
+    cfg: {},
+  });
+}
 
 const mockConnect = vi.fn(() => {
   for (const handler of authSuccessHandlers) {
