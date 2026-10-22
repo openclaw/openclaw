@@ -1,10 +1,10 @@
-import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { ProviderPrepareRuntimeAuthContext } from "openclaw/plugin-sdk/core";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type {
@@ -65,31 +65,21 @@ function registerProvider() {
   const register = vi.fn<(provider: ProviderPlugin) => void>();
   plugin.register(createTestPluginApi({ registerProvider: register }));
   expect(register).toHaveBeenCalledTimes(1);
-  const provider = register.mock.calls[0]?.[0];
-  assert(provider, "expected Microsoft Foundry provider");
-  return provider;
+  return expectDefined(register.mock.calls[0]?.[0], "Microsoft Foundry provider");
 }
 
 function prepareAuth(provider = registerProvider()) {
-  const prepare = provider.prepareRuntimeAuth;
-  assert(prepare, "expected Microsoft Foundry runtime auth hook");
-  return async (overrides: Partial<ProviderPrepareRuntimeAuthContext> = {}) => {
-    const result = await prepare(authContext(overrides));
-    assert(result, "expected Microsoft Foundry runtime auth result");
-    return result;
-  };
+  const prepare = expectDefined(provider.prepareRuntimeAuth, "Foundry runtime auth hook");
+  return async (overrides: Partial<ProviderPrepareRuntimeAuthContext> = {}) =>
+    expectDefined(await prepare(authContext(overrides)), "Foundry runtime auth result");
 }
 
 function providerPatch(result: ReturnType<typeof buildFoundryAuthResult>) {
-  const provider = result.configPatch?.models?.providers?.["microsoft-foundry"];
-  assert(provider, "expected Microsoft Foundry provider config patch");
-  return provider;
+  return expectDefined(result.configPatch?.models?.providers?.[providerId], "Foundry config patch");
 }
 
 function configuredProvider(config: OpenClawConfig) {
-  const provider = config.models?.providers?.[providerId];
-  assert(provider, "expected configured Microsoft Foundry provider");
-  return provider;
+  return expectDefined(config.models?.providers?.[providerId], "configured Foundry provider");
 }
 
 const baseUrl = "https://example.services.ai.azure.com/openai/v1";
@@ -135,50 +125,41 @@ function makeConfig({
   api?: FoundryProviderApi;
   timeoutSeconds?: number;
 } = {}) {
+  const profiles = Object.fromEntries(
+    profileIds.map((id) => [id, { provider: providerId, mode: "api_key" as const }]),
+  );
+  const modelProvider = {
+    baseUrl,
+    api: "openai-responses" as const,
+    models: [makeModel()],
+    ...provider,
+  };
   return {
     auth: {
-      profiles: Object.fromEntries(
-        profileIds.map((id) => [id, { provider: providerId, mode: "api_key" as const }]),
-      ),
+      profiles,
       ...(orderedProfileIds ? { order: { [providerId]: orderedProfileIds } } : {}),
     },
-    models: {
-      providers: {
-        [providerId]: {
-          baseUrl,
-          api: "openai-responses" as const,
-          models: [makeModel()],
-          ...provider,
-        },
-      },
-    },
+    models: { providers: { [providerId]: modelProvider } },
   } satisfies OpenClawConfig;
 }
 
 function entraStore(
-  overrides: Partial<{
-    api: "openai-responses" | "openai-completions" | "anthropic-messages";
-    endpoint: string;
-    modelId: string;
-    modelName: string;
-    tenantId: string;
-  }> = {},
+  overrides: Partial<Pick<FoundryAuthParams, "api" | "endpoint" | "modelId" | "tenantId">> & {
+    modelName?: string;
+  } = {},
 ) {
+  const metadata = {
+    authMethod: "entra-id",
+    endpoint,
+    modelId: "custom-deployment",
+    modelName: defaultModelId,
+    api: "openai-responses",
+    tenantId: runtimeAuthTestTenantId,
+    ...overrides,
+  };
   return {
     profiles: {
-      [profileId]: {
-        type: "api_key",
-        provider: providerId,
-        metadata: {
-          authMethod: "entra-id",
-          endpoint,
-          modelId: "custom-deployment",
-          modelName: defaultModelId,
-          api: "openai-responses",
-          tenantId: runtimeAuthTestTenantId,
-          ...overrides,
-        },
-      },
+      [profileId]: { type: "api_key", provider: providerId, metadata },
     },
   };
 }
@@ -302,9 +283,10 @@ async function selectModel(config: OpenClawConfig, modelId: string) {
 }
 
 function findAuthMethod(id: string) {
-  const method = registerProvider().auth.find((entry) => entry.id === id);
-  assert(method, `expected Foundry ${id} auth method`);
-  return method;
+  return expectDefined(
+    registerProvider().auth.find((entry) => entry.id === id),
+    `Foundry ${id} auth`,
+  );
 }
 
 function authPrompt(modelId: string) {
@@ -345,13 +327,7 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it("tolerates timeout-only provider overlays when selecting a Foundry model", async () => {
-    const config: OpenClawConfig = {
-      models: {
-        providers: {
-          [providerId]: { baseUrl: "", models: [], timeoutSeconds: 120 },
-        },
-      },
-    };
+    const config = makeConfig({ baseUrl: "", models: [], timeoutSeconds: 120 });
     await selectModel(config, "gpt-5.4");
     expect(configuredProvider(config)).toMatchObject({ models: [], timeoutSeconds: 120 });
   });
@@ -942,55 +918,42 @@ describe("microsoft-foundry plugin", () => {
     });
   });
 
-  it.each([
-    [
-      "deployment-codex-mini",
-      "gpt-5.1-codex-mini",
-      {
-        reasoning: true,
-        compat: {
-          supportsReasoningEffort: true,
-          supportedReasoningEfforts: ["none", "low", "medium", "high"],
-          maxTokensField: "max_completion_tokens",
-        },
+  it("records supported Codex Mini reasoning efforts", () => {
+    const model = builtChatModel("deployment-codex-mini", "gpt-5.1-codex-mini");
+    expect(model).toMatchObject({
+      reasoning: true,
+      compat: {
+        supportsReasoningEffort: true,
+        supportedReasoningEfforts: ["none", "low", "medium", "high"],
+        maxTokensField: "max_completion_tokens",
       },
-      {
-        off: "none",
-        minimal: null,
-        low: "low",
-        medium: "medium",
-        high: "high",
-        xhigh: null,
-        max: null,
-      },
-    ],
-    [
-      "gpt-5-codex",
-      "gpt-5-codex",
-      {
-        thinkingLevelMap: { minimal: null },
-        compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
-      },
-      undefined,
-    ],
-    [
-      "gpt-5-chat",
-      "gpt-5-chat",
-      {
-        reasoning: false,
-        contextWindow: 128_000,
-        maxTokens: 16_384,
-        compat: { supportsReasoningEffort: false, maxTokensField: "max_completion_tokens" },
-      },
-      undefined,
-    ],
-  ] as const)("records reasoning metadata for %s", (modelId, modelNameHint, expected, thinking) => {
-    const model = builtChatModel(modelId, modelNameHint);
-    expect(model).toMatchObject(expected);
+    });
     // Persisted maps use schema level keys (openclaw#91011).
-    if (thinking) {
-      expect(model?.thinkingLevelMap).toEqual(thinking);
-    }
+    expect(model?.thinkingLevelMap).toEqual({
+      off: "none",
+      minimal: null,
+      low: "low",
+      medium: "medium",
+      high: "high",
+      xhigh: null,
+      max: null,
+    });
+  });
+
+  it("excludes minimal reasoning for GPT-5 Codex", () => {
+    expect(builtChatModel("gpt-5-codex")).toMatchObject({
+      thinkingLevelMap: { minimal: null },
+      compat: { supportedReasoningEfforts: ["low", "medium", "high"] },
+    });
+  });
+
+  it("disables reasoning and retains chat limits for GPT-5 Chat", () => {
+    expect(builtChatModel("gpt-5-chat")).toMatchObject({
+      reasoning: false,
+      contextWindow: 128_000,
+      maxTokens: 16_384,
+      compat: { supportsReasoningEffort: false, maxTokensField: "max_completion_tokens" },
+    });
   });
 
   it("preserves project-scoped endpoint prefixes when extracting the Foundry endpoint", async () => {
