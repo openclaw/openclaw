@@ -1,8 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { captureAuthProfileAuthorization } from "../agents/auth-profiles/authorization.js";
-import { setAuthProfileOrder } from "../agents/auth-profiles/profiles.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../agents/auth-profiles/runtime-snapshots.js";
-import { updateAuthProfileStoreWithLock } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { persistAuthProfileBatch } from "../agents/auth-profiles/upsert-with-lock.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
@@ -21,7 +18,6 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { captureCronInferenceBinding } from "./inference-binding.runtime.js";
-import { makeJob } from "./isolated-agent.test-harness.js";
 import {
   makeIsolatedAgentJobFixture,
   makeIsolatedAgentParamsFixture,
@@ -131,128 +127,62 @@ describe("runCronIsolatedAgentTurn auth profile propagation (#20624, #90991)", (
     await state.cleanup();
   });
 
-  it.each([
-    { profileId: platformId, mode: "API-key", requirement: "api-key" },
-    { profileId: subscriptionId, mode: "OAuth", requirement: "subscription" },
-  ] as const)(
-    "forwards the creator's durable $mode account on fresh runs despite opposite current auth",
-    async ({ profileId, requirement }) => {
-      await saveProfiles({ [platformId]: apiKey(), [subscriptionId]: oauth() });
-      const cfg = config();
-      const creator: SessionEntry = {
-        sessionId: "creator-session",
-        updatedAt: 1,
-        modelProvider: "openai",
-        model: "gpt-4.1",
-        authProfileOverride: profileId,
-        authProfileOverrideSource: "auto",
-      };
-      const binding = await captureCronInferenceBinding({
-        cfg,
-        agentId: "main",
-        sessionEntry: creator,
+  it("leases the creator's account through settlement and releases it after the turn", async () => {
+    const profileId = platformId;
+    const requirement = "api-key";
+    await saveProfiles({ [platformId]: apiKey(), [subscriptionId]: oauth() });
+    const cfg = config();
+    const creator: SessionEntry = {
+      sessionId: "creator-session",
+      updatedAt: 1,
+      modelProvider: "openai",
+      model: "gpt-4.1",
+      authProfileOverride: profileId,
+      authProfileOverrideSource: "auto",
+    };
+    const binding = await captureCronInferenceBinding({
+      cfg,
+      agentId: "main",
+      sessionEntry: creator,
+    });
+    expect(creator.authProfileOverrideSource).toBe("auto");
+    const other = subscriptionId;
+    h.resolveCronAgentLaneMock.mockImplementation(resolveCronAgentLane);
+    let assertLease: (() => void) | undefined;
+    h.runEmbeddedAgentMock.mockImplementation(async (request: AgentRequest) => {
+      expect(request).toMatchObject({
+        authProfileId: profileId,
+        authProfileIdSource: "auto",
+        authProfileBinding: { profileId, authRequirement: requirement },
+        allowAuthProfileFallback: false,
+        authProfileFailurePolicy: "local_transient",
+        lane: "cron-nested",
       });
-      expect(binding).toMatchObject({
-        version: 1,
-        provider: "openai",
-        profileId,
-        source: "auto",
-        authRequirement: requirement,
-      });
-      expect(creator.authProfileOverrideSource).toBe("auto");
-      const authority = await captureAuthProfileAuthorization({
-        profileId,
-        agentDir: state.agentDir(),
-        cfg,
-        assertCurrent() {},
-      });
-      try {
-        expect(binding?.authorizationId).toBe(authority.authorizationId);
-        authority.assertCurrent();
-      } finally {
-        authority.dispose();
+      const { authProfileBinding, onSuccessfulAuthProfile } = request;
+      if (!authProfileBinding || !onSuccessfulAuthProfile) {
+        throw new Error("Expected live binding and account settlement guard");
       }
-      const job = makeAuthJob({
-        ...makeJob({ kind: "agentTurn", message: "check status" }),
-        inferenceBinding: binding,
-      });
-      const storePath = state.statePath("cron", "jobs.json");
-      await saveCronJobsStore(storePath, { version: 1, jobs: [job] });
-      const other = profileId === platformId ? subscriptionId : platformId;
-      await setAuthProfileOrder({
-        agentDir: state.agentDir(),
-        provider: "openai",
-        order: [other, profileId],
-      });
-      await updateAuthProfileStoreWithLock({
-        agentDir: state.agentDir(),
-        updater(store) {
-          store.lastGood = { openai: other };
-          return true;
-        },
-      });
-      h.resolveCronAgentLaneMock.mockImplementation(resolveCronAgentLane);
-      h.resolveSessionAuthSelectionMock.mockResolvedValue({
-        profileId: other,
-        source: "auto",
-        routeRequirement: requirement === "api-key" ? "subscription" : "api-key",
-      });
-      const liveAssertions: Array<() => void> = [];
-      h.runEmbeddedAgentMock.mockImplementation(async (request: AgentRequest) => {
-        expect(request).toMatchObject({
-          authProfileId: profileId,
-          authProfileIdSource: "auto",
-          authProfileBinding: { profileId, authRequirement: requirement },
-          allowAuthProfileFallback: false,
-          authProfileFailurePolicy: "local_transient",
-          lane: "cron-nested",
-        });
-        const { authProfileBinding, onSuccessfulAuthProfile } = request;
-        if (!authProfileBinding || !onSuccessfulAuthProfile) {
-          throw new Error("Expected live binding and account settlement guard");
-        }
-        const assertCurrent = () => authProfileBinding.assertCurrent();
-        expect(() => assertCurrent()).not.toThrow();
-        expect(() => onSuccessfulAuthProfile(profileId)).not.toThrow();
-        expect(() => onSuccessfulAuthProfile(other)).toThrow(/inference account changed/i);
-        liveAssertions.push(assertCurrent);
-        request.userTurnTranscriptRecorder?.markBlocked();
-        return { payloads: [{ text: "same authorized account" }], meta: { agentMeta: {} } };
-      });
+      const assertCurrent = () => authProfileBinding.assertCurrent();
+      expect(() => assertCurrent()).not.toThrow();
+      expect(() => onSuccessfulAuthProfile(profileId)).not.toThrow();
+      expect(() => onSuccessfulAuthProfile(other)).toThrow(/inference account changed/i);
+      assertLease = assertCurrent;
+      request.userTurnTranscriptRecorder?.markBlocked();
+      return { payloads: [{ text: "same authorized account" }], meta: { agentMeta: {} } };
+    });
 
-      let previousSessionEntry: ReturnType<typeof h.makeCronSessionEntry> | undefined;
-      for (const [index, model] of ["gpt-4.1", "gpt-4o"].entries()) {
-        // Close the real SQLite owners before each load: neither job nor credential comes from a warm handle.
-        clearRuntimeAuthProfileStoreSnapshots();
-        await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-        const reloaded = (await loadCronJobsStore(storePath)).jobs[0];
-        expect(reloaded?.inferenceBinding).toEqual(binding);
-        if (!reloaded) {
-          throw new Error("Expected the persisted automation");
-        }
-        const changed = config(`openai/${model}@${other}`);
-        changed.auth!.order = { openai: [other, profileId] };
-        h.resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model });
-        const cronSession = h.makeCronSession({
-          sessionEntry: h.makeCronSessionEntry({ sessionId: `fresh-run-${index}` }),
-          initialSessionEntry: previousSessionEntry,
-        });
-        h.resolveCronSessionMock.mockReturnValue(cronSession);
-        const result = await runWithConfig(changed, reloaded);
-        previousSessionEntry = cronSession.sessionEntry;
-        expect(result).toMatchObject({ status: "ok", sessionId: `fresh-run-${index}` });
-        expect(h.runEmbeddedAgentMock).toHaveBeenCalledTimes(index + 1);
-        expect(h.runEmbeddedAgentMock.mock.lastCall?.[0]).toMatchObject({
-          provider: "openai",
-          model,
-        });
-        expect(h.resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
-        // The assertion is backed by a per-run owner lease, not a permanently valid closure.
-        expect(() => liveAssertions[index]!()).toThrow(/disconnected|replaced/i);
-      }
-      expect(h.runCliAgentMock).not.toHaveBeenCalled();
-    },
-  );
+    // Persistence and changed defaults are covered through real HTTP in auth-continuity.integration.
+    const result = await runWithConfig(
+      config(`openai/gpt-4.1@${other}`),
+      makeAuthJob({ inferenceBinding: binding }),
+    );
+    expect(result.status, result.error).toBe("ok");
+    expect(h.runEmbeddedAgentMock).toHaveBeenCalledOnce();
+    expect(h.resolveSessionAuthSelectionMock).not.toHaveBeenCalled();
+    expect(assertLease).toBeTypeOf("function");
+    expect(() => assertLease!()).toThrow(/disconnected|replaced/i);
+    expect(h.runCliAgentMock).not.toHaveBeenCalled();
+  });
 
   it("executes a reloaded native-owned job without resolving its irrelevant host profile", async () => {
     const runtimeAuthority = {

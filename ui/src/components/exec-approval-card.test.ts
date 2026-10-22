@@ -345,20 +345,23 @@ describe("exec approval card", () => {
       });
       renderSurface(request, variant, onDecision);
       const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
-      expect(buttons.map((button) => button.textContent?.trim())).toEqual([
-        "Allow once",
-        "Allow while this App is open",
-        "Deny",
-      ]);
+      const expected = [
+        ["Allow once", "allow-once"],
+        ["Allow while this App is open", "allow-always"],
+        ["Deny", "deny"],
+      ] as const;
+      // The right-aligned modal footer keeps its primary decision at the trailing edge.
+      const order = variant === "modal" ? expected.toReversed() : expected;
+      expect(buttons.map((button) => button.textContent?.trim())).toEqual(
+        order.map(([label]) => label),
+      );
       for (const button of buttons) {
         button.click();
       }
       await Promise.all(onDecision.mock.results.map((result) => result.value));
-      expect(client.request.mock.calls).toEqual([
-        ["plugin.approval.resolve", { id: request.id, decision: "allow-once" }],
-        ["plugin.approval.resolve", { id: request.id, decision: "allow-always" }],
-        ["plugin.approval.resolve", { id: request.id, decision: "deny" }],
-      ]);
+      expect(client.request.mock.calls).toEqual(
+        order.map(([, decision]) => ["plugin.approval.resolve", { id: request.id, decision }]),
+      );
     },
   );
 

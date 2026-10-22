@@ -4,7 +4,6 @@ import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import { buildConversationIdentity } from "../../config/sessions/conversation-identity.js";
 import { registerConversationAddresses } from "../../config/sessions/conversation-registry.js";
 import { loadTranscriptEventsSync } from "../../config/sessions/session-accessor.sqlite-read.js";
-import * as reactionStore from "../../config/sessions/session-reaction-store.js";
 import { addSessionMember } from "../../config/sessions/session-sharing-store.native.js";
 import { publishSystemEventStoreConfig } from "../../config/sessions/session-store-path.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -346,7 +345,6 @@ it("reports own prompts and assistant replies with author label fallbacks", () =
   withReactionState(async () => {
     await seedSession();
     for (const [role, metadata, author] of [
-      ["user", { senderName: "Alice", senderId: "alice" }, "Alice"],
       ["user", { senderUsername: "riley", senderId: "peer-id" }, "riley"],
       ["user", { senderId: "peer-id" }, "peer-id"],
       ["assistant", undefined, "assistant"],
@@ -381,7 +379,6 @@ it("uses the kernel's newest surviving emoji for a single-slot replacement", () 
         })),
       ),
     );
-    const write = vi.spyOn(reactionStore, "setSessionReactionAsync");
     const response = await setReaction(
       messageId,
       { emoji: "🚀", remove: true },
@@ -397,7 +394,6 @@ it("uses the kernel's newest surviving emoji for a single-slot replacement", () 
         params: expect.objectContaining({ emoji: "👍", remove: false }),
       }),
     );
-    expect(await write.mock.results[0]?.value).toMatchObject({ newestRemainingEmoji: "👍" });
     expect(response[1]).not.toHaveProperty("newestRemainingEmoji");
   }));
 

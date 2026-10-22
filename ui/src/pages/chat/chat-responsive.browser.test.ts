@@ -540,10 +540,9 @@ async function openSessionRailFixture(width: number, height: number) {
                     <section class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded" role="region" aria-label="Side chat">
                       <div class="chat-session-rail__thread">
                         <article class="chat-session-rail__exchange">
-                          <div class="chat-group user chat-session-rail__message"><div class="chat-bubble chat-session-rail__question">What should I check next?</div></div>
-                          <div class="chat-group assistant chat-session-rail__message"><div class="chat-bubble chat-session-rail__answer">${LONG_SESSION_RAIL_BODY}</div></div>
+                          <div class="chat-group user chat-group--with-footer"><div class="chat-group-messages"><div class="chat-bubble">What should I check next?</div></div></div>
+                          <div class="chat-group assistant chat-group--with-footer"><div class="chat-group-messages"><div class="chat-bubble">${LONG_SESSION_RAIL_BODY}</div></div></div>
                           <span class="chat-session-rail__pr-checks">2 passed</span>
-                          <time class="chat-session-rail__timestamp">as of 4:12 PM</time>
                           <div class="chat-session-rail__hint">Side chat is already answering a question.</div>
                         </article>
                       </div>
@@ -3129,7 +3128,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         <section class="chat-session-rail chat-session-rail--expanded chat-session-rail--embedded">
           <div class="chat-session-rail__thread">
             <article class="chat-session-rail__exchange">
-              <div class="chat-session-rail__answer">
+              <div class="chat-bubble">
                 <span data-selection-target>Copy this side chat answer.</span>
               </div>
             </article>
@@ -3233,17 +3232,16 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
           return {
             thread: read(".chat-session-rail__thread"),
             prChecks: read(".chat-session-rail__pr-checks"),
-            timestamp: read(".chat-session-rail__timestamp"),
             hint: read(".chat-session-rail__hint"),
           };
         });
 
-        // PR checks, timestamps and hints are metadata inside an exchange. Sharing the
+        // PR checks and hints are metadata inside an exchange. Sharing the
         // thread's rule would give each one a 96px scrolling bordered box; the
         // selector list has silently merged before.
         expect(styles.thread.minHeight).toBe("96px");
         expect(styles.thread.overflowY).toBe("auto");
-        for (const metadata of [styles.prChecks, styles.timestamp, styles.hint]) {
+        for (const metadata of [styles.prChecks, styles.hint]) {
           // Relational, not a literal: the point is that these nodes do not share
           // the thread's rule, whatever the thread's own numbers become.
           expect(metadata.minHeight).not.toBe(styles.thread.minHeight);

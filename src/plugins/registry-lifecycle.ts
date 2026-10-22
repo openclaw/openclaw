@@ -499,9 +499,9 @@ export function capturePluginLifecycleAuthority(
             registration.instance === owner.instance &&
             owner.instance?.hasActiveCall === true) ||
           (options?.scopedRuntime === true &&
-            registryEpochs.get(registry)?.epoch === undefined &&
-            !retiredRegistries.has(registry) &&
-            registry.plugins.includes(record)))
+            registryEpochs.get(owner.registry)?.epoch === undefined &&
+            !retiredRegistries.has(owner.registry) &&
+            owner.registry.plugins.includes(record)))
       );
     };
     // Mint only from the current owner; retained closures follow legitimate adoption.

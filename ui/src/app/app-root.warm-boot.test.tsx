@@ -228,32 +228,29 @@ describe("warm boot app root", () => {
       container.querySelector("openclaw-terminal-panel"),
       "focused Terminal panel",
     );
-    expect(panel.client).toBe(client);
-    expect(panel.gatewayConnected).toBe(true);
-    expect(panel.available).toBe(true);
+    const expectPanel = (
+      owner: GatewayBrowserClient | null,
+      connected: boolean,
+      available = true,
+    ) => {
+      expect(panel.client).toBe(owner);
+      expect(panel).toMatchObject({ gatewayConnected: connected, available });
+    };
+    expectPanel(client, true);
 
-    Object.assign(snapshot, { phase: "reconnecting", hello: null });
-    await draw();
+    await draw({ phase: "reconnecting", hello: null });
     expect(container.querySelector("openclaw-terminal-panel")).toBe(panel);
-    expect(panel.client).toBe(client);
-    expect(panel.gatewayConnected).toBe(false);
-    expect(panel.available).toBe(true);
+    expectPanel(client, false);
 
-    Object.assign(snapshot, { phase: "connected", hello });
-    await draw();
-    expect(panel.client).toBe(client);
-    expect(panel.gatewayConnected).toBe(true);
+    await draw({ phase: "connected", hello });
+    expectPanel(client, true);
 
     const replacement = createTestGatewayClient(vi.fn());
-    snapshot.client = replacement;
-    await draw();
-    expect(panel.client).toBe(replacement);
+    await draw({ client: replacement });
+    expectPanel(replacement, true);
 
-    Object.assign(snapshot, { phase: "stopped", client: null, hello: null });
-    await draw();
-    expect(panel.client).toBeNull();
-    expect(panel.gatewayConnected).toBe(false);
-    expect(panel.available).toBe(false);
+    await draw({ phase: "stopped", client: null, hello: null });
+    expectPanel(null, false, false);
   });
 
   it("pins embedded ingress to its serving Gateway and never offers a shared-credential login", async () => {

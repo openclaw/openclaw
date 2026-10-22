@@ -13,7 +13,7 @@ export const agentChip = {
   working: "Working…",
   ready: "Ready to chat",
   help: "Help",
-  getHelp: "Get help",
+  getHelp: "Get support",
   getApps: "Get the apps",
   discord: "Discord community",
   viewChangelog: "View changelog",

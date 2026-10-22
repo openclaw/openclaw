@@ -15,6 +15,7 @@ import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { SessionManager } from "../../sessions/session-manager.js";
+import { taskCompletionEvents } from "../../subagent-test-fixtures.test-helpers.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { deliverCompletionDirect } from "./subagent-announce-completion-delivery.js";
 
@@ -102,19 +103,12 @@ it("settles child delivery before a blocked requester mirror", ({ signal }) =>
           deliveryTarget: { deliver: true, channel: "discord", to: "dm:mirror-fixture" },
           contentKind: "completed_result",
           agentResult: { payloads: [{ text: "Synthetic child result" }] },
-          internalEvents: [
-            {
-              type: "task_completion",
-              source: "subagent",
-              childSessionKey: "agent:main:subagent:child",
-              announceType: "subagent task",
-              taskLabel: "synthetic child",
-              status: "ok",
-              statusLabel: "completed",
-              result: "Synthetic child result",
-              replyInstruction: "Summarize the result.",
-            },
-          ],
+          internalEvents: taskCompletionEvents({
+            childSessionKey: "agent:main:subagent:child",
+            taskLabel: "synthetic child",
+            statusLabel: "completed",
+            result: "Synthetic child result",
+          }),
           onDeliveryResult,
         });
       const result = await withinTest(

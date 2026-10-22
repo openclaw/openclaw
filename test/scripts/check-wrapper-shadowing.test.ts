@@ -1,10 +1,9 @@
 import { spawnSync } from "node:child_process";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { collectRepositoryWrapperShadowing } from "../../scripts/check-wrapper-shadowing.mts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
 const guardScriptPath = fileURLToPath(
   new URL("../../scripts/check-wrapper-shadowing.mts", import.meta.url),
@@ -14,20 +13,15 @@ type GuardFixture = Record<string, string>;
 
 async function runFixture(files: GuardFixture) {
   return await withTempDir("openclaw-wrapper-shadowing-", async (repoRoot) => {
-    await Promise.all(
-      Object.entries(files).map(async ([repoPath, content]) => {
-        const filePath = path.join(repoRoot, repoPath);
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
-        await fs.writeFile(filePath, content);
-      }),
-    );
+    writeFixtureFiles(repoRoot, files);
     return await collectRepositoryWrapperShadowing(repoRoot);
   });
 }
 
 const inner = "export function runTask() { return 'inner'; }\n";
-const identity =
-  'import { runTask as inner } from "./inner.js"; export const runTask: () => string = inner;';
+const imported = (declaration: string) =>
+  `import { runTask as runTaskInner } from "./inner.js"; ${declaration}`;
+const identity = imported("export const runTask: () => string = runTaskInner;");
 const namespaceIdentity =
   'import * as bridge from "./bridge.js"; export const runTask = bridge.runTask;';
 function wrapperFixture(module: string, extension = "ts"): GuardFixture {
@@ -44,6 +38,9 @@ export function runTask() {
 function origin(name: string, files: GuardFixture, wrapped: string | null = "src/inner.ts") {
   return { name, files, wrapped };
 }
+function violation(wrapped: string, via?: string) {
+  return { name: "runTask", wrapped, wrapper: "src/outer.ts", ...(via ? { via } : {}) };
+}
 
 describe("wrapper shadowing guard", () => {
   it("fails for a same-name wrapper around an imported implementation", async () => {
@@ -57,19 +54,13 @@ describe("wrapper shadowing guard", () => {
       ),
     });
 
-    expect(result).toEqual([{ name: "runTask", wrapped: "src/inner.js", wrapper: "src/outer.ts" }]);
+    expect(result).toEqual([violation("src/inner.js")]);
   });
 
   it.each([
     ["pure re-export", 'export { runTask } from "./inner.js";'],
-    [
-      "untyped identity alias",
-      'import { runTask as runTaskInner } from "./inner.js"; export const runTask = runTaskInner;',
-    ],
-    [
-      "typed identity alias",
-      'import { runTask as runTaskInner } from "./inner.js"; export const runTask: () => string = runTaskInner;',
-    ],
+    ["untyped identity alias", imported("export const runTask = runTaskInner;")],
+    ["typed identity alias", identity],
     [
       "namespace identity alias",
       'import * as runtime from "./inner.js"; export const runTask = runtime.runTask;',
@@ -91,10 +82,10 @@ describe("wrapper shadowing guard", () => {
     const result = await runFixture({
       "src/inner.ts":
         "export const runTask = Object.assign(() => 'inner', { runTask: () => 'nested' });",
-      "src/outer.ts": `import { runTask as runTaskInner } from "./inner.js";\n${declaration}`,
+      "src/outer.ts": imported(declaration),
     });
 
-    expect(result).toEqual([{ name: "runTask", wrapped: "src/inner.ts", wrapper: "src/outer.ts" }]);
+    expect(result).toEqual([violation("src/inner.ts")]);
   });
 
   it.each([
@@ -142,14 +133,7 @@ describe("wrapper shadowing guard", () => {
   ])("resolves the wrapper origin through $name", async ({ files, wrapped }) => {
     expect(await runFixture({ ...wrapperFixture("facade"), ...files })).toEqual(
       wrapped
-        ? [
-            {
-              name: "runTask",
-              wrapped,
-              wrapper: "src/outer.ts",
-              ...(wrapped === "src/facade.ts" ? {} : { via: "src/facade.ts" }),
-            },
-          ]
+        ? [violation(wrapped, wrapped === "src/facade.ts" ? undefined : "src/facade.ts")]
         : [],
     );
   });

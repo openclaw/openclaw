@@ -273,7 +273,10 @@ export function createSessionActorWorker(
       }
       working.hot.writeToken = pendingToken;
       if (stageResidentState(database, working)) {
-        publication.actorPostimages = new Map([[sessionKey, structuredClone(working.hot)]]);
+        // The synchronous transfer shares the publication's canonical entry, including snapshots.
+        publication.actorPostimages = new Map([
+          [sessionKey, { ...working.hot, entry: postimage.entry }],
+        ]);
       }
     };
     return {

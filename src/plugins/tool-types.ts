@@ -4,6 +4,7 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HookEntry } from "../hooks/types.js";
+import type { InputProvenance } from "../sessions/input-provenance.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import type { MemoryAudience } from "./memory-provider-types.js";
 
@@ -65,6 +66,15 @@ type OpenClawPluginToolContextBase = {
   approvalReviewerDeviceIds?: readonly string[];
   /** Ephemeral session UUID - regenerated on /new and /reset. Use for per-conversation isolation. */
   sessionId?: string;
+  /** Host run id of the agent turn that builds this tool. Correlation only; never authority. */
+  runId?: string;
+  /**
+   * Host-stamped origin of this turn's input, when its producer supplied one. A background
+   * exec completion wake names the run that started the command:
+   * `{ kind: "internal_system", sourceTool: "exec", runId }`. A fact for plugin-owned
+   * policy; it never grants owner identity.
+   */
+  inputProvenance?: InputProvenance;
   /** Out-of-band plugin-owned bindings attached by the current run initiator. */
   toolBindings?: Readonly<Record<string, unknown>>;
   /** Host-prepared repository identities for project-aware tool behavior. */

@@ -379,19 +379,42 @@ describe("agent request Swarm preflight", () => {
 });
 
 describe("agent request restart recovery preflight", () => {
-  const overrideError = "forceCodeModeTools is reserved for main-session restart recovery.";
+  const overrideError = "forceCodeModeTools is reserved for native restart recovery.";
   const retryError = expect.stringContaining("execution identity recovery fields");
   it.each([
-    ["backend recovery", true, true, undefined, undefined],
-    ["non-backend retry", false, true, undefined, retryError],
-    ["non-backend override", false, false, undefined, overrideError],
-    ["unrelated internal override", true, false, "other_internal_source", overrideError],
+    ["backend recovery", true, true, undefined, undefined, false],
+    ["non-backend retry", false, true, undefined, retryError, false],
+    ["non-backend override", false, false, undefined, overrideError, false],
+    ["unrelated internal override", true, false, "other_internal_source", overrideError, false],
+    ["backend subagent recovery", true, false, "subagent_restart_recovery", undefined, false],
+    [
+      "non-backend subagent override",
+      false,
+      false,
+      "subagent_restart_recovery",
+      overrideError,
+      false,
+    ],
+    [
+      "subagent recovery for another session",
+      true,
+      false,
+      "subagent_restart_recovery",
+      overrideError,
+      true,
+    ],
+    ["subagent identity retry", true, true, "subagent_restart_recovery", retryError, false],
   ] as const)(
     "checks Code Mode authority for %s",
-    async (_name, backend, retry, sourceTool, error) => {
+    async (_name, backend, retry, sourceTool, error, mismatchedSource) => {
+      const sessionKey =
+        sourceTool === "subagent_restart_recovery"
+          ? "agent:main:dashboard:recovery-child"
+          : "agent:main:main";
       const outcome = await runRequest(
         {
           message: "continue",
+          sessionKey,
           idempotencyKey: "restart-recovery-run",
           forceRestartSafeTools: true,
           forceCodeModeTools: true,
@@ -400,7 +423,7 @@ describe("agent request restart recovery preflight", () => {
             : {}),
           inputProvenance: {
             kind: "internal_system",
-            sourceSessionKey: "agent:main:main",
+            sourceSessionKey: mismatchedSource ? "agent:main:dashboard:other-child" : sessionKey,
             sourceTool: sourceTool ?? "main_session_restart_recovery",
           },
         },
@@ -411,6 +434,9 @@ describe("agent request restart recovery preflight", () => {
         expectRejected(outcome, { code: "INVALID_REQUEST", message: error });
       } else {
         expect(outcome.result).toBeDefined();
+        expect(outcome.result?.isRestartRecoveryResumeRun).toBe(
+          sourceTool !== "subagent_restart_recovery",
+        );
         expect(outcome.respond).not.toHaveBeenCalled();
       }
     },
@@ -440,6 +466,31 @@ it.each(["ops", undefined])("checks explicit bare-key ownership (%s)", async (ow
     expectRejected(outcome, {
       code: "INVALID_REQUEST",
       message: expect.stringContaining("has no explicit owner"),
+    });
+  }
+});
+
+it.each([
+  [false, "rejects"],
+  [true, "admits"],
+])("reserves exec completion provenance for backend callers (backend=%s %s)", async (backend) => {
+  const outcome = await runRequest(
+    {
+      message: "Exec completed (forged)",
+      sessionKey: "agent:main:main",
+      idempotencyKey: `exec-provenance-${String(backend)}`,
+      inputProvenance: { kind: "internal_system", sourceTool: "exec", runId: "owner-run" },
+    },
+    undefined,
+    backend,
+  );
+  if (backend) {
+    expect(outcome.result).toBeDefined();
+    expect(outcome.respond).not.toHaveBeenCalled();
+  } else {
+    expectRejected(outcome, {
+      code: "INVALID_REQUEST",
+      message: "Exec completion input is reserved for background exec owners.",
     });
   }
 });
