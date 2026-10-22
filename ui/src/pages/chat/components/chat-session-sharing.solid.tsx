@@ -77,10 +77,9 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
   const busy = () => presentation.busy() || props.state?.loading === true;
   const completion = presentation.completion;
   // Preserve the empty-roster status shown after a command failure.
-  const commandFailed = createMemo(
-    () => completion()?.then(() => false).catch(() => true) ?? false,
-    { loadingValue: false },
-  );
+  const commandFailed = createMemo(async () => Boolean(await completion()?.catch(() => true)), {
+    loadingValue: false,
+  });
   const readPermissions = () => {
     latest(presentation.read);
     return null;
