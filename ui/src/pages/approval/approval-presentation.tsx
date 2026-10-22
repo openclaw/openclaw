@@ -9,11 +9,22 @@ import { summarizeApprovalScopeLabel } from "../../app/approval-presentation.ts"
 import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import type { ApprovalPageView } from "./approval-page.tsx";
 
 registerEnglishCatalog(registerApprovalsEnglish);
 
 export type ResolutionOrigin = "here" | "elsewhere" | "observed";
+
+type ApprovalPageView = {
+  read: () => {
+    resolutionOrigin: ResolutionOrigin;
+    requestError: "connection" | "unavailable" | null;
+  };
+  setHeading: (element: HTMLHeadingElement) => void;
+  hasApprovalGrantAccess: () => boolean;
+  hasGatewayConnection: () => boolean;
+  resolvingDecision: () => ApprovalDecision | null;
+  resolveApproval: (decision: ApprovalDecision) => Promise<void>;
+};
 
 export function decisionLabel(
   decision: ApprovalDecision,

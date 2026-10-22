@@ -632,5 +632,3 @@ defineSolidBridge<ApprovalPageProps>(
     propertyChanged: (host) => approvalIdHandlers.get(host)?.(),
   },
 );
-
-export type ApprovalPageView = ReturnType<typeof createApprovalPage>;
