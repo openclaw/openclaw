@@ -1,19 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { authProvider, subscriptionRoute } from "./auth-fixtures.test-support.js";
+import { subscriptionPlan as buildPlan } from "./auth-fixtures.test-support.js";
 import { createPreparedRuntimeModelMaterializer } from "./credential-scoped-model.js";
-import type { AgentRuntimeAuthPlan } from "./types.js";
-
-// Fresh object per call, matching prepare-auth minting new plans every turn.
-function buildPlan(overrides: Partial<AgentRuntimeAuthPlan> = {}): AgentRuntimeAuthPlan {
-  return {
-    ...authProvider,
-    forwardedAuthProfileId: "openai:subscription",
-    selectedAuthMode: "token",
-    modelRoute: { ...subscriptionRoute },
-    ...overrides,
-  };
-}
 
 const routedModel = {
   provider: "openai",

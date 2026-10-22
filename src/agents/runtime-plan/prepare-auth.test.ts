@@ -240,9 +240,7 @@ it("does not let clear OAuth auth hide a cooldown Platform tier before literal f
     },
     { openai: ["openai:chatgpt", "openai:platform"] },
   );
-  store.usageStats = {
-    "openai:platform": { cooldownUntil: Date.now() + 60_000 },
-  };
+  setProfileCooldown(store, "openai:platform");
 
   expectAuthError({
     routeIntent: { authRequirement: "api-key", source: "explicit" },
@@ -546,9 +544,7 @@ it("does not unlock direct fallback when every prepared profile cools down befor
   if (profileAttempt?.kind !== "profile" || directAttempt?.kind !== "direct") {
     throw new Error("expected profile and direct attempts");
   }
-  store.usageStats = {
-    "openai:platform": { cooldownUntil: Date.now() + 60_000 },
-  };
+  setProfileCooldown(store, "openai:platform");
 
   expect(
     preparedAgentRuntimeProfileAttemptHasCandidate({

@@ -6,20 +6,14 @@ import {
 } from "../../config/plugin-auto-enable.test-helpers.js";
 import { configFor } from "../model-auth.fixtures.test-support.js";
 import {
-  authProvider,
   platformModel,
   subscriptionModel,
-  subscriptionRoute,
+  subscriptionPlan as createSubscriptionPlan,
 } from "./auth-fixtures.test-support.js";
 import { materializePreparedRuntimeModel, type RuntimeRouteModel } from "./materialize-model.js";
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
-const plan: AgentRuntimeAuthPlan = {
-  ...authProvider,
-  forwardedAuthProfileId: "openai:subscription",
-  selectedAuthMode: "token",
-  modelRoute: subscriptionRoute,
-};
+const plan = createSubscriptionPlan();
 
 type MaterializeParams<M extends RuntimeRouteModel> = Parameters<
   typeof materializePreparedRuntimeModel<M>
