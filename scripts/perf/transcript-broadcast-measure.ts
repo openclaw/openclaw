@@ -428,6 +428,16 @@ if (
   throw new Error("--broadcast-timing requires --diagnostics --entry src/entry.ts");
 }
 if (
+  values["broadcast-timing"] &&
+  (values.allocations ||
+    values["stream-start-allocations"] ||
+    (soakScenario && retainedProfileMs > 0))
+) {
+  throw new Error(
+    "--broadcast-timing needs a separate pass without --allocations, --stream-start-allocations, or memory-soak retained heap capture (--retained-profile-ms 0)",
+  );
+}
+if (
   values["session-projection-source"] &&
   path.resolve(values.entry) !== path.resolve("src/entry.ts")
 ) {

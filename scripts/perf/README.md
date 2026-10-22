@@ -2362,7 +2362,8 @@ src/gateway` for the candidate. The preload reads all four before Gateway startu
 and fails on a missing file; it substitutes raw TypeScript while retaining canonical
 module URLs, relative imports, and source line numbers. The report records the
 resolved `sessionProjectionSource`. Use separate fixtures and ports with matching
-workload flags; `--broadcast-timing` remains available in both arms.
+workload flags. Collect allocation and broadcast-timing comparisons in separate
+passes so the timing observer's allocations do not enter the broadcast profile.
 
 The existing allocation diagnostics include per-kind GC pause `count`, `total`,
 `max`, `p95`, and `p99` under `allocation.diagnostics.gc`, plus event-loop sample
@@ -2379,6 +2380,8 @@ source anchors or an unloaded owner. This includes recipient projection, encodin
 and synchronous socket submission; it excludes completion of asynchronous socket
 writes. It also counts calls that return without delivering a frame. Enable it
 identically in both arms and report that timing instrumentation was present.
+The timer rejects allocation sampling, including stream-start and memory-soak
+retained profiles; use `--retained-profile-ms 0` for a timing-only memory soak.
 Use a sufficiently long single allocation round when gating natural GC and loop
 tails; for example, 4,000 chunks at 10 ms with eight concurrent runs and 48 clients.
 Check actual sample counts rather than inferring them from requested duration.
