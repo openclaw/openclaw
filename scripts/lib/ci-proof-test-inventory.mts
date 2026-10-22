@@ -4817,7 +4817,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "test/scripts/release-workflow-git-lifecycle.test.ts",
   "test/scripts/render-maturity-docs.test.ts",
   "test/scripts/repo-e2e-artifacts.test.ts",
-  "test/scripts/run-tsgo.test.ts",
   "test/scripts/run-vitest-profile.test.ts",
   "test/scripts/validate-release-publish-approval.test.ts",
   "test/scripts/vitest-fork-shutdown.test.ts",

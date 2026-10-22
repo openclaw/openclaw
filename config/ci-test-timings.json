@@ -2910,7 +2910,6 @@
       "test/scripts/run-oxlint.test.ts": 4,
       "test/scripts/run-swiftlint.test.ts": 1,
       "test/scripts/run-tsgo-worktree.test.ts": 2,
-      "test/scripts/run-tsgo.test.ts": 8,
       "test/scripts/run-vitest-bounded.test.ts": 55,
       "test/scripts/run-vitest-profile.test.ts": 22,
       "test/scripts/run-vitest-progress.test.ts": 2,

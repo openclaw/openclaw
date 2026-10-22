@@ -63,55 +63,45 @@ function makeCtx(cfg: Config, accountId: string) {
 
 describe("startIMessageGatewayAccount duplicate-source handling", () => {
   it.each([
-    {
-      name: "parks a non-owner duplicate without spawning a watcher",
-      accounts: (): NonNullable<ChannelConfig["accounts"]> => ({
-        "swang430-gmail-com": { cliPath: "imsg" },
-        default: { enabled: true },
-      }),
-      ownerId: "swang430-gmail-com",
-      duplicateId: "default",
-      startOwner: false,
-    },
-    {
-      name: "shares an executable with implicit and explicit databases",
-      accounts: (): NonNullable<ChannelConfig["accounts"]> => ({
-        primary: { cliPath: "/usr/local/bin/imsg" },
-        secondary: {
-          cliPath: "/usr/local/bin/imsg",
-          dbPath: path.join(process.env.HOME || os.homedir(), "Library", "Messages", "chat.db"),
-        },
-      }),
-      ownerId: "primary",
-      duplicateId: "secondary",
-      startOwner: true,
-    },
-  ])("$name", async ({ accounts, ownerId, duplicateId, startOwner }) => {
-    monitorMock.mockReset().mockResolvedValue(undefined);
-    const cfg = accountConfig(accounts());
-    if (startOwner) {
-      await startIMessageGatewayAccount(makeCtx(cfg, ownerId).ctx);
-    }
-    const { ctx, abort, logEvents, statusEvents } = makeCtx(cfg, duplicateId);
-    const settled = vi.fn();
-    const task = startIMessageGatewayAccount(ctx).then(settled);
-    const monitorCount = startOwner ? 1 : 0;
-    try {
-      await vi.waitFor(() => expect(skipsWatcher(logEvents)).toBe(true));
+    ["swang430-gmail-com", "default", false],
+    ["primary", "secondary", true],
+  ] as const)(
+    "parks duplicate %s / %s (owner started: %s)",
+    async (ownerId, duplicateId, startOwner) => {
+      monitorMock.mockReset().mockResolvedValue(undefined);
+      const cfg = accountConfig({
+        [ownerId]: { cliPath: startOwner ? "/usr/local/bin/imsg" : "imsg" },
+        [duplicateId]: startOwner
+          ? {
+              cliPath: "/usr/local/bin/imsg",
+              dbPath: path.join(process.env.HOME || os.homedir(), "Library", "Messages", "chat.db"),
+            }
+          : { enabled: true },
+      });
+      if (startOwner) {
+        await startIMessageGatewayAccount(makeCtx(cfg, ownerId).ctx);
+      }
+      const { ctx, abort, logEvents, statusEvents } = makeCtx(cfg, duplicateId);
+      const settled = vi.fn();
+      const task = startIMessageGatewayAccount(ctx).then(settled);
+      const monitorCount = startOwner ? 1 : 0;
+      try {
+        await vi.waitFor(() => expect(skipsWatcher(logEvents)).toBe(true));
+        expect(monitorMock).toHaveBeenCalledTimes(monitorCount);
+        expect(settled).not.toHaveBeenCalled();
+        expect(logEvents.some((e) => e.line.includes(`using account "${ownerId}"`))).toBe(true);
+        expect(statusEvents).not.toEqual([]);
+        expect(statusEvents.every((event) => !(event as Record<string, unknown>).lifecycle)).toBe(
+          true,
+        );
+      } finally {
+        abort();
+        await task;
+      }
+      expect(settled).toHaveBeenCalled();
       expect(monitorMock).toHaveBeenCalledTimes(monitorCount);
-      expect(settled).not.toHaveBeenCalled();
-      expect(logEvents.some((e) => e.line.includes(`using account "${ownerId}"`))).toBe(true);
-      expect(statusEvents).not.toEqual([]);
-      expect(statusEvents.every((event) => !(event as Record<string, unknown>).lifecycle)).toBe(
-        true,
-      );
-    } finally {
-      abort();
-      await task;
-    }
-    expect(settled).toHaveBeenCalled();
-    expect(monitorMock).toHaveBeenCalledTimes(monitorCount);
-  });
+    },
+  );
 
   it("starts independent monitors for distinct auto-detected remote wrappers named imsg", async () => {
     monitorMock.mockClear();
