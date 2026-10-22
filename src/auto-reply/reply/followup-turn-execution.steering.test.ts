@@ -195,6 +195,7 @@ describe("queued turn steering", () => {
             },
             session: {
               ...target,
+              resolvedSessionModel: { provider: "anthropic", model: "claude" },
               cfg: {},
               entry: turn.session.current(),
               clientRunId,

@@ -367,13 +367,11 @@ describe("createAgentHarnessToolSurfaceRuntime", () => {
     expect(restored.callableToolNames).toEqual(names);
   });
 
-  it.each([
-    { name: "message-only delivery", sourceReplyDeliveryMode: "message_tool_only" as const },
-  ])("keeps $name directly visible in Code Mode", (delivery) => {
+  it("keeps message-only delivery directly visible in Code Mode", () => {
     const runtime = configuredRuntime({
       config: { tools: { codeMode: true } },
       executeTool: async () => ({ content: [], details: {} }),
-      ...delivery,
+      sourceReplyDeliveryMode: "message_tool_only",
     });
 
     expect(

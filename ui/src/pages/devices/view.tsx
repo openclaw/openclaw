@@ -7,7 +7,7 @@ import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import "../../styles/devices.css";
 import { ExecApprovals, resolveExecApprovalsState } from "./view-exec-approvals.tsx";
-import { DeviceInventory } from "./view-inventory.tsx";
+import { DeviceInventory } from "./view-inventory-readiness.tsx";
 import { resolveConfigAgents, resolveNodeTargets } from "./view-shared.tsx";
 import type { DevicesProps } from "./view.types.ts";
 

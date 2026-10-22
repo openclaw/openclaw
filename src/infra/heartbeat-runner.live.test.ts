@@ -35,7 +35,7 @@ async function readMessages(config: OpenClawConfig, sessionKey: string): Promise
   }
   return readSessionMessagesAsync(
     { storePath, sessionEntry: entry, sessionId: entry.sessionId, sessionKey },
-    { mode: "full", reason: "live completion and heartbeat routing verification" },
+    { mode: "full", reason: "live completion and scheduled event routing verification" },
   );
 }
 
@@ -82,7 +82,7 @@ async function writeGateFixture(workspace: string, name: string, output: string,
 
 describeLive("session event wake through a live Gateway", () => {
   it.each([
-    { outcome: "success and keeps monitor polls on main", exitCode: 0, busySibling: false },
+    { outcome: "success and keeps an ordinary schedule on main", exitCode: 0, busySibling: false },
     { outcome: "watcher failure during another session", exitCode: 7, busySibling: true },
   ])(
     "continues a completed foreground session for $outcome",
@@ -119,6 +119,7 @@ describeLive("session event wake through a live Gateway", () => {
       const followupReply = busySibling ? `${completionReply} | code ${exitCode}` : completionReply;
       const siblingReply = `SIBLING-FINISHED-${nonce}`;
       const monitorReply = `MAIN-MONITOR-${nonce}`;
+      const monitorPrompt = `Reply exactly ${monitorReply}. Do no other work.`;
       const workspace = instance.state.workspaceDir;
       const gatePath = path.join(workspace, "release-completion");
       const siblingGatePath = path.join(workspace, "release-sibling");
@@ -165,11 +166,6 @@ describeLive("session event wake through a live Gateway", () => {
               model: { primary: MODEL },
               models: { [MODEL]: { agentRuntime: { id: "openclaw" } } },
               sandbox: { mode: "off" },
-              heartbeat: {
-                every: "24h",
-                target: busySibling ? "last" : "none",
-                prompt: `Reply exactly ${monitorReply}. Do no other work.`,
-              },
             },
           },
           tools: {
@@ -295,7 +291,7 @@ describeLive("session event wake through a live Gateway", () => {
         expect(completionUsers).toMatch(
           new RegExp(`Exec completed \\([^)]*, code ${exitCode}\\) :: ${completionReply}`),
         );
-        expect(completionUsers).not.toContain("[OpenClaw heartbeat poll]");
+        expect(completionUsers).not.toContain(monitorPrompt);
         expect(await fs.readFile(path.join(workspace, "completion-completed"), "utf8")).toBe(
           "completed",
         );
@@ -315,9 +311,17 @@ describeLive("session event wake through a live Gateway", () => {
           ).toContain(siblingReply);
         }
 
-        // The success case also exercises scheduled monitoring; target:last
-        // on the failure case's untouched main session has no delivery route.
+        // The success case also exercises an ordinary main-session schedule.
         if (!busySibling) {
+          const scheduled = await client.request<{ id: string }>("cron.add", {
+            agentId: "main",
+            name: "Live main-session schedule",
+            schedule: { kind: "every", everyMs: 86_400_000 },
+            sessionTarget: "main",
+            wakeMode: "now",
+            payload: { kind: "systemEvent", text: monitorPrompt },
+            delivery: { mode: "none" },
+          });
           const jobs = await client.request<{
             jobs: Array<{
               id: string;
@@ -326,10 +330,13 @@ describeLive("session event wake through a live Gateway", () => {
               sessionTarget: string;
             }>;
           }>("cron.list", { includeDisabled: true });
-          const monitor = jobs.jobs.find((job) => job.payload.kind === "heartbeat");
-          expect(monitor).toMatchObject({ sessionTarget: "main" });
+          const monitor = jobs.jobs.find((job) => job.id === scheduled.id);
+          expect(monitor).toMatchObject({
+            sessionTarget: "main",
+            payload: { kind: "systemEvent", text: monitorPrompt },
+          });
           if (!monitor) {
-            throw new Error("Gateway did not create its main-session heartbeat monitor");
+            throw new Error("Gateway did not create its main-session schedule");
           }
           const forced = await client.request<{ ok: boolean }>("cron.run", {
             id: monitor.id,
@@ -339,7 +346,7 @@ describeLive("session event wake through a live Gateway", () => {
           await vi.waitFor(
             async () => {
               const mainMessages = await readMessages(config, mainSessionKey);
-              expect(messagesWithRole(mainMessages, "user")).toContain("[OpenClaw heartbeat poll]");
+              expect(messagesWithRole(mainMessages, "user")).toContain(monitorPrompt);
               expect(messagesWithRole(mainMessages, "assistant")).toContain(monitorReply);
             },
             { timeout: TURN_TIMEOUT_MS, interval: 1_000 },

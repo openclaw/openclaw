@@ -110,33 +110,29 @@ function recordsFor(
     typeof durations === "function"
       ? durations
       : () => ({ baselineMs: 100, candidateMs: 100 * durations });
-  const records: BenchmarkRunRecord[] = [];
-  for (const lane of manifest.lanes) {
-    for (const round of [...Array.from({ length: manifest.rounds }, (_, i) => i + 1), null]) {
+  return manifest.lanes.flatMap((lane) =>
+    [...Array.from({ length: manifest.rounds }, (_, i) => i + 1), null].flatMap((round) => {
       const pair = round === null ? `cold-${lane.id}` : `measured-${round}-${lane.id}`;
       const pairDurations = durationsFor(lane.id, round);
-      for (const side of ["baseline", "candidate"] as const) {
-        records.push({
-          id: `${pair}-${side}`,
-          phase: round === null ? "cold" : "measured",
-          side,
-          lane: lane.id,
-          round,
-          pair,
-          cacheMode: round === null ? "fresh" : "warm",
-          command: ["node"],
-          packageManager,
-          startedAt: "2026-09-05T00:00:00.000Z",
-          durationMs: side === "baseline" ? pairDurations.baselineMs : pairDurations.candidateMs,
-          userCpuMs: 50,
-          systemCpuMs: 10,
-          execution,
-          exitCode: 0,
-        });
-      }
-    }
-  }
-  return records;
+      return (["baseline", "candidate"] as const).map((side): BenchmarkRunRecord => ({
+        id: `${pair}-${side}`,
+        phase: round === null ? "cold" : "measured",
+        side,
+        lane: lane.id,
+        round,
+        pair,
+        cacheMode: round === null ? "fresh" : "warm",
+        command: ["node"],
+        packageManager,
+        startedAt: "2026-09-05T00:00:00.000Z",
+        durationMs: side === "baseline" ? pairDurations.baselineMs : pairDurations.candidateMs,
+        userCpuMs: 50,
+        systemCpuMs: 10,
+        execution,
+        exitCode: 0,
+      }));
+    }),
+  );
 }
 
 function inventoryPaths(lane: BenchmarkManifest["lanes"][number]): string[] {
@@ -357,8 +353,7 @@ describe("Vitest pair benchmark", () => {
     expect(neutral).toMatchObject({ verdict: "pass", performance: "no-material-change" });
     expect(neutral.claim).toContain("No broad improvement claim");
 
-    const improved = analyzeRecords(0.9);
-    expect(improved).toMatchObject({ verdict: "pass", performance: "improved" });
+    expect(analyzeRecords(0.9)).toMatchObject({ verdict: "pass", performance: "improved" });
 
     const noisyFaster = analyzeRecords((_lane, round) => ({
       baselineMs: 100,
@@ -384,7 +379,7 @@ describe("Vitest pair benchmark", () => {
     const pinned = path.join(pinnedDir, "pnpm");
     writeExecutable(
       pinned,
-      `#!/bin/sh\nprintf 'pinned\\n' >> ${JSON.stringify(marker)}\nprintf '12.1.0\\n'\n`,
+      `#!/bin/sh\n[ "\${pnpm_config_pm_on_fail:-}" = ignore ] || exit 96\nprintf 'pinned\\n' >> ${JSON.stringify(marker)}\nprintf '12.1.0\\n'\n`,
     );
     const ambientEnv = {
       ...process.env,

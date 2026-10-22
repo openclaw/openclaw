@@ -37,6 +37,7 @@ function createController(
 
 function createStore(params?: {
   cooldownUntil?: number;
+  cooldownReason?: "rate_limit";
   failureCounts?: Record<string, number>;
 }): AuthProfileStore {
   return {
@@ -90,7 +91,7 @@ describe("discord auto presence", () => {
 
   it("clears expired cooldowns without sending presence while disconnected", async () => {
     const now = Date.now();
-    const store = createStore({ cooldownUntil: now - 1, failureCounts: { rate_limit: 1 } });
+    const store = createStore({ cooldownUntil: now - 1, cooldownReason: "rate_limit" });
     const updatePresence = vi.fn();
     const controller = createController({
       gateway: { isConnected: false, updatePresence },
@@ -103,7 +104,7 @@ describe("discord auto presence", () => {
 
   it("recovers from exhausted to online once a profile becomes usable", async () => {
     const now = Date.now();
-    let store = createStore({ cooldownUntil: now + 60_000, failureCounts: { rate_limit: 1 } });
+    let store = createStore({ cooldownUntil: now + 60_000, cooldownReason: "rate_limit" });
     const controller = createController({
       discordConfig: {
         activity: "working",

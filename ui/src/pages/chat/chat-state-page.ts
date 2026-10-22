@@ -52,6 +52,7 @@ import {
   openSessionWorkspacePreview,
   getSessionWorkspace,
   clearSessionWorkspacePreviews,
+  sessionWorkspaceForHost,
 } from "./components/chat-session-workspace-state.ts";
 import {
   handleChatDraftChange,
@@ -527,6 +528,7 @@ export function createPageState(
         preview.label = fileTab.label;
         const workspace = getSessionWorkspace(state);
         workspace.previews = [...workspace.previews];
+        sessionWorkspaceForHost(state).publish();
       }
     } else {
       state.sidebarContent = content;

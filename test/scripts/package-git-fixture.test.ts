@@ -42,8 +42,12 @@ describe("package git fixture", () => {
       version: "1.0.0",
       dependencies: { "fixture-runtime": "file:./runtime" },
       devDependencies: { "checkout-build-tool": "workspace:*" },
+      scripts: { ...sourceScripts, lint: "node lint.mjs" },
     });
     prepare(root);
+    const packageJson = readJson(root);
+    expect(packageJson.scripts).toEqual({ lint: "node lint.mjs", openclaw: "node openclaw.mjs" });
+    expect(packageJson.dependencies).not.toHaveProperty("@openclaw/ai");
     const npm = resolveNpmRunner({
       npmArgs: "install --omit=dev --offline --ignore-scripts --no-fund --no-audit".split(" "),
     });
@@ -120,17 +124,5 @@ describe("package git fixture", () => {
     expect(staged.stdout).not.toContain("pnpm-lock.yaml");
     expect(staged.stdout).not.toContain(".openclaw-update-");
     expect(staged.stdout).toContain("operator-notes.tmp");
-  });
-
-  it("uses the packed entrypoint without a bundled ai runtime", () => {
-    const root = tempDirs.make("openclaw-package-git-fixture-no-ai-");
-    write(root, "package.json", {
-      dependencies: { chalk: "5.6.2" },
-      scripts: { ...sourceScripts, lint: "node lint.mjs" },
-    });
-    prepare(root);
-    const packageJson = readJson(root);
-    expect(packageJson.scripts).toEqual({ lint: "node lint.mjs", openclaw: "node openclaw.mjs" });
-    expect(packageJson.dependencies).not.toHaveProperty("@openclaw/ai");
   });
 });

@@ -24,29 +24,61 @@ import {
 import type { DoctorHealthFlowContext } from "./doctor-health-contributions.js";
 import { runDoctorHealthFlow } from "./doctor-health.js";
 
-const mocks = vi.hoisted(() => ({
-  offerUpdate: vi.fn<typeof import("../commands/doctor-update.js").maybeOfferUpdateBeforeDoctor>(),
-  updateCommand: vi.fn<typeof import("../cli/update-cli/update-command.js").updateCommand>(),
-  triageCommand: vi.fn(async () => undefined),
-  outro: vi.fn(),
-  confirmCustody: vi.fn<() => Promise<boolean>>(),
-  config: vi.fn<() => OpenClawConfig>(),
-  disposeConfig: vi.fn<() => Promise<void>>(async () => undefined),
-  runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
-  packageRoot: vi.fn<() => string | undefined>(),
-  pendingPluginMigrations:
-    vi.fn<
-      typeof import("../infra/deferred-plugin-migrations.js").readDeferredPluginMigrationsAsync
-    >(),
-  stateMigrationReceipts: [] as LegacyStateMigrationStepReceipt[],
-}));
-
-vi.mock("@clack/prompts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@clack/prompts")>()),
-  intro: vi.fn(),
-  note: vi.fn(),
-  outro: mocks.outro,
-}));
+const mocks = vi.hoisted(() => {
+  const handles = {
+    offerUpdate:
+      vi.fn<typeof import("../commands/doctor-update.js").maybeOfferUpdateBeforeDoctor>(),
+    updateCommand: vi.fn<typeof import("../cli/update-cli/update-command.js").updateCommand>(),
+    triageCommand: vi.fn(async () => undefined),
+    outro: vi.fn(),
+    confirmCustody: vi.fn<() => Promise<boolean>>(),
+    config: vi.fn<() => OpenClawConfig>(),
+    disposeConfig: vi.fn<() => Promise<void>>(async () => undefined),
+    runContributions: vi.fn<(ctx: DoctorHealthFlowContext) => Promise<void>>(),
+    packageRoot: vi.fn<() => string | undefined>(),
+    pendingPluginMigrations:
+      vi.fn<
+        typeof import("../infra/deferred-plugin-migrations.js").readDeferredPluginMigrationsAsync
+      >(),
+    stateMigrationReceipts: [] as LegacyStateMigrationStepReceipt[],
+  };
+  const partials = {
+    "@clack/prompts": { intro: vi.fn(), note: vi.fn(), outro: handles.outro },
+    "../infra/openclaw-root.js": { resolveOpenClawPackageRoot: async () => handles.packageRoot() },
+    // This worker-thread lane lacks the shared-state ledger's host broker.
+    "../infra/deferred-plugin-migrations.js": {
+      readDeferredPluginMigrationsAsync: handles.pendingPluginMigrations,
+    },
+    "../config/config.js": { CONFIG_PATH: "/tmp/openclaw.json" },
+  };
+  for (const [module, overrides] of Object.entries(partials)) {
+    vi.doMock(module, async (original) => ({ ...(await original<object>()), ...overrides }));
+  }
+  const replacements = {
+    // mock-isolation: dispatch must not execute the updater or external triage agents.
+    "../cli/update-cli/update-command.js": { updateCommand: handles.updateCommand },
+    "../commands/doctor-update.js": { maybeOfferUpdateBeforeDoctor: handles.offerUpdate },
+    "../commands/triage.js": { triageCommand: handles.triageCommand },
+    "../commands/doctor/shared/plugin-runtime-symlinks.js": {
+      noteStalePluginRuntimeSymlinks: async () => undefined,
+    },
+    "../commands/doctor-platform-notes.js": { noteStartupOptimizationHints: () => undefined },
+    // mock-isolation: outcomes do not need config preparation or plugin resources.
+    "../commands/doctor-config-flow.js": {
+      loadAndMaybeMigrateDoctorConfig: async () => ({
+        [Symbol.asyncDispose]: handles.disposeConfig,
+        cfg: handles.config(),
+        shouldWriteConfig: true,
+        stateMigrationStepReceipts: handles.stateMigrationReceipts,
+      }),
+    },
+    "./doctor-health-contributions.js": { runDoctorHealthContributions: handles.runContributions },
+  };
+  for (const [module, replacement] of Object.entries(replacements)) {
+    vi.doMock(module, () => replacement);
+  }
+  return handles;
+});
 
 vi.mock("../commands/doctor-prompter.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../commands/doctor-prompter.js")>();
@@ -59,52 +91,6 @@ vi.mock("../commands/doctor-prompter.js", async (importOriginal) => {
     }),
   };
 });
-
-vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
-  resolveOpenClawPackageRoot: async () => mocks.packageRoot(),
-}));
-
-// The shared-state ledger needs the host broker, which this worker-thread lane lacks.
-vi.mock("../infra/deferred-plugin-migrations.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../infra/deferred-plugin-migrations.js")>()),
-  readDeferredPluginMigrationsAsync: mocks.pendingPluginMigrations,
-}));
-
-// mock-isolation: Doctor dispatch must not execute the real installation updater.
-vi.mock("../cli/update-cli/update-command.js", () => ({ updateCommand: mocks.updateCommand }));
-vi.mock("../commands/doctor-update.js", () => ({
-  maybeOfferUpdateBeforeDoctor: mocks.offerUpdate,
-}));
-// mock-isolation: Recovery dispatch is observed without launching external triage agents.
-vi.mock("../commands/triage.js", () => ({ triageCommand: mocks.triageCommand }));
-
-vi.mock("../commands/doctor/shared/plugin-runtime-symlinks.js", () => ({
-  noteStalePluginRuntimeSymlinks: async () => undefined,
-}));
-
-vi.mock("../commands/doctor-platform-notes.js", () => ({
-  noteStartupOptimizationHints: () => undefined,
-}));
-
-// mock-isolation: Exercise Doctor flow outcomes without config preparation or plugin resources.
-vi.mock("../commands/doctor-config-flow.js", () => ({
-  loadAndMaybeMigrateDoctorConfig: async () => ({
-    [Symbol.asyncDispose]: mocks.disposeConfig,
-    cfg: mocks.config(),
-    shouldWriteConfig: true,
-    stateMigrationStepReceipts: mocks.stateMigrationReceipts,
-  }),
-}));
-
-vi.mock("../config/config.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../config/config.js")>()),
-  CONFIG_PATH: "/tmp/openclaw.json",
-}));
-
-vi.mock("./doctor-health-contributions.js", () => ({
-  runDoctorHealthContributions: mocks.runContributions,
-}));
 
 async function withResult(run: (state: OpenClawTestState, resultPath: string) => Promise<void>) {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

@@ -181,11 +181,9 @@ describe("CronService startup catch-up repair scoping", () => {
         order.push("notify");
       }
     });
-    const requestHeartbeat = vi.fn();
     const state = makeState(store.storePath, {
       nowMs: () => now,
       enqueueSessionEvent,
-      requestHeartbeat,
       maxMissedJobsPerRestart: 1,
       missedJobStaggerMs: 5_000,
     });
@@ -204,7 +202,6 @@ describe("CronService startup catch-up repair scoping", () => {
       });
     }
     expect(order).toEqual(["persist", "notify", "notify"]);
-    expect(requestHeartbeat).not.toHaveBeenCalled();
     const persisted = (await loadCronStore(store.storePath)).jobs;
     for (const job of deferred) {
       const saved = persisted.find(({ id }) => id === job.id);

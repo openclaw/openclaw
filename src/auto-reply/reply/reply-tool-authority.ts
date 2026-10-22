@@ -18,6 +18,7 @@ import {
   bindReplyToolAuthorityCallerRead,
   recordPreparedToolAuthorityRead,
   type PreparedQuestionCallerRead,
+  type ReplyToolAuthorityCaller,
 } from "../../agents/harness/host-private-capabilities.js";
 import { readOperatorModelPolicyMembership } from "../../agents/operator-model-policy.js";
 import {
@@ -53,19 +54,16 @@ import type {
   ReplyToolAuthorityRoute,
   ReplyToolAuthoritySnapshot,
 } from "../../sessions/session-controller.contracts.js";
+import { captureReplyExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
-import { MessageInjectionRequesterMismatchError } from "./message-injection-authority.js";
+import { MessageInjectionPolicyMismatchError } from "./message-injection-authority.js";
 import {
   captureReplyToolAuthoritySession,
   retainReplyToolAuthorityClassification,
   withReplyToolAuthorityCohort,
   type CapturedReplyToolAuthoritySession,
 } from "./reply-tool-authority-cohort.js";
-import {
-  applyReplyToolAuthorityOverlay,
-  applyReplyToolAuthorityRequester,
-  isSameReplyToolAuthorityConversation,
-} from "./reply-tool-authority-inbound.js";
+import { projectReplyToolAuthorityInput } from "./reply-tool-authority-inbound.js";
 import {
   captureMemoryReplyToolAuthoritySession,
   prepareMemoryReplyToolAuthorityCaller,
@@ -315,6 +313,22 @@ function resolvePreparedReplyToolAuthorityFingerprint(
   );
 }
 
+/** Capture original execution settings when the reply owner admits the turn. */
+export function prepareReplyRunToolAuthority(
+  input: ReplyToolAuthorityInput,
+  sessionEntry: SessionEntry | undefined,
+  resolveReader?: () => SessionEntryCohortReader | undefined,
+) {
+  return prepareReplyToolAuthority(
+    {
+      ...input,
+      executionSelection: captureReplyExecutionSelection({ run: input.run, sessionEntry }),
+    },
+    undefined,
+    resolveReader,
+  );
+}
+
 export function prepareReplyToolAuthority(
   run: ReplyToolAuthorityInput,
   narrow?: ReplyToolAuthorityNarrow,
@@ -335,6 +349,9 @@ export function prepareReplyToolAuthority(
     attachToolAllowlistIntersection(toolsAllow, intersection);
   }
   const snapshot: ReplyToolAuthorityInput = {
+    executionSelection: run.executionSelection
+      ? structuredClone(run.executionSelection)
+      : undefined,
     originatingChannel: run.originatingChannel,
     operatorAuthority: run.operatorAuthority,
     toolsAllow,
@@ -375,46 +392,8 @@ export function prepareReplyToolAuthority(
     messageChannel: snapshot.originatingChannel,
     operatorAuthority: snapshot.operatorAuthority,
   });
-  const projectInput = (caller?: ReplyToolAuthorityOverlay | ReplyToolAuthorityRequester) => {
-    const incomingRequester =
-      caller && !("requesterOrigin" in caller) && caller.allowCollaborativeSteering
-        ? resolveRequesterPrincipalKey({ ...caller, messageChannel: caller.originatingChannel })
-        : undefined;
-    if (
-      caller &&
-      !("requesterOrigin" in caller) &&
-      caller.allowCollaborativeSteering &&
-      requesterPrincipalKey &&
-      incomingRequester &&
-      incomingRequester !== requesterPrincipalKey &&
-      (!caller.inputProvenance || caller.inputProvenance.kind === "external_user") &&
-      isSameReplyToolAuthorityConversation(snapshot, caller)
-    ) {
-      assertCurrentOperatorAuthority(caller.operatorAuthority);
-      // Only the policy projection uses the incumbent. The input and its author
-      // remain unchanged, including if injection later falls back to a new turn.
-      return snapshot;
-    }
-    const incoming = !caller
-      ? snapshot
-      : "requesterOrigin" in caller
-        ? applyReplyToolAuthorityRequester(snapshot, caller)
-        : applyReplyToolAuthorityOverlay(snapshot, caller);
-    // Unidentified executions may run, but cannot lend their identity to new human input.
-    if (
-      caller &&
-      (!requesterPrincipalKey ||
-        requesterPrincipalKey !==
-          resolveRequesterPrincipalKey({
-            ...incoming.run,
-            messageChannel: incoming.originatingChannel,
-            operatorAuthority: incoming.operatorAuthority,
-          }))
-    ) {
-      throw new MessageInjectionRequesterMismatchError();
-    }
-    return incoming;
-  };
+  const projectInput = (caller?: ReplyToolAuthorityCaller) =>
+    projectReplyToolAuthorityInput(snapshot, caller);
   const env = { ...process.env };
   const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
   const agentId = sessionKey
@@ -617,26 +596,40 @@ export function prepareReplyToolAuthority(
   bindReplyToolAuthorityCallerRead(
     result.projectAsync,
     async (caller, expected, route, assertActive) => {
+      if (caller && "kind" in caller && !snapshot.executionSelection) {
+        return undefined;
+      }
+      if (caller && "kind" in caller && snapshot.executionSelection) {
+        caller.delivery.bindExecutionSelection(snapshot.executionSelection, caller.config);
+        await caller.delivery.prepareCurrent();
+        assertActive();
+      }
       const projected = projectInput(caller);
       const policyInputs = projected === snapshot ? [snapshot] : [snapshot, projected];
       const assertCallerCurrent = () => {
-        if (caller && !("requesterOrigin" in caller)) {
-          assertCurrentOperatorAuthority(caller.operatorAuthority);
+        const participant = caller && "kind" in caller ? caller.caller : caller;
+        if (participant && !("requesterOrigin" in participant)) {
+          assertCurrentOperatorAuthority(participant.operatorAuthority);
         }
       };
       if (readMemoryEntry) {
         const policy = await prepareSessionCapabilityRead(() => {
           assertCallerCurrent();
-          return policyInputs.every(
-            (input) =>
-              resolvePreparedReplyToolAuthorityFingerprint(
-                input,
-                route,
-                readMemoryEntry(),
-                undefined,
-                memoryCapabilities,
-              ) === expected,
-          );
+          if (
+            !policyInputs.every(
+              (input) =>
+                resolvePreparedReplyToolAuthorityFingerprint(
+                  input,
+                  route,
+                  readMemoryEntry(),
+                  undefined,
+                  memoryCapabilities,
+                ) === expected,
+            )
+          ) {
+            throw new MessageInjectionPolicyMismatchError("tool_authority_mismatch");
+          }
+          return true;
         });
         releases.add(policy.release);
         const prepared = prepareMemoryReplyToolAuthorityCaller(readMemoryEntry, assertActive, () =>
@@ -678,7 +671,7 @@ export function prepareReplyToolAuthority(
           if (
             resolvePreparedReplyToolAuthorityFingerprint(input, route, entry, narrow) !== expected
           ) {
-            throw new Error("question answer caller policy does not match its creator");
+            throw new MessageInjectionPolicyMismatchError("tool_authority_mismatch");
           }
         }
         assertSources();

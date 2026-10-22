@@ -5,6 +5,7 @@ import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snaps
 import { resolveAuthProfileOrder } from "../auth-profiles/order.js";
 import { ensureAuthProfileStoreAsync } from "../auth-profiles/store-runtime.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
+import type { AgentAttemptParams } from "./attempt-execution.types.js";
 
 type HarnessAuthProfileSelection = {
   authProfileId?: string;
@@ -12,6 +13,24 @@ type HarnessAuthProfileSelection = {
   authProfileProvider: string;
   authProfileMode?: string;
 };
+
+/** A successful fallback credential becomes automatic; the selected credential keeps its origin. */
+export function createCommandSuccessfulAuthProfileCallback(
+  params: Pick<AgentAttemptParams, "onSuccessfulAuthProfile">,
+  selection: Pick<HarnessAuthProfileSelection, "authProfileId" | "authProfileIdSource">,
+) {
+  return params.onSuccessfulAuthProfile
+    ? (successfulProfileId: string | undefined) =>
+        params.onSuccessfulAuthProfile?.({
+          authProfileId: successfulProfileId,
+          authProfileIdSource: successfulProfileId
+            ? successfulProfileId === selection.authProfileId
+              ? selection.authProfileIdSource
+              : "auto"
+            : undefined,
+        })
+    : undefined;
+}
 
 export function resolveCommandAuthProfileSelection(params: {
   sessionEntry?: SessionEntry;

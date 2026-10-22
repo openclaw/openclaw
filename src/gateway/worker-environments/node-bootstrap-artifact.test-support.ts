@@ -1,7 +1,8 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach } from "vitest";
+import * as tar from "tar";
+import { afterEach, expect } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createNodeBootstrapArtifactProvider } from "./node-bootstrap-artifact.js";
 
@@ -16,10 +17,35 @@ export async function write(root: string, relative: string, contents: string | o
   await fs.writeFile(target, typeof contents === "string" ? contents : JSON.stringify(contents));
 }
 
-async function writeFiles(root: string, files: Record<string, string | object>) {
+export async function writeFiles(root: string, files: Record<string, string | object>) {
   for (const [relative, contents] of Object.entries(files)) {
     await write(root, relative, contents);
   }
+}
+
+export const readText = (root: string, relative: string) =>
+  fs.readFile(path.join(root, relative), "utf8");
+
+export async function expectFiles(root: string, files: Record<string, string>) {
+  for (const [relative, text] of Object.entries(files)) {
+    expect(await readText(root, relative), relative).toBe(text);
+  }
+}
+
+export async function expectMissing(root: string, files: string[]) {
+  for (const relative of files) {
+    await expect(fs.access(path.join(root, relative)), relative).rejects.toHaveProperty(
+      "code",
+      "ENOENT",
+    );
+  }
+}
+
+export async function extract(root: string, artifact: { tarballPath: string }) {
+  const installed = path.join(root, "node");
+  await fs.mkdir(installed);
+  await tar.extract({ file: artifact.tarballPath, cwd: installed });
+  return path.join(installed, "package");
 }
 
 export type OwnedRuntimeChunk = { source: string; extensions: readonly string[] };

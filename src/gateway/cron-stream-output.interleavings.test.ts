@@ -14,20 +14,11 @@ import {
   exitResult,
   job,
   settle,
+  streamBatchArgs as batchArgs,
+  streamStateArgs,
 } from "./cron-stream-watchers.test-helpers.js";
 
-const batchArgs = (text: string) => [
-  expect.any(Object),
-  text,
-  expect.any(String),
-  expect.any(String),
-];
-const coalescedArgs = [
-  "stream-job",
-  expect.objectContaining({ streamCoalescedBatches: 1 }),
-  expect.any(String),
-  expect.any(String),
-];
+const coalescedArgs = streamStateArgs({ streamCoalescedBatches: 1 });
 const blockedFire = (gate: Promise<void>) =>
   vi.fn(async () => {
     await gate;

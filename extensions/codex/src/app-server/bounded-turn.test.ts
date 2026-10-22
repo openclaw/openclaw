@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { runBoundedCodexAppServerTurn } from "./bounded-turn.js";
 import {
   codexModel,
@@ -11,7 +11,10 @@ import {
   threadStartResult,
 } from "./bounded-turn.test-harness.js";
 import type { JsonValue } from "./protocol.js";
+import * as shared from "./shared-client.js";
 import { createClientHarness } from "./test-support.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 function requestParams(fake: ReturnType<typeof createClientFactory>, method: string) {
   return fake.request.mock.calls.find(([name]) => name === method)?.[1];
@@ -42,11 +45,17 @@ const appServerOptions = (
 ) => ({ pluginConfig: { appServer } });
 const clientOptions = (fake: ReturnType<typeof createClientFactory>) =>
   vi.mocked(fake.factory).mock.calls[0]?.[0];
+const agentMessage = (id: string, text: string) => ({ id, type: "agentMessage", text });
+const completedNotification = () => ({
+  method: "turn/completed",
+  params: { threadId: threadIdentity.threadId, ...completedTurnResult() },
+});
 
 function runTurn(
-  clientFactory: TurnParams["options"]["clientFactory"],
+  clientFactory: typeof shared.createIsolatedCodexAppServerClient,
   params: Partial<TurnParams> = {},
 ) {
+  vi.spyOn(shared, "createIsolatedCodexAppServerClient").mockImplementation(clientFactory);
   return runBoundedCodexAppServerTurn({
     model: { mode: "required", id: "gpt-5.4" },
     timeoutMs: 5_000,
@@ -56,7 +65,7 @@ function runTurn(
     requiredModalities: ["text"],
     isolation: "private-stdio",
     ...params,
-    options: { ...params.options, clientFactory },
+    options: params.options ?? {},
   });
 }
 
@@ -121,15 +130,13 @@ it.each([true, false])(
       },
       hooks: [{ key: "managed:stop:0:0", enabled: true, isManaged: true }],
       terminalItems: [
-        { id: "draft", type: "agentMessage", text: "Rejected draft." },
+        agentMessage("draft", "Rejected draft."),
         {
           id: "policy",
           type: "hookPrompt",
           fragments: [{ text: "Revise this answer.", hookRunId: "managed-stop" }],
         },
-        ...(hasRevision
-          ? [{ id: "revision", type: "agentMessage", text: "Approved revision." }]
-          : []),
+        ...(hasRevision ? [agentMessage("revision", "Approved revision.")] : []),
       ],
     });
     const run = runRestricted(fake);
@@ -154,13 +161,10 @@ it.each(["bound notification", "queued notification", "terminal response"] as co
         method: "item/completed",
         params: {
           ...threadIdentity,
-          item: { id: "first", type: "agentMessage", text: "First answer." },
+          item: agentMessage("first", "First answer."),
         },
       });
-      harness.send({
-        method: "turn/completed",
-        params: { threadId: "thread-finalizer", ...completedTurnResult() },
-      });
+      harness.send(completedNotification());
       harness.emitExit();
     };
     const harness = createClientHarness({
@@ -334,10 +338,7 @@ it("returns an explicit unsupported decline for interactive MCP input", async ()
     _meta: { message: "OpenClaw Codex hosted search does not support interactive input." },
   });
 
-  await fake.notify({
-    method: "turn/completed",
-    params: { threadId: "thread-finalizer", turn: completedTurnResult().turn },
-  });
+  await fake.notify(completedNotification());
   await expect(run).resolves.toMatchObject(success);
 });
 
@@ -437,15 +438,20 @@ it.each(["prepared", "profile"] as const)(
   },
 );
 
+const providerOverrides = [
+  'openai_base_url="http://127.0.0.1:9/first"',
+  'openai_base_url="http://127.0.0.1:9/last"',
+  'model_catalog_json="/tmp/synthetic-models.json"',
+];
 it.each([
   {
     name: "carries provider overrides without importing tool policy",
     appServer: {
       args: [
-        '-copenai_base_url="http://127.0.0.1:9/first"',
+        `-c${providerOverrides[0]}`,
         "app-server",
-        '--config=openai_base_url="http://127.0.0.1:9/last"',
-        '-c=model_catalog_json="/tmp/synthetic-models.json"',
+        `--config=${providerOverrides[1]}`,
+        `-c=${providerOverrides[2]}`,
         "-csandbox_workspace_write.exclude_slash_tmp=false",
         "--config",
         "features.hooks=true",
@@ -455,15 +461,7 @@ it.each([
     },
     restricted: false,
     expected: {
-      args: stdioArgs(
-        "app-server",
-        ...configArgs(
-          'openai_base_url="http://127.0.0.1:9/first"',
-          'openai_base_url="http://127.0.0.1:9/last"',
-          'model_catalog_json="/tmp/synthetic-models.json"',
-          "project_root_markers=[]",
-        ),
-      ),
+      args: stdioArgs("app-server", ...configArgs(...providerOverrides, "project_root_markers=[]")),
     },
   },
   {
@@ -574,33 +572,20 @@ it("rejects a missing required model before starting a thread", async () => {
   expect(fake.methods).toEqual(["model/list"]);
 });
 
-it("attests ring-zero and totals response usage when final usage is missing", async () => {
-  const firstResponse = {
-    responseId: "response-first",
-    usage: {
-      totalTokens: 12,
-      inputTokens: 8,
-      cachedInputTokens: 2,
-      cacheWriteInputTokens: 1,
-      outputTokens: 4,
-      reasoningOutputTokens: 3,
-    },
-  };
+it("attests ring-zero and retains usage when the final response has none", async () => {
   const fake = createClientFactory({
     responseCompletions: [
-      firstResponse,
       {
-        responseId: "response-final",
+        responseId: "response-first",
         usage: {
-          totalTokens: 20,
-          inputTokens: 15,
-          cachedInputTokens: 5,
-          cacheWriteInputTokens: 2,
-          outputTokens: 5,
-          reasoningOutputTokens: 2,
+          totalTokens: 12,
+          inputTokens: 8,
+          cachedInputTokens: 2,
+          cacheWriteInputTokens: 1,
+          outputTokens: 4,
+          reasoningOutputTokens: 3,
         },
       },
-      firstResponse,
       { responseId: "response-without-usage", usage: null },
     ],
   });
@@ -618,12 +603,12 @@ it("attests ring-zero and totals response usage when final usage is missing", as
     ...success,
     model: "gpt-5.4",
     usage: {
-      input: 13,
-      output: 9,
-      cacheRead: 7,
-      cacheWrite: 3,
-      reasoningTokens: 5,
-      total: 32,
+      input: 5,
+      output: 4,
+      cacheRead: 2,
+      cacheWrite: 1,
+      reasoningTokens: 3,
+      total: 12,
       contextUsage: { state: "unavailable" },
     },
   });

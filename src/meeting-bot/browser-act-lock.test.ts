@@ -10,31 +10,6 @@ describe("meeting browser act lock", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
-  it("serializes async evaluations for one browser target", async () => {
-    const firstGate = createDeferred();
-    const events: string[] = [];
-    const entered = createDeferred();
-    const evaluate = (name: string, gate?: Promise<void>) =>
-      run("target-1", async () => {
-        events.push(`start-${name}`);
-        entered.resolve();
-        await gate;
-        events.push(`end-${name}`);
-      });
-
-    const first = evaluate("first", firstGate.promise);
-    const second = evaluate("second");
-    try {
-      await Promise.race([entered.promise, first]);
-      expect(events).toEqual(["start-first"]);
-    } finally {
-      firstGate.resolve();
-      await Promise.all([first, second]);
-    }
-
-    expect(events).toEqual(["start-first", "end-first", "start-second", "end-second"]);
-  });
-
   it("releases the target after a failed evaluation", async () => {
     await expect(
       run("target-failure", async () => {

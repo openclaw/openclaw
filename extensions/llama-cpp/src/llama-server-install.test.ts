@@ -413,6 +413,33 @@ describe("downloadVerifiedFile", () => {
 });
 
 describe("ensureLlamaServerInstalled", () => {
+  it.each([
+    ["libssl.so.3", "OpenSSL 3", "libssl3t64"],
+    ["libcrypto.so.3", "OpenSSL 3", "libssl3t64"],
+    ["libgomp.so.1", "OpenMP", "libgomp1"],
+    ["libcustom.so.1", "libcustom.so.1", "system package manager"],
+  ])(
+    "diagnoses the missing %s runtime when reusing an installed server",
+    async (library, runtime, remedy) => {
+      const command = await createInstalledServer();
+      const detail = `${command}: error while loading shared libraries: ${library}: cannot open shared object file: No such file or directory`;
+      mockCommand(() => {
+        throw new Error(detail);
+      });
+      const failure = await ensureLlamaServerInstalled().catch((error: unknown) => error);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure).toMatchObject({ message: expect.stringContaining(detail) });
+      expect(failure).toMatchObject({ message: expect.stringContaining(runtime) });
+      expect(failure).toMatchObject({ message: expect.stringContaining(remedy) });
+      expect(failure).toMatchObject({ message: expect.stringContaining("rerun llama.cpp setup") });
+      if (library !== "libgomp.so.1") {
+        expect((failure as Error).message).not.toContain("OpenMP");
+      }
+      expect(await fs.readFile(command, "utf8")).toBe("");
+      expect(mocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
+    },
+  );
+
   it("cancels a queued setup without cancelling another installation or poisoning reuse", async () => {
     const command = await createInstalledServer();
     const started = createDeferred<void>();

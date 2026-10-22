@@ -17,7 +17,13 @@ import {
   wrapWebContent,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { resolveDdgRegion, resolveDdgSafeSearch, type DdgSafeSearch } from "./config.js";
+import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search-config-contract";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
+
+type DdgSafeSearch = "strict" | "moderate" | "off";
 
 const require = createRequire(import.meta.url);
 const PLUGIN_VERSION = readPluginPackageVersion({ require });
@@ -121,15 +127,24 @@ export async function runDuckDuckGoSearch(params: {
   region?: string;
   safeSearch?: DdgSafeSearch;
   timeoutSeconds?: number;
-  cacheTtlMinutes?: number;
   signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
   const count = resolveSearchCount(params.count, DEFAULT_SEARCH_COUNT);
-  const region = params.region ?? resolveDdgRegion(params.config);
-  const safeSearch = params.safeSearch ?? resolveDdgSafeSearch(params.config);
+  const region =
+    params.region ??
+    normalizeOptionalString(
+      resolveProviderWebSearchPluginConfig(params.config, "duckduckgo")?.region,
+    );
+  let safeSearch = params.safeSearch;
+  if (safeSearch == null) {
+    const normalized = normalizeLowercaseStringOrEmpty(
+      resolveProviderWebSearchPluginConfig(params.config, "duckduckgo")?.safeSearch,
+    );
+    safeSearch = normalized === "strict" || normalized === "off" ? normalized : "moderate";
+  }
   const timeoutSeconds = resolveTimeoutSeconds(params.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
   const cacheTtlMs = resolveCacheTtlMs(
-    params.cacheTtlMinutes ?? params.config?.tools?.web?.search?.cacheTtlMinutes,
+    params.config?.tools?.web?.search?.cacheTtlMinutes,
     DEFAULT_CACHE_TTL_MINUTES,
   );
   const cacheKey = JSON.stringify({

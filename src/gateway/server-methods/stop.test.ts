@@ -7,6 +7,7 @@ import {
   authorizationClient,
   startExactAuthorizationRequest,
 } from "../server-methods.authorization.test-support.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 
 const { readActiveGatewayLockIdentity, prepareHostedGatewayStop } = vi.hoisted(() => ({
   readActiveGatewayLockIdentity: vi.fn(),
@@ -110,7 +111,7 @@ it.each([
     expect(readActiveGatewayLockIdentity).not.toHaveBeenCalled();
   }
   expect(acceptStop).not.toHaveBeenCalled();
-  expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
+  expectRpcError(respond, error);
 });
 
 it.each(["signal", "client invalidation", "transport authority", "stop preparation"] as const)(
@@ -150,13 +151,9 @@ it.each(["signal", "client invalidation", "transport authority", "stop preparati
       expect(prepareHostedGatewayStop).not.toHaveBeenCalled();
     }
     expect(acceptStop).not.toHaveBeenCalled();
-    expect(respond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({
-        code: "UNAVAILABLE",
-        ...(loss === "stop preparation" ? { message: "Gateway requester authority changed" } : {}),
-      }),
-    );
+    expectRpcError(respond, {
+      code: "UNAVAILABLE",
+      ...(loss === "stop preparation" ? { message: "Gateway requester authority changed" } : {}),
+    });
   },
 );

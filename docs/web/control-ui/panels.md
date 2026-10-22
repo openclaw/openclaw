@@ -75,13 +75,18 @@ the Gateway's `PATH`; OpenClaw skips Bun's `node` shim, and an unavailable Node
 executable produces a startup error with installation guidance. Windows keeps
 `node-pty`. See [Bun compatibility](/install/bun-compatibility#known-limitations).
 
-Enablement changes hot-apply without restarting the Gateway. Disabling closes
-attached, detached, and conversation-owned terminals and cancels pending opens.
-Re-enabling allows fresh sessions; closed sessions do not return. Reload the
-Control UI page to pick up the updated content security policy.
+Changes to `gateway.terminal.enabled` hot-apply without restarting the Gateway.
+Disabling closes attached, detached, and conversation-owned terminals and
+cancels pending opens. Re-enabling allows fresh sessions; closed sessions do
+not return. Reload the Control UI page to pick up the updated content security
+policy.
 
 <Warning>
-The terminal is an unconfined host shell and inherits the Gateway process environment. Disable it with `gateway.terminal.enabled: false` on deployments where admin operators should not get a host shell. OpenClaw refuses terminal sessions for agents with `sandbox.mode: "all"`; changing an active agent to that mode closes its existing and in-flight terminal sessions.
+A Gateway-local terminal is an unconfined host shell that inherits the Gateway process environment. If the Gateway can read credentials or write configuration files, an operator with this shell can too. Direct file writes bypass Gateway API restrictions such as `OPENCLAW_CONFIG_READONLY`.
+
+If Gateway operators should not have this host access, start the Gateway with `OPENCLAW_DISABLE_GATEWAY_LOCAL_TERMINALS=1`. This deployment control blocks Gateway-local terminals while preserving authorized terminals on connected nodes. Gateway configuration cannot change it; change the launch environment and restart the Gateway to change it. [Gateway-hosted automation](/automation/cron-jobs/managing-jobs#configuration) requires a separate control.
+
+OpenClaw refuses terminal sessions for agents with `sandbox.mode: "all"`; changing an active agent to that mode closes its existing and in-flight terminal sessions.
 </Warning>
 
 Use **Ctrl + backtick** to toggle the **Terminal** tab in the selected Chat pane's unified side panel. You can also open **Terminal** from the panel's **+** menu. The shared panel docks right or bottom, resizes with the browser viewport, can expand over the Chat pane, and keeps multiple shell tabs. The dock remains available for ad-hoc operator shells. Starting a native CLI from **New session**, or opening a Claude Code or Codex catalog session in the terminal, opens the [main terminal page](/web/urls#terminal-urls), keeping the sidebar and application chrome while replacing the composer. See [Gateway configuration](/gateway/configuration-reference#gateway) for `gateway.terminal.enabled` and the optional `gateway.terminal.shell` override.

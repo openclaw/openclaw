@@ -1,7 +1,7 @@
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { requestClientCredentialsFromApp } from "../infra/client-credential-ipc.js";
+import { prepareClientCredentialStoreAsync } from "../infra/client-credential-async.js";
 import {
   ClientCredentialMigrationRequiredError,
   readClientCredentialReceipt,
@@ -115,17 +115,7 @@ async function readCredentialPreparationState(
 ): Promise<"ready" | "upgrade" | "required"> {
   try {
     assertNoPendingLegacyExecApprovals({ env });
-    // A running Mac app retains custody; its admitted operation is authoritative.
-    if (
-      await requestClientCredentialsFromApp(env, { kind: "identity.read", identity_key: "primary" })
-    ) {
-      return "ready";
-    }
-    // Existing independent native sources refresh through this same noncreating owner.
-    using owner = openClientCredentialCustody(env);
-    const receipt = owner && readClientCredentialReceipt(owner.database)?.receipt;
-    // Older healthy bootstraps need durable provenance before a future filesystem remount.
-    return receipt?.sharedFile && receipt.source === null ? "upgrade" : "ready";
+    return await prepareClientCredentialStoreAsync(env);
   } catch (error) {
     if (
       error instanceof ClientCredentialMigrationRequiredError ||

@@ -54,7 +54,9 @@ describe("renderDreamingToggleConfirmation", () => {
     const pending = createDeferred();
     const onCancel = vi.fn();
     const host = renderToggle({ onConfirm: () => pending.promise, onCancel });
-    const confirm = host.querySelector("button");
+    const confirm = host.querySelector<HTMLButtonElement>(
+      "openclaw-modal-actions button:last-child",
+    );
     confirm?.click();
     await waitForSolid(() => expect(confirm?.textContent?.trim()).toBe("Saving…"));
     expect(confirm?.hasAttribute("disabled")).toBe(true);

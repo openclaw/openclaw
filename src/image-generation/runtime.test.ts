@@ -208,6 +208,43 @@ describe("image-generation runtime", () => {
     ]);
   });
 
+  it.each([
+    ["family/pro/edit", 12],
+    ["family/pro/v2", 10],
+    ["family/basic", 5],
+    ["other", 1],
+  ] as const)("enforces the reference limit for %s", async (model, limit) => {
+    useProvider("test", {
+      capabilities: {
+        generate: {},
+        edit: {
+          enabled: true,
+          maxInputImages: 1,
+          maxInputImagesByModel: { "family/pro/edit": 12 },
+          maxInputImagesByModelPrefix: { family: 5, "family/pro": 10 },
+        },
+      },
+    });
+    const modelOverride = `test/${model}`;
+    const result = await runGenerateImage({
+      modelOverride,
+      inputImages: Array.from({ length: limit }, () => referenceImage),
+    });
+    expect(result.images).toEqual(imageResult.images);
+    expect(seenRequest?.model).toBe(model);
+
+    seenRequest = undefined;
+    await expect(
+      runGenerateImage({
+        modelOverride,
+        inputImages: Array.from({ length: limit + 1 }, () => referenceImage),
+      }),
+    ).rejects.toThrow(
+      `${modelOverride} supports at most ${limit} reference image${limit === 1 ? "" : "s"}, ${limit + 1} requested`,
+    );
+    expect(seenRequest).toBeUndefined();
+  });
+
   it("preserves flexible-model dimensions for reference-image edits", async () => {
     useProvider("canvas", {
       capabilities: geometryCapabilities(

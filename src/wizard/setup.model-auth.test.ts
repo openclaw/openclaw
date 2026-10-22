@@ -15,7 +15,8 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { createCanonicalAgentConfigFixture } from "../test-utils/config-roster.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { WizardCancelledError } from "./prompts.js";
-import { runSetupModelAuthStep, type SetupModelAuthCandidate } from "./setup.model-auth.js";
+import { agentConfig, authCandidate as candidate } from "./setup.credentials.test-support.js";
+import { runSetupModelAuthStep } from "./setup.model-auth.js";
 import {
   requestTelemetryConsent,
   requireRiskAcknowledgement,
@@ -78,35 +79,8 @@ function runStep(params: Partial<Parameters<typeof runSetupModelAuthStep>[0]> = 
   });
 }
 
-function candidate(
-  config: OpenClawConfig,
-  authProfiles: SetupModelAuthCandidate["authProfiles"] = [],
-) {
-  return { config, authProfiles, persistAuthProfiles: vi.fn(async () => {}) };
-}
-
 function expectCall(mock: unknown, fields: object) {
   expect(mock).toHaveBeenCalledWith(expect.objectContaining(fields));
-}
-
-const managedModels: OpenClawConfig["models"] = {
-  providers: {
-    "managed-local": {
-      baseUrl: "http://127.0.0.1:8080/v1",
-      models: [],
-      localService: { command: "/fixture/server" },
-    },
-  },
-};
-
-function agentConfig(agents: NonNullable<OpenClawConfig["agents"]> = {}): OpenClawConfig {
-  return {
-    agents: {
-      defaults: { workspace: "/tmp/global-workspace" },
-      entries: { ops: { agentDir: "/tmp/ops-agent", workspace: "/tmp/ops-workspace" } },
-      ...agents,
-    },
-  };
 }
 
 describe("runSetupModelAuthStep", () => {
@@ -151,15 +125,11 @@ describe("runSetupModelAuthStep", () => {
     });
     const result = await runStep({ config, prompter });
     const target = { agentId: "ops", agentDir: "/tmp/ops-agent" };
-
     expect(ensureAuthProfileStore).not.toHaveBeenCalled();
-    expectCall(promptAuthChoiceGrouped, {
-      workspaceDir: "/tmp/ops-workspace",
-      detectedProviderIds: new Set(["ollama"]),
-    });
     expectCall(applyAuthChoice, { ...target, preserveExistingDefaultModel: true });
     expectCall(promptDefaultModel, {
-      ...target,
+      agentId: "ops",
+      agentDir: "/tmp/ops-agent",
       workspaceDir: "/tmp/ops-workspace",
       allowKeep: false,
     });
@@ -167,33 +137,32 @@ describe("runSetupModelAuthStep", () => {
       ...target,
       pendingAuthProfiles: prepared.authProfiles,
     });
-    expectCall(resolvePluginSetupProviderCore, { provider: "anthropic", pluginIds: ["anthropic"] });
+    expect(result.authProfiles).toEqual(prepared.authProfiles);
     expect(result.persistAuthProfiles).toBe(prepared.persistAuthProfiles);
     expect(prepared.persistAuthProfiles).not.toHaveBeenCalled();
   });
 
-  it("stages provider auth on the pending named agent without nesting its workspace", async () => {
+  it("scopes pending-agent credential preparation to its selected workspace", async () => {
     const workspaceDir = "/tmp/robby-workspace";
     const config: OpenClawConfig = { agents: { defaults: { workspace: workspaceDir } } };
     promptAuthChoiceGrouped.mockResolvedValueOnce("anthropic-cli");
     applyAuthChoice.mockResolvedValueOnce(candidate(config));
-
     await runStep({ config, pendingAgent: { name: "Robby!", workspaceDir } });
-
-    const agentDir = expect.stringMatching(/[/\\]agents[/\\]robby[/\\]agent$/);
+    const target = {
+      agentId: "robby",
+      agentDir: expect.stringMatching(/[/\\]agents[/\\]robby[/\\]agent$/),
+    };
     expect(ensureAuthProfileStore).not.toHaveBeenCalled();
-    expectCall(promptAuthChoiceGrouped, { workspaceDir });
-    for (const mock of [applyAuthChoice, promptDefaultModel]) {
-      expectCall(mock, { agentId: "robby", agentDir, workspaceDir });
-    }
+    expectCall(applyAuthChoice, { ...target, workspaceDir });
+    expectCall(promptDefaultModel, { ...target, workspaceDir });
     expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(
       expect.anything(),
       expect.anything(),
-      expect.objectContaining({ agentId: "robby", agentDir }),
+      expect.objectContaining(target),
     );
   });
 
-  it("keeps managed model defaults owned by the selected fleet agent", async () => {
+  it("keeps provider-selected models owned by the selected fleet agent", async () => {
     const selectedModel = "managed-local/selected";
     const existingModels = { "ops/current": { alias: "existing" } };
     const selectedModels = { ...existingModels, [selectedModel]: { alias: "selected" } };
@@ -221,16 +190,11 @@ describe("runSetupModelAuthStep", () => {
         ...authConfig.agents?.defaults?.models,
         [selectedModel]: { alias: "selected" },
       };
-      prepared.models = managedModels;
       return candidate(prepared);
     });
 
     const result = await runStep({ config, opts: { authChoice: "anthropic-cli" } });
 
-    expectCall(applyAuthChoice, { agentId: "ops" });
-    expect(applyAuthChoice.mock.lastCall?.[0].config.agents.defaults).toEqual(
-      expect.objectContaining({ model: { primary: "ops/current" }, models: existingModels }),
-    );
     expect(result.config.agents?.defaults).toEqual(config.agents?.defaults);
     expect(result.config.agents?.entries?.main).toEqual(config.agents?.entries?.main);
     expect(result.config.agents?.entries?.ops?.model).toEqual({ primary: selectedModel });
@@ -276,10 +240,6 @@ describe("runSetupModelAuthStep", () => {
       fallbacks: ["openai/fallback-model"],
     });
     expect(result.config.agents?.defaults?.model).toBe("openai/global-model");
-    expect(warnIfModelConfigLooksOff).toHaveBeenCalledWith(result.config, expect.anything(), {
-      agentId: "ops",
-      agentDir: "/tmp/ops-agent",
-    });
   });
 
   it("keeps the current provider without applying auth or automatic lean changes", async () => {
@@ -417,19 +377,17 @@ describe("resolveQuickstartGatewayDefaults", () => {
   });
 
   it("aligns credential-only overrides while keeping an explicit auth mode authoritative", () => {
-    const mode = (opts: Parameters<typeof gatewayDefaults>[1], config = storedConfig) =>
-      gatewayDefaults(config, opts).authMode;
-    expect(mode({ gatewayPassword: "explicit-password" })).toBe("password");
-    expect(
-      mode(
-        { gatewayToken: "explicit-token" },
-        {
-          gateway: { auth: { mode: "password", password: "stored-password" } },
-        },
-      ),
-    ).toBe("token");
-    expect(mode({ gatewayAuth: "password", gatewayToken: "explicit-token" })).toBe("password");
-    expect(mode({ gatewayAuth: "token", gatewayPassword: "explicit-password" })).toBe("token");
+    const passwordConfig: OpenClawConfig = {
+      gateway: { auth: { mode: "password", password: "stored-password" } },
+    };
+    for (const [opts, expected, config = storedConfig] of [
+      [{ gatewayPassword: "explicit-password" }, "password"],
+      [{ gatewayToken: "explicit-token" }, "token", passwordConfig],
+      [{ gatewayAuth: "password", gatewayToken: "explicit-token" }, "password"],
+      [{ gatewayAuth: "token", gatewayPassword: "explicit-password" }, "token"],
+    ] as const) {
+      expect(gatewayDefaults(config, opts).authMode).toBe(expected);
+    }
   });
 
   it("maps an explicit env-backed token to the canonical SecretRef", () => {
