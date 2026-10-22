@@ -41,6 +41,8 @@ const assistant = (seq: number, data: Record<string, unknown>) =>
   createAgentEvent("run", seq, seq, "assistant", data);
 type Expected = { type: OpenClawEvent["type"]; data?: Record<string, unknown>; raw?: number };
 const projected = (data: Record<string, unknown>): Expected => ({ type: "assistant.delta", data });
+const expectedDelta = (text: string, chunk = text, replace?: true) =>
+  projected({ text, delta: chunk, ...(replace ? { replace } : {}) });
 
 async function readEvent(
   pending: Promise<IteratorResult<OpenClawEvent>>,
@@ -48,11 +50,10 @@ async function readEvent(
   raw?: GatewayEvent,
 ) {
   const next = await pending;
-  expect(next.done).toBe(false);
+  expect(next).toMatchObject({ done: false, value: { type: expected.type } });
   if (next.done) {
     throw new Error("Expected projected output");
   }
-  expect(next.value.type).toBe(expected.type);
   if (expected.data !== undefined) {
     expect(next.value.data).toEqual(expected.data);
   }
@@ -99,9 +100,9 @@ describe("SDK streaming projections", () => {
         { event: "custom.debug", seq: 5, payload: { runId: "run", ts: 5, data: { ok: true } } },
       ],
       [
-        projected({ text: "hello", delta: "hello" }),
-        projected({ text: "hello again", delta: " again" }),
-        projected({ text: replacement, delta: replacement, replace: true }),
+        expectedDelta("hello"),
+        expectedDelta("hello again", " again"),
+        expectedDelta(replacement, replacement, true),
         { type: "run.completed" as const, data: { phase: "end", outputText: replacement } },
       ],
     ]),
@@ -109,9 +110,9 @@ describe("SDK streaming projections", () => {
       "chat reconnect and replacement snapshots",
       [chat(1, "hello", "hello"), chat(2, "hello again", "in"), chat(3, "rewritten", "ten")],
       [
-        projected({ text: "hello", delta: "hello" }),
-        projected({ text: "hello again", delta: " again" }),
-        projected({ text: "rewritten", delta: "rewritten", replace: true }),
+        expectedDelta("hello"),
+        expectedDelta("hello again", " again"),
+        expectedDelta("rewritten", "rewritten", true),
       ],
     ],
     assistantScenario(),
@@ -180,10 +181,7 @@ describe("SDK streaming projections", () => {
         }
         expect((await rawEvents(1001).next()).value).toBe(frames[500]);
       } else {
-        const first = await readEvent(
-          iterator.next(),
-          projected({ text: "hello 1", delta: "hello 1" }),
-        );
+        const first = await readEvent(iterator.next(), expectedDelta("hello 1"));
         const observedLive = observeGatewaySequence(oc, 502);
         text += " 501";
         transport.emit(chat(502, undefined, " 501"));
@@ -219,13 +217,9 @@ describe("SDK streaming projections", () => {
         Array.from({ length: 101 }, (_, i) => streamFrame(stream, i + 1, i + 1, "prefix")),
       );
       const iterator = events("run-1");
-      await expect(iterator.next()).resolves.toMatchObject({
-        value: { data: { text: "prefix", delta: "prefix" } },
-      });
+      await readEvent(iterator.next(), expectedDelta("prefix"));
       transport.emit(streamFrame(stream, 1, 102, undefined, " suffix"));
-      await expect(iterator.next()).resolves.toMatchObject({
-        value: { data: { text: "prefix suffix", delta: " suffix" } },
-      });
+      await readEvent(iterator.next(), expectedDelta("prefix suffix", " suffix"));
       await iterator.return?.();
       await publish(
         203,
@@ -330,8 +324,9 @@ describe("SDK terminal carriers", () => {
     }
     observed.push(...(await pending));
 
-    const raw = await collectUntil(oc.rawEvents(), (event) => event.event === "custom.debug");
-    expect(raw).toEqual(expectedRaw);
+    await expect(
+      collectUntil(oc.rawEvents(), (event) => event.event === "custom.debug"),
+    ).resolves.toEqual(expectedRaw);
     return observed;
   }
 

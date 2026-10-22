@@ -1,6 +1,6 @@
 import type { AddressInfo } from "node:net";
 import net from "node:net";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { claimAgentSessionWriter } from "../../../src/agents/embedded-agent-runner/run/session-bootstrap.js";
 import * as embeddedRuns from "../../../src/agents/embedded-agent-runner/runs.test-support.js";
 import { resolveDefaultSessionStorePath } from "../../../src/config/sessions/paths.js";
@@ -22,18 +22,12 @@ import { GatewayClientTransport, OpenClaw, type OpenClawEvent } from "./index.js
 import { createSdkWebSocketServer } from "./transport.websocket.test-support.js";
 
 type JsonObject = Record<string, unknown>;
-type FakeGatewayRequest = {
-  id: string;
-  method: string;
-  params?: unknown;
-};
-type FakeGateway = {
-  url: string;
-  requests: FakeGatewayRequest[];
-  close: () => Promise<void>;
-};
-
-const gateways = new Set<FakeGateway>();
+type Request = <T>(
+  method: string,
+  params: unknown,
+  response: unknown,
+  invoke: () => Promise<T>,
+) => Promise<T>;
 
 function createClient(url: string, token?: string) {
   return new OpenClaw({
@@ -46,11 +40,22 @@ function createClient(url: string, token?: string) {
   });
 }
 
-async function withGateway(body: (oc: OpenClaw, gateway: FakeGateway) => Promise<void>) {
-  const gateway = await createFakeGateway();
+async function withGateway(body: (oc: OpenClaw, request: Request) => Promise<void>) {
+  const gateway = await createSdkWebSocketServer();
   const oc = createClient(gateway.url);
+  const request: Request = async (method, params, response, invoke) => {
+    let calls = 0;
+    gateway.setRequestHandler((socket, frame) => {
+      calls++;
+      expect([frame.method, frame.params]).toEqual([method, params]);
+      gateway.reply(socket, frame.id, response);
+    });
+    const result = await invoke();
+    expect(calls).toBe(1);
+    return result;
+  };
   try {
-    await body(oc, gateway);
+    await body(oc, request);
   } finally {
     await oc.close();
     await gateway.close();
@@ -60,10 +65,6 @@ async function withGateway(body: (oc: OpenClaw, gateway: FakeGateway) => Promise
 function expectJsonObject(value: unknown): JsonObject {
   expect(value && typeof value).toBe("object");
   return value as JsonObject;
-}
-
-async function expectResponse(response: Promise<unknown>, fields: JsonObject) {
-  expect(expectJsonObject(await response)).toEqual(expect.objectContaining(fields));
 }
 
 const collectRun = (events: AsyncIterable<OpenClawEvent>) =>
@@ -81,140 +82,107 @@ async function reservePort(): Promise<number> {
   return port;
 }
 
-async function createFakeGateway(port = 0): Promise<FakeGateway> {
-  const server = await createSdkWebSocketServer(port);
-  const requests: FakeGatewayRequest[] = [];
-  server.setRequestHandler((socket, frame) => {
-    requests.push(frame);
-    const reply = (payload: JsonObject) => server.reply(socket, frame.id, payload);
-    const params = frame.params as JsonObject | undefined;
-    const echo = { ok: true, method: frame.method, params };
-    const responses: Record<string, JsonObject> = {
-      "agents.list": { agents: [{ id: "main" }] },
-      "agent.identity.get": { agentId: "main", ...params },
-      "agents.create": echo,
-      "agents.update": echo,
-      "agents.delete": echo,
-      "sessions.list": { sessions: [{ key: "sdk-session" }] },
-      "sessions.create": { key: params?.key ?? "sdk-session" },
-      "sessions.resolve": { key: "sdk-session", params },
-      "sessions.send": { status: "ok", runId: "run-session-e2e", sessionKey: params?.key },
-      "sessions.abort": {
-        ok: true,
-        abortedRunId: params?.runId ?? "run-sdk-e2e",
-        status: "aborted",
-      },
-      "sessions.patch": echo,
-      "sessions.compact": echo,
-      "models.list": { models: [{ id: "gpt-5.4" }] },
-      "models.authStatus": { providers: [] },
-      "tools.catalog": { tools: [{ name: "shell" }] },
-      "tools.effective": { tools: [{ name: "shell", enabled: true }] },
-      "tools.invoke": { ok: true, toolName: "shell", output: { ok: true } },
-      "exec.approval.list": { approvals: [] },
-    };
-    const response = Object.hasOwn(responses, frame.method) && responses[frame.method];
-    if (response) {
-      reply(response);
-      return;
-    }
-
-    if (frame.method === "exec.approval.resolve") {
-      expect(frame.params).toMatchObject({ id: "approval-1", decision: "allow-once" });
-      reply({ ok: true, params: frame.params as JsonObject | undefined });
-      return;
-    }
-
-    socket.send(
-      JSON.stringify({
-        type: "res",
-        id: frame.id,
-        ok: false,
-        error: { code: "UNKNOWN_METHOD", message: `unhandled fake Gateway method ${frame.method}` },
-      }),
-    );
-  });
-  const gateway: FakeGateway = {
-    url: server.url,
-    requests,
-    close: async () => {
-      gateways.delete(gateway);
-      await server.close();
-    },
-  };
-  gateways.add(gateway);
-  return gateway;
-}
-
 describe("OpenClaw SDK websocket e2e", () => {
-  afterEach(() => Promise.all([...gateways].map((gateway) => gateway.close())));
-
   it("covers documented namespace helpers over a Gateway websocket", async () => {
-    await withGateway(async (oc, gateway) => {
-      await expectResponse(oc.agents.list(), { agents: [{ id: "main" }] });
-      const agent = await oc.agents.get("main");
-      await expectResponse(agent.identity({ sessionKey: "sdk-session" }), {
-        agentId: "main",
-        sessionKey: "sdk-session",
-      });
-      await expectResponse(oc.agents.create({ name: "SDK Agent", workspace: "/tmp/sdk-agent" }), {
-        method: "agents.create",
-        params: { name: "SDK Agent", workspace: "/tmp/sdk-agent" },
-      });
-      await expectResponse(oc.agents.update({ agentId: "sdk-agent", name: "Renamed SDK Agent" }), {
-        method: "agents.update",
-        params: { agentId: "sdk-agent", name: "Renamed SDK Agent" },
-      });
-      await expectResponse(oc.agents.update({ agentId: "sdk-agent", model: null }), {
-        params: { agentId: "sdk-agent", model: null },
-      });
-      await expectResponse(oc.agents.delete({ agentId: "sdk-agent" }), {
-        method: "agents.delete",
-        params: { agentId: "sdk-agent" },
-      });
-      await expectResponse(oc.sessions.list(), { sessions: [{ key: "sdk-session" }] });
-      const session = await oc.sessions.create({ key: "sdk-session", agentId: "main" });
-      expect(session.key).toBe("sdk-session");
-      await expectResponse(oc.sessions.resolve({ key: "sdk-session" }), { key: "sdk-session" });
-      const sessionRun = await session.send("continue");
-      expect(sessionRun.id).toBe("run-session-e2e");
-      await expectResponse(session.abort(sessionRun.id), { abortedRunId: "run-session-e2e" });
-      await expectResponse(session.patch({ label: "Renamed" }), { method: "sessions.patch" });
-      await expectResponse(session.compact({ maxLines: 200 }), { method: "sessions.compact" });
-      await expectResponse(oc.models.list(), { models: [{ id: "gpt-5.4" }] });
-      await expectResponse(oc.models.status({ probe: false }), { providers: [] });
-      await expectResponse(oc.tools.list(), { tools: [{ name: "shell" }] });
-      await expectResponse(oc.tools.effective({ sessionKey: "sdk-session" }), {
-        tools: [{ name: "shell", enabled: true }],
-      });
-      await expectResponse(
-        oc.tools.invoke("shell", { args: { command: "pwd" }, sessionKey: "sdk-session" }),
-        { ok: true, toolName: "shell", output: { ok: true } },
-      );
-      await expectResponse(oc.approvals.list(), { approvals: [] });
-      const staleDecision = { id: "stale-approval", decision: "allow-once" as const };
-      await expectResponse(oc.approvals.respond("approval-1", staleDecision), { ok: true });
-      const requestParams = new Map(
-        gateway.requests.map((request) => [request.method, request.params]),
-      );
-      expect(requestParams.get("models.authStatus")).toEqual({ probe: false });
-      for (const method of [
-        "agents.list",
-        "sessions.list",
-        "models.list",
-        "tools.catalog",
-        "exec.approval.list",
-      ]) {
-        expect(requestParams.get(method)).toEqual({});
+    await withGateway(async (oc, request) => {
+      const rpc = async (
+        method: string,
+        params: unknown,
+        response: unknown,
+        invoke: () => Promise<unknown>,
+      ) => expect(request(method, params, response, invoke)).resolves.toEqual(response);
+      const echo = <T>(method: string, params: T, invoke: (params: T) => Promise<unknown>) =>
+        rpc(method, params, { ok: true, method, params }, () => invoke(structuredClone(params)));
+
+      for (const [method, invoke, response] of [
+        ["agents.list", () => oc.agents.list(), { agents: [{ id: "main" }] }],
+        ["sessions.list", () => oc.sessions.list(), { sessions: [{ key: "sdk-session" }] }],
+        ["models.list", () => oc.models.list(), { models: [{ id: "gpt-5.4" }] }],
+        ["tools.catalog", () => oc.tools.list(), { tools: [{ name: "shell" }] }],
+        ["exec.approval.list", () => oc.approvals.list(), { approvals: [] }],
+      ] as const) {
+        await rpc(method, {}, response, invoke);
       }
+      const agent = await oc.agents.get("main");
+      await rpc(
+        "agent.identity.get",
+        { agentId: "main", sessionKey: "sdk-session" },
+        { agentId: "main", sessionKey: "sdk-session" },
+        () => agent.identity({ sessionKey: "sdk-session" }),
+      );
+      await echo("agents.create", { name: "SDK Agent", workspace: "/tmp/sdk-agent" }, (p) =>
+        oc.agents.create(p),
+      );
+      await echo("agents.update", { agentId: "sdk-agent", name: "Renamed SDK Agent" }, (p) =>
+        oc.agents.update(p),
+      );
+      await echo("agents.update", { agentId: "sdk-agent", model: null }, (p) =>
+        oc.agents.update(p),
+      );
+      await echo("agents.delete", { agentId: "sdk-agent" }, (p) => oc.agents.delete(p));
+
+      const session = await request(
+        "sessions.create",
+        { key: "sdk-session", agentId: "main" },
+        { key: "sdk-session" },
+        () => oc.sessions.create({ key: "sdk-session", agentId: "main" }),
+      );
+      expect(session.key).toBe("sdk-session");
+      await rpc(
+        "sessions.resolve",
+        { key: "sdk-session" },
+        { key: "sdk-session", params: { key: "sdk-session" } },
+        () => oc.sessions.resolve({ key: "sdk-session" }),
+      );
+      const run = await request(
+        "sessions.send",
+        { key: "sdk-session", message: "continue" },
+        { status: "ok", runId: "run-session-e2e", sessionKey: "sdk-session" },
+        () => session.send("continue"),
+      );
+      expect(run.id).toBe("run-session-e2e");
+      await rpc(
+        "sessions.abort",
+        { key: session.key, runId: run.id },
+        { ok: true, abortedRunId: run.id, status: "aborted" },
+        () => session.abort(run.id),
+      );
+      await echo("sessions.patch", { label: "Renamed", key: session.key }, (p) =>
+        session.patch({ label: p.label }),
+      );
+      await echo("sessions.compact", { maxLines: 200, key: session.key }, (p) =>
+        session.compact({ maxLines: p.maxLines }),
+      );
+      await rpc("models.authStatus", { probe: false }, { providers: [] }, () =>
+        oc.models.status({ probe: false }),
+      );
+      await rpc(
+        "tools.effective",
+        { sessionKey: session.key },
+        { tools: [{ name: "shell", enabled: true }] },
+        () => oc.tools.effective({ sessionKey: session.key }),
+      );
+      const toolParams = { args: { command: "pwd" }, sessionKey: session.key };
+      await rpc(
+        "tools.invoke",
+        { name: "shell", conversationReadOrigin: "direct-operator", ...toolParams },
+        { ok: true, toolName: "shell", output: { ok: true } },
+        () => oc.tools.invoke("shell", toolParams),
+      );
+      const staleDecision = { id: "stale-approval", decision: "allow-once" as const };
+      await rpc(
+        "exec.approval.resolve",
+        { id: "approval-1", decision: "allow-once" },
+        { ok: true },
+        () => oc.approvals.respond("approval-1", staleDecision),
+      );
     });
   }, 10_000);
 
   it("retries after an initial websocket connection failure", async () => {
     const port = await reservePort();
-    const url = `ws://127.0.0.1:${port}`;
     const transport = new GatewayClientTransport({
-      url,
+      url: `ws://127.0.0.1:${port}`,
       deviceIdentity: null,
       connectChallengeTimeoutMs: 200,
       preauthHandshakeTimeoutMs: 200,
@@ -223,7 +191,7 @@ describe("OpenClaw SDK websocket e2e", () => {
     const initialConnectError = await transport.connect().catch((error: unknown) => error);
     expect(initialConnectError).toBeInstanceOf(Error);
     expect(String(initialConnectError)).toMatch(/ECONNREFUSED/);
-    const gateway = await createFakeGateway(port);
+    const gateway = await createSdkWebSocketServer(port);
     try {
       await expect(transport.connect()).resolves.toBeUndefined();
     } finally {
