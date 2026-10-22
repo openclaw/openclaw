@@ -253,6 +253,7 @@ export function Agents(props: AgentsProps) {
                     <AgentFiles
                       {...props.agentFiles}
                       readData={props.readData}
+                      presentationRetired={props.presentationRetired}
                       agentId={agent().id}
                       canWrite={props.access.canWriteFiles}
                     />

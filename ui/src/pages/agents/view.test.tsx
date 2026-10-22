@@ -67,12 +67,14 @@ function renderFiles(
       readData() {
         return { ...createProps().readData(), ...this };
       },
+      presentationRetired: createProps().presentationRetired,
       agentId: "alpha",
       listRead: null,
       agentFileConflict: null,
       canWrite: true,
       agentFilesLoading: false,
-      agentFilesError: null,
+      agentFileRead: null,
+      agentFileOutcome: null,
       agentFileSaving: false,
       ...inertAgentFileControls,
       ...params,

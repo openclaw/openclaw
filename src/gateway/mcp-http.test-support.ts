@@ -80,7 +80,7 @@ export function captureGrant(token: string, captureKey: string, runtimeOwnerToke
 }
 
 export async function startLoopbackServerForTest() {
-  await ensureMcpLoopbackServer(0);
+  await ensureMcpLoopbackServer();
   const runtime = getActiveMcpLoopbackRuntime();
   if (!runtime) {
     throw new Error("expected active MCP loopback runtime");

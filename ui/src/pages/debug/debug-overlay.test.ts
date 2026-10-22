@@ -140,6 +140,34 @@ it("keeps vitals live while an active-run read is pending and minimizes invisibl
   expect(request).toHaveBeenCalledTimes(closedCount);
 });
 
+it("keeps settled section polling independent while a later active-run read is pending", async () => {
+  const heldRuns = deferred<unknown>();
+  onTestFinished(() => heldRuns.resolve({ sessions: [] }));
+  let infoResponse: unknown = { eventLoop: { cpuCoreRatio: 0.1 } };
+  let runReads = 0;
+  const request = makeRequest(
+    () => infoResponse,
+    () => (++runReads === 1 ? { sessions: [] } : heldRuns.promise),
+  );
+  const { text, query, step, open } = mountOverlay(createDebugApplicationContext(request));
+  await open();
+  expect(text(".debug-overlay__count")).toContain("0 active");
+  expect(text(".gateway-vital--cpu")).toContain("0.10 cores");
+
+  for (const cpuCoreRatio of [0.2, 0.3, 0.4]) {
+    const sample = deferred<unknown>();
+    onTestFinished(() => sample.resolve({}));
+    infoResponse = sample.promise;
+    await step();
+    sample.resolve({ eventLoop: { cpuCoreRatio } });
+    await step(0);
+    expect(text(".gateway-vital--cpu")).toContain(`${cpuCoreRatio.toFixed(2)} cores`);
+  }
+
+  expect(readCounts(request)).toEqual([2, 4, 4]);
+  expect(query(".gateway-vital--cpu")?.samples).toHaveLength(4);
+});
+
 it("defers hidden reads and catches up once when the tray becomes visible", async () => {
   let visibility: DocumentVisibilityState = "hidden";
   vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibility);

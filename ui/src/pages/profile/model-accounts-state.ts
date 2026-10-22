@@ -58,6 +58,8 @@ export class ModelAccountsState {
   connectFlow: (UsersAuthConnectStartResult & { step?: WizardStep }) | null = null;
   stepValue: unknown;
   statusUnavailable = false;
+  catalogReceipt = { result: Promise.resolve<string | null>(null) };
+  statusReceipt = { result: Promise.resolve<string | null>(null) };
 
   target: AccountTarget | null = null;
   generation = 0;
@@ -115,6 +117,8 @@ export class ModelAccountsState {
     this.inventoryLoading = false;
     this.inventoryError = null;
     this.inventoryReceipt = { result: Promise.resolve<string | null>(null) };
+    this.catalogReceipt = { result: Promise.resolve(null) };
+    this.statusReceipt = { result: Promise.resolve(null) };
     this.action = null;
     this.error = null;
     this.notice = null;
@@ -258,7 +262,7 @@ export class ModelAccountsState {
 
   openSignIn() {
     this.signIn = { providers: [], provider: "", method: "" };
-    void this.runAction(
+    const pending = this.runAction(
       "request",
       (target) =>
         target.client.request<UsersAuthConnectCatalogResult>("users.authConnect.catalog", {
@@ -268,6 +272,11 @@ export class ModelAccountsState {
         this.signIn = { providers: result.providers, provider: "", method: "" };
       },
     );
+    const generation = this.generation;
+    this.catalogReceipt = {
+      result: pending.then(() => (this.generation === generation ? this.error : null)),
+    };
+    this.publish();
   }
 
   selectProvider(provider: string) {
@@ -344,7 +353,7 @@ export class ModelAccountsState {
     if (!flow) {
       return;
     }
-    void this.runAction(
+    const pending = this.runAction(
       action === "status" ? "request" : action,
       (target) =>
         target.client.request<UsersAuthConnectStatusResult>(`users.authConnect.${action}`, {
@@ -353,6 +362,22 @@ export class ModelAccountsState {
         }),
       (result) => this.applyConnectStatus(result),
     );
+    if (action === "status") {
+      const generation = this.generation;
+      this.statusReceipt = {
+        result: pending.then(() => {
+          if (this.generation !== generation) {
+            return null;
+          }
+          if (this.error && this.connectFlow) {
+            this.statusUnavailable = true;
+            this.publish();
+          }
+          return this.error;
+        }),
+      };
+      this.publish();
+    }
   }
 
   answerStep(stepId: string, value: unknown) {

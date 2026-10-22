@@ -60,6 +60,7 @@ export class ClawCreatorFlow {
   modalOpen = false;
   publication: ClawsDraftsPublishResult | null = null;
   error: string | null = null;
+  presentationLifetime = Promise.withResolvers<void>();
 
   get hasActiveDraft() {
     return this.target !== null;
@@ -80,6 +81,11 @@ export class ClawCreatorFlow {
   readonly subscribe = this.listeners.subscribe;
 
   private readonly changed = this.listeners.publish;
+
+  retirePresentation() {
+    this.presentationLifetime.resolve();
+    this.presentationLifetime = Promise.withResolvers<void>();
+  }
 
   private mainSessionKey(agentId: string) {
     const mainKey = resolveUiConfiguredMainKey({
@@ -111,6 +117,7 @@ export class ClawCreatorFlow {
   }
 
   private reset(target: Target | null) {
+    this.retirePresentation();
     this.generation += 1;
     this.reviewRequest += 1;
     if (this.pollTimer) {
@@ -341,6 +348,7 @@ export class ClawCreatorFlow {
   }
 
   close() {
+    this.retirePresentation();
     this.modalOpen = false;
     this.changed();
   }

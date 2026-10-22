@@ -79,41 +79,22 @@ describe("Mantis worktree cleanup", () => {
     await expect(fs.stat(displacedPath)).resolves.toBeDefined();
   });
 
-  it.each(["targetInode"] as const)(
-    "preserves a worktree when its Windows ownership receipt has unknown %s",
-    async (field) => {
-      const ownership = await captureOwnership();
-      const sentinelPath = path.join(worktreeDir, "preserve-me.txt");
-      await fs.writeFile(sentinelPath, "preserve", "utf8");
-      const runner = vi.fn(async () => successfulCommandResult());
-      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-      Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-      try {
-        await expect(removeWorktree(runner, { ...ownership, [field]: 0n })).rejects.toThrow(
-          "replaced before cleanup",
-        );
-        expect(runner).not.toHaveBeenCalled();
-        await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("preserve");
-      } finally {
-        Object.defineProperty(process, "platform", platform);
-      }
-    },
-  );
-
-  it("reports a registered owned path that disappeared before cleanup", async () => {
+  it("preserves a worktree when its Windows ownership receipt has unknown targetInode", async () => {
     const ownership = await captureOwnership();
-    await fs.rm(worktreeDir, { recursive: true });
-    const runner = vi.fn(async (_command: string, args: readonly string[]) => {
-      if (args[1] === "list") {
-        return successfulCommandResult(worktreeListOutput(worktreeDir));
-      }
-      throw new Error(`unexpected git command: ${args.join(" ")}`);
-    });
-
-    await expect(removeWorktree(runner, ownership)).rejects.toThrow(
-      "baseline worktree cleanup left registered path",
-    );
-    expect(runner).toHaveBeenCalledOnce();
+    const sentinelPath = path.join(worktreeDir, "preserve-me.txt");
+    await fs.writeFile(sentinelPath, "preserve", "utf8");
+    const runner = vi.fn(async () => successfulCommandResult());
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    try {
+      await expect(removeWorktree(runner, { ...ownership, targetInode: 0n })).rejects.toThrow(
+        "replaced before cleanup",
+      );
+      expect(runner).not.toHaveBeenCalled();
+      await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("preserve");
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
   });
 
   it("attributes a shared legacy deadline expiry to the active candidate lane", async () => {

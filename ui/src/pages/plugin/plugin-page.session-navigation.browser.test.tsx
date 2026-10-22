@@ -1,3 +1,4 @@
+import { createRouter, definePage } from "@openclaw/uirouter";
 import type { CDPSession } from "@vitest/browser-playwright";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cdp } from "vitest/browser";
@@ -86,6 +87,10 @@ async function mount(options: MountOptions = {}) {
     },
   } satisfies Partial<typeof gateway.snapshot>);
   const rows = options.boardFace ? [{ key: sessionKey, boardFace: options.boardFace }] : [];
+  const router = createRouter({
+    routes: [definePage({ id: "plugin", path: "/plugin", component: () => ({}) })],
+  });
+  dispose.push(() => router.stop());
   const context = {
     basePath: "/console",
     gateway,
@@ -94,6 +99,7 @@ async function mount(options: MountOptions = {}) {
     agentSelection: { state: { selectedId: "main" }, set: actions.selectAgent },
     sessions: { state: { result: { sessions: rows } } },
     navigate: actions.navigate,
+    router,
   } as unknown as ApplicationContext;
   const mounted = mountSolid(
     () => <PluginPage pluginId={descriptor.pluginId} tabId={descriptor.id} />,

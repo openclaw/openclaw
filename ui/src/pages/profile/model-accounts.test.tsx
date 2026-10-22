@@ -486,6 +486,53 @@ it("lets an admin link and unlink an existing model account", async () => {
   });
 });
 
+it("keeps a held catalog disabled and recovers from its error by reopening sign-in", async () => {
+  const held = createDeferred<UsersAuthConnectCatalogResult>();
+  const harness = await mountAccounts(async () => {
+    throw new Error("Unexpected account mutation");
+  });
+  harness.request.mockImplementationOnce(async () => held.promise);
+  button(harness.accounts, ".profile-auth-add-account").click();
+  await waitForSolid(() =>
+    expect(
+      button(harness.accounts, ".profile-auth-provider .picker-select__trigger").disabled,
+    ).toBe(true),
+  );
+  expect(harness.accounts.textContent).not.toContain(t("profilePage.modelAccounts.noMethods"));
+  held.reject(new Error("Catalog unavailable"));
+  await waitForSolid(() =>
+    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
+      "Catalog unavailable",
+    ),
+  );
+  button(harness.accounts, ".profile-auth-connect-cancel").click();
+  flush();
+  button(harness.accounts, ".profile-auth-add-account").click();
+  await waitForSolid(() =>
+    expect(
+      button(harness.accounts, ".profile-auth-provider .picker-select__trigger").disabled,
+    ).toBe(false),
+  );
+  expect(harness.accounts.querySelector('[role="alert"]')).toBeNull();
+});
+
+it("retires the previous connection's catalog without reopening its sign-in", async () => {
+  const held = createDeferred<UsersAuthConnectCatalogResult>();
+  const harness = await mountAccounts(async () => {
+    throw new Error("Unexpected account mutation");
+  });
+  harness.request.mockImplementationOnce(async () => held.promise);
+  button(harness.accounts, ".profile-auth-add-account").click();
+  harness.emit("connected", true);
+  await waitForSolid(() =>
+    expect(button(harness.accounts, ".profile-auth-add-account").disabled).toBe(false),
+  );
+  held.resolve(catalog);
+  await vi.advanceTimersByTimeAsync(0);
+  flush();
+  expect(harness.accounts.querySelector(".model-accounts-choice")).toBeNull();
+});
+
 it("polls one authorization at a time and uses its recorded outcome", async () => {
   const exchanging = createDeferred<UsersAuthConnectStatusResult>();
   let polls = 0;
@@ -646,13 +693,14 @@ it("does not apply an old poll after replacing the connection and starting a new
   expect(harness.accounts.querySelector(".model-accounts-flow")).not.toBeNull();
 });
 
-it("keeps a failed status check visible and lets the person retry it", async () => {
+it("keeps repeated failed status checks retryable and retains the answer while checking", async () => {
   let polls = 0;
+  const completion = createDeferred<UsersAuthConnectStatusResult>();
   const harness = await mountAccounts(async () => {
-    if (++polls === 1) {
+    if (++polls < 3) {
       throw new Error("Gateway disconnected");
     }
-    return connectedResult;
+    return completion.promise;
   });
   await harness.start();
   await vi.advanceTimersByTimeAsync(2_000);
@@ -662,7 +710,26 @@ it("keeps a failed status check visible and lets the person retry it", async () 
   );
   await vi.advanceTimersByTimeAsync(10_000);
   expect(polls).toBe(1);
+  const answer = await input(
+    harness.accounts,
+    ".wizard-step__form input",
+    "https://example.test/callback",
+  );
   button(harness.accounts, ".profile-auth-connect-check").click();
+  await waitForSolid(() => {
+    expect(harness.accounts.querySelector('[role="alert"]')?.textContent).toContain(
+      "Gateway disconnected",
+    );
+    expect(button(harness.accounts, ".profile-auth-connect-check").disabled).toBe(false);
+  });
+  expect(answer.value).toBe("https://example.test/callback");
+  button(harness.accounts, ".profile-auth-connect-check").click();
+  await waitForSolid(() =>
+    expect(button(harness.accounts, ".profile-auth-connect-check").disabled).toBe(true),
+  );
+  expect(harness.accounts.querySelector(".wizard-step__form input")).toBe(answer);
+  expect(answer.value).toBe("https://example.test/callback");
+  completion.resolve(connectedResult);
   await waitForSolid(() => expect(harness.accounts.textContent).toContain(connectedAccount.label));
   expect(harness.accounts.querySelector('[role="alert"]')).toBeNull();
 });
