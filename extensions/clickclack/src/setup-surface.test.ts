@@ -3,6 +3,7 @@ import path from "node:path";
 import {
   createPluginSetupWizardConfigure,
   createQueuedWizardPrompter,
+  createNonExitingRuntimeEnv,
   createTestWizardPrompter,
   runSetupWizardConfigure,
   runSetupWizardFinalize,
@@ -11,36 +12,36 @@ import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
+  callGatewayFromCli: vi.fn(),
   createClient: vi.fn(),
   me: vi.fn(),
   workspaces: vi.fn(),
+}));
+
+vi.mock("openclaw/plugin-sdk/gateway-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/gateway-runtime")>()),
+  callGatewayFromCli: mocks.callGatewayFromCli,
 }));
 
 vi.mock("./http-client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./http-client.js")>()),
   createClickClackClient: (options: unknown) => {
     mocks.createClient(options);
-    return {
-      me: mocks.me,
-      workspaces: mocks.workspaces,
-    };
+    return { me: mocks.me, workspaces: mocks.workspaces };
   },
 }));
 
 import { clickClackSetupPlugin } from "./channel.setup.js";
 import { ClickClackHttpError } from "./http-client.js";
 import { clickClackSetupWizard } from "./setup-surface.js";
+import { verifyClickClackAccountAfterSetup } from "./setup-verify.js";
 import type { CoreConfig } from "./types.js";
 
 const { credentials, status, introNote, finalize } = clickClackSetupWizard;
-function requireCredential() {
-  const credential = credentials[0];
-  if (!credential) {
-    throw new Error("expected ClickClack token credential");
-  }
-  return credential;
+const [credential] = credentials;
+if (!credential) {
+  throw new Error("expected ClickClack token credential");
 }
-const credential = requireCredential();
 const account = {
   baseUrl: "https://clickclack.example",
   token: "ccb_test",
@@ -53,6 +54,36 @@ function channelConfig(
 }
 const configuredAccount = channelConfig();
 const tokenRef = { source: "file", provider: "vault", id: "/clickclack/token" };
+const runningMessage = "OpenClaw is running — ClickClack will connect automatically.";
+const connectedMessage = "Connected as @openclaw — workspace Default resolved.";
+const warnings = [
+  [
+    () => mocks.me.mockRejectedValue(new ClickClackHttpError(401, "unauthorized", new Headers())),
+    "ClickClack rejected the bot token (401). Copy a current token and rerun setup.",
+  ],
+  [
+    () => mocks.workspaces.mockResolvedValue([]),
+    'Workspace "default" was not found. Check the id, slug, or name, list available workspaces, and rerun setup.',
+  ],
+  [
+    () => mocks.me.mockRejectedValue(new Error("network unavailable")),
+    "Connection check failed: network unavailable. Setup was saved; fix the connection and rerun setup.",
+  ],
+] as const;
+
+async function verify(overrides: Parameters<typeof channelConfig>[0] = {}) {
+  const runtime = createNonExitingRuntimeEnv();
+  await verifyClickClackAccountAfterSetup({
+    cfg: channelConfig(overrides),
+    accountId: "default",
+    runtime,
+  });
+  return runtime;
+}
+
+function expectLogs(runtime: Awaited<ReturnType<typeof verify>>, message: string) {
+  expect(vi.mocked(runtime.log).mock.calls).toEqual([[message], [runningMessage]]);
+}
 
 function expectCredential(
   cfg: CoreConfig,
@@ -83,6 +114,7 @@ async function expectValidationNote(message: string, cfg = configuredAccount) {
 describe("ClickClack setup wizard", () => {
   beforeEach(() => {
     mocks.createClient.mockReset();
+    mocks.callGatewayFromCli.mockReset().mockResolvedValue({ ok: true });
     mocks.me.mockReset().mockResolvedValue({ id: "usr_bot", handle: "openclaw" });
     mocks.workspaces.mockReset();
     mocks.workspaces.mockResolvedValue([
@@ -154,10 +186,7 @@ describe("ClickClack setup wizard", () => {
       workspace: "default",
     });
     expect(mocks.me).toHaveBeenCalledTimes(1);
-    expect(queued.prompter.note).toHaveBeenCalledWith(
-      "Connected as @openclaw — workspace Default resolved.",
-      "ClickClack connection",
-    );
+    expect(queued.prompter.note).toHaveBeenCalledWith(connectedMessage, "ClickClack connection");
   });
 
   it("uses the resolved setup credential for live validation", async () => {
@@ -173,25 +202,57 @@ describe("ClickClack setup wizard", () => {
     });
   });
 
-  it("keeps setup saved when the token is rejected", async () => {
-    mocks.me.mockRejectedValue(new ClickClackHttpError(401, "unauthorized", new Headers()));
-    await expectValidationNote(
-      "ClickClack rejected the bot token (401). Copy a current token and rerun setup.",
-    );
+  it.each(warnings)("keeps setup saved on validation failure (%#)", async (arrange, message) => {
+    arrange();
+    await expectValidationNote(message);
   });
 
-  it("keeps setup saved when workspace resolution fails", async () => {
-    mocks.workspaces.mockResolvedValue([]);
-    await expectValidationNote(
-      'Workspace "wsp_missing" was not found. Check the id, slug, or name, list available workspaces, and rerun setup.',
-      channelConfig({ workspace: "wsp_missing" }),
-    );
+  it.each(warnings)("logs a warning and continues after writing (%#)", async (arrange, message) => {
+    arrange();
+    expectLogs(await verify(), message);
   });
 
-  it("keeps setup saved when the server is unreachable", async () => {
-    mocks.me.mockRejectedValue(new Error("network unavailable"));
-    await expectValidationNote(
-      "Connection check failed: network unavailable. Setup was saved; fix the connection and rerun setup.",
+  it.each(["default", "wsp_default", "Default"])(
+    "verifies workspace selector %s",
+    async (workspace) => {
+      const runtime = await verify({ workspace, apiBaseUrl: "http://127.0.0.1:8484" });
+      expect(mocks.createClient).toHaveBeenCalledWith(
+        expect.objectContaining({ baseUrl: "http://127.0.0.1:8484" }),
+      );
+      expectLogs(runtime, connectedMessage);
+    },
+  );
+
+  it("skips verification when the implicit env token is unavailable", async () => {
+    vi.stubEnv("CLICKCLACK_BOT_TOKEN", "");
+    const runtime = await verify({ token: undefined });
+    expect(mocks.createClient).not.toHaveBeenCalled();
+    expectLogs(runtime, "Token comes from CLICKCLACK_BOT_TOKEN; verification skipped.");
+  });
+
+  it.each([
+    [
+      Object.assign(new Error("gateway closed (1006): no listener"), {
+        name: "GatewayTransportError",
+        kind: "closed",
+        code: 1006,
+        connectionDetails: { url: "ws://127.0.0.1:18789", message: "Local Gateway" },
+      }),
+      "Start OpenClaw to connect: openclaw gateway",
+    ],
+    [
+      new Error("probe failed"),
+      "If OpenClaw is running it connects automatically; otherwise start it with: openclaw gateway",
+    ],
+  ])("prints the gateway next step (%#)", async (error, expected) => {
+    mocks.callGatewayFromCli.mockRejectedValue(error);
+    const runtime = await verify();
+    expect(runtime.log).toHaveBeenNthCalledWith(2, expected);
+    expect(mocks.callGatewayFromCli).toHaveBeenCalledWith(
+      "health",
+      { timeout: "1000", json: true },
+      undefined,
+      { expectFinal: false, progress: false },
     );
   });
 });

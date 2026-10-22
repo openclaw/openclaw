@@ -17,6 +17,27 @@ import type {
 
 const location = { baseUrl: "http://127.0.0.1:8080", workspace: "wsp_1" };
 
+export function createInboundCompletion(
+  text = "service bot online",
+  model = "gpt-5.4-mini",
+  includeExecution = true,
+) {
+  return {
+    text,
+    provider: "openai",
+    model,
+    agentId: "service-bot",
+    usage: {},
+    ...(includeExecution && {
+      execution: {
+        mode: "direct-provider" as const,
+        owner: { kind: "provider" as const, id: "openai" },
+      },
+    }),
+    audit: { caller: { kind: "plugin" as const, id: "clickclack" } },
+  };
+}
+
 export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
   const runtime = createPluginRuntimeMock();
   const sessionEntry = () => ({ sessionId: "session-id", updatedAt: 1 });
@@ -24,17 +45,9 @@ export function createInboundRuntime(includeExecution: boolean): PluginRuntime {
   runtime.agent.session.getSessionEntryAsync = vi.fn(async () => sessionEntry());
   runtime.channel.routing.resolveAgentRoute = vi.fn(resolveAgentRoute);
   runtime.channel.routing.buildAgentSessionKey = vi.fn(buildAgentSessionKey);
-  runtime.llm.complete = vi.fn().mockResolvedValue({
-    text: "service bot online",
-    provider: "openai",
-    model: "gpt-5.4-mini",
-    agentId: "service-bot",
-    usage: {},
-    ...(includeExecution && {
-      execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
-    }),
-    audit: { caller: { kind: "plugin", id: "clickclack" } },
-  });
+  runtime.llm.complete = vi
+    .fn()
+    .mockResolvedValue(createInboundCompletion(undefined, undefined, includeExecution));
   const stores = new Map<string, PluginStateSyncKeyedStore<unknown>>();
   runtime.state.openSyncKeyedStore = vi.fn((options: { namespace: string }) => {
     const store = stores.get(options.namespace) ?? createDiscussionMemoryStore<unknown>();

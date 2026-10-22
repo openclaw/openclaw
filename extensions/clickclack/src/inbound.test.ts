@@ -14,6 +14,7 @@ import { markClickClackDiscussionChannelRevoked } from "./discussions/revoked-ch
 import { handleClickClackInbound } from "./inbound.js";
 import {
   createInboundRuntime,
+  createInboundCompletion,
   createInboundAgentAccount,
   createInboundAuthor as createAuthor,
   publishInboundAccountConfig as publishAccountConfig,
@@ -52,6 +53,29 @@ function createAgentAccount(
       botUserId: overrides.botUserId,
       ...overrides.config,
     },
+  };
+}
+
+const directMessage = { channel_id: undefined, direct_conversation_id: "dcn_1" };
+
+function routingConfig(agentId: string, dmScope: "main" | "per-channel-peer"): CoreConfig {
+  return {
+    ...(dmScope === "main" ? { agents: { entries: { [agentId]: {} } } } : {}),
+    session:
+      dmScope === "main"
+        ? { dmScope }
+        : { dmScope, mainKey: "work", identityLinks: { alice: ["clickclack:dm:usr_owner"] } },
+    bindings: [
+      {
+        agentId,
+        match: {
+          channel: "clickclack",
+          accountId: "default",
+          peer: { kind: "direct", id: "dm:usr_owner" },
+        },
+        session: { dmScope: "per-account-channel-peer" },
+      },
+    ],
   };
 }
 
@@ -107,18 +131,7 @@ describe("handleClickClackInbound", () => {
   }
 
   it("logs and skips delivery when model mode produces no sendable text", async () => {
-    vi.mocked(runtime.llm.complete).mockResolvedValue({
-      text: "   ",
-      provider: "openai",
-      model: "gpt-5.4-mini",
-      agentId: "service-bot",
-      usage: {},
-      execution: {
-        mode: "direct-provider",
-        owner: { kind: "provider", id: "openai" },
-      },
-      audit: { caller: { kind: "plugin", id: "clickclack" } },
-    });
+    vi.mocked(runtime.llm.complete).mockResolvedValue(createInboundCompletion("   "));
     const account = createAgentAccount({
       accountId: "service",
       agentId: "service-bot",
@@ -231,26 +244,9 @@ describe("handleClickClackInbound", () => {
   });
 
   it("preserves session policy when an account overrides the routed agent", async () => {
-    const cfg = {
-      session: {
-        dmScope: "per-channel-peer",
-        mainKey: "work",
-        identityLinks: { alice: ["clickclack:dm:usr_owner"] },
-      },
-      bindings: [
-        {
-          agentId: "binding-agent",
-          match: {
-            channel: "clickclack",
-            accountId: "default",
-            peer: { kind: "direct", id: "dm:usr_owner" },
-          },
-          session: { dmScope: "per-account-channel-peer" },
-        },
-      ],
-    } satisfies CoreConfig;
+    const cfg = routingConfig("binding-agent", "per-channel-peer");
     const account = createAgentAccount({ agentId: "service-bot" });
-    await dispatchInbound(account, cfg, { channel_id: undefined, direct_conversation_id: "dcn_1" });
+    await dispatchInbound(account, cfg, directMessage);
 
     const dispatchTurn = vi.mocked(runtime.channel.inbound.dispatch);
     expect(dispatchTurn.mock.calls[0]?.[0].route.sessionKey).toBe(
@@ -412,23 +408,9 @@ describe("handleClickClackInbound", () => {
   });
 
   it("preserves binding scope for a canonically equivalent account agent", async () => {
-    const cfg = {
-      agents: { entries: { "service-bot": {} } },
-      session: { dmScope: "main" },
-      bindings: [
-        {
-          agentId: "service-bot",
-          match: {
-            channel: "clickclack",
-            accountId: "default",
-            peer: { kind: "direct", id: "dm:usr_owner" },
-          },
-          session: { dmScope: "per-account-channel-peer" },
-        },
-      ],
-    } satisfies CoreConfig;
+    const cfg = routingConfig("service-bot", "main");
     const account = createAgentAccount({ agentId: "SERVICE-BOT" });
-    await dispatchInbound(account, cfg, { channel_id: undefined, direct_conversation_id: "dcn_1" });
+    await dispatchInbound(account, cfg, directMessage);
 
     const dispatchTurn = vi.mocked(runtime.channel.inbound.dispatch);
     expect(dispatchTurn.mock.calls[0]?.[0]).toMatchObject({
@@ -459,15 +441,9 @@ describe("handleClickClackInbound", () => {
 function createModelRuntime(text = "service bot online"): PluginRuntime {
   return createPluginRuntimeMock({
     llm: {
-      complete: vi.fn<PluginRuntime["llm"]["complete"]>().mockResolvedValue({
-        text,
-        provider: "openai",
-        model: "gpt-5.6-luna",
-        agentId: "service-bot",
-        usage: {},
-        execution: { mode: "direct-provider", owner: { kind: "provider", id: "openai" } },
-        audit: { caller: { kind: "plugin", id: "clickclack" } },
-      }),
+      complete: vi
+        .fn<PluginRuntime["llm"]["complete"]>()
+        .mockResolvedValue(createInboundCompletion(text, "gpt-5.6-luna")),
     },
   });
 }
@@ -511,6 +487,18 @@ function createModelMessage(
   });
 }
 
+function modelHarness(config: CoreConfig = {}, text?: string) {
+  const runtime = createModelRuntime(text);
+  const account = createModelAccount();
+  publishAccountConfig(runtime, account, config);
+  setClickClackRuntime(runtime);
+  return {
+    runtime,
+    dispatch: (message = createModelMessage()) =>
+      handleClickClackInbound({ account, config, message }),
+  };
+}
+
 describe("ClickClack direct-model response prefix", () => {
   beforeEach(() => {
     sendClickClackTextMock.mockClear();
@@ -538,11 +526,8 @@ describe("ClickClack direct-model response prefix", () => {
           ? { agents: { entries: { "service-bot": { identity: { name: identity } } } } }
           : {}),
       };
-      const runtime = createModelRuntime();
-      const account = createModelAccount();
-      publishAccountConfig(runtime, account, cfg);
-      setClickClackRuntime(runtime);
-      await handleClickClackInbound({ account, config: cfg, message: createModelMessage() });
+      const { runtime, dispatch } = modelHarness(cfg);
+      await dispatch();
 
       expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
       expect(runtime.agent.runEmbeddedAgent).not.toHaveBeenCalled();
@@ -552,17 +537,8 @@ describe("ClickClack direct-model response prefix", () => {
   );
 
   it("does not add a second prefix when the completion already opens with one", async () => {
-    sendClickClackTextMock.mockClear();
-    const runtime = createModelRuntime("[bot] service bot online");
-    const account = createModelAccount();
     const config = { channels: { clickclack: { responsePrefix: "[bot]" } } };
-    publishAccountConfig(runtime, account, config);
-    setClickClackRuntime(runtime);
-    await handleClickClackInbound({
-      account,
-      config,
-      message: createModelMessage(),
-    });
+    await modelHarness(config, "[bot] service bot online").dispatch();
     expect(sendClickClackTextMock.mock.calls[0]?.[0]?.text).toBe("[bot] service bot online");
   });
 });
@@ -573,10 +549,7 @@ describe("ClickClack direct-model bot loop protection", () => {
   });
 
   it("suppresses the second bot message before model completion", async () => {
-    const runtime = createModelRuntime();
-    setClickClackRuntime(runtime);
-    const account = createModelAccount();
-    publishAccountConfig(runtime, account);
+    const { runtime, dispatch } = modelHarness();
     const message = createModelMessage(
       "msg_01arz3ndektsv4rrffq69g5fbx",
       "dm_model_loop_suppression",
@@ -584,28 +557,17 @@ describe("ClickClack direct-model bot loop protection", () => {
       "bot",
     );
 
-    await handleClickClackInbound({
-      account,
-      config: {} as CoreConfig,
-      message,
-    });
-    await handleClickClackInbound({
-      account,
-      config: {} as CoreConfig,
-      message: { ...message, id: "msg_01arz3ndektsv4rrffq69g5fby" },
-    });
+    await dispatch(message);
+    await dispatch({ ...message, id: "msg_01arz3ndektsv4rrffq69g5fby" });
 
     expect(runtime.llm.complete).toHaveBeenCalledTimes(1);
     expect(sendClickClackTextMock).toHaveBeenCalledTimes(1);
   });
 
   it("retries the same bot message without consuming another loop slot", async () => {
-    const runtime = createModelRuntime();
+    const { runtime, dispatch } = modelHarness();
     const complete = vi.mocked(runtime.llm.complete);
     complete.mockRejectedValueOnce(new Error("transient model failure"));
-    setClickClackRuntime(runtime);
-    const account = createModelAccount();
-    publishAccountConfig(runtime, account);
     const message = createModelMessage(
       "msg_01arz3ndektsv4rrffq69g5fbz",
       "dm_model_loop_retry",
@@ -613,10 +575,8 @@ describe("ClickClack direct-model bot loop protection", () => {
       "bot",
     );
 
-    await expect(
-      handleClickClackInbound({ account, config: {} as CoreConfig, message }),
-    ).rejects.toThrow("transient model failure");
-    await handleClickClackInbound({ account, config: {} as CoreConfig, message });
+    await expect(dispatch(message)).rejects.toThrow("transient model failure");
+    await dispatch(message);
 
     expect(complete).toHaveBeenCalledTimes(2);
     expect(sendClickClackTextMock).toHaveBeenCalledTimes(1);

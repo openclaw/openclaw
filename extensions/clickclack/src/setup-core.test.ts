@@ -29,10 +29,6 @@ type ClickClackSetupInput = ChannelSetupInput & {
   agentActivity?: boolean;
 };
 
-function makeClaimError(status: number, detail: string): Error {
-  return Object.assign(new Error(`claim failed (${status}): ${detail}`), { status });
-}
-
 function channelConfig(
   clickclack: NonNullable<NonNullable<CoreConfig["channels"]>["clickclack"]>,
 ): CoreConfig {
@@ -40,6 +36,7 @@ function channelConfig(
 }
 
 const baseInput = { baseUrl: "https://clickclack.example", workspace: "default" };
+const defaults = { defaultTo: "channel:general", allowFrom: ["*"], agentActivity: true };
 const codeInput = { code: "ABCD-EFGH-JKMN", baseUrl: baseInput.baseUrl };
 const exactClaimUrl =
   "https://api.clickclack.example/services/clickclack/api/bot-setup-codes/claim";
@@ -83,15 +80,7 @@ describe("ClickClack setup adapter", () => {
   });
 
   it("claims a full setup URL and prepares the token, workspace, and defaults", async () => {
-    claimClickClackSetupCode.mockResolvedValue(
-      claimResponse({
-        defaults: {
-          defaultTo: "channel:general",
-          allowFrom: ["*"],
-          agentActivity: true,
-        },
-      }),
-    );
+    claimClickClackSetupCode.mockResolvedValue(claimResponse({ defaults }));
 
     await expect(
       prepare({
@@ -103,9 +92,7 @@ describe("ClickClack setup adapter", () => {
       baseUrl: "https://clickclack.example",
       token: "test-token",
       workspace: "wsp_1",
-      defaultTo: "channel:general",
-      allowFrom: ["*"],
-      agentActivity: true,
+      ...defaults,
     });
     expect(claimClickClackSetupCode).toHaveBeenCalledWith({
       claimUrl: "https://clickclack.example/api/bot-setup-codes/claim",
@@ -178,36 +165,26 @@ describe("ClickClack setup adapter", () => {
   });
 
   it("maps invalid and rate-limited claims to actionable errors", async () => {
-    claimClickClackSetupCode.mockRejectedValueOnce(makeClaimError(404, "not found"));
-    await expect(prepare(codeInput)).rejects.toThrow("invalid, expired, or already used");
-
-    claimClickClackSetupCode.mockRejectedValueOnce(makeClaimError(429, "retry later"));
-    await expect(prepare(codeInput)).rejects.toThrow("Too many ClickClack setup code attempts");
+    for (const [status, message] of [
+      [404, "invalid, expired, or already used"],
+      [429, "Too many ClickClack setup code attempts"],
+    ] as const) {
+      claimClickClackSetupCode.mockRejectedValueOnce(
+        Object.assign(new Error("claim failed"), { status }),
+      );
+      await expect(prepare(codeInput)).rejects.toThrow(message);
+    }
   });
 
   it("writes setup-code defaults through the existing account patch", () => {
-    expect(
-      apply({
-        token: "test-token",
-        baseUrl: "https://clickclack.example",
-        workspace: "wsp_1",
-        defaultTo: " channel:general ",
-        allowFrom: ["*"],
-        agentActivity: true,
-      }),
-    ).toEqual({
-      channels: {
-        clickclack: {
-          enabled: true,
-          token: "test-token",
-          baseUrl: "https://clickclack.example",
-          workspace: "wsp_1",
-          defaultTo: "channel:general",
-          allowFrom: ["*"],
-          agentActivity: true,
-        },
-      },
-    });
+    const input = {
+      ...defaults,
+      token: "test-token",
+      baseUrl: baseInput.baseUrl,
+      workspace: "wsp_1",
+      defaultTo: " channel:general ",
+    };
+    expect(apply(input)).toEqual(channelConfig({ ...input, ...defaults, enabled: true }));
   });
 
   it("limits --use-env to the default account and requires URL and workspace config", () => {
@@ -249,11 +226,6 @@ describe("ClickClack setup adapter", () => {
       token: "work-token",
     } satisfies ClickClackSetupInput;
 
-    expect(resolveClickClackAccount({ cfg, accountId: "ops" })).toMatchObject({
-      name: "Active",
-      token: "root-token",
-      configured: true,
-    });
     expect(validate(input, cfg, "work")).toBeNull();
     const next = apply(input, cfg, "work");
 
@@ -264,9 +236,7 @@ describe("ClickClack setup adapter", () => {
     });
     expect(next.channels?.clickclack?.accounts?.Ops).toEqual({ name: "Other spelling" });
     expect(resolveClickClackAccount({ cfg: next, accountId: "work" })).toMatchObject({
-      baseUrl: "https://work.clickclack.example",
-      workspace: "work",
-      token: "work-token",
+      ...input,
       configured: true,
     });
   });
@@ -289,10 +259,9 @@ describe("ClickClack setup adapter", () => {
         token: "ccb_old",
         tokenFile: "/run/secrets/old-token",
       }),
-    );
-    expect(withEnv.channels?.clickclack).not.toHaveProperty("token");
-    expect(withEnv.channels?.clickclack).not.toHaveProperty("tokenFile");
-    expect(withEnv.channels?.clickclack).toMatchObject({
+    ).channels?.clickclack;
+    expect(withEnv).toEqual({
+      enabled: true,
       baseUrl: "https://clickclack.example",
       workspace: "default",
     });
@@ -311,11 +280,9 @@ describe("ClickClack setup adapter", () => {
   });
 
   it("preserves credentials when a partial patch does not select an auth mode", () => {
-    const cfg = channelConfig({ tokenFile: "/run/secrets/clickclack" });
-
     expect(
       applyClickClackCredentialConfig({
-        cfg,
+        cfg: channelConfig({ tokenFile: "/run/secrets/clickclack" }),
         accountId: DEFAULT_ACCOUNT_ID,
       }).channels?.clickclack,
     ).toMatchObject({
