@@ -100,6 +100,7 @@ export function createPositionRail(props: PositionRailParams) {
   };
 
   const observeLayout = () => {
+    observationPending = false;
     const scroller = scrollElement;
     if (!scroller) {
       return;
@@ -267,6 +268,7 @@ export function createPositionRail(props: PositionRailParams) {
           reader.resizeTarget = undefined;
         } else if (observation.type === "resize" && layoutVisible && viewportHeight) {
           // Retain the committed viewport before another composer change can replace it.
+          reader.followActive ||= observation.resumeFollow === true;
           syncReaderViewport(observation.viewport);
           requestObservation();
         }
@@ -409,8 +411,8 @@ export function createPositionRail(props: PositionRailParams) {
     syncVisibleMarks();
     syncTabStop();
     if (initialize || reader.followActive) {
-      // Navigation must reach the final viewport, even if its slot resized before this frame.
-      reader.followActive = viewportResizePending;
+      // An older queued frame must retain navigation until its final viewport is measured.
+      reader.followActive = viewportResizePending || observationPending;
       const focused = markerElements.get(interactionState.focusedId ?? "");
       const current =
         (initialize || focused?.matches(":focus-visible")
@@ -471,7 +473,6 @@ export function createPositionRail(props: PositionRailParams) {
       reader.followActive = true;
       observationPending = true;
       resizeObserver = new ResizeObserver(() => {
-        observationPending = false;
         observeLayout();
       });
       resizeObserver.observe(scrollElement);
