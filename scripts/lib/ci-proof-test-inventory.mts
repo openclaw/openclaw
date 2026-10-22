@@ -5066,7 +5066,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "ui/src/pages/usage/usage-page-detail-identity.test.ts",
   "ui/src/pages/usage/usage-page-query-ownership.test.ts",
   "ui/src/pages/usage/usage-page.test.ts",
-  "ui/src/pages/workboard/workboard-routing.e2e.test.ts",
   "ui/src/styles/chat-file-link-presentation.browser.test.ts",
   "ui/src/styles/cursor-policy.browser.test.ts",
 ] as const;

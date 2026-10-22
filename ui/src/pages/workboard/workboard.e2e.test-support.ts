@@ -8,9 +8,10 @@ import type {
 } from "@openclaw/workboard-contract";
 import { WORKBOARD_STATUSES } from "@openclaw/workboard-contract";
 import type { Browser, Locator, Page } from "playwright";
-import { expect } from "vitest";
+import { expect, onTestFinished } from "vitest";
 import { createRequireRecord } from "../../../../test/helpers/record.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { createControlUiE2eSuite } from "../../e2e/control-ui-e2e-suite.test-support.ts";
 import { createControlUiE2eArtifactDir } from "../../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   takeControlUiElementScreenshot,
@@ -22,8 +23,10 @@ import {
   controlUiE2eWaitTimeoutMs,
   installMockGateway,
   type MockGatewayRequest,
+  type MockGatewayControls,
 } from "../../test-helpers/control-ui-e2e.ts";
 import { workboardUi } from "../../test-helpers/control-ui-workboard-fixture.ts";
+import { openPicker } from "../../test-helpers/select-picker-e2e.ts";
 
 const captureEnabled = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
 
@@ -206,4 +209,162 @@ export function createWorkboardProof(
       }
     },
   };
+}
+
+function controls(
+  page: Page,
+  gateway: MockGatewayControls,
+  proof: ReturnType<typeof createWorkboardProof>,
+  baseUrl: string,
+) {
+  const col = (status: string) =>
+    page.locator(".workboard-column--" + status.toLowerCase()).first();
+  const tile = (status: string, title: string) =>
+    col(status).locator(".workboard-card", { hasText: title }).first();
+  const strictTile = (status: string, title: string) =>
+    page
+      .locator(".workboard-column", { has: page.getByRole("heading", { name: status }) })
+      .locator(".workboard-card", { hasText: title });
+  const draft = page.locator(".workboard-draft");
+  const details = page.locator(".workboard-detail");
+  const b = (name: string, scope: Page | Locator = page) => button(scope, name);
+  return {
+    page,
+    gateway,
+    col,
+    tile,
+    strictTile,
+    draft,
+    details,
+    b,
+    snap: (name: string, surface?: Locator, content?: readonly Locator[]) =>
+      proof.capture(page, name, surface, content),
+    count: async (method: string) => (await gateway.getRequests(method)).length,
+    setCards: (cards: WorkboardCard[]) =>
+      gateway.setMethodResponse("workboard.cards.list", cardsListResponse(cards)),
+    emit: (revision: number) =>
+      gateway.emitGatewayEvent("plugin.workboard.changed", { epoch: "workboard-e2e", revision }),
+    defer: (action: string) => gateway.deferNext("workboard.cards." + action),
+    resolve: (action: string, nextCard: WorkboardCard) =>
+      gateway.resolveDeferred("workboard.cards." + action, { card: nextCard }),
+    async goto(route: string) {
+      expect((await page.goto(baseUrl + route))?.status()).toBe(200);
+    },
+    async fields(fields: Record<string, string>) {
+      for (const [label, text] of Object.entries(fields)) {
+        await draft.getByLabel(label).fill(text);
+      }
+    },
+    async action(target: Locator, name: string) {
+      await target.hover();
+      await target.locator(".workboard-card__menu-trigger").click();
+      await b(name, target).click();
+    },
+  };
+}
+export function createWorkboardCase(suite: ReturnType<typeof createControlUiE2eSuite>) {
+  return async function withBoard(
+    name: string,
+    cards: WorkboardCard[],
+    options: {
+      path?: string;
+      size?: { width: number; height: number };
+      clock?: boolean;
+      gateway?: Parameters<typeof installWorkboard>[2];
+      responses?: NonNullable<Parameters<typeof installWorkboard>[2]>["methodResponses"];
+    } = {},
+  ) {
+    const proof = createWorkboardProof(suite, name, options.size ?? { width: 2400, height: 1000 });
+    const { page, close } = await proof.open();
+    onTestFinished(async () => {
+      await close();
+      await proof.writeManifest();
+    });
+    if (options.clock) {
+      await page.clock.install();
+    }
+    const gateway = await installWorkboard(page, cards, {
+      ...options.gateway,
+      methodResponses: options.responses,
+    });
+    const ui = controls(page, gateway, proof, suite.server.baseUrl);
+    await ui.goto(options.path ?? "workboard");
+    return ui;
+  };
+}
+export async function filters(page: Page, open: boolean) {
+  const panel = page.locator(".workboard-filter-popover__panel");
+  if ((await panel.isVisible()) !== open) {
+    if (open) {
+      await page.locator(".workboard-filter-trigger").click();
+      await expect
+        .poll(() => page.locator(".workboard-filter-trigger").getAttribute("aria-expanded"))
+        .toBe("true");
+    } else {
+      await page
+        .locator(".workboard-filter-popover")
+        .evaluate((node) => (node as HTMLElement).hidePopover());
+    }
+  }
+  if (open) {
+    await panel.waitFor();
+  } else {
+    await expect.poll(() => panel.isHidden()).toBe(true);
+  }
+}
+export async function boardPicker(page: Page) {
+  await filters(page, true);
+  const picker = page.locator("openclaw-select-picker").filter({
+    has: page.getByRole("button", { name: /^Filter by board:/u }),
+  });
+  await openPicker(picker);
+  return picker;
+}
+export async function stableRequests(gateway: MockGatewayControls, method: string, count: number) {
+  const deadline = Date.now() + 10_000;
+  let stableSince: number | null = null;
+  let requests: Awaited<ReturnType<typeof gateway.getRequests>> = [];
+  while (Date.now() < deadline) {
+    requests = await gateway.getRequests(method);
+    if (requests.length === count) {
+      stableSince ??= Date.now();
+      if (Date.now() - stableSince >= 250) {
+        return requests;
+      }
+    } else {
+      stableSince = null;
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 10);
+    });
+  }
+  throw new Error(
+    "Timed out waiting for " + count + " " + method + " requests: " + JSON.stringify(requests),
+  );
+}
+export async function html5Drag(source: Locator, target: Locator) {
+  const from = await source.elementHandle(),
+    to = await target.elementHandle();
+  if (!from || !to) {
+    throw new Error("Could not resolve Workboard drag source or target");
+  }
+  try {
+    await from.evaluate((node, destination) => {
+      const rect = destination.getBoundingClientRect();
+      const init = {
+        bubbles: true,
+        cancelable: true,
+        dataTransfer: new DataTransfer(),
+        clientX: rect.x + rect.width / 2,
+        clientY: rect.top + 1,
+      };
+      node.dispatchEvent(new DragEvent("dragstart", init));
+      destination.dispatchEvent(new DragEvent("dragover", init));
+      destination.dispatchEvent(new DragEvent("drop", init));
+      node.dispatchEvent(new DragEvent("dragend", init));
+    }, to);
+  } finally {
+    await from.dispose();
+    await to.dispose();
+  }
 }
