@@ -1,4 +1,4 @@
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { isInternalRuntimeContextCarrierText } from "../shared/runtime-context.js";
 import {
   type ResponsesInputItem,

@@ -13,8 +13,8 @@ import {
   filterLocalModelLeanTools,
   resolveLocalModelLeanPreserveToolNames,
 } from "../local-model-lean.js";
-import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { EmbeddedRunTrigger } from "../run-trigger.js";
+import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../tool-schema-projection.js";
 import { TOOL_SEARCH_CONTROL_TOOL_NAMES } from "../tool-search-types.js";
 import {
