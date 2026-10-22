@@ -673,6 +673,24 @@ response alone does not prove model execution. Compare total CPU and CPU per
 fixed initiating turn, not CPU per remaining browser RPC. This mode excludes
 patch, delete, mixed-interaction, catalog-refresh and cron workloads.
 
+For steady model selection with multiple active conversations, use
+`--activity-run-mix --activity-session agent:main:main --activity-models openai/gpt-5`.
+Start the reload fixture with `--subagent-seed` to expose its native spawn tool.
+The probe asks its synthetic provider to invoke `sessions_spawn` once,
+finds that exact native child by parent and unique label, then warms three
+conversations and completes concurrent real turns in each. `--activity-cron` replaces every fourth cohort
+with a forced cron run. `--activity-interactions` adds separately timed sidebar
+hover, model-picker opening, and conversation navigation after each cohort.
+Initial catalog/descriptor responses settle before the warm window; the report
+retains actual elapsed time and a post-window model/speed-control observation.
+
+Launch the reload fixture with `--stream-delay-ms 75` to stream three chunks per
+response, and `--service-tier-responses fast,default` to alternate provider tier
+observations while model selections and requested tiers remain fixed. The default
+is still a single immediate response returning `fast`. Compare steady responses
+and changing observations separately; these synthetic transitions establish the
+invalidation path, not the production frequency of provider tier changes.
+
 For active-session loads, add `--activity-session <synthetic-key>` and configure
 that isolated Gateway with two loopback mock-provider models:
 
