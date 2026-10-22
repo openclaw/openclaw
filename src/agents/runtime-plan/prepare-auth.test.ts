@@ -82,21 +82,6 @@ it.each([
     },
   ],
   [
-    "non-Codex harnesses honor no-host-auth policy",
-    () => ({
-      provider: "xai",
-      modelId: "grok-4",
-      config: providerConfig("xai", { auth: "api-key", apiKey: "xai-key" }),
-      profiles: { "xai:auto": xaiKey("profile-key") },
-      sessionAuthProfileId: "xai:auto",
-      sessionAuthProfileSource: "auto",
-      harnessId: "native-remote",
-      harnessRuntime: "native-remote",
-      allowHarnessAuthProfileForwarding: false,
-    }),
-    { forwardedAuthProfileId: undefined, selectedAuthMode: undefined },
-  ],
-  [
     "provider token binding outranks configured auth and order",
     () => ({
       ...platform,
@@ -139,6 +124,22 @@ it.each([
   ],
 ] satisfies [string, () => Params, object][])("%s", (_name, fixture, expected) => {
   expect(preparePlan(fixture())).toMatchObject(expected);
+});
+
+it("non-Codex harnesses honor no-host-auth policy", () => {
+  const plan = preparePlan({
+    provider: "xai",
+    modelId: "grok-4",
+    config: providerConfig("xai", { auth: "api-key", apiKey: "xai-key" }),
+    profiles: { "xai:auto": xaiKey("profile-key") },
+    sessionAuthProfileId: "xai:auto",
+    sessionAuthProfileSource: "auto",
+    harnessId: "native-remote",
+    harnessRuntime: "native-remote",
+    allowHarnessAuthProfileForwarding: false,
+  });
+  expect(plan.forwardedAuthProfileId).toBeUndefined();
+  expect(plan.selectedAuthMode).toBeUndefined();
 });
 
 it.each([
@@ -491,23 +492,22 @@ it.each(["profile", "secret-ref"] as const)(
       expect(serialized).not.toContain("secret-ref-platform-key");
       expect(serialized).not.toContain("OPENAI_PLATFORM_KEY");
     }
-    expect(
-      await getApiKeyForModelCore({
-        model: authModel(plan),
-        cfg: config,
-        store,
-        profileId: attempts[0]?.profileId,
-        allowAuthProfileFallback: attempts[0]?.allowAuthProfileFallback,
-        ...(profile ? { lockedProfile: true } : {}),
-      }),
-    ).toMatchObject({
+    const resolvedAuth = await getApiKeyForModelCore({
+      model: authModel(plan),
+      cfg: config,
+      store,
+      profileId: attempts[0]?.profileId,
+      allowAuthProfileFallback: attempts[0]?.allowAuthProfileFallback,
+      ...(profile ? { lockedProfile: true } : {}),
+    });
+    expect(resolvedAuth).toMatchObject({
       apiKey: profile ? "profile-platform-key" : "secret-ref-platform-key",
       source: profile
         ? "profile:openai:platform-backup"
         : "env: OPENAI_PLATFORM_KEY (models.json secretref)",
       mode: "api-key",
-      profileId: profile ? id : undefined,
     });
+    expect(resolvedAuth.profileId).toBe(profile ? id : undefined);
   },
 );
 

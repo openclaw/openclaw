@@ -132,7 +132,8 @@ it("returns durable receipt handles across queued edits and records disabled req
   const disabled = await cancelled.update(cancelJob.id, { enabled: false });
   expect(disabled).toMatchObject({ outcome: { store: await cancelled.read() } });
   const disabledJob = "outcome" in disabled ? disabled.outcome.store.jobs[0] : undefined;
-  expect(disabledJob).toMatchObject({ enabled: false, state: { queuedAtMs: undefined } });
+  expect(disabledJob?.enabled).toBe(false);
+  expect(disabledJob?.state.queuedAtMs).toBeUndefined();
   const drained = await cancelled.drain([manual]);
   expect(drained.launches).toEqual([]);
   expect(runIds(drained.skipped)).toEqual([manual.receiptId]);
@@ -201,8 +202,9 @@ it("recovers a timed request without replaying active work or reconstructing a l
   const interrupted = (await queue.read()).jobs[0]!;
   expect(interrupted).toMatchObject({
     enabled: false,
-    state: { lastRunStatus: "error", runningAtMs: undefined },
+    state: { lastRunStatus: "error" },
   });
+  expect(interrupted.state.runningAtMs).toBeUndefined();
 
   const manualJob = job("legacy");
   const legacy = await store("legacy", [manualJob]);

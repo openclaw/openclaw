@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
@@ -15,7 +16,6 @@ import {
   desktopEnvironment,
   expectObserve,
   mountDesktop as mount,
-  panelElement,
   rpcCalls,
   type RpcParams,
   selectSizing,
@@ -199,9 +199,15 @@ describe("embedded desktop panel presentation", () => {
         clickPanelButton(panel);
       }
       const credentialForm = () => ({
-        form: panelElement<HTMLFormElement>(panel, "form"),
-        username: panelElement<HTMLInputElement>(panel, 'form input[name="username"]'),
-        password: panelElement<HTMLInputElement>(panel, 'form input[name="password"]'),
+        form: expectDefined(panel.querySelector<HTMLFormElement>("form"), "credential form"),
+        username: expectDefined(
+          panel.querySelector<HTMLInputElement>('form input[name="username"]'),
+          "username input",
+        ),
+        password: expectDefined(
+          panel.querySelector<HTMLInputElement>('form input[name="password"]'),
+          "password input",
+        ),
       });
       const initial = await waitForSolid(credentialForm);
       initial.username.value = "operator";
@@ -569,7 +575,10 @@ describe("embedded desktop panel presentation", () => {
         }
         expect(previous.disconnect).not.toHaveBeenCalled();
         expect(sizingMenu(panel).querySelector('option[value="match"]')).toBeNull();
-        const input = panelElement<HTMLTextAreaElement>(panel, ".desktop-keyboard-input");
+        const input = expectDefined(
+          panel.querySelector<HTMLTextAreaElement>(".desktop-keyboard-input"),
+          "keyboard input",
+        );
         const sendKey = () =>
           input.dispatchEvent(
             new KeyboardEvent("keydown", { key: "x", code: "KeyX", bubbles: true }),

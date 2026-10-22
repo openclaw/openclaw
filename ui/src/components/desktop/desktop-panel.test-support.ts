@@ -122,11 +122,10 @@ export function createConnectionHandle(overrides: Partial<DesktopConnectionHandl
 }
 
 export function clickPanelButton(panel: Panel, selector = ".desktop-environment button") {
-  panelElement<HTMLButtonElement>(panel, selector).click();
-}
-
-export function panelElement<T extends Element>(panel: Panel, selector: string): T {
-  return expectDefined(panel.querySelector<T>(selector), `Desktop element: ${selector}`);
+  expectDefined(
+    panel.querySelector<HTMLButtonElement>(selector),
+    `Desktop button: ${selector}`,
+  ).click();
 }
 
 export const sizingMenu = (panel: Panel) =>

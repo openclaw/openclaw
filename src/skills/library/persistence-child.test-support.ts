@@ -199,7 +199,7 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
   }
 }
 
-process.once("message", async (command: PersistenceCommand) => {
+async function handleCommand(command: PersistenceCommand) {
   try {
     const root = process.env.OPENCLAW_STATE_DIR;
     assert.ok(root);
@@ -214,5 +214,8 @@ process.once("message", async (command: PersistenceCommand) => {
     assert.ok(typeof process.disconnect === "function");
     process.disconnect();
   }
+}
+process.once("message", (command: PersistenceCommand) => {
+  void handleCommand(command);
 });
 await send({ kind: "booted" });

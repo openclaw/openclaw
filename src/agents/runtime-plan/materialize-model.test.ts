@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { ModelProviderConfig } from "../../config/types.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { configFor } from "../model-auth.fixtures.test-support.js";
 import {
@@ -13,7 +14,12 @@ import { materializePreparedRuntimeModel, type RuntimeRouteModel } from "./mater
 import type { AgentRuntimeAuthPlan } from "./types.js";
 
 const plan = createSubscriptionPlan();
-const routeModel = (id: string, api: string, baseUrl: string, provider = "openai") => ({
+const routeModel = (
+  id: string,
+  api: ModelProviderConfig["api"],
+  baseUrl: string,
+  provider = "openai",
+) => ({
   provider,
   id,
   api,
@@ -54,7 +60,7 @@ describe("materializePreparedRuntimeModel", () => {
     "openai-chatgpt-responses",
     "https://subscription.example/v1",
   );
-  const apiSibling = { ...retired, api: "openai-responses", baseUrl: "https://api.example/v1" };
+  const apiSibling = routeModel(retired.id, "openai-responses", "https://api.example/v1");
   const metadataSnapshot = createPluginMetadataSnapshotFixture({
     plugins: [
       {

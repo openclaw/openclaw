@@ -35,8 +35,10 @@ function waitForStatus(request: unknown) {
     }),
   );
 }
-const requests: typeof desktopRequest = (handlers, fallback = () => observation) =>
-  desktopRequest(handlers, fallback);
+const requests = (
+  handlers: Parameters<typeof desktopRequest>[0],
+  fallback?: Parameters<typeof desktopRequest>[1],
+) => desktopRequest(handlers, fallback ?? (() => observation));
 const describeSession = (key: string, environmentId = desktopEnvironment.id) => ({
   session: { key, placement: { state: "active", environmentId } },
 });
