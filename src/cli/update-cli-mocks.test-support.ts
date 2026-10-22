@@ -60,9 +60,6 @@ const spinner = vi.fn(() => ({ start: vi.fn(), stop: vi.fn(), clear: vi.fn() }))
 export const triageCommand = vi.fn<typeof import("../commands/triage.js").triageCommand>();
 export const triageAfterFailure =
   vi.fn<typeof import("../commands/triage-failure.js").triageAfterFailure>();
-const updateFailureActionMocks = vi.hoisted(() => ({
-  runInteractiveUpdateFailureAction: vi.fn(),
-}));
 
 export const readPackageName = vi.fn();
 export const readPackageVersion = vi.fn();
@@ -173,7 +170,10 @@ export const fixtureEnvSnapshot = captureEnv([
 
 vi.mock("@clack/prompts", () => ({
   confirm,
-  select,
+  select: (params: Parameters<typeof import("@clack/prompts").select>[0]) =>
+    params.options.some((option) => option.value === "triage")
+      ? Promise.resolve("triage")
+      : select(params),
   text,
   isCancel,
   spinner,
@@ -584,7 +584,8 @@ vi.mock("../daemon/launchd.js", async (importOriginal) => ({
     launchdUpdateCleanupMocks.disableCurrentOpenClawUpdateLaunchdJob,
 }));
 
-vi.mock("../daemon/schtasks.js", () => ({
+vi.mock("../daemon/schtasks-control.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/schtasks-control.js")>()),
   suspendScheduledTaskAutoStartForUpdate: (...args: unknown[]) =>
     suspendScheduledTaskAutoStartForUpdate(...args),
   resumeScheduledTaskAutoStartAfterUpdate: (...args: unknown[]) =>
@@ -672,11 +673,9 @@ vi.mock("../runtime.js", async (importOriginal) => ({
 }));
 vi.mock("../commands/triage.js", () => ({ triageCommand }));
 vi.mock("../commands/triage-failure.js", () => ({ triageAfterFailure }));
-vi.mock("./update-cli/update-command-report.js", () => updateFailureActionMocks);
 
 export {
   commandTransport,
-  updateFailureActionMocks,
   managedUpdateHandoff,
   candidateValidation,
   retainUpdateRuntime,

@@ -303,6 +303,7 @@ function voiceWakeOwner(gateway: ApplicationContext["gateway"]): VoiceWakeSettin
 }
 
 export type TalkSettingsPageProps = {
+  presentationRetired: () => Promise<void>;
   configObject?: Record<string, unknown>;
   mutationDisabled?: boolean;
   buildEditor?: () => JSX.Element;
@@ -614,6 +615,7 @@ export function TalkSettingsPage(props: TalkSettingsPageProps) {
   return (
     <openclaw-talk-settings>
       <Talk
+        presentationRetired={props.presentationRetired}
         nativeDeviceSettings={context.nativeDeviceSettings}
         nativeDeviceSnapshot={device?.read()}
         voiceWake={{

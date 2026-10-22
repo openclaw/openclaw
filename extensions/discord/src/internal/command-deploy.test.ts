@@ -4,9 +4,13 @@ import { describe, expect, test, vi } from "vitest";
 import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { commandsEqual } from "./command-comparison.js";
 import { DiscordCommandDeployer } from "./command-deploy.js";
-import { Command } from "./commands.js";
 import type { RequestClient } from "./rest.js";
-import { attachRestMock, createInternalTestClient } from "./test-builders.test-support.js";
+import {
+  attachRestMock,
+  createInternalTestClient,
+  createTestCommand,
+  createTestHashStore,
+} from "./test-builders.test-support.js";
 
 // Discord's normalization must not trigger another PATCH on every startup (#76588).
 describe("commandsEqual", () => {
@@ -58,12 +62,6 @@ describe("commandsEqual", () => {
 });
 // #77359: identical command sets must not suppress another application’s deploy.
 describe("DiscordCommandDeployer SQLite cache", () => {
-  class StaticCommand extends Command {
-    name = "ping";
-    override description = "ping the bot";
-    run() {}
-  }
-
   function createRest(): RequestClient {
     const client = createInternalTestClient();
     attachRestMock(client, { get: vi.fn(async () => []) });
@@ -77,30 +75,14 @@ describe("DiscordCommandDeployer SQLite cache", () => {
   ) {
     return new DiscordCommandDeployer({
       clientId,
-      commands: [new StaticCommand()],
+      commands: [createTestCommand("ping", undefined, { description: "ping the bot" })],
       hashStore,
       rest: () => rest,
     });
   }
 
-  function createHashStore(): {
-    rows: Map<string, string>;
-    store: DiscordCommandDeployHashStore;
-  } {
-    const rows = new Map<string, string>();
-    return {
-      rows,
-      store: {
-        lookup: vi.fn(async (key: string) => rows.get(key)),
-        register: vi.fn(async (key: string, value: string) => {
-          rows.set(key, value);
-        }),
-      },
-    };
-  }
-
   test("two applications with identical command sets each reconcile their own application", async () => {
-    const { store, rows } = createHashStore();
+    const { store, rows } = createTestHashStore();
     const restA = createRest();
     const restB = createRest();
 

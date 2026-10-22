@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -26,12 +27,8 @@ async function beginOperation() {
   await start;
 }
 
-function hold() {
-  // The IPC listener keeps the publisher alive without a sleep or production testing flag.
-  return new Promise<void>((resolve) => {
-    process.once("message", () => resolve());
-  });
-}
+// The IPC listener keeps publishers alive without sleeps or production test flags.
+const hold = () => once(process, "message");
 
 async function runCandidate(command: PersistenceCommand, root: string): Promise<PersistenceReply> {
   const bundle = await import("./bundle.js");
@@ -63,10 +60,6 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
   await beginOperation();
   const options = { env: process.env, path: path.join(root, "state", "openclaw.sqlite") };
   const scope = { env: process.env, agentId: "main", sessionKey: PERSISTENCE_SESSION_KEY };
-  const draft = (version: "old" | "new" | "orphan", slug: string) => {
-    const [instructions, ...files] = persistenceFiles(version);
-    return { slug, content: instructions!.content, files };
-  };
   try {
     const profile = ensureProfileForEmail("persistence@example.test", options);
     const authority = {
@@ -79,16 +72,20 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
       version: "old" | "new" | "orphan",
       slug: string,
       pin?: { skillId: string; revision: string },
-    ) =>
-      service.saveSkillLibrary(
+    ) => {
+      const [instructions, ...files] = persistenceFiles(version);
+      return service.saveSkillLibrary(
         authority,
         {
-          ...draft(version, slug),
+          slug,
+          content: instructions!.content,
+          files,
           skillId: pin?.skillId,
           expectedRevision: pin?.revision ?? null,
         },
         options,
       );
+    };
     const mutate = (skillId: string, revision: string, action: "transfer" | "remove") =>
       service.mutateSkillLibrary(
         authority,
@@ -202,23 +199,23 @@ async function runCandidate(command: PersistenceCommand, root: string): Promise<
   }
 }
 
+async function handleCommand(command: PersistenceCommand) {
+  try {
+    const root = process.env.OPENCLAW_STATE_DIR;
+    assert.ok(root);
+    await send(await runCandidate(command, root));
+  } catch (error) {
+    process.exitCode = 1;
+    await send({
+      kind: "error",
+      error: error instanceof Error ? (error.stack ?? error.message) : String(error),
+    });
+  } finally {
+    assert.ok(typeof process.disconnect === "function");
+    process.disconnect();
+  }
+}
 process.once("message", (command: PersistenceCommand) => {
-  void (async () => {
-    try {
-      const root = process.env.OPENCLAW_STATE_DIR;
-      assert.ok(root);
-      const reply = await runCandidate(command, root);
-      await send(reply);
-    } catch (error) {
-      process.exitCode = 1;
-      await send({
-        kind: "error",
-        error: error instanceof Error ? (error.stack ?? error.message) : String(error),
-      });
-    } finally {
-      assert.ok(typeof process.disconnect === "function");
-      process.disconnect();
-    }
-  })();
+  void handleCommand(command);
 });
 await send({ kind: "booted" });

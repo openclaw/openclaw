@@ -308,7 +308,6 @@ export function loadSqliteTrajectoryRuntimeEventRowsSync(
               events.select(["event_json", "event_utf8_bytes"]).as("events"),
               Math.floor(scope.maxEventBytes),
               "Trajectory runtime store",
-              { hasExactUtf8Bytes: true },
             );
           }
           let query = events

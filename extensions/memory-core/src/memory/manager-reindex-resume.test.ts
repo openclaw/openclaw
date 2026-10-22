@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { EmbeddingBatchUnavailableError } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { resolveSessionTranscriptsDirForAgent } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import { publishSessionTranscriptUpdateByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -63,6 +64,7 @@ describe("background reindex resumption", () => {
     "close",
     "unsupported",
     "fallback",
+    "batch-disabled",
   ] as const)(
     "settles a background reindex interrupted by a foreground turn: %s",
     { timeout: 30_000 },
@@ -77,7 +79,16 @@ describe("background reindex resumption", () => {
         );
       }
       const mixedSources =
-        resume === "idle" || resume === "changed" || resume === "watch" || resume === "joined";
+        resume === "idle" ||
+        resume === "changed" ||
+        resume === "watch" ||
+        resume === "joined" ||
+        resume === "batch-disabled";
+      if (resume === "batch-disabled") {
+        fixture.provider.providerRuntimeBatchErrors.push(
+          new EmbeddingBatchUnavailableError("Synthetic batch unavailability"),
+        );
+      }
       const memoryPaths = mixedSources ? ["memory/2026-01-12.md", "memory/sibling.md"] : [];
       if (mixedSources) {
         await fs.writeFile(
@@ -132,6 +143,19 @@ describe("background reindex resumption", () => {
       const shadowPaths = new Set<string>();
       const groups: string[][] = [];
       const memoryWrites: string[] = [];
+      let memoryReads = 0;
+      // Count actual shadow planning reads without replacing their results.
+      // oxlint-disable-next-line typescript/unbound-method -- Called with the intercepted owner.
+      const readSourceState = MemoryIndexDatabase.prototype.readSourceState;
+      vi.spyOn(MemoryIndexDatabase.prototype, "readSourceState").mockImplementation(function (
+        this: MemoryIndexDatabase,
+        ...args
+      ) {
+        if (this.isShadow && args[0].source === "memory") {
+          memoryReads += 1;
+        }
+        return readSourceState.apply(this, args);
+      });
       let joined: Promise<void> | undefined;
       let injectedFailures = 0;
       // Delegate every write: interruption follows a durably completed source group.
@@ -206,6 +230,9 @@ describe("background reindex resumption", () => {
         expect(groups).toHaveLength(1);
         expect(groups[0]).toHaveLength(8);
         expect(memoryWrites.toSorted()).toEqual(memoryPaths.toSorted());
+        if (mixedSources) {
+          expect(memoryReads).toBe(1);
+        }
         expect(publish).not.toHaveBeenCalled();
         expect(database.prepare("SELECT count(*) AS n FROM memory_index_sources").get()).toEqual({
           n: 0,
@@ -280,7 +307,8 @@ describe("background reindex resumption", () => {
             path.join(fixture.paths.workspace, memoryPaths[0]!),
             "Memorychangedwhilepaused replaces the original memory.",
           );
-          (manager as unknown as { markMemoryWatchDirty(): void }).markMemoryWatchDirty();
+          await (manager as unknown as { memoryWatcherReady: Promise<void> }).memoryWatcherReady;
+          observer.observations.at(-1)!.dirty();
           expectedMemoryWrites.push(memoryPaths[0]!);
         }
         if (resume === "targeted") {
@@ -312,6 +340,11 @@ describe("background reindex resumption", () => {
         expect(publish).toHaveBeenCalledTimes(1);
         expect(groups.flat().toSorted()).toEqual(expectedPaths.toSorted());
         expect(memoryWrites.toSorted()).toEqual(expectedMemoryWrites.toSorted());
+        if (mixedSources) {
+          expect(memoryReads).toBe(
+            resume === "changed" || resume === "watch" || resume === "batch-disabled" ? 2 : 1,
+          );
+        }
         if (resume === "idle" || resume === "joined") {
           expect(groups).toHaveLength(3);
         }

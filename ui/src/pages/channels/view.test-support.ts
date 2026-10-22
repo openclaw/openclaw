@@ -90,6 +90,7 @@ export function createChannelsViewProps(
     onPairingPromptConfirm: () => {},
     onWhatsAppStart: () => {},
     onWhatsAppWait: () => {},
+    onWhatsAppLogout: () => {},
     onShowAdvancedSettings: () => {},
     onConfigPatch: () => {},
     onConfigSave: () => {},

@@ -85,6 +85,17 @@ async function expectResourcesRetained(sutAuthDir: string) {
   }
 }
 
+async function expectLeaseReleased(tickMs = 100) {
+  expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
+  expect(mocks.release).toHaveBeenCalledOnce();
+  await expect(fs.stat(expectDefined(authRoot, "auth root"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  mocks.heartbeat.mockClear();
+  await vi.advanceTimersByTimeAsync(tickMs);
+  expect(mocks.heartbeat).not.toHaveBeenCalled();
+}
+
 beforeEach(async () => {
   vi.resetAllMocks();
   authRoot = undefined;
@@ -224,14 +235,7 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
           .soft(mocks.heartbeat, "failed Gateway stop must retain heartbeat")
           .toHaveBeenCalled();
       } else {
-        expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
-        expect(mocks.release).toHaveBeenCalledOnce();
-        await expect(fs.stat(expectDefined(authRoot, "auth root"))).rejects.toMatchObject({
-          code: "ENOENT",
-        });
-        mocks.heartbeat.mockClear();
-        await vi.advanceTimersByTimeAsync(100);
-        expect(mocks.heartbeat).not.toHaveBeenCalled();
+        await expectLeaseReleased();
       }
       if (fail) {
         await expect(transport.cleanupWithoutGateway()).rejects.toBe(failure);
@@ -308,11 +312,7 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
       await initialization;
     }
     expect(mocks.startDriver).not.toHaveBeenCalled();
-    expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
-    expect(mocks.release).toHaveBeenCalledOnce();
-    await expect(fs.stat(expectDefined(authRoot, "auth root"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectLeaseReleased();
   });
 
   it.each([
@@ -331,14 +331,7 @@ describe("WhatsApp QA adapter cleanup through the suite", () => {
       await expect(createAdapter()).rejects.toThrow(
         failureAt === "none" ? "driver initialization failed" : `${failureAt} failed`,
       );
-      expect(mocks.heartbeatStop).toHaveBeenCalledOnce();
-      expect(mocks.release).toHaveBeenCalledOnce();
-      await expect(fs.stat(expectDefined(authRoot, "auth root"))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      mocks.heartbeat.mockClear();
-      await vi.advanceTimersByTimeAsync(1_000);
-      expect(mocks.heartbeat).not.toHaveBeenCalled();
+      await expectLeaseReleased(1_000);
     },
   );
 });

@@ -42,7 +42,7 @@ function mount(overrides: Partial<DetailProps>, setup?: (props: DetailProps) => 
     configUnsupportedPaths: [],
     pluginId: "workboard",
     inspection: null,
-    inspectionError: null,
+    inspectionRead: { receipt: () => null, value: () => null },
     configSchema: null,
     hostControlsSchema: null,
     backHref: "/settings/plugins",

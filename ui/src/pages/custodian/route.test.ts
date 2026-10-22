@@ -8,7 +8,7 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { createContext as createCustodianContext } from "./custodian-page.test-harness.ts";
 import { CustodianRoute } from "./custodian-page.tsx";
-import { page, type CustodianRouteData } from "./route.ts";
+import { page, type CustodianRouteData } from "./route.tsx";
 
 function location(search: string): RouteLocation {
   return { pathname: "/custodian", search, hash: "" };

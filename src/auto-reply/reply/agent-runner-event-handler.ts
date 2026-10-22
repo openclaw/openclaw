@@ -1,3 +1,4 @@
+import { asOptionalObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
@@ -93,10 +94,7 @@ export function createAgentRunEventHandler(params: {
       const phase = readStringValue(evt.data.phase) ?? "";
       const name = readStringValue(evt.data.name);
       const toolCallId = readStringValue(evt.data.toolCallId) ?? "";
-      const args =
-        evt.data.args && typeof evt.data.args === "object"
-          ? (evt.data.args as Record<string, unknown>)
-          : undefined;
+      const args = asOptionalObjectRecord(evt.data.args);
       if (
         params.sourceRepliesAreToolOnly &&
         toolCallId &&
@@ -242,7 +240,9 @@ export function createAgentRunEventHandler(params: {
     const phase = readStringValue(evt.data.phase) ?? "";
     const backend = readStringValue(evt.data.backend);
     const hookMessages = normalizeTrimmedStringList(evt.data.messages);
-    if (phase === "notice") {
+    const sendCompactionUserNotices = async (
+      noticePhase?: "start" | "end" | "incomplete" | "degraded" | "context_bounded",
+    ) => {
       const noticePayload = createCompactionHookNoticePayload({
         messages: hookMessages,
         currentMessageId,
@@ -251,20 +251,8 @@ export function createAgentRunEventHandler(params: {
       if (noticePayload) {
         await deliverCompactionNoticePayload(noticePayload, "hook");
       }
-      return;
-    }
-    const sendCompactionUserNotices = async (
-      noticePhase: "start" | "end" | "incomplete" | "degraded" | "context_bounded",
-    ) => {
-      if (hookMessages.length > 0) {
-        const noticePayload = createCompactionHookNoticePayload({
-          messages: hookMessages,
-          currentMessageId,
-          applyReplyToMode: params.turn.applyReplyToMode,
-        });
-        if (noticePayload) {
-          await deliverCompactionNoticePayload(noticePayload, "hook");
-        }
+      if (!noticePhase) {
+        return;
       }
       if (
         noticePhase === "degraded" ||
@@ -281,6 +269,10 @@ export function createAgentRunEventHandler(params: {
         );
       }
     };
+    if (phase === "notice") {
+      await sendCompactionUserNotices();
+      return;
+    }
     if (phase === "context_bounded") {
       await sendCompactionUserNotices("context_bounded");
       return;

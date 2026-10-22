@@ -342,7 +342,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/talk/handlers/client-native-replay.test.ts",
   "src/gateway/talk/handlers/client.test.ts",
   "src/gateway/talk/handlers/native-consult-target.test.ts",
-  "src/gateway/talk/handlers/realtime-relay-close.test.ts",
   "src/gateway/talk/handlers/voice.test.ts",
   "src/gateway/talk/relay-audio-base64.test.ts",
   "src/gateway/talk/relay/agent-consult.registration.test.ts",

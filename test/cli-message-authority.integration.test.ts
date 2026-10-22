@@ -328,7 +328,7 @@ describe("CLI message authority integration", () => {
     };
     initialConfig = cfg;
     setRuntimeConfigSnapshot(cfg, cfg);
-    await ensureMcpLoopbackServer(0);
+    await ensureMcpLoopbackServer();
     const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "task-owned MCP runtime");
     mcpOrigin = `http://127.0.0.1:${runtime.port}`;
   });

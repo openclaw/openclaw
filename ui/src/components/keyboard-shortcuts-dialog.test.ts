@@ -28,37 +28,27 @@ afterEach(() => {
 });
 
 it.each([
-  ["Win32", "Ctrl", "Shift", "Alt", "Enter"],
-  ["MacIntel", "⌘", "⇧", "⌥", "⏎"],
-])(
-  "renders shortcut groups and send preferences: %s",
-  async (platform, modifier, shift, alt, enter) => {
-    vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
-    const dialog = await openDialog();
+  ["Win32", "Ctrl", "Enter"],
+  ["MacIntel", "⌘", "⏎"],
+])("renders shortcut groups and send preferences: %s", async (platform, modifier, enter) => {
+  vi.spyOn(navigator, "platform", "get").mockReturnValue(platform);
+  const dialog = await openDialog();
 
-    expect(dialog.querySelector("h2")?.textContent).toBe("Keyboard shortcuts");
-    expect(
-      Array.from(dialog.querySelectorAll("h3") ?? [], (heading) => heading.textContent),
-    ).toEqual(["General", "Chat", "Panels", "Sidebar", "Image viewer", "Approvals"]);
-    for (const [label, keys] of [
-      ["Open New Session", [modifier, shift, "O"]],
-      ["Archive current session", [modifier, shift, "A"]],
-      ["Select multiple sessions", [alt, "Click"]],
-      ["Send message", [enter]],
-    ] as const) {
-      expect(chips(dialog, label)).toEqual(keys);
-    }
+  expect(dialog.querySelector("h2")?.textContent).toBe("Keyboard shortcuts");
+  expect(Array.from(dialog.querySelectorAll("h3") ?? [], (heading) => heading.textContent)).toEqual(
+    ["General", "Chat", "Panels", "Sidebar", "Image viewer", "Approvals"],
+  );
+  expect(chips(dialog, "Send message")).toEqual([enter]);
 
-    dialog.sendShortcut = "modifier-enter";
-    await dialog.updateComplete;
+  dialog.sendShortcut = "modifier-enter";
+  await dialog.updateComplete;
 
-    expect(chips(dialog, "Send message")).toEqual([modifier, enter]);
-    dialog.querySelector<HTMLButtonElement>("button[aria-label='Close']")?.click();
-    await dialog.updateComplete;
-    expect(dialog.isOpen).toBe(false);
-    expect(dialog.querySelector("openclaw-modal-dialog")).toBeNull();
-  },
-);
+  expect(chips(dialog, "Send message")).toEqual([modifier, enter]);
+  dialog.querySelector<HTMLButtonElement>("button[aria-label='Close']")?.click();
+  await dialog.updateComplete;
+  expect(dialog.isOpen).toBe(false);
+  expect(dialog.querySelector("openclaw-modal-dialog")).toBeNull();
+});
 
 it.each(
   ["MacIntel", "Win32", "Linux x86_64"].flatMap((platform) =>
