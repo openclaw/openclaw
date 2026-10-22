@@ -339,7 +339,7 @@ it("records terminal metrics without reading logs or private diagnostic content"
   expect(scrapeMetrics(exporter.handler)).toBe("");
 });
 
-it("preserves worker phases, frame sizes, and core metrics after shared capacity saturates", () => {
+it("exports production-shaped worker, WebSocket, and late RPC populations without drops", () => {
   const metrics = createMetricsHarness();
   expect(metrics.render()).not.toContain("openclaw_gc_duration_seconds");
   const queue = {
@@ -362,10 +362,61 @@ it("preserves worker phases, frame sizes, and core metrics after shared capacity
       durationMs: 7,
     });
   }
-  for (let index = 0; index < 426; index += 1) {
-    const base = { ...baseEvent(), type: "gateway.rpc" as const, method: `core.method.${index}` };
+  // Cover 400 worker request/queue sets and 400 phase sets (57 complete + one partial).
+  for (let index = 0; index < 58; index++) {
+    metrics.record({
+      type: "worker.request",
+      kind: "sqlite_writer",
+      requestClass: `request.${index}`,
+      phase: "completed",
+      queueDepth: 0,
+      timing: {
+        dispatched: 0,
+        posted: 1,
+        ...(index < 57
+          ? {
+              received: 2,
+              inputReady: 3,
+              executeStarted: 4,
+              executeFinished: 5,
+              replied: 6,
+              replyReceived: 7,
+            }
+          : {}),
+      },
+    });
+  }
+  for (let index = 0; index < 200; index++) {
+    metrics.record({
+      type: "gateway.ws.event",
+      event: `event.${index}`,
+      count: 1,
+      bytes: 256,
+      wireBytes: 128,
+      sessionEvent: { reason: "assistant", delivery: "subscribed" },
+      frameBytes: {
+        "256": 1,
+        "512": 1,
+        "1024": 1,
+        "2048": 1,
+        "4096": 1,
+        "8192": 1,
+        "16384": 1,
+        "65536": 1,
+        "+Inf": 1,
+      },
+    });
+  }
+  // RPC arrives after worker and WebSocket traffic; sessions.list is the last method.
+  for (let index = 0; index < 170; index += 1) {
+    const base = {
+      ...baseEvent(),
+      type: "gateway.rpc" as const,
+      method: index === 169 ? "sessions.list" : `core.method.${index}`,
+    };
     for (const event of [
-      { ...base, phase: "received" },
+      { ...base, phase: "received", clientKind: "control-ui" },
+      { ...base, phase: "received", clientKind: "cli" },
       { ...base, phase: "response", outcome: "ok", durationMs: 10, responseBytes: 1024 },
       {
         ...base,
@@ -387,46 +438,6 @@ it("preserves worker phases, frame sizes, and core metrics after shared capacity
       metrics.record(event);
     }
   }
-  expect(metrics.render()).toMatch(/openclaw_prometheus_series_dropped_total [1-9][0-9]*/);
-  // Observed deployment shape: 47 complete phase sets plus three partial phases,
-  // and 19 event types with nine cumulative frame-size bounds apiece.
-  for (let index = 0; index < 48; index++) {
-    metrics.record({
-      type: "worker.request",
-      kind: "sqlite_writer",
-      requestClass: `request.${index}`,
-      phase: "completed",
-      queueDepth: 0,
-      timing: {
-        dispatched: 0,
-        posted: 1,
-        received: 2,
-        inputReady: 3,
-        ...(index < 47
-          ? { executeStarted: 4, executeFinished: 5, replied: 6, replyReceived: 7 }
-          : {}),
-      },
-    });
-  }
-  for (let index = 0; index < 19; index++) {
-    metrics.record({
-      type: "gateway.ws.event",
-      event: `event.${index}`,
-      count: 1,
-      bytes: 256,
-      frameBytes: {
-        "256": 1,
-        "512": 1,
-        "1024": 1,
-        "2048": 1,
-        "4096": 1,
-        "8192": 1,
-        "16384": 1,
-        "65536": 1,
-        "+Inf": 1,
-      },
-    });
-  }
   metrics.record({ ...queue, queueSize: 2 });
   const existing = metrics.render();
   expect(existing).toContain('openclaw_queue_lane_size{lane="main"} 2');
@@ -434,7 +445,7 @@ it("preserves worker phases, frame sizes, and core metrics after shared capacity
 
   metrics.record({ ...queue, lane: "later" });
 
-  for (let index = 0; index < 4; index++) {
+  for (let index = 0; index < 64; index++) {
     const model = `model-${index}`;
     metrics.record({
       type: "run.completed",
@@ -565,18 +576,33 @@ it("preserves worker phases, frame sizes, and core metrics after shared capacity
   }
   const core = metrics.render();
   const expectedFamilies = {
-    worker_request_phase_seconds_count: 332,
-    gateway_ws_event_frame_bytes: 171,
-    run_completed_total: 4,
-    run_duration_seconds_count: 4,
-    harness_run_total: 4,
-    harness_run_duration_seconds_count: 4,
-    model_call_total: 4,
-    model_call_duration_seconds_count: 4,
-    model_usage_duration_seconds_count: 4,
-    tool_execution_total: 4,
-    tool_execution_duration_seconds_count: 4,
-    gen_ai_client_token_usage_count: 8,
+    worker_request_seconds_count: 400,
+    worker_queue_wait_seconds_count: 400,
+    worker_request_phase_seconds_count: 400,
+    gateway_ws_event_frame_bytes: 1800,
+    gateway_ws_events_total: 200,
+    gateway_ws_event_bytes_total: 200,
+    gateway_ws_event_wire_bytes_total: 200,
+    gateway_ws_session_event_frames_total: 200,
+    gateway_ws_session_event_bytes_total: 200,
+    gateway_rpc_handler_seconds_count: 170,
+    gateway_rpc_admission_seconds_count: 170,
+    gateway_rpc_first_response_seconds_count: 170,
+    gateway_rpc_queue_wait_seconds_count: 170,
+    gateway_rpc_response_bytes_count: 170,
+    gateway_rpc_handler_heap_delta_bytes_count: 170,
+    gateway_rpc_requests_total: 170,
+    gateway_rpc_client_requests_total: 340,
+    run_completed_total: 64,
+    run_duration_seconds_count: 64,
+    harness_run_total: 64,
+    harness_run_duration_seconds_count: 64,
+    model_call_total: 64,
+    model_call_duration_seconds_count: 64,
+    model_usage_duration_seconds_count: 64,
+    tool_execution_total: 64,
+    tool_execution_duration_seconds_count: 64,
+    gen_ai_client_token_usage_count: 128,
     worktree_preparation_seconds_count: 1,
     secret_egress_requests_total: 1,
     gateway_http_cancelled_total: 1,
@@ -597,11 +623,8 @@ it("preserves worker phases, frame sizes, and core metrics after shared capacity
     ]),
   );
   expect(actualFamilies).toEqual(expectedFamilies);
-  for (const family of ["worker_request_phase_seconds", "gateway_ws_event_frame_bytes"]) {
-    expect(core).not.toContain(
-      `openclaw_prometheus_family_series_dropped_total{family="openclaw_${family}"}`,
-    );
-  }
+  expect(core).not.toContain("openclaw_prometheus_series_dropped_total");
+  expect(core).toContain('openclaw_gateway_rpc_handler_seconds_count{method="sessions.list"} 1');
   expect(core).toContain(
     'openclaw_worker_gc_collections_total{kind="scavenge",script="worker-0.js",worker_class="compute"} 7',
   );
