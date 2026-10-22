@@ -23,6 +23,10 @@ function sample(row: GatewaySessionRow, at: number, fields: Partial<GatewaySessi
   return { ...row, updatedAt: at, snapshotAt: at, ...fields };
 }
 
+function makeSession(name: string, fields: Partial<GatewaySessionRow> = {}) {
+  return { ...active, key: `agent:work:${name}`, sessionId: `${name}-session`, ...fields };
+}
+
 function settled<T extends { key: string }>(row: T, updatedAt: number) {
   return { ...row, updatedAt, hasActiveRun: false, activeRunIds: [], status: "done" as const };
 }
@@ -233,7 +237,7 @@ it("refreshes a conflicting delete generation without confusing global owners du
   const globalRow = { ...active, key: "global", kind: "global" as const };
   const main = { ...globalRow, agentId: "main", sessionId: "main-global" };
   const work = { ...globalRow, agentId: "work", sessionId: "work-global" };
-  const literal = { ...active, key: "agent:work:global", sessionId: "literal-global" };
+  const literal = makeSession("global", { sessionId: "literal-global" });
   const initial = listing([main, work, literal]);
   request.mockResolvedValueOnce(initial).mockResolvedValue({ ...listing([literal]), ts: 300 });
   await controller.load(client, "current");
@@ -281,11 +285,7 @@ it("excludes certified dock snapshots from current work even with space", async 
   const { client, request, controller } = fixture;
   request.mockResolvedValue({ ...listing([active]), hasMore: false, limitApplied: 100 });
   await controller.load(client, "current");
-  const added = sample(active, 200, {
-    key: "agent:work:new",
-    sessionId: "new-session",
-    isDock: true,
-  });
+  const added = sample(makeSession("new", { isDock: true }), 200);
   controller.invalidate(snapshot(added, [], "agent.run.started"));
   expectRows([active]);
   await advance(5_000, 1);
@@ -294,14 +294,11 @@ it("excludes certified dock snapshots from current work even with space", async 
 it("refreshes held parent facts after uncertified child completion during a read", async () => {
   const { client, request, controller } = fixture;
   const group = { groupId: "work", createdAt: 1, queued: 0, running: 1, done: 0, failed: 0 };
-  const parent = {
-    ...active,
-    key: "agent:work:parent",
-    sessionId: "parent-session",
+  const parent = makeSession("parent", {
     activeRunIds: ["parent-run"],
     hasActiveSubagentRun: true,
     swarm: { groups: [group], otherActiveGroups: 0 },
-  };
+  });
   const child = { ...active, parentSessionKey: parent.key };
   const settledParent = {
     ...parent,
@@ -326,23 +323,17 @@ it("refreshes held parent facts after uncertified child completion during a read
 
 it("applies certified ancestor rows and references without refetching current work during a read", async () => {
   const { client, request, controller } = fixture;
-  const parent = {
-    ...active,
-    key: "agent:work:parent",
-    sessionId: "parent-session",
+  const parent = makeSession("parent", {
     label: "Parent before settlement",
     snapshotAt: 100,
     hasActiveSubagentRun: true,
     childSessions: [active.key],
     parentSessionKey: "agent:work:grandparent",
-  };
-  const grandparent = {
-    ...active,
-    key: parent.parentSessionKey,
-    sessionId: "grandparent-session",
+  });
+  const grandparent = makeSession("grandparent", {
     childSessions: [parent.key],
     snapshotAt: 100,
-  };
+  });
   const child = { ...active, parentSessionKey: parent.key, snapshotAt: 100 };
   const heldParent = () => controller.result?.sessions.find((row) => row.key === parent.key);
   const changeAncestors = (at: number, rows: GatewaySessionRow[]) => {

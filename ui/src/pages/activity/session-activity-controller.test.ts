@@ -39,10 +39,15 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 
-it("reconstructs conditional Activity rows before reconciling fresh metadata", async () => {
-  const filters = { personId: null, time: "all" as const, query: "" };
-  request.mockResolvedValueOnce(sessionActivityListing([active], { rowsRevision: "first" }));
+it("retains same-query rows across conditional refreshes and clears changed people", async () => {
+  const filters = { personId: "former", time: "all" as const, query: "" };
+  const initial = sessionActivityListing([active], {
+    rowsRevision: "first",
+    involvingProfileId: "current",
+  });
+  request.mockResolvedValueOnce(initial);
   await controller.load(client, filters);
+  expect(controller.result).toEqual(initial);
   request.mockResolvedValueOnce(
     sessionActivityListing([], {
       rowsRevision: "first",
@@ -51,10 +56,18 @@ it("reconstructs conditional Activity rows before reconciling fresh metadata", a
       totalCount: 20,
     }),
   );
-  await controller.load(client, filters, "refresh");
+  const refreshing = controller.load(client, filters, "refresh");
+  expect(controller.result).toEqual(initial);
+  await refreshing;
   expect(request).toHaveBeenLastCalledWith(
     "sessions.list",
-    expect.objectContaining({ ifRowsRevision: "delta:first" }),
+    expect.objectContaining({
+      ifRowsRevision: "delta:first",
+      involvingProfileId: "former",
+      excludeDock: true,
+      includePeople: true,
+      sortBy: "activity",
+    }),
     expect.objectContaining({ signal: expect.any(AbortSignal) }),
   );
   expect(controller.result).toMatchObject({ sessions: [active], totalCount: 20 });
@@ -67,6 +80,8 @@ it("reconstructs conditional Activity rows before reconciling fresh metadata", a
   );
   await controller.load(client, filters, "refresh");
   expect(controller.result?.sessions).toEqual([renamed]);
+  void controller.load(client, { ...filters, personId: "other" });
+  expect(controller.result).toBeUndefined();
 });
 
 it("requests calendar-aligned pulse windows, including clock-change dates", async () => {
@@ -188,28 +203,6 @@ it.each([
   held.resolve(result);
   await advance(15_000, 3);
   expect(controller.result).toEqual(replacement);
-});
-
-it("keeps the same-query snapshot during invalidation and clears it on person changes", async () => {
-  const resolved = { ...result, involvingProfileId: "current" };
-  request.mockResolvedValue(resolved);
-  const filters = { personId: "former", time: "all" as const, query: "" };
-  await controller.load(client, filters);
-  expect(controller.result).toEqual(resolved);
-  void controller.load(client, filters, "refresh");
-  expect(controller.result).toEqual(resolved);
-  expect(request).toHaveBeenLastCalledWith(
-    "sessions.list",
-    expect.objectContaining({
-      involvingProfileId: "former",
-      excludeDock: true,
-      includePeople: true,
-      sortBy: "activity",
-    }),
-    expect.anything(),
-  );
-  void controller.load(client, { ...filters, personId: "other" });
-  expect(controller.result).toBeUndefined();
 });
 
 it("holds a trailing Activity refresh through page hiding and retires it on disconnect", async () => {
@@ -336,20 +329,6 @@ describe("Activity recap generation", () => {
     expect(request).toHaveBeenCalledTimes(6);
   });
 
-  it("keeps cached recaps readable without requesting generation on a read-only connection", async () => {
-    const cached = listing([
-      row(),
-      row("agent:main:cached", {
-        activitySummary: recap("Verified the repair; rollout remains pending."),
-      }),
-    ]);
-    request.mockResolvedValue(cached);
-    void controller.load(client, filters, "query", false);
-    await vi.waitFor(() => expect(controller.result).toEqual(cached));
-    controller.retrySummary(controller.result!.sessions[1]!);
-    expect(request).toHaveBeenCalledTimes(1);
-  });
-
   it("does not let a delayed backfill response overwrite a newer session-list recap", async () => {
     const oldRow = row();
     const newRow = row(oldRow.key, {
@@ -440,6 +419,7 @@ describe("Activity recap generation", () => {
     const sessions = Array.from({ length: 25 }, (_, index) => row(`agent:main:notes-${index}`));
     await startBackfill(sessions);
     void controller.load(client, filters, "query", false);
+    controller.retrySummary(sessions[0]!);
     held.resolve(updating(...sessions.slice(0, 20)));
     await held.promise;
     await Promise.resolve();
