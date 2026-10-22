@@ -1779,6 +1779,8 @@ async function runGatewaySample(
         );
       }
       env.PATH = `${path.join(root, "publication-bin")}${path.delimiter}${env.PATH ?? ""}`;
+      // Keep startup PATH hardening from moving the real Git ahead of the fixture wrapper.
+      env.OPENCLAW_PATH_BOOTSTRAPPED = "1";
     }
     if (preload) {
       env.NODE_OPTIONS = `--import=${preload}`;
@@ -1950,14 +1952,30 @@ async function runGatewaySample(
           await delay(25);
         }
       }
-      const completionMs = options.benchCase.completionTracePhase
-        ? await waitForStartupTracePhase({
-            deadlineAt,
-            isDone: () => childExited,
-            phase: options.benchCase.completionTracePhase,
-            startupTrace,
-          })
-        : performance.now() - startAt;
+      // Compare CPU/RSS after the same optional startup work, even when publication
+      // recovery overlaps that work on only one side of the comparison.
+      const postReadyCompletion = publicationMarker
+        ? await Promise.all(
+            ["post-ready.startup-maintenance", "post-ready.gateway-data.plugins"].map((phase) =>
+              waitForStartupTracePhase({
+                deadlineAt,
+                isDone: () => childExited,
+                phase,
+                startupTrace,
+              }),
+            ),
+          )
+        : [];
+      const completionMs = postReadyCompletion.includes(null)
+        ? null
+        : options.benchCase.completionTracePhase
+          ? await waitForStartupTracePhase({
+              deadlineAt,
+              isDone: () => childExited,
+              phase: options.benchCase.completionTracePhase,
+              startupTrace,
+            })
+          : performance.now() - startAt;
       const completedAt = performance.now();
       const cpuEndMs = readProcessTreeCpuMs(startedChild.pid);
       const cpuMs =
