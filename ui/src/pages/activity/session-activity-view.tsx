@@ -610,7 +610,12 @@ export function renderSessionActivityView(props: SessionActivityViewProps) {
       <div class="activity-feed__main">
         <Errored fallback={() => null}>
           <Loading on={request()} fallback={!props.result ? renderActivityLoading() : undefined}>
-            {(latest(read), props.loading && !props.result ? renderActivityLoading() : undefined)}
+            {
+              (latest(read),
+              (props.loading || isPending(read)) && !props.result
+                ? renderActivityLoading()
+                : undefined)
+            }
           </Loading>
         </Errored>
         {props.result?.activityPulse ? (
