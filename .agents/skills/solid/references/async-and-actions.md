@@ -309,6 +309,29 @@ that memo under `Errored`. Do not silently discard rejections. Boundary reset
 retries a read, not a mutation; an explicit retry-save button must invoke the
 save action. Keep the user's draft on failure.
 
+### Command errors without optimistic state
+
+Some plugin commands already expose their busy state through a shared owner.
+They need no presentation action merely to show an error. WhatsApp Settings
+stores the admitted command's completion promise and reads it under `Errored`:
+
+```tsx
+const [completion, setCompletion] = createSignal<Promise<void>>();
+const completed = createMemo(() => completion()?.then(() => null) ?? null);
+
+<Loading on={completion()}>
+  <Errored fallback={(error) => <CommandError error={error()} />}>{completed()}</Errored>
+</Loading>;
+```
+
+Start the owner command in the event handler, publish its completion, and attach
+a rejection consumer for work whose view is replaced or disposed. Preserve the
+owner's cancellation and error-precedence contract. Each new completion replaces
+the previous read, so an older failed refresh cannot overwrite a newer success.
+Re-arm this narrow error slot on retry to clear the previous error immediately;
+keep the controls outside it. A local error string written by each completion
+would lose that ordering and require a second request-generation guard.
+
 ## Key a projection over an owner snapshot
 
 Use `projectSource`/`projectOwner` for the synchronous owner adapter, then
