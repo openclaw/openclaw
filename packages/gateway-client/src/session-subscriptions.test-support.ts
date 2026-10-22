@@ -25,6 +25,14 @@ export function createClient(
   };
 }
 
+export function createApprovalClient(replay: () => unknown) {
+  return createClient(async (method, params) =>
+    method === "sessions.messages.subscribe"
+      ? { key: params.key, ...(params.includeApprovals ? { approvalReplay: await replay() } : {}) }
+      : {},
+  );
+}
+
 export function expectWire(
   request: ReturnType<typeof createClient>["request"],
   method: "subscribe" | "unsubscribe",

@@ -3,11 +3,16 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { validatePreviousConnectParams } from "../../gateway-protocol/src/connect-compatibility.test-support.js";
 import { GATEWAY_SERVER_CAPS, validateConnectParams } from "../../gateway-protocol/src/index.js";
-import { transportFixture, sendFrame } from "./client.transport.test-support.js";
+import {
+  transportFixture,
+  sendFrame,
+  sendChallenge,
+  sendResponse,
+} from "./client.transport.test-support.js";
 import { rawDataToString } from "./websocket-data.js";
 
 describe("GatewayClient websocket opening handshakeTimeout", () => {
-  const { client: createClient, startClient, websocketServer, listen } = transportFixture();
+  const { startClient, startWebSocketServer, listen } = transportFixture();
   async function connectError(port: number) {
     return startClient({ url: `ws://127.0.0.1:${port}` }).failed;
   }
@@ -18,20 +23,14 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
   ])(
     "negotiates catalog input with a compatible Gateway: %j",
     async ({ advertised, modelCatalog }) => {
-      const server = http.createServer();
-      const wss = websocketServer(server);
-      const port = await listen(server);
+      const { server: wss, url } = await startWebSocketServer();
       const connected = createDeferred();
       const received = createDeferred<{ id: string; params: unknown }>();
       wss.on("connection", (socket) => {
-        sendFrame(socket, {
-          type: "event",
-          event: "connect.challenge",
-          payload: {
-            nonce: "catalog-handshake",
-            ts: Date.now(),
-            ...(advertised ? { capabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] } : {}),
-          },
+        sendChallenge(socket, {
+          nonce: "catalog-handshake",
+          ts: Date.now(),
+          ...(advertised ? { capabilities: [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] } : {}),
         });
         socket.once("message", (raw) => {
           const frame = JSON.parse(rawDataToString(raw)) as { id: string; params: unknown };
@@ -49,14 +48,13 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
           });
         });
       });
-      const client = createClient({
-        url: `ws://127.0.0.1:${port}`,
+      startClient({
+        url,
         deviceIdentity: null,
         modelCatalog,
         onHelloOk: () => connected.resolve(),
         onConnectError: connected.reject,
       });
-      client.start();
       await connected.promise;
       const frame = await received.promise;
       if (advertised) {
@@ -69,17 +67,15 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
   );
 
   it("keeps a hello received during WebSocket closing in the pre-hello failure path", async () => {
-    const server = http.createServer();
-    const wss = websocketServer(server);
-    const port = await listen(server);
+    const { server: wss, url } = await startWebSocketServer();
     const onHelloOk = vi.fn();
     const onConnectError = vi.fn();
     const onClose = vi.fn();
     const onEvent = vi.fn();
     const closed = createDeferred();
     const lateFramesWritten = createDeferred();
-    const client = createClient({
-      url: `ws://127.0.0.1:${port}`,
+    const { client } = startClient({
+      url,
       deviceIdentity: null,
       onHelloOk,
       onConnectError,
@@ -90,18 +86,14 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
       onEvent,
     });
     wss.on("connection", (socket) => {
-      sendFrame(socket, {
-        type: "event",
-        event: "connect.challenge",
-        payload: { nonce: "synthetic-nonce", ts: Date.now() },
-      });
+      sendChallenge(socket, { nonce: "synthetic-nonce", ts: Date.now() });
       socket.once("message", (raw) => {
         const frame = JSON.parse(rawDataToString(raw)) as { id: string };
         // Write both frames before admitting the peer's close reply, preserving
         // their wire order without waiting for retired application callbacks.
         socket.pause();
         client.updateNodeManifest({ caps: [], commands: [] });
-        sendFrame(socket, { type: "res", id: frame.id, ok: true, payload: { type: "hello-ok" } });
+        sendResponse(socket, frame.id, { type: "hello-ok" });
         socket.send(JSON.stringify({ type: "event", event: "late-hello-marker" }), (error) => {
           socket.resume();
           if (error) {
@@ -112,7 +104,6 @@ describe("GatewayClient websocket opening handshakeTimeout", () => {
         });
       });
     });
-    client.start();
     await Promise.all([lateFramesWritten.promise, closed.promise]);
     expect(onEvent).not.toHaveBeenCalled();
     expect(onHelloOk).not.toHaveBeenCalled();

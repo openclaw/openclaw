@@ -8,6 +8,7 @@ import {
   projection,
   terminal,
   savedReply,
+  delta,
 } from "./session-projection.test-support.js";
 
 /** Run-scoped terminal state: final acceptance, late diagnostics, and retention. */
@@ -35,12 +36,7 @@ describe("session run terminal bookkeeping", () => {
       errorMessage: "provider rate limit",
       message: { role: "assistant", content, stopReason: "error" },
     });
-    const resumed = reduce(failed, {
-      type: "runDelta",
-      seq: 11,
-      runId: "run-1",
-      message: reply("I"),
-    });
+    const resumed = delta(failed, "run-1", reply("I"), 11);
     expect(resumed.runs["run-1"]).toMatchObject({ status: "streaming" });
     expect(resumed.runs["run-1"]?.errorMessage).toBeUndefined();
     expect(resumed.runs["run-1"]?.stopReason).toBeUndefined();
@@ -61,14 +57,7 @@ describe("session run terminal bookkeeping", () => {
       errorMessage: "provider rate limit",
       message: { role: "assistant", content, stopReason: "error" },
     });
-    expect(
-      reduce(failed, {
-        type: "runDelta",
-        seq: 11,
-        runId: "run-1",
-        message: reply("late stream"),
-      }),
-    ).toBe(failed);
+    expect(delta(failed, "run-1", reply("late stream"), 11)).toBe(failed);
   });
 
   it("upgrades an identified empty completed final exactly once without reopening the run", () => {
@@ -169,19 +158,12 @@ describe("session run terminal bookkeeping", () => {
   });
 
   it("retains a newly completed live stream ahead of older terminal diagnostics", () => {
-    let state = reduce(projection(), {
-      type: "runDelta",
-      runId: "active-first",
-      message: reply("stream"),
-    });
+    let state = delta(projection(), "active-first", reply("stream"));
     for (let index = 0; index < 199; index += 1) {
-      state = terminal(state, {
-        runId: `older-${index}`,
-        status: "completed",
-      });
+      state = terminal(state, { runId: `older-${index}` });
     }
-    state = terminal(state, { runId: "active-first", status: "completed" });
-    state = terminal(state, { runId: "newest", status: "completed" });
+    state = terminal(state, { runId: "active-first" });
+    state = terminal(state, { runId: "newest" });
 
     expect(Object.keys(state.runs)).toHaveLength(150);
     expect(state.runs["older-0"]).toBeUndefined();
@@ -192,10 +174,7 @@ describe("session run terminal bookkeeping", () => {
   it("protects every concurrent active stream when terminal retention reaches its soft cap", () => {
     let state = projection();
     for (let index = 0; index < 205; index += 1) {
-      state = reduce(state, {
-        type: "runDelta",
-        runId: `active-${index}`,
-      });
+      state = delta(state, `active-${index}`);
     }
 
     expect(Object.keys(state.runs)).toHaveLength(205);

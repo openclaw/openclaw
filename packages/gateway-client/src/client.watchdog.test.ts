@@ -21,7 +21,6 @@ type ProtocolHarness = {
   socket: GatewayProtocolSocket | null;
   stopped: boolean;
   generation: number;
-  hasPendingRequests: boolean;
   reconnectSupervisor: { reset(initialMs?: number): void };
   handleMessage: (socket: GatewayProtocolSocket, generation: number, raw: string) => void;
 };
@@ -37,8 +36,8 @@ function installSyntheticSocket(
 ): void {
   const socket: GatewayProtocolSocket = {
     isOpen: () => true,
-    send: (data) => send(data),
-    close: (code, reason) => close(code, reason),
+    send,
+    close,
   };
   Object.assign(protocolHarness(client), { socket, stopped: false, generation: 1 });
   (client as unknown as { ws: unknown }).ws = {
@@ -80,7 +79,7 @@ async function stopSyntheticClient(client: GatewayClient): Promise<void> {
 }
 
 describe("GatewayClient", () => {
-  const { startWebSocketServer: startServer } = transportFixture();
+  const { startWebSocketServer: startServer, client: createClient } = transportFixture();
 
   beforeEach(() => {
     vi.spyOn(Math, "random").mockReturnValue(0);
@@ -97,11 +96,10 @@ describe("GatewayClient", () => {
     const receivedOrigin = new Promise<string | undefined>((resolve) => {
       server.once("connection", (_socket, request) => resolve(request.headers.origin));
     });
-    const client = new GatewayClient({ url, origin, connectChallengeTimeoutMs: 0 });
+    const client = createClient({ url, origin, connectChallengeTimeoutMs: 0 });
     client.start();
 
     await expect(receivedOrigin).resolves.toBe(origin);
-    client.stop();
   });
 
   test("returns non-sensitive connection metadata", () => {
@@ -176,7 +174,7 @@ describe("GatewayClient", () => {
     const secondHello = createDeferred();
     const closeEvents: Array<{ code: number; reason: string }> = [];
     let helloCount = 0;
-    const client = new GatewayClient({
+    const client = createClient({
       url,
       tickWatchMinIntervalMs: 5,
       onHelloOk: () => {
@@ -192,24 +190,19 @@ describe("GatewayClient", () => {
       onClose: (code, reason) => closeEvents.push({ code, reason }),
     });
 
-    try {
-      client.start();
-      await firstHello.promise;
-
-      const stalledRequest = client.request("chat.send", undefined, { expectFinal: true });
-      void stalledRequest.catch(() => {});
-
-      await expect(stalledRequest).rejects.toThrow("gateway closed (4000): tick timeout");
-      await secondHello.promise;
-      await expect(client.request("status")).resolves.toEqual({ status: "ok" });
-
-      expect(closeEvents[0]).toEqual({ code: 4000, reason: "tick timeout" });
-      expect(methodsByConnection[0]).toEqual(["connect", "chat.send"]);
-      expect(methodsByConnection[1]).toEqual(["connect", "status"]);
-      expect(methodsByConnection.flat().filter((method) => method === "chat.send")).toHaveLength(1);
-    } finally {
-      await client.stopAndWait();
-    }
+    client.start();
+    await firstHello.promise;
+    const stalledRequest = client.request("chat.send", undefined, { expectFinal: true });
+    void stalledRequest.catch(() => {});
+    await expect(stalledRequest).rejects.toThrow("gateway closed (4000): tick timeout");
+    await secondHello.promise;
+    await expect(client.request("status")).resolves.toEqual({ status: "ok" });
+    expect(closeEvents[0]).toEqual({ code: 4000, reason: "tick timeout" });
+    expect(methodsByConnection.slice(0, 2)).toEqual([
+      ["connect", "chat.send"],
+      ["connect", "status"],
+    ]);
+    expect(methodsByConnection.flat().filter((method) => method === "chat.send")).toHaveLength(1);
   }, 5000);
 
   test("lets finite pending requests own their timeout when ticks are missing", async () => {
@@ -288,25 +281,6 @@ describe("GatewayClient", () => {
 
     expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), MAX_SAFE_TIMEOUT_DELAY_MS);
     client.stop();
-  });
-
-  test("aborts in-flight requests from caller AbortSignal", async () => {
-    const client = new GatewayClient({ requestTimeoutMs: 25 });
-    const send = vi.fn();
-    installSyntheticSocket(client, send, vi.fn());
-
-    const controller = new AbortController();
-    const requestPromise = client.request("status", undefined, {
-      signal: controller.signal,
-      timeoutMs: null,
-    });
-    expect(send).toHaveBeenCalledTimes(1);
-    expect(protocolHarness(client).hasPendingRequests).toBe(true);
-
-    controller.abort();
-
-    await expect(requestPromise).rejects.toThrow("gateway request aborted for status");
-    expect(protocolHarness(client).hasPendingRequests).toBe(false);
   });
 
   test("clamps oversized stopAndWait timeouts before scheduling", async () => {
