@@ -1,28 +1,13 @@
 /** Tests configured channel-to-ACP binding resolution and generated session keys. */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import type { ChannelConfiguredBindingProvider } from "../channels/plugins/types.adapters.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
-import type { AcpSessionResolution } from "./control-plane/manager.types.js";
-import { ensureConfiguredAcpBindingSession } from "./persistent-bindings.lifecycle.js";
 import {
   resolveConfiguredAcpBindingRecord,
   resolveConfiguredAcpBindingSpecBySessionKey,
 } from "./persistent-bindings.resolve.js";
-import {
-  buildConfiguredAcpSessionKey,
-  type ConfiguredAcpBindingSpec,
-} from "./persistent-bindings.types.js";
-
-const manager = vi.hoisted(() => ({
-  resolveSessionAsync: vi.fn<(params: { sessionKey: string }) => Promise<AcpSessionResolution>>(),
-  closeSession: vi.fn(),
-  initializeSession: vi.fn(),
-  setSessionConfigOption: vi.fn(),
-}));
-// mock-isolation: lifecycle assertions must not create real ACP sessions or workers.
-vi.mock("./control-plane/manager.js", () => ({ getAcpSessionManager: () => manager }));
 
 type ConfiguredBinding = NonNullable<OpenClawConfig["bindings"]>[number];
 type BindingRecordInput = Parameters<typeof resolveConfiguredAcpBindingRecord>[0];
@@ -41,10 +26,17 @@ const discordBindings: ChannelConfiguredBindingProvider = {
     return normalized ? { conversationId: normalized } : null;
   },
   matchInboundConversation: ({ compiledBinding, conversationId, parentConversationId }) => {
-    const index = [conversationId, parentConversationId].indexOf(compiledBinding.conversationId);
-    return index < 0
-      ? null
-      : { conversationId: compiledBinding.conversationId, matchPriority: 2 - index };
+    if (compiledBinding.conversationId === conversationId) {
+      return { conversationId, matchPriority: 2 };
+    }
+    if (
+      parentConversationId &&
+      parentConversationId !== conversationId &&
+      compiledBinding.conversationId === parentConversationId
+    ) {
+      return { conversationId: parentConversationId, matchPriority: 1 };
+    }
+    return null;
   },
 };
 
@@ -182,46 +174,4 @@ describe("resolveConfiguredAcpBindingSpecBySessionKey", () => {
 
     expect(spec?.backend).toBe("exact");
   });
-});
-
-it("reinitializes a matching error-state session with the configured harness and runtime options", async () => {
-  manager.closeSession.mockResolvedValue(undefined);
-  manager.initializeSession.mockResolvedValue(undefined);
-  const runtimeOptions = { model: "anthropic/claude-sonnet-4-6", thinking: "off" };
-  const spec: ConfiguredAcpBindingSpec = {
-    channel: "discord",
-    accountId: defaultDiscordAccountId,
-    conversationId: defaultDiscordConversationId,
-    agentId: "coding",
-    acpAgentId: "codex",
-    mode: "persistent",
-    cwd: "/home/bob/clawd",
-    ...runtimeOptions,
-  };
-  const sessionKey = buildConfiguredAcpSessionKey(spec);
-  manager.resolveSessionAsync.mockResolvedValue({
-    kind: "ready",
-    sessionKey,
-    agentId: spec.agentId,
-    meta: {
-      backend: "acpx",
-      agent: "codex",
-      runtimeSessionName: "existing",
-      mode: spec.mode,
-      runtimeOptions: { cwd: spec.cwd },
-      state: "error",
-      lastActivityAt: Date.now(),
-    },
-  });
-  expect(await ensureConfiguredAcpBindingSession({ cfg: baseCfg, spec })).toEqual({
-    ok: true,
-    sessionKey,
-  });
-  expect(manager.closeSession).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ sessionKey, clearMeta: false }),
-  );
-  expect(manager.initializeSession).toHaveBeenCalledExactlyOnceWith(
-    expect.objectContaining({ agent: "codex", runtimeOptions }),
-  );
-  expect(manager.initializeSession.mock.calls[0]?.[0]).not.toHaveProperty("modelExplicit");
 });

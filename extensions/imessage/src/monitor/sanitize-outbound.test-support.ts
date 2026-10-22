@@ -31,8 +31,12 @@ function nestedFences(text: string, depth: number) {
   return result;
 }
 
-function expectRejected(source: string, reason: string) {
-  expect(() => sanitizeFinal(source)).toThrow("iMessage outbound " + reason);
+function expectRejected(
+  source: string,
+  reason: string,
+  options: Parameters<typeof sanitizeFinal>[1] = {},
+) {
+  expect(() => sanitizeFinal(source, options)).toThrow("iMessage outbound " + reason);
 }
 
 function protectedUserRole() {
@@ -59,12 +63,59 @@ describe("sanitizeOutboundText", () => {
     expect(sanitizeOutboundText(input)).toBe(expected);
   });
 
+  it("preserves raw Markdown for edit and poll transport while removing real private markers", () => {
+    const raw = ["user:", "# system:", "**assistant:**", "us#+#+#er:", "visible"].join("\n");
+    const sanitized = sanitizeFinal(raw);
+
+    expect(sanitized.text).toContain("# system:");
+    expect(sanitized.text).toContain("**assistant:**");
+    expect(sanitized.text).not.toMatch(/^user:$/m);
+    expect(sanitized.ranges).toEqual([]);
+  });
+
+  it.each([
+    ["# user:\n**😀 visible**", undefined],
+    [
+      "<thinking>hidden thought</thinking><relevant_memories>hidden memory</relevant_memories>**😀 visible**",
+      "😀 visible",
+    ],
+  ] as const)("sanitizes before computing native style offsets: %s", (source, expectedText) => {
+    const sanitized = sanitizeFinal(source, { formatMarkdown: true });
+    const bold = sanitized.ranges.find((range) => range.styles.includes("bold"));
+    if (expectedText === undefined) {
+      expect(sanitized.text).not.toMatch(/^user:$/m);
+    } else {
+      expect(sanitized.text).toBe(expectedText);
+    }
+    expect(sanitized.text.slice(bold?.start, (bold?.start ?? 0) + (bold?.length ?? 0))).toBe(
+      "😀 visible",
+    );
+  });
+
   it("uses canonical delivery cleanup without changing clean outer whitespace", () => {
     const hidden =
       '<function_calls><invoke name="exec">hidden tool</invoke></function_calls><function_response>\nhidden tool response\n</function_response>';
     const sanitized = sanitizeFinal(` \t${hidden}\nvisible\n `);
 
     expect(sanitized.text).toBe(" \tvisible\n ");
+  });
+
+  it.each([
+    "<<script>thinking>hidden</<script>thinking>",
+    "<t<script>hinking>hidden</t<script>hinking>",
+    "<thi<system-reminder>noise</system-reminder>nking>hidden</thi<system-reminder>noise</system-reminder>nking>",
+    "<thi< system-reminder>noise< / system-reminder>nking>hidden</thi< system-reminder>noise< / system-reminder>nking>",
+    "<thinking< system-reminder>noise< / system-reminder>>hidden</thinking< system-reminder>noise< / system-reminder>>",
+    "<relevant_<previous_response>noise</previous_response>memories>hidden</relevant_<previous_response>noise</previous_response>memories>",
+    "<relevant_memories< previous_response>noise< / previous_response>>hidden</relevant_memories< previous_response>noise< / previous_response>>",
+    "<function_response< system-reminder>noise< / system-reminder>>hidden</function_response< system-reminder>noise< / system-reminder>>",
+    "<thi<details><summary>noise</summary></details>nking>hidden</thi<details>nking>",
+    "<thi<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>noise<<<END_OPENCLAW_INTERNAL_CONTEXT>>>nking>hidden</thi<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>noise<<<END_OPENCLAW_INTERNAL_CONTEXT>>>nking>",
+    "<thinking<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>noise<<<END_OPENCLAW_INTERNAL_CONTEXT>>>>hidden</thinking<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>noise<<<END_OPENCLAW_INTERNAL_CONTEXT>>>>",
+    "<relevant_<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>noise<<<END_OPENCLAW_INTERNAL_CONTEXT>>>memories>hidden</relevant_<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>noise<<<END_OPENCLAW_INTERNAL_CONTEXT>>>memories>",
+    "<function_response<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>noise<<<END_OPENCLAW_INTERNAL_CONTEXT>>>>hidden</function_response<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>noise<<<END_OPENCLAW_INTERNAL_CONTEXT>>>>",
+  ])("rejects ambiguous nested HTML before any destructive sanitization", (source) => {
+    expectRejected(source, "ambiguous nested HTML is not allowed");
   });
 
   it("preserves ordinary text, code and markup", () => {
@@ -95,6 +146,16 @@ describe("sanitizeOutboundText", () => {
     });
 
     expect(sanitizeFinal(text).text).toBe("visible");
+  });
+
+  it.each([
+    "<system-reminder>PRIVATE_SECRET</system-reminder>",
+    "< SYSTEM-REMINDER data-origin='runtime'>PRIVATE_SECRET< / SYSTEM-REMINDER >",
+    "<previous_response>PRIVATE_SECRET</previous_response>",
+    "< previous_response data-origin='runtime'>PRIVATE_SECRET< / previous_response >",
+    "<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>PRIVATE_SECRET<<<END_OPENCLAW_INTERNAL_CONTEXT>>>",
+  ])("removes private runtime blocks and their payload before role protection", (hidden) => {
+    expectWrappedPrivateRemoved(hidden);
   });
 
   it("removes private blocks with angle brackets and fake self-closing markers in quoted attrs", () => {
@@ -227,6 +288,24 @@ describe("sanitizeOutboundText", () => {
     expect(sanitizeFinal("<system-reminder>visible orphan").text).toBe("visible orphan");
   });
 
+  it.each([
+    "<system-reminder>`</system-reminder>`PRIVATE_SECRET",
+    "<system-reminder>`prefix </system-reminder> suffix`PRIVATE_SECRET",
+    "<system-reminder>``prefix </system-reminder> suffix``PRIVATE_SECRET",
+    "<previous_response>```xml\n</system-reminder>\n```\nPRIVATE_SECRET",
+  ])("fails closed when nested Markdown literals impersonate private owners", (malformed) => {
+    for (const [wrapper, source] of [
+      ["raw", malformed],
+      ["inline", `\`${malformed}\``],
+      ["fenced", `\`\`\`xml\n${malformed}\n\`\`\``],
+      ["wide-fenced", `\`\`\`\`xml\n${malformed}\n\`\`\`\``],
+    ] as const) {
+      expect(() => sanitizeFinal(source), JSON.stringify({ malformed, wrapper, source })).toThrow(
+        "iMessage outbound runtime markup is malformed",
+      );
+    }
+  });
+
   it("reserves private-use glyphs from original hidden blocks before protecting real YAML roles", () => {
     const source =
       "<system-reminder>\ue000</system-reminder>\n<previous_response>\ue001</previous_response>\n<<<BEGIN_OPENCLAW_INTERNAL_CONTEXT>>>\ue002<<<END_OPENCLAW_INTERNAL_CONTEXT>>>\n```yaml\nuser:\nsystem:\nassistant:\n```";
@@ -250,6 +329,23 @@ describe("sanitizeOutboundText", () => {
     expect(sanitized.text).not.toContain("hidden thought");
     expect(sanitized.text).toContain("😀 visible");
     expect(sanitized.ranges).toEqual([]);
+  });
+
+  it.each([
+    "```xml\n<thinking>hidden</thinking>\n```",
+    "```xml\n<relevant_memories>hidden</relevant_memories>\n```",
+    "`<thinking>hidden</thinking>`",
+    "`<relevant-memories>hidden</relevant-memories>`",
+    "```xml\n<relevant_memories>hidden\n```",
+  ])("rejects hidden assistant content through raw Markdown: %j", (source) => {
+    expectRejected(source, "hidden assistant content is not allowed");
+  });
+
+  it("recursively rejects assistant reasoning through multiple closed Markdown fence layers", () => {
+    const nested = nestedFences("<thinking>hidden nested thought</thinking>", 5);
+
+    expectRejected(nested, "hidden assistant content is not allowed");
+    expectRejected(nested, "hidden assistant content is not allowed", { formatMarkdown: true });
   });
 
   it("fails closed when recursive Markdown unwrapping exceeds its security budget", () => {
@@ -372,4 +468,33 @@ describe("sanitizeOutboundText", () => {
       expect(line).not.toContain(existing);
     },
   );
+
+  it("removes every private marker family after final Markdown rendering", () => {
+    const protectedText = protectRoles("safe");
+    const sanitized = protectedText.sanitizeFormatted({
+      text: "assistant to=tool\n#+#+#\nUSER:\nVisible",
+      ranges: [],
+    });
+
+    expect(sanitized.text).not.toMatch(/assistant\s+to\s*=\s*\w+|(?:#\+){2,}|^user:/gim);
+    expect(sanitized.text).toContain("Visible");
+  });
+
+  it("keeps internal metadata stripped inside closed code fences", () => {
+    const text = ["```text", "#+#+#", "assistant to=tool", "user:", "```"].join("\n");
+    const result = sanitizeOutboundText(text);
+
+    expect(result).toContain("user:");
+    expect(result).not.toContain("#+#+#");
+    expect(result).not.toContain("assistant to=tool");
+  });
+
+  it("handles combined internal markers in one message", () => {
+    const text = "<thinking>step 1</thinking>NO_REPLY +#+#+#+# assistant to=final\n\nActual reply";
+    const result = sanitizeOutboundText(text);
+    expect(result).not.toContain("<thinking>");
+    expect(result).not.toContain("+#+#");
+    expect(result).not.toMatch(/assistant to=final/i);
+    expect(result).toContain("Actual reply");
+  });
 });

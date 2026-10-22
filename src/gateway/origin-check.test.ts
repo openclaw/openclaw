@@ -10,6 +10,17 @@ const denied = { ok: false, reason: "origin not allowed" } as const;
 const invalid = { ok: false, reason: "origin missing or invalid" } as const;
 const privateOrigin = { ok: true, matchedBy: "private-same-origin" } as const;
 const allowlisted = { ok: true, matchedBy: "allowlist" } as const;
+function originCase(
+  origin: string,
+  expected: ReturnType<typeof checkBrowserOrigin>,
+  overrides: Partial<Parameters<typeof checkBrowserOrigin>[0]> = {},
+) {
+  return {
+    input: { requestHost: "gateway.example.com:18789", origin, ...overrides },
+    expected,
+  };
+}
+
 function browserRequest(origin: string, host = "127.0.0.1:18789") {
   return {
     headers: { host, origin },
@@ -19,45 +30,65 @@ function browserRequest(origin: string, host = "127.0.0.1:18789") {
 
 describe("checkBrowserOrigin", () => {
   it.each([
-    ["https://gateway.example.com:18789", denied],
-    ["http://192.168.0.202:18789", privateOrigin, { requestHost: "192.168.0.202:18789" }],
-    [
-      "http://peters-mac-studio-1.example.ts.net:18789",
-      privateOrigin,
-      { requestHost: "peters-mac-studio-1.example.ts.net:18789" },
-    ],
-    [
+    originCase(
       "http://127.0.0.1:18789",
-      privateOrigin,
-      { requestHost: "127.0.0.1:18789", isLocalClient: true },
-    ],
-    ["http://127.0.0.1:18789", denied, { requestHost: "127.0.0.1:18789", isLocalClient: false }],
-    ["http://[64:ff9b:1::8.8.8.8]:18789", denied, { requestHost: "[64:ff9b:1::8.8.8.8]:18789" }],
-    [
-      "https://CONTROL.example.com",
-      allowlisted,
-      { allowedOrigins: [" https://control.example.com "] },
-    ],
-    [
-      "https://any-origin.example.com",
-      allowlisted,
+      { ok: true, matchedBy: "host-header-fallback" },
       {
-        requestHost: "gateway.tailnet.ts.net:18789",
-        allowedOrigins: ["https://control.example.com", " * "],
+        requestHost: "127.0.0.1:18789",
+        allowHostHeaderOriginFallback: true,
       },
-    ],
-    ["", invalid],
-    ["null", invalid],
-    ["not a url", invalid],
-  ] satisfies [
-    string,
-    ReturnType<typeof checkBrowserOrigin>,
-    Partial<Parameters<typeof checkBrowserOrigin>[0]>?,
-  ][])("checks origin %s", (origin, expected, overrides) => {
-    expect(
-      checkBrowserOrigin({ requestHost: "gateway.example.com:18789", origin, ...overrides }),
-    ).toEqual(expected);
+    ),
+    originCase("https://gateway.example.com:18789", denied),
+    originCase("http://192.168.0.202:18789", privateOrigin, {
+      requestHost: "192.168.0.202:18789",
+    }),
+    originCase("http://peters-mac-studio-1.example.ts.net:18789", privateOrigin, {
+      requestHost: "peters-mac-studio-1.example.ts.net:18789",
+    }),
+    originCase("http://127.0.0.1:18789", privateOrigin, {
+      requestHost: "127.0.0.1:18789",
+      isLocalClient: true,
+    }),
+    originCase("http://127.0.0.1:18789", denied, {
+      requestHost: "127.0.0.1:18789",
+      isLocalClient: false,
+    }),
+    originCase("http://[64:ff9b:1::8.8.8.8]:18789", denied, {
+      requestHost: "[64:ff9b:1::8.8.8.8]:18789",
+    }),
+    originCase(
+      "http://localhost:5173",
+      { ok: true, matchedBy: "local-loopback" },
+      {
+        requestHost: "127.0.0.1:18789",
+        isLocalClient: true,
+      },
+    ),
+    originCase("http://localhost:5173", denied, {
+      requestHost: "127.0.0.1:18789",
+      isLocalClient: false,
+    }),
+    originCase("https://CONTROL.example.com", allowlisted, {
+      allowedOrigins: [" https://control.example.com "],
+    }),
+    originCase("https://any-origin.example.com", allowlisted, {
+      requestHost: "gateway.tailnet.ts.net:18789",
+      allowedOrigins: ["https://control.example.com", " * "],
+    }),
+    originCase("", invalid),
+    originCase("null", invalid),
+    originCase("not a url", invalid),
+    originCase("https://attacker.example.com", denied),
+  ])("checks $input.origin against $input", ({ input, expected }) => {
+    expect(checkBrowserOrigin(input)).toEqual(expected);
   });
+
+  it.each(["chrome-extension://abcdefghijklmnop", "tauri://localhost"])(
+    "accepts an exactly allowlisted hosted app origin: %s",
+    (origin) => {
+      expect(checkBrowserOrigin({ origin, allowedOrigins: [origin] })).toEqual(allowlisted);
+    },
+  );
 
   it.each([
     "tauri://localhost/path",

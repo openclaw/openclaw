@@ -79,6 +79,7 @@ export const forcedUnitFastTestFiles = [
   "src/acp/control-plane/manager.runtime-config.test.ts",
   "src/acp/control-plane/manager.runtime-handles.test.ts",
   "src/acp/control-plane/manager.turn-results.test.ts",
+  "src/acp/persistent-bindings.lifecycle.test.ts",
   "src/acp/translator.prompt-prefix.test.ts",
   "src/acp/persistent-bindings.test.ts",
   "src/acp/server.startup.test.ts",

@@ -63,6 +63,7 @@ const externalProxy = source("trusted-proxy", forwardedFor);
 describe("gateway ingress attribution", () => {
   it.each<[string, Parameters<typeof request>[0], string[] | undefined, object]>([
     ["clean headerless loopback stays local", {}, undefined, source("direct-local", "127.0.0.1")],
+    ["external Serve", { forwardedFor, login }, loopbackProxy, externalProxy],
     [
       "external Funnel",
       { forwardedFor, funnel: true },
@@ -84,6 +85,12 @@ describe("gateway ingress attribution", () => {
       rejected,
     ],
     ["rejects missing forwarded client", { login }, loopbackProxy, rejected],
+    [
+      "rejects loopback forwarded client",
+      { login, forwardedFor: "127.0.0.1" },
+      loopbackProxy,
+      rejected,
+    ],
   ])("%s", (_name, input, trustedProxies, expected) => {
     expect(prepareGatewayIngressAttribution({ req: request(input), trustedProxies })).toMatchObject(
       expected,
@@ -111,6 +118,11 @@ describe("gateway ingress attribution", () => {
       "first source bucket",
       { forwardedFor, funnel: true },
       source("tailscale-funnel", forwardedFor),
+    ],
+    [
+      "distinct source bucket",
+      { forwardedFor: "203.0.113.11", funnel: true },
+      source("tailscale-funnel", "203.0.113.11"),
     ],
     [
       "unmarked tailnet source",
