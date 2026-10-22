@@ -89,7 +89,7 @@ export function DeviceInventoryContent(props: DevicesProps & { pending: boolean 
           title={
             props.connected && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : ""
           }
-          disabled={!props.connected || !props.canManagePairing}
+          disabled={props.inventorySaving || !props.connected || !props.canManagePairing}
           onClick={() => props.onInventoryCleanup(stale().map(toRemovalRequest))}
         >
           <Icon name="trash" />{" "}
@@ -109,6 +109,11 @@ export function DeviceInventoryContent(props: DevicesProps & { pending: boolean 
   // Pending requests and unpaired presence render in their own sections, so
   // this section's empty state depends only on its own rows.
   const empty = () => groups().length === 0 && !gatewayPresence();
+  const groupedRows = (
+    <For each={groups()} keyed={(group) => group.key}>
+      {(group) => <InventoryGroup group={group()} devices={props} />}
+    </For>
+  );
   const deviceRows = (
     <>
       <Show when={gatewayPresence()}>
@@ -121,9 +126,7 @@ export function DeviceInventoryContent(props: DevicesProps & { pending: boolean 
       ) : empty() && (props.connected || props.devicesList) ? (
         <SettingsEmpty message={t("devices.inventory.empty")} />
       ) : (
-        <For each={groups()} keyed={(group) => group.key}>
-          {(group) => <InventoryGroup group={group()} devices={props} />}
-        </For>
+        groupedRows
       )}
     </>
   );
@@ -553,6 +556,8 @@ function TokenRow(props: {
   tokenSummary: DeviceTokenSummary;
   devices: DevicesProps;
 }) {
+  const disabled = () =>
+    props.devices.inventorySaving || !props.devices.connected || !props.devices.canManagePairing;
   const status = () =>
     props.tokenSummary.revokedAtMs ? t("devices.inventory.revoked") : t("devices.inventory.active");
   const scopes = createMemo(() => formatList(props.tokenSummary.scopes));
@@ -574,7 +579,7 @@ function TokenRow(props: {
         <div class="device-entry__token-actions">
           <button
             class="btn btn--sm"
-            disabled={!props.devices.connected || !props.devices.canManagePairing}
+            disabled={disabled()}
             onClick={() =>
               props.devices.onDeviceRotate(
                 props.device,
@@ -588,7 +593,7 @@ function TokenRow(props: {
           {props.tokenSummary.revokedAtMs ? undefined : (
             <button
               class="btn btn--sm danger"
-              disabled={!props.devices.connected || !props.devices.canManagePairing}
+              disabled={disabled()}
               onClick={() => props.devices.onDeviceRevoke(props.device.id, props.tokenSummary.role)}
             >
               {t("devices.inventory.revoke")}
@@ -660,6 +665,8 @@ function PendingDevice(props: {
   devices: DevicesProps;
   paired?: PairedDevice;
 }) {
+  const disabled = () =>
+    props.devices.inventorySaving || !props.devices.connected || !props.devices.canManagePairing;
   const name = () => normalizeOptionalString(props.req.displayName) || props.req.deviceId;
   const age = createMemo(() =>
     props.req.ts === undefined ? t("common.na") : formatRelativeTimestamp(props.req.ts),
@@ -687,14 +694,14 @@ function PendingDevice(props: {
       <div class="settings-row__control">
         <button
           class="btn btn--sm"
-          disabled={!props.devices.connected || !props.devices.canManagePairing}
+          disabled={disabled()}
           onClick={() => props.devices.onDeviceApprove(props.req.requestId)}
         >
           {t("devices.inventory.approve")}
         </button>
         <button
           class="btn btn--sm"
-          disabled={!props.devices.connected || !props.devices.canManagePairing}
+          disabled={disabled()}
           onClick={() => props.devices.onDeviceReject(props.req.requestId)}
         >
           {t("devices.inventory.reject")}

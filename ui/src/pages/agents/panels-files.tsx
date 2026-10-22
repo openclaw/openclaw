@@ -1,11 +1,11 @@
 import { createMemo, createSignal, For, Show } from "solid-js";
 import type { AgentFileEntry } from "../../api/types.ts";
-import type { OpenClawModalDialog } from "../../components/modal-dialog.ts";
+import type { OpenClawModalDialog } from "../../components/modal-dialog.tsx";
 import { HubTabs } from "../../components/solid/hub-tabs.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { SettingsEmpty, SettingsSection } from "../../components/solid/settings-ui.tsx";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import "../../components/tooltip.ts";
 import { formatBytes } from "../../lib/agents/display.ts";

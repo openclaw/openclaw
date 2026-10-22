@@ -7,7 +7,7 @@ import {
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
-import { fetchXService, type XFetch } from "./fetch.js";
+import { fetchXService } from "./fetch.js";
 
 export type XTokenState = "idle" | "refreshing" | "ready" | "error";
 export type XRefreshClaim = {
@@ -19,7 +19,6 @@ export type XOAuthOptions = {
   clientId: string;
   clientSecret: string;
   refreshToken: string;
-  fetch?: XFetch;
   loadRefreshToken?: () => Promise<string | undefined>;
   saveRefreshToken?: (token: string) => Promise<void>;
   claimRefreshToken?: () => Promise<XRefreshClaim>;
@@ -61,7 +60,6 @@ async function exchange(options: XOAuthOptions, refreshToken: string) {
         }).toString(),
         signal,
       },
-      options.fetch,
       () => options.assertCurrent,
       () => {
         dispatched = true;

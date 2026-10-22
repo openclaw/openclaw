@@ -93,4 +93,11 @@ export const nativeSubagentRuntime: NativeSubagentRuntime = {
   async collect(params) {
     return (await currentRuntime()).collect(params);
   },
+  async list(params) {
+    const runtime = await currentRuntime();
+    if (!runtime.list) {
+      throw new Error("Native subagent listing is unsupported by this runtime.");
+    }
+    return runtime.list(params);
+  },
 };

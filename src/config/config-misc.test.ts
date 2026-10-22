@@ -128,6 +128,16 @@ describe("accessGroups config", () => {
   });
 });
 
+it.each([
+  [0, true],
+  [120_000, true],
+  [-1, false],
+  [1.5, false],
+  ["60000", false],
+])("validates provider usage cache lifetime %s", (cacheTtlMs, valid) => {
+  expect(accepts({ models: { usage: { cacheTtlMs } } })).toBe(valid);
+});
+
 describe("models.catalogRefresh", () => {
   const acceptsRefresh = (catalogRefresh: unknown) => accepts({ models: { catalogRefresh } });
   it("accepts the refresh toggle and an http(s) override", () => {

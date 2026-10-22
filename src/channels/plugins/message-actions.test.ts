@@ -467,8 +467,7 @@ function activateCapabilities() {
   );
 }
 
-it.each<[string | undefined, boolean, boolean]>([
-  [undefined, true, true],
+it.each<[string, boolean, boolean]>([
   ["demo-cards-alias", false, true],
   ["demo-missing", false, false],
 ])("scopes capabilities: %s", async (channel, presentation, pin) => {

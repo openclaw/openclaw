@@ -254,7 +254,7 @@ describe("extension executable test plans", () => {
 
   it.each([
     ["live", "extensions/telegram/src/api-fetch.live.test.ts"],
-    ["e2e", "extensions/telegram/src/bot.media.warning-topics.e2e.test.ts"],
+    ["e2e", "extensions/telegram/src/bot.media.stickers-and-fragments.e2e.test.ts"],
   ] as const)("preserves explicit %s config selection", async (kind, file) => {
     const config = `test/vitest/vitest.${kind}.config.ts`;
     expect(chunksFor(config, [file])).toEqual([[file]]);

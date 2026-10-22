@@ -150,21 +150,32 @@ export async function withRequesterNativeSubagents<T>(
         const { createRequestNativeSubagentRuntime } =
           await import("../../agents/plugin-native-subagent.js");
         assertCurrent();
-        const sandbox = resolvePreparedSandboxRuntimeStatus({
-          cfg,
-          agentId: sessionAgentId,
-          sessionKey,
-          preparedSessionEntry: entry,
-        });
-        const conversationCapabilityProfile = await prepareConversationCapabilityProfile({
-          ...options,
-          sandboxToolPolicy: sandbox.sandboxed ? sandbox.toolPolicy : undefined,
-          preparedSessionEntry: { sessionKey, entry },
-        });
+        // Rebuild current policy with the same owner-prepared session and sandbox inputs.
+        const prepareCurrentCapabilityProfile = async (config: OpenClawConfig) => {
+          assertCurrent();
+          owner.assertOwnerCurrent?.();
+          const sandbox = resolvePreparedSandboxRuntimeStatus({
+            cfg: config,
+            agentId: sessionAgentId,
+            sessionKey,
+            preparedSessionEntry: entry,
+          });
+          const profile = await prepareConversationCapabilityProfile({
+            ...options,
+            config,
+            sandboxToolPolicy: sandbox.sandboxed ? sandbox.toolPolicy : undefined,
+            preparedSessionEntry: { sessionKey, entry },
+          });
+          assertCurrent();
+          owner.assertOwnerCurrent?.();
+          return profile;
+        };
+        const conversationCapabilityProfile = await prepareCurrentCapabilityProfile(cfg);
         assertCurrent();
         const runtime = createRequestNativeSubagentRuntime(
           {
             options: { ...options, conversationCapabilityProfile },
+            prepareCurrentCapabilityProfile,
             lifecycleRevision: entry.lifecycleRevision,
             operatorAuthority,
             assertCurrent: () => {
@@ -210,6 +221,7 @@ export async function withRequesterNativeSubagents<T>(
         return {
           spawn: (params) => runtime.spawn(params),
           collect: (params) => runtime.collect(params),
+          ...(runtime.list ? { list: runtime.list } : {}),
         };
       };
       if (state.commandIngressEligible !== undefined) {
