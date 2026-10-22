@@ -74,6 +74,28 @@ export function bindActiveCronAuthorityCurrentness(
   return scope?.active && scope.runId === runId?.trim() ? scope.isCurrent : undefined;
 }
 
+/** Retain only the live Cron scope; late CLI admission still supplies caller authority. */
+export function bindCronManagementToolConstruction(
+  runId: string | undefined,
+): (<T>(run: () => T) => T) | undefined {
+  const scope = activeCronCreatorAuthority.getStore();
+  if (!scope?.managementEntitlement || scope.runId !== runId?.trim()) {
+    return undefined;
+  }
+  return <T>(run: () => T): T => {
+    if (
+      !scope.active ||
+      scope.signal.aborted ||
+      scope.isCurrent?.() === false ||
+      (scope.managementEntitlement?.source === "channel-owner" &&
+        !scope.managementEntitlement.isCurrent())
+    ) {
+      return activeCronCreatorAuthority.exit(run);
+    }
+    return activeCronCreatorAuthority.run(scope, run);
+  };
+}
+
 /** Retain the exact scope for callbacks invoked outside their creation context. */
 export function bindRequesterYieldCronAuthority(
   runId: string | undefined,

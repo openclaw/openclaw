@@ -1,7 +1,14 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { PreparedAgentRunAdmission } from "../agents/admitted-run-context.js";
+import {
+  bindCronManagementToolConstruction,
+  captureCronRequesterGrantIssuer,
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "../agents/cron-creator-authority-context.js";
 import {
   getGatewayToolCallerIdentity as getToolCaller,
   withGatewayToolCallerIdentity as withToolCaller,
@@ -33,6 +40,7 @@ vi.mock("../agents/agent-tools.before-tool-call.js", () => ({
 }));
 vi.mock("./tool-resolution.js", () => ({ resolveGatewayScopedTools: resolveTools }));
 
+import { consumeCronCreatorAuthorityGrant } from "./cron-creator-authority-grant.js";
 import { revokeMcpLoopbackClientGrant } from "./mcp-grant-store.js";
 import * as mcp from "./mcp-http-request.test-support.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
@@ -310,4 +318,52 @@ it("joins accepted tool cleanup without closing a replacement listener", async (
     await cleanup;
     await closing;
   }
+});
+
+it("keeps requester grant minting at execution when management needs a construction identity", async () => {
+  await ensureMcpLoopbackServer();
+  const runId = "mcp-management-and-requester";
+  const admission = mcp.prepareAdmission(runId, "mcp-management-requester-proof");
+  admissions.push(admission);
+  const admittedRunContext = await admission.admit("gateway", runId);
+  const scope = expectDefined(
+    createCronCreatorAuthorityCapability(runId, { kind: "local" }, { source: "control-ui-admin" }),
+    "Cron run scope",
+  );
+  const constructionIssuers: boolean[] = [];
+  resolveTools.mockImplementation(() => {
+    expect(getToolCaller()?.approvalAuthority).toBeDefined();
+    constructionIssuers.push(getToolCaller()?.mintCronRequesterGrant !== undefined);
+    return mcp.probeTools("scope_probe", execute);
+  });
+  execute.mockImplementation(() => {
+    const mint = expectDefined(getToolCaller()?.mintCronRequesterGrant, "execution issuer");
+    const grant = mint();
+    const redeemed = consumeCronCreatorAuthorityGrant(grant);
+    expect(redeemed.authority).toBeUndefined();
+    redeemed.assertCurrent();
+    expect(() => consumeCronCreatorAuthorityGrant(grant)).toThrow(/no longer active/);
+    return completed;
+  });
+  await runWithCronCreatorAuthorityCapability(scope, async () => {
+    const grant = mcp.captureGrant(
+      {
+        context: { sessionKey: "agent:main:scope-proof", runId, senderIsOwner: true },
+        runtimeOwnerToken: mcp.runtime().ownerToken,
+        admittedRunContext,
+        toolPolicyConfig: {},
+        cronRequesterGrantIssuer: captureCronRequesterGrantIssuer(runId),
+        withCronManagementToolConstruction: bindCronManagementToolConstruction(runId),
+      },
+      "management-and-requester-capture",
+    );
+    await mcp.json(
+      await mcp.request(mcp.runtime(), { jsonrpc: "2.0", id: 1, method: "tools/list" }, grant),
+    );
+    expect(scope.grantTokens.size).toBe(0);
+    expect(await callTool(grant)).toMatchObject({ result: { ...completed, isError: false } });
+    expect(execute).toHaveBeenCalledOnce();
+    expect(constructionIssuers).toEqual([false]);
+    expect(scope.grantTokens.size).toBe(0);
+  });
 });
