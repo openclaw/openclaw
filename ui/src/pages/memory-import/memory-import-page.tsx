@@ -540,6 +540,12 @@ export function MemoryImportPage() {
     const value = acceptedPlan();
     const error = planErrorValue();
     const retired = presentationScope().promise;
+    if (!loading()) {
+      if (!value && error) {
+        throw new Error(error);
+      }
+      return value;
+    }
     return pending
       ? Promise.race([pending, retired]).then(() => {
           const result = plan();
@@ -548,9 +554,7 @@ export function MemoryImportPage() {
           }
           return result;
         })
-      : error && !value
-        ? Promise.reject(new Error(error))
-        : Promise.resolve(value);
+      : value;
   });
   const admittedPreview = createMemo(() => {
     source.revision();
@@ -561,8 +565,14 @@ export function MemoryImportPage() {
   const previewRead = createMemo(() => {
     const pending = admittedPreview()?.promise;
     const value = previewValue();
-    previewError();
+    const error = previewError();
     const retired = presentationScope().promise;
+    if (read("backfillBusy") !== "preview") {
+      if (pending && !value && error) {
+        throw new Error(error);
+      }
+      return value;
+    }
     return pending
       ? Promise.race([pending, retired]).then(() => {
           if (!state.backfillPreview && state.backfillError) {
@@ -570,7 +580,7 @@ export function MemoryImportPage() {
           }
           return state.backfillPreview;
         })
-      : Promise.resolve(value);
+      : value;
   });
   const presentMutation = action(function* (
     current: ReturnType<typeof presentation>,
