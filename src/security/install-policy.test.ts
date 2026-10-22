@@ -399,7 +399,7 @@ describe("runInstallPolicy", () => {
       'decision must be "allow", "warn", or "block"',
     ],
   ])("fails closed for a %s response", async (_label, response, expected) => {
-    expectFailed(await runResponse(response), String(expected));
+    expectFailed(await runResponse(response), expected);
   });
 
   async function runLoggedPolicy(env: Record<string, string>) {
