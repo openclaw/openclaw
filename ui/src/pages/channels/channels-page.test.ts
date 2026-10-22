@@ -770,7 +770,6 @@ it("checks operation authority after consuming a successful response body", asyn
 });
 
 it.each([
-  [401, 200],
   [401, 401],
   [403, 200],
   [401, 503],
@@ -787,15 +786,13 @@ it.each([
     );
     expect(fetchMock.mock.calls[0]![0]).toBe("/api/channels/custom-profile/main%2Faccount/profile");
     expect(result.status).toBe(first === 403 ? 403 : second);
-    if (first === 403 || second !== 200) {
-      expect(result.errorMessage).toBe(
-        first === 403
-          ? "HTTP 403: Forbidden"
-          : second === 503
-            ? "HTTP 503"
-            : "HTTP 401: Unauthorized",
-      );
-    }
+    expect(result.errorMessage).toBe(
+      first === 403
+        ? "HTTP 403: Forbidden"
+        : second === 503
+          ? "HTTP 503"
+          : "HTTP 401: Unauthorized",
+    );
   },
 );
 

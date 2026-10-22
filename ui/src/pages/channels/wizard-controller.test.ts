@@ -237,77 +237,67 @@ it("maps runner failures to the error phase", async () => {
   expect(controller.state).toEqual({ phase: "error", channel: null, message: "config invalid" });
 });
 
-it("cancels a stale in-flight start so the gateway session is not leaked", async () => {
-  const startResult = createDeferred<unknown>();
-  const { controller, request } = scripted(
-    ["wizard.start", startResult.promise],
-    ["wizard.cancel", { status: "cancelled" }],
-  );
-
-  const start = controller.start("telegram");
-  await Promise.resolve();
-  await controller.cancel();
-  startResult.resolve(running(selectStep, "s-stale"));
-  await start;
-  await Promise.resolve();
-  expect(controller.state).toEqual({ phase: "idle" });
-  expect(request).toHaveBeenCalledWith("wizard.cancel", { sessionId: "s-stale" });
-});
-
-it.each([false, true])("cleans up a late start after timeout (terminal: %s)", async (terminal) => {
-  vi.useFakeTimers();
-  const firstStartResult = createDeferred<unknown>();
-  let runningSession: string | null = null;
-  let startCount = 0;
-  const { controller, request } = createController(async (method, params) => {
-    if (method === "wizard.start") {
-      startCount += 1;
-      if (startCount === 1) {
-        runningSession = "s-timeout";
-        return await firstStartResult.promise;
+it.each(["cancel", "timeout", "terminal"] as const)(
+  "settles a late start after %s without leaking a live session",
+  async (mode) => {
+    vi.useFakeTimers();
+    const pending = createDeferred<unknown>();
+    let session: string | null = null;
+    let starts = 0;
+    const { controller, request } = createController(async (method, params) => {
+      if (method === "wizard.cancel") {
+        if ((params as { sessionId: string }).sessionId === session) {
+          session = null;
+        }
+        return { status: "cancelled" };
       }
-      if (runningSession) {
+      if (method !== "wizard.start") {
+        throw new Error(`unexpected ${method}`);
+      }
+      if (++starts === 1) {
+        session = "late";
+        return await pending.promise;
+      }
+      if (session) {
         throw new Error("wizard already running");
       }
-      return running(selectStep, "s-retry");
+      return running(selectStep, "retry");
+    });
+    const start = controller.start("telegram");
+    if (mode === "cancel") {
+      await Promise.resolve();
+      await controller.cancel();
+    } else {
+      await vi.advanceTimersByTimeAsync(120_000);
+      await start;
+      expect(controller.state).toMatchObject({
+        phase: "error",
+        message: "wizard request timed out: wizard.start",
+      });
     }
-    if (method === "wizard.cancel") {
-      const sessionId = (params as { sessionId?: string }).sessionId;
-      if (sessionId === runningSession) {
-        runningSession = null;
-      }
-      return { status: "cancelled" };
+    pending.resolve(
+      mode === "terminal" ? { ...done(), sessionId: "late" } : running(selectStep, "late"),
+    );
+    await start;
+    await settle();
+    if (mode === "terminal") {
+      expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toEqual([]);
+      return;
     }
-    throw new Error(`unexpected ${method}`);
-  });
-
-  const timedOutStart = controller.start("telegram");
-  await vi.advanceTimersByTimeAsync(120_000);
-  await timedOutStart;
-  expect(controller.state).toMatchObject({
-    phase: "error",
-    message: "wizard request timed out: wizard.start",
-  });
-
-  firstStartResult.resolve(
-    terminal ? { ...done(), sessionId: "s-timeout" } : running(selectStep, "s-timeout"),
-  );
-  await settle();
-  if (terminal) {
-    expect(request.mock.calls.filter(([method]) => method === "wizard.cancel")).toEqual([]);
-    return;
-  }
-  expect(request).toHaveBeenCalledWith("wizard.cancel", { sessionId: "s-timeout" });
-  expect(runningSession).toBeNull();
-
-  await controller.start("telegram");
-  expect(startCount).toBe(2);
-  expect(controller.state).toMatchObject({
-    phase: "step",
-    step: { id: "step-select" },
-    busy: false,
-  });
-});
+    if (mode === "cancel") {
+      expect(controller.state).toEqual({ phase: "idle" });
+    }
+    expect(request).toHaveBeenCalledWith("wizard.cancel", { sessionId: "late" });
+    expect(session).toBeNull();
+    await controller.start("telegram");
+    expect(starts).toBe(2);
+    expect(controller.state).toMatchObject({
+      phase: "step",
+      step: { id: "step-select" },
+      busy: false,
+    });
+  },
+);
 
 it.each([
   [
