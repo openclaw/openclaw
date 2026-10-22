@@ -1,5 +1,5 @@
 ---
-summary: "CLI reference for `openclaw config` (get/set/patch/unset/file/schema/validate)"
+summary: "CLI reference for `openclaw config` (get/set/patch/unset/file/schema/validate/export)"
 read_when:
   - You want to read or edit config non-interactively
   - You manage config externally and want OpenClaw to leave it unchanged
@@ -7,7 +7,7 @@ title: "Config"
 sidebarTitle: "Config"
 ---
 
-Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path, print the schema, validate, or print the active file path. Run `openclaw config` with no subcommand to open the same guided wizard as `openclaw configure`.
+Non-interactive helpers for `openclaw.json`: get/set/patch/unset a value by path, print the schema, validate, export a redacted full dump, or print the active file path. Run `openclaw config` with no subcommand to open the same guided wizard as `openclaw configure`.
 
 `config set`, `config patch`, and `config unset` require the local Gateway to be
 stopped. These commands hold exclusive state ownership while publishing the file
@@ -19,7 +19,7 @@ restriction, not an authentication failure. For online changes, use
 [Config RPC](/gateway/configuration/config-rpc).
 
 <Note>
-When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`) still work; config writers refuse.
+When `OPENCLAW_CONFIG_READONLY=1` or `OPENCLAW_NIX_MODE=1`, OpenClaw treats `openclaw.json` as immutable. Read-only commands (`config get`, `config file`, `config schema`, `config validate`, `config export --safe`) still work; config writers refuse.
 </Note>
 
 ## Externally managed config
@@ -197,6 +197,17 @@ openclaw config schema > openclaw.schema.json
 
 The schema is JSON in both modes. `--json` is accepted as the explicit
 machine-output spelling and keeps stdout reserved for the schema document.
+
+### `config export --safe`
+
+Prints the full effective (runtime) config as JSON with the same schema-aware redaction used by `config get` and Control UI snapshots. `--safe` is required; unredacted full export is not supported.
+
+```bash
+openclaw config export --safe
+openclaw config export --safe --out /tmp/openclaw.safe.json
+```
+
+Sensitive fields become `__OPENCLAW_REDACTED__` (or redacted SecretRef ids). Use this when attaching config to a bug report or sharing an install snapshot.
 
 ### `config validate`
 

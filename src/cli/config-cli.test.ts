@@ -739,6 +739,60 @@ describe("config cli", () => {
     });
   });
 
+  describe("config export --safe", () => {
+    it("refuses export without --safe", async () => {
+      await expect(runConfigCommand(["config", "export"])).rejects.toThrow(ExitError);
+      expect(mockError).toHaveBeenCalledWith(
+        expect.stringContaining("config export requires --safe"),
+      );
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+    });
+
+    it("exports a redacted full config and keeps non-sensitive fields", async () => {
+      const secret = "super-secret-token-xyz";
+      const config = {
+        gateway: { mode: "local", port: 18789, auth: { mode: "token", token: secret } },
+        agents: { defaults: { heartbeat: { every: "30m" } } },
+      } as unknown as OpenClawConfig;
+      setSnapshot(config, config);
+
+      await runConfigCommand(["config", "export", "--safe"]);
+
+      const payload = lastMockArg(defaultRuntime.writeJson) as {
+        safe: boolean;
+        path: string;
+        config: {
+          gateway?: { auth?: { token?: string }; port?: number };
+          agents?: { defaults?: { heartbeat?: { every?: string } } };
+        };
+      };
+      expect(payload.safe).toBe(true);
+      expect(payload.path).toBe("/tmp/openclaw.json");
+      expect(payload.config.gateway?.auth?.token).toBe("__OPENCLAW_REDACTED__");
+      expect(JSON.stringify(payload)).not.toContain(secret);
+      expect(payload.config.gateway?.port).toBe(18789);
+      expect(payload.config.agents?.defaults?.heartbeat?.every).toBe("30m");
+      expect(mockExit).not.toHaveBeenCalled();
+    });
+
+    it("writes redacted JSON to --out and prints the path", async () => {
+      const secret = "out-file-secret-token";
+      const config = {
+        gateway: { mode: "local", auth: { mode: "token", token: secret } },
+      } as unknown as OpenClawConfig;
+      setSnapshot(config, config);
+      const outPath = path.join(tempDirs.make("config-export-out-"), "safe.json");
+
+      await runConfigCommand(["config", "export", "--safe", "--out", outPath]);
+
+      expect(mockWriteStdout).toHaveBeenCalledWith(`${outPath}\n`);
+      const written = fs.readFileSync(outPath, "utf8");
+      expect(written).toContain("__OPENCLAW_REDACTED__");
+      expect(written).not.toContain(secret);
+      expect(mockExit).not.toHaveBeenCalled();
+    });
+  });
+
   registerConfigJsonOutputTests(() => ({
     runConfigCommand,
     mockReadConfigFileSnapshot,

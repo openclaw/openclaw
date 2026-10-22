@@ -301,6 +301,91 @@ async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
   }
 }
 
+export async function runConfigExportSafe(opts: {
+  safe?: boolean;
+  out?: string;
+  json?: boolean;
+  runtime?: RuntimeEnv;
+}) {
+  const runtime = opts.runtime ?? defaultRuntime;
+  const json = Boolean(opts.json);
+  try {
+    if (!opts.safe) {
+      const message =
+        "config export requires --safe so the full dump is schema-redacted. Re-run with --safe (unredacted export is not supported).";
+      if (json) {
+        writeRuntimeJson(runtime, formatCliJsonFailure(message));
+        exitCliAfterOutput(runtime, 1);
+      }
+      runtime.error(danger(message));
+      exitCliAfterOutput(runtime, 1);
+    }
+    const { readConfigFileSnapshotWithPluginMetadata } = await import("../config/config.js");
+    const { ensureValidConfigSnapshotForCli } = await import("./config-cli-validation.js");
+    const { snapshot, pluginMetadataSnapshot } = await readConfigFileSnapshotWithPluginMetadata({
+      observe: false,
+      completePluginMetadata: true,
+    });
+    if (!snapshot.exists) {
+      const shortPath = shortenHomePath(snapshot.path);
+      const message = `Config file not found: ${shortPath}`;
+      if (json) {
+        writeRuntimeJson(
+          runtime,
+          { ...formatCliJsonFailure(message), valid: false, path: snapshot.path },
+          0,
+        );
+      } else {
+        runtime.error(danger(message));
+        runtime.error(
+          `Create one with ${formatCliCommand("openclaw onboard")} or run ${formatCliCommand("openclaw doctor --fix")}.`,
+        );
+      }
+      exitCliAfterOutput(runtime, 1);
+    }
+    ensureValidConfigSnapshotForCli(snapshot, runtime, { json });
+    const { redactConfigObject } = await import("../config/redact-snapshot.js");
+    const runtimeSchema = pluginMetadataSnapshot
+      ? (await import("../config/runtime-schema.js")).buildRuntimeConfigSchemaFromRegistry(
+          pluginMetadataSnapshot.manifestRegistry,
+          snapshot.sourceConfig,
+        )
+      : undefined;
+    const uiHints =
+      runtimeSchema?.uiHints ??
+      (await import("../config/schema-base.js")).computeBaseConfigUiHints();
+    const redacted = redactConfigObject(snapshot.config, uiHints);
+    const payload = {
+      path: snapshot.path,
+      safe: true as const,
+      config: redacted,
+    };
+    if (opts.out) {
+      const fs = await import("node:fs");
+      const pathMod = await import("node:path");
+      const outPath = pathMod.resolve(opts.out);
+      fs.writeFileSync(outPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+      if (json) {
+        writeRuntimeJson(runtime, { ok: true, path: outPath, safe: true }, 0);
+      } else {
+        writeRuntimeStdout(runtime, `${outPath}\n`);
+      }
+      return;
+    }
+    writeRuntimeJson(runtime, payload, 0);
+  } catch (err) {
+    if (err instanceof ExitError) {
+      throw err;
+    }
+    if (json) {
+      writeRuntimeJson(runtime, formatCliJsonFailure(err));
+      exitCliAfterOutput(runtime, 1);
+    }
+    runtime.error(danger(formatErrorMessage(err)));
+    exitCliAfterOutput(runtime, 1);
+  }
+}
+
 async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } = {}) {
   const runtime = opts.runtime ?? defaultRuntime;
   let outputPath = CONFIG_PATH ?? "openclaw.json";
@@ -397,7 +482,7 @@ export function registerConfigCli(program: Command) {
   const cmd = program
     .command("config")
     .description(
-      "Non-interactive config helpers (get/set/patch/unset/file/schema/validate). Run without subcommand for guided setup.",
+      "Non-interactive config helpers (get/set/patch/unset/file/schema/validate/export). Run without subcommand for guided setup.",
     )
     .addHelpText("after", () => formatDocsHelp("/cli/config"))
     .option(
@@ -561,5 +646,23 @@ export function registerConfigCli(program: Command) {
     .option("--json", "Output validation result as JSON", false)
     .action(async (opts) => {
       await runConfigValidate({ json: Boolean(opts.json) });
+    });
+
+  cmd
+    .command("export")
+    .description("Export the full effective config as schema-redacted JSON (requires --safe)")
+    .option(
+      "--safe",
+      "Required: redact secrets using the same schema hints as config get / Control UI",
+      false,
+    )
+    .option("--out <path>", "Write the redacted export to a file instead of stdout")
+    .option("--json", "When used with --out, print a small JSON receipt instead of the path", false)
+    .action(async (opts: { safe?: boolean; out?: string; json?: boolean }) => {
+      await runConfigExportSafe({
+        safe: Boolean(opts.safe),
+        out: opts.out,
+        json: Boolean(opts.json),
+      });
     });
 }
