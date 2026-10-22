@@ -1203,12 +1203,16 @@ attributes.
   <Accordion title="Series cap and overflow accounting">
     The exporter retains at most **2,048 aggregate label sets** across counters, gauges, and histograms. Each histogram consumes one entry, regardless of its bucket count; the rendered scrape has more time series.
 
-    A fixed catalog of 134 metric families reserves **1,204 entries**, leaving **844 shared entries**. Each family can retain at most **128 entries**, including its reserve. Unused reserves are not borrowed: worker/RPC startup traffic cannot consume space reserved for later run, model, tool, GC, or memory samples. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
+    A fixed catalog of 134 metric families reserves **1,836 entries**, leaving **212 shared entries**. Each family can retain at most **128 entries** or its reserve, whichever is larger. Unused reserves are not borrowed: worker/RPC startup traffic cannot consume space reserved for later run, model, tool, GC, or memory samples. Existing entries continue updating after admission fills. Gauge replacement releases its entries and preserves its family's reserve.
+
+    Worker request phases have a **384-entry reserve and ceiling** for `kind`, `request_class`, and `phase` combinations. WebSocket frame sizes have a **256-entry reserve and ceiling** for `event` and `le` combinations; each event type uses nine cumulative size bounds. These budgets preserve attribution even when shared capacity fills first, without increasing the total cap.
 
     The following reserves apply per family (all names have the `openclaw_` prefix):
 
     | Reserve | Families |
     | --- | --- |
+    | 384 | `worker_request_phase_seconds` |
+    | 256 | `gateway_ws_event_frame_bytes` |
     | 64 | `heap_space_bytes` |
     | 32 | `run_completed_total`, `run_duration_seconds`, `harness_run_total`, `harness_run_duration_seconds`, `model_call_total`, `model_call_duration_seconds`, `model_cost_usd_total`, `model_tokens_total`, `model_usage_duration_seconds`, `gen_ai_client_token_usage`, `tool_execution_total`, `tool_execution_duration_seconds`, `gc_duration_seconds`, `worktree_preparation_seconds`, `chat_send_phase_seconds`, `code_mode_worker_heap_bytes`, `code_mode_worker_memory_bytes` |
     | 16 | `heap_old_generation_after_gc_bytes`, `heap_old_generation_after_gc_ratio`, `heap_size_limit_bytes`, `heap_used_ratio`, `memory_bytes`, `worker_count`, `worker_heap_sampled_count`, `worker_heap_space_used_bytes`, `worker_heap_used_bytes`, `worker_external_bytes`, `worker_array_buffers_bytes` |

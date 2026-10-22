@@ -36,7 +36,7 @@ it("bounds retained entries while reserving every family and releasing cleared g
   const store = createPrometheusMetricStore();
   const families = Object.keys(PROMETHEUS_FAMILY_RESERVES) as PrometheusMetricName[];
   for (const name of families) {
-    for (let index = 0; index < 160; index++) {
+    for (let index = 0; index < 400; index++) {
       store.gauge(name, "Synthetic admission pressure.", { index: String(index) }, index);
     }
   }
@@ -48,8 +48,14 @@ it("bounds retained entries while reserving every family and releasing cleared g
   for (const name of families) {
     const count = samples.filter((line) => line.startsWith(`${name}{`)).length;
     expect(count).toBeGreaterThanOrEqual(PROMETHEUS_FAMILY_RESERVES[name]);
-    expect(count).toBeLessThanOrEqual(128);
+    expect(count).toBeLessThanOrEqual(Math.max(128, PROMETHEUS_FAMILY_RESERVES[name]));
   }
+  expect(
+    samples.filter((line) => line.startsWith("openclaw_worker_request_phase_seconds{")),
+  ).toHaveLength(384);
+  expect(
+    samples.filter((line) => line.startsWith("openclaw_gateway_ws_event_frame_bytes{")),
+  ).toHaveLength(256);
   // This late family only used its reserve. Clearing it must not make that
   // capacity available to another family whose shared admission is exhausted.
   const late = "openclaw_worktree_preparation_seconds";

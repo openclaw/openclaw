@@ -33,7 +33,7 @@ export const PROMETHEUS_FAMILY_RESERVES = {
   openclaw_gateway_rpc_stage_seconds: 4,
   openclaw_gateway_rpc_stage_thread_cpu_seconds: 4,
   openclaw_gateway_ws_event_bytes_total: 4,
-  openclaw_gateway_ws_event_frame_bytes: 4,
+  openclaw_gateway_ws_event_frame_bytes: 256,
   openclaw_gateway_ws_event_wire_bytes_total: 4,
   openclaw_gateway_ws_events_total: 4,
   openclaw_gateway_ws_operator_connections: 4,
@@ -129,7 +129,7 @@ export const PROMETHEUS_FAMILY_RESERVES = {
   openclaw_worker_messages_total: 4,
   openclaw_worker_queue_depth: 4,
   openclaw_worker_queue_wait_seconds: 4,
-  openclaw_worker_request_phase_seconds: 4,
+  openclaw_worker_request_phase_seconds: 384,
   openclaw_worker_request_seconds: 4,
   openclaw_worker_retired_total: 4,
   openclaw_worker_started_total: 4,
@@ -139,6 +139,7 @@ export const PROMETHEUS_FAMILY_RESERVES = {
 
 export type PrometheusMetricName = keyof typeof PROMETHEUS_FAMILY_RESERVES;
 const MAX_PROMETHEUS_SERIES = 2048;
+// Larger explicit reserves also raise the ceiling, without borrowing shared entries.
 export const MAX_PROMETHEUS_FAMILY_SERIES = 128;
 export const SHARED_PROMETHEUS_SERIES =
   MAX_PROMETHEUS_SERIES - Object.values(PROMETHEUS_FAMILY_RESERVES).reduce((sum, n) => sum + n, 0);

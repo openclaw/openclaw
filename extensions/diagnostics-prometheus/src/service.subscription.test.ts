@@ -339,7 +339,7 @@ it("records terminal metrics without reading logs or private diagnostic content"
   expect(scrapeMetrics(exporter.handler)).toBe("");
 });
 
-it("keeps core metrics exporting after worker and RPC families saturate", () => {
+it("preserves worker phases, frame sizes, and core metrics after shared capacity saturates", () => {
   const metrics = createMetricsHarness();
   expect(metrics.render()).not.toContain("openclaw_gc_duration_seconds");
   const queue = {
@@ -360,16 +360,6 @@ it("keeps core metrics exporting after worker and RPC families saturate", () => 
       queueDepth: 0,
       queueWaitMs: 1,
       durationMs: 7,
-      timing: {
-        dispatched: 0,
-        posted: 1,
-        received: 2,
-        inputReady: 3,
-        executeStarted: 4,
-        executeFinished: 5,
-        replied: 6,
-        replyReceived: 7,
-      },
     });
   }
   for (let index = 0; index < 426; index += 1) {
@@ -398,6 +388,45 @@ it("keeps core metrics exporting after worker and RPC families saturate", () => 
     }
   }
   expect(metrics.render()).toMatch(/openclaw_prometheus_series_dropped_total [1-9][0-9]*/);
+  // Observed deployment shape: 47 complete phase sets plus three partial phases,
+  // and 19 event types with nine cumulative frame-size bounds apiece.
+  for (let index = 0; index < 48; index++) {
+    metrics.record({
+      type: "worker.request",
+      kind: "sqlite_writer",
+      requestClass: `request.${index}`,
+      phase: "completed",
+      queueDepth: 0,
+      timing: {
+        dispatched: 0,
+        posted: 1,
+        received: 2,
+        inputReady: 3,
+        ...(index < 47
+          ? { executeStarted: 4, executeFinished: 5, replied: 6, replyReceived: 7 }
+          : {}),
+      },
+    });
+  }
+  for (let index = 0; index < 19; index++) {
+    metrics.record({
+      type: "gateway.ws.event",
+      event: `event.${index}`,
+      count: 1,
+      bytes: 256,
+      frameBytes: {
+        "256": 1,
+        "512": 1,
+        "1024": 1,
+        "2048": 1,
+        "4096": 1,
+        "8192": 1,
+        "16384": 1,
+        "65536": 1,
+        "+Inf": 1,
+      },
+    });
+  }
   metrics.record({ ...queue, queueSize: 2 });
   const existing = metrics.render();
   expect(existing).toContain('openclaw_queue_lane_size{lane="main"} 2');
@@ -536,6 +565,8 @@ it("keeps core metrics exporting after worker and RPC families saturate", () => 
   }
   const core = metrics.render();
   const expectedFamilies = {
+    worker_request_phase_seconds_count: 332,
+    gateway_ws_event_frame_bytes: 171,
     run_completed_total: 4,
     run_duration_seconds_count: 4,
     harness_run_total: 4,
@@ -566,6 +597,11 @@ it("keeps core metrics exporting after worker and RPC families saturate", () => 
     ]),
   );
   expect(actualFamilies).toEqual(expectedFamilies);
+  for (const family of ["worker_request_phase_seconds", "gateway_ws_event_frame_bytes"]) {
+    expect(core).not.toContain(
+      `openclaw_prometheus_family_series_dropped_total{family="openclaw_${family}"}`,
+    );
+  }
   expect(core).toContain(
     'openclaw_worker_gc_collections_total{kind="scavenge",script="worker-0.js",worker_class="compute"} 7',
   );

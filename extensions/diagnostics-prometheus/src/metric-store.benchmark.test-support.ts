@@ -7,6 +7,7 @@ import { PerformanceObserver } from "node:perf_hooks";
 import { setImmediate as immediate, setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 import {
+  MAX_PROMETHEUS_FAMILY_SERIES,
   PROMETHEUS_FAMILY_RESERVES,
   type PrometheusMetricName,
 } from "./prometheus-family-budget.js";
@@ -139,14 +140,18 @@ try {
   globalThis.gc!();
   const emptyHeap = process.memoryUsage().heapUsed;
   const families = Object.keys(PROMETHEUS_FAMILY_RESERVES) as PrometheusMetricName[];
+  const maxReserve = Math.max(...Object.values(PROMETHEUS_FAMILY_RESERVES));
   let series = 0;
   // Populate every reserve before using shared capacity. Keep the retained-size
   // workload at exactly 2048 entries under both old and partitioned admission.
   for (let pass = 0; series < 2048; pass++) {
     for (const [familyIndex, name] of families.entries()) {
       const reserve = PROMETHEUS_FAMILY_RESERVES[name];
-      const label = pass < 64 ? pass : reserve + pass - 64;
-      if (pass < 64 && pass >= reserve) {
+      const label = pass < maxReserve ? pass : reserve + pass - maxReserve;
+      if (
+        (pass < maxReserve && pass >= reserve) ||
+        label >= Math.max(MAX_PROMETHEUS_FAMILY_SERIES, reserve)
+      ) {
         continue;
       }
       if (series === 2048) {
