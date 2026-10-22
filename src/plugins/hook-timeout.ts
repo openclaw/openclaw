@@ -4,7 +4,7 @@ import { trackAsyncWork } from "../shared/async-work-scope.js";
 export const withHookTimeout = async <T>(
   promise: Promise<T>,
   timeoutMs: number,
-  optionsResult: { unref?: boolean } = {},
+  optionsResult: { unref?: boolean; signal?: AbortSignal } = {},
 ): Promise<T> => {
   // The handler has started. Retain its work without replacing the raced promise
   // if its caller's scope has already closed; hook policy still owns its errors.
@@ -15,6 +15,6 @@ export const withHookTimeout = async <T>(
     () => {
       throw new Error(`timed out after ${timeoutMs}ms`);
     },
-    { ref: !optionsResult.unref },
+    { ref: !optionsResult.unref, signal: optionsResult.signal },
   );
 };

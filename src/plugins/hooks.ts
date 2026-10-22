@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { clampPositiveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { racePromiseWithAbortSignal } from "../../packages/retry/src/index.js";
 import { createToolPolicyMatcher } from "../agents/tool-policy-match.js";
 import {
   attachToolAllowlistIntersection,
@@ -21,6 +22,7 @@ import {
   withAgentRunId,
   withoutIncognitoLlmContent,
 } from "./hook-agent-observations.js";
+import { mergeBeforeAgentFinalize } from "./hook-before-agent-finalize.js";
 import { readClaimingHookAdmission } from "./hook-claim-admission.js";
 import {
   type GateHookResult,
@@ -33,7 +35,6 @@ import type { GlobalHookRunnerRegistry, HookRunnerRegistry } from "./hook-regist
 import { acceptPluginReplyPayload, toPluginReplyPayload } from "./hook-reply-payload.js";
 import type {
   BeforeAgentFinalizeResultWithRetryCandidates,
-  BeforeAgentFinalizeRetry,
   HookFailurePolicy,
   HookRunnerOptions,
   VoidHookContextProjection,
@@ -44,7 +45,9 @@ import { isPluginHookReplyDispatchKind, PLUGIN_HOOK_METADATA } from "./hook-type
 import type {
   PluginHookAgentContext,
   PluginHookAgentTrigger,
-  PluginHookBeforeAgentFinalizeResult,
+  PluginHookBeforeChannelIngressContext,
+  PluginHookBeforeChannelIngressEvent,
+  PluginHookBeforeChannelIngressResult,
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
   PluginHookBeforeDispatchResult,
@@ -212,6 +215,7 @@ export function createHookRunner(
   const logger = options.logger;
   const catchErrors = options.catchErrors ?? true;
   const failurePolicyByHook = {
+    before_channel_ingress: "fail-closed",
     before_agent_run: "fail-closed",
     ...options.failurePolicyByHook,
   } satisfies Partial<Record<PluginHookName, HookFailurePolicy>>;
@@ -378,63 +382,6 @@ export function createHookRunner(
     };
   };
 
-  const mergeBeforeAgentFinalize = (
-    acc: BeforeAgentFinalizeResultWithRetryCandidates | undefined,
-    next: PluginHookBeforeAgentFinalizeResult,
-  ): BeforeAgentFinalizeResultWithRetryCandidates => {
-    const normalizeRetry = (
-      retry: PluginHookBeforeAgentFinalizeResult["retry"] | undefined,
-    ): BeforeAgentFinalizeRetry | undefined => {
-      const instruction = typeof retry?.instruction === "string" ? retry.instruction.trim() : "";
-      if (!instruction) {
-        return undefined;
-      }
-      return {
-        ...retry,
-        instruction,
-      };
-    };
-    if (acc?.action === "finalize") {
-      return acc;
-    }
-    if (next.action === "finalize") {
-      return { action: "finalize", reason: next.reason };
-    }
-    if (acc?.action === "revise" && next.action === "revise") {
-      const nextRetry = normalizeRetry(next.retry);
-      const retryCandidates = [
-        ...(acc.retryCandidates ?? (acc.retry ? [acc.retry] : [])),
-        ...(nextRetry ? [nextRetry] : []),
-      ];
-      const retry = retryCandidates[0];
-      const result: BeforeAgentFinalizeResultWithRetryCandidates = {
-        action: "revise",
-        reason: concatOptionalTextSegments({ left: acc.reason, right: next.reason }),
-        ...(retry ? { retry } : {}),
-      };
-      if (retryCandidates.length > 1) {
-        Object.defineProperty(result, "retryCandidates", {
-          configurable: true,
-          enumerable: false,
-          value: retryCandidates,
-        });
-      }
-      return result;
-    }
-    if (acc?.action === "revise") {
-      return acc;
-    }
-    if (next.action === "revise") {
-      const retry = normalizeRetry(next.retry);
-      return {
-        action: "revise",
-        reason: next.reason,
-        ...(retry ? { retry } : {}),
-      };
-    }
-    return next.action === "continue" ? { action: "continue", reason: next.reason } : (acc ?? next);
-  };
-
   const handleHookError = (params: {
     hookName: PluginHookName;
     pluginId: string;
@@ -458,11 +405,13 @@ export function createHookRunner(
     hook: PluginHookRegistration,
     promise: Promise<T>,
     defaultTimeoutMs?: number,
-    timeoutOptions?: { unref?: boolean },
+    timeoutOptions?: { unref?: boolean; signal?: AbortSignal },
   ): Promise<T> => {
     const timeoutMs =
       clampPositiveTimerTimeoutMs(hook.timeoutMs) ?? clampPositiveTimerTimeoutMs(defaultTimeoutMs);
-    return timeoutMs ? withHookTimeout(promise, timeoutMs, timeoutOptions) : promise;
+    return timeoutMs
+      ? withHookTimeout(promise, timeoutMs, timeoutOptions)
+      : racePromiseWithAbortSignal(promise, timeoutOptions?.signal);
   };
 
   const runSyncMessageHookStep = <K extends SyncHookName>(
@@ -883,6 +832,46 @@ export function createHookRunner(
     );
   }
 
+  async function runBeforeChannelIngress(
+    event: PluginHookBeforeChannelIngressEvent,
+    ctx: PluginHookBeforeChannelIngressContext,
+  ): Promise<PluginHookBeforeChannelIngressResult | undefined> {
+    for (const hook of getHooksForName(registry, "before_channel_ingress")) {
+      ctx.abortSignal.throwIfAborted();
+      let active = true;
+      const scope = new AbortController();
+      const handlerContext = {
+        ...ctx,
+        abortSignal: AbortSignal.any([ctx.abortSignal, scope.signal]),
+        heartbeat: () => {
+          if (!active) {
+            throw new Error("channel ingress preparation handler is no longer active");
+          }
+          ctx.abortSignal.throwIfAborted();
+          ctx.heartbeat();
+        },
+      };
+      try {
+        const result = await awaitHook(
+          hook,
+          Promise.resolve(hook.handler(event, handlerContext)),
+          undefined,
+          { signal: ctx.abortSignal },
+        );
+        ctx.abortSignal.throwIfAborted();
+        if (result !== undefined) {
+          return result;
+        }
+      } catch (error) {
+        handleHookError({ hookName: "before_channel_ingress", pluginId: hook.pluginId, error });
+      } finally {
+        active = false;
+        scope.abort(new Error("channel ingress preparation handler is no longer active"));
+      }
+    }
+    return undefined;
+  }
+
   async function runBeforeDispatch(
     event: PluginHookBeforeDispatchEvent,
     ctx: PluginHookBeforeDispatchContext,
@@ -1077,6 +1066,7 @@ export function createHookRunner(
     runInboundClaimForPluginOutcome,
     runChannelPairingRequested: bindVoidHook("channel_pairing_requested"),
     runMessageReceived: bindVoidHook("message_received"),
+    runBeforeChannelIngress,
     runBeforeDispatch,
     runReplyDispatch: bindClaimingHook("reply_dispatch"),
     runReplyPayloadSending: bindModifyingHook("reply_payload_sending", {

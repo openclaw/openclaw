@@ -31,6 +31,14 @@ import type {
   PluginHookGatewayStopEvent,
 } from "./hook-gateway.types.js";
 import type {
+  PluginHookBeforeChannelIngressContext,
+  PluginHookBeforeChannelIngressEvent,
+  PluginHookBeforeChannelIngressResult,
+  PluginHookBeforeDispatchContext,
+  PluginHookBeforeDispatchEvent,
+  PluginHookBeforeDispatchResult,
+} from "./hook-ingress.types.js";
+import type {
   PluginHookInboundClaimContext,
   PluginHookInboundClaimEvent,
   PluginHookMessageContext,
@@ -50,6 +58,15 @@ import type {
 } from "./host-hook-turn-types.js";
 import type { SkillInstallSpecMetadata } from "./install-security-scan.types.js";
 import type { PluginHookSessionContext } from "./session-end-transcript.js";
+
+export type {
+  PluginHookBeforeChannelIngressContext,
+  PluginHookBeforeChannelIngressEvent,
+  PluginHookBeforeChannelIngressResult,
+  PluginHookBeforeDispatchContext,
+  PluginHookBeforeDispatchEvent,
+  PluginHookBeforeDispatchResult,
+} from "./hook-ingress.types.js";
 
 export type { PluginHookReplyDispatchEvent } from "./hook-reply-dispatch-event.types.js";
 
@@ -156,6 +173,7 @@ export const PLUGIN_HOOK_METADATA: Readonly<Record<PluginHookName, PluginHookMet
   cron_reconciled: {},
   cron_changed: {},
   skill_changed: { voidTimeoutMs: 30_000 },
+  before_channel_ingress: { conversationAccess: true },
   before_dispatch: {},
   reply_dispatch: {},
   before_install: { modifyingTimeoutMs: 15_000 },
@@ -380,41 +398,6 @@ type PluginHookAfterCompactionEvent = {
 export type PluginHookInboundClaimResult = {
   handled: boolean;
   reply?: ReplyPayload;
-};
-
-export type PluginHookBeforeDispatchEvent = {
-  messageId?: string;
-  content: string;
-  body?: string;
-  channel?: string;
-  sessionKey?: string;
-  senderId?: string;
-  replyToId?: string;
-  replyToIdFull?: string;
-  replyToBody?: string;
-  replyToSender?: string;
-  replyToIsQuote?: boolean;
-  isGroup?: boolean;
-  timestamp?: number;
-};
-
-export type PluginHookBeforeDispatchContext = {
-  messageId?: string;
-  channelId?: string;
-  accountId?: string;
-  conversationId?: string;
-  sessionKey?: string;
-  senderId?: string;
-  replyToId?: string;
-  replyToIdFull?: string;
-  replyToBody?: string;
-  replyToSender?: string;
-  replyToIsQuote?: boolean;
-};
-
-export type PluginHookBeforeDispatchResult = {
-  handled: boolean;
-  text?: string;
 };
 
 export type PluginHookReplyDispatchContext = {
@@ -891,6 +874,11 @@ export type PluginHookHandlerMap = {
   channel_pairing_requested: AsyncPluginHook<
     PluginHookChannelPairingRequestedEvent,
     PluginHookChannelPairingContext
+  >;
+  before_channel_ingress: AsyncPluginHook<
+    PluginHookBeforeChannelIngressEvent,
+    PluginHookBeforeChannelIngressContext,
+    PluginHookBeforeChannelIngressResult
   >;
   before_dispatch: AsyncPluginHook<
     PluginHookBeforeDispatchEvent,

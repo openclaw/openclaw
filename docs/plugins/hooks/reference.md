@@ -152,16 +152,27 @@ contracts above; a modifying hook is not an observation hook.
 
 **Messages and delivery**
 
-| Hook                        | Kind          | Purpose                                                                    |
-| --------------------------- | ------------- | -------------------------------------------------------------------------- |
-| `inbound_claim`             | Claim         | Claim an inbound message for the plugin that owns its conversation binding |
-| `channel_pairing_requested` | Observe       | Observe newly created DM pairing requests                                  |
-| `message_received`          | Observe       | Observe inbound content, sender, thread, and metadata                      |
-| `message_sending`           | Modify / gate | Rewrite outbound content or cancel delivery                                |
-| `reply_payload_sending`     | Modify / gate | Mutate or cancel normalized reply payloads before delivery                 |
-| `message_sent`              | Observe       | Observe outbound delivery success or failure                               |
-| `before_dispatch`           | Claim         | Handle an inbound message before the normal model dispatch                 |
-| `reply_dispatch`            | Claim         | Own reply generation and dispatch instead of the default model path        |
+| Hook                        | Kind          | Purpose                                                                        |
+| --------------------------- | ------------- | ------------------------------------------------------------------------------ |
+| `inbound_claim`             | Claim         | Claim an inbound message for the plugin that owns its conversation binding     |
+| `channel_pairing_requested` | Observe       | Observe newly created DM pairing requests                                      |
+| `message_received`          | Observe       | Observe inbound content, sender, thread, and metadata                          |
+| `message_sending`           | Modify / gate | Rewrite outbound content or cancel delivery                                    |
+| `reply_payload_sending`     | Modify / gate | Mutate or cancel normalized reply payloads before delivery                     |
+| `message_sent`              | Observe       | Observe outbound delivery success or failure                                   |
+| `before_channel_ingress`    | Prepare       | Prepare admitted durable content before attachment loading; errors fail closed |
+| `before_dispatch`           | Claim         | Handle an inbound message before the normal model dispatch                     |
+| `reply_dispatch`            | Claim         | Own reply generation and dispatch instead of the default model path            |
+
+Telegram invokes `before_channel_ingress` for ordinary singleton messages and
+edits after its native sender/group/topic admission gate and, for fresh messages,
+dispatch deduplication. Original control commands recognized by the native command
+detector, native-command config grants, and album members bypass preparation and
+retain their original payloads and native owners. This applies to authorized and
+denied commands alike. Edits retain their native cache-only handling. The event
+contains transport facts, not final route-bound requester authority; that remains
+with the native context builder. See [Message hooks](/plugins/hooks/messages#message-hooks)
+for preparation and consent boundaries.
 
 `inbound_claim` is not a global pre-routing broadcast. OpenClaw invokes it only
 for the plugin that owns the message's core-managed conversation binding. To
