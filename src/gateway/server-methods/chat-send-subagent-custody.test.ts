@@ -106,13 +106,19 @@ it("retains native child custody before a human continuation executes", async ({
   }
 });
 
-it.for(["human", "native recovery"] as const)(
-  "starts a %s follow-up in a child interrupted by a Gateway restart",
-  async (source, { signal }) => {
-    const sessionKey = "agent:main:dashboard:interrupted-child";
+it.for([
+  ["human", false],
+  ["human", true],
+  ["native recovery", false],
+  ["native recovery", true],
+] as const)(
+  "starts a %s follow-up in a child interrupted by a Gateway restart (settled: %s)",
+  async ([source, settled], { signal }) => {
+    const caseId = `${source === "human" ? "human" : "native"}-${settled ? "settled" : "pending"}`;
+    const sessionKey = `agent:main:dashboard:interrupted-child-${caseId}`;
     await using fixture = await createFixture({ active: false, preserveContent: true, sessionKey });
-    const interruptedRunId = "interrupted-child-run";
-    let runId = "human-child-after-restart";
+    const interruptedRunId = `interrupted-child-run-${caseId}`;
+    let runId = `human-child-after-restart-${caseId}`;
     const task = "Continue landing the change.";
     const parent = {
       requesterSessionKey: "agent:main:main",
@@ -178,9 +184,18 @@ it.for(["human", "native recovery"] as const)(
           interrupted.runId,
           {
             ...interrupted,
-            execution: { ...interrupted.execution, interruptionReason: "gateway-restart" },
-            endedReason: "subagent-error",
-            terminalOwner: "interrupted-recovery",
+            delivery: settled ? interrupted.delivery : { status: "pending" },
+            execution: settled
+              ? { ...interrupted.execution, interruptionReason: "gateway-restart" }
+              : {
+                  status: "interrupted",
+                  startedAt: 1,
+                  interruptedAt: 2,
+                  interruptionReason: "gateway-restart",
+                },
+            ...(settled
+              ? { endedReason: "subagent-error", terminalOwner: "interrupted-recovery" }
+              : {}),
           },
         ],
       ]),
@@ -236,10 +251,7 @@ it.for(["human", "native recovery"] as const)(
       expect(admitted?.restartRecoveryTerminalRunIds).toContain(`${interruptedRunId}:user`);
       expect(subagentRuns.get(runId)).toMatchObject({
         ...parent,
-        task:
-          source === "human"
-            ? task
-            : expect.stringContaining("Continue from the recovered transcript"),
+        task: source === "human" ? task : "Land the change.",
         execution: { status: "running" },
       });
     } finally {

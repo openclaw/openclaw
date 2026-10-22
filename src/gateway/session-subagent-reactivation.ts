@@ -175,7 +175,7 @@ export async function reactivateCompletedSubagentSession(params: {
             ? { expected: source, preserveRequesterSettleWake: true }
             : { preserveCompletedRun: true }),
           runTimeoutSeconds: source.runTimeoutSeconds ?? 0,
-          ...(hasTask && !continuesInterruptedTask ? { task } : {}),
+          ...(hasTask ? { task } : {}),
           assertCurrent: assertOriginalOwnerCurrent,
           ...gatewayBinding,
         });

@@ -206,7 +206,6 @@ describe("detached subagent restart recovery", () => {
             await reactivateCompletedSubagentSession({
               sessionKey: request.sessionKey,
               runId: request.idempotencyKey,
-              task: request.message,
               gatewayContextResolver: replacementContext.resolveGatewayContext,
               assertCurrent: options.assertAdmissionCurrent,
             }),
