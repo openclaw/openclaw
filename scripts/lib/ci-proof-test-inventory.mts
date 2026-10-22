@@ -3478,7 +3478,6 @@ export const PR_PROTECTED_RUNTIME_TEST_FILES: readonly string[] = [
   "src/projects/project-clone-registration.test.ts",
   "src/projects/project-environment.test.ts",
   "src/projects/project-registry.authority.test.ts",
-  "src/projects/project-source-env.test.ts",
   "src/proxy-capture/proxy-server.test.ts",
   "src/proxy-capture/runtime.lifecycle.test.ts",
   "src/scripts/ci-changed-scope.test.ts",
