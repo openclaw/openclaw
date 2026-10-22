@@ -1,10 +1,9 @@
 import { clearRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createXApiClient } from "./api.js";
 import { sendXDelivery } from "./send.js";
 import { normalizeXReplyTarget } from "./target.js";
+import { createXTestApi as createXApiClient } from "./test-support/api-client.js";
 import { client, config, fixture, post as makePost } from "./test-support/monitor-fixture.js";
-import { createXTestSpend } from "./test-support/spend.js";
 
 vi.mock("./client.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./client.js")>()),
@@ -17,11 +16,6 @@ function createReplyFixture(signature = "", failSecondPost = false) {
   fixture({ posts: [], cfg });
   const sent: { text: string; reply: { in_reply_to_tweet_id: string } }[] = [];
   const api = createXApiClient({
-    spend: createXTestSpend(),
-    clientId: "client",
-    clientSecret: "secret",
-    refreshToken: "refresh",
-    saveRefreshToken: async () => {},
     fetch: async (input, init) => {
       if (input.endsWith("/oauth2/token")) {
         return Response.json({ access_token: "access" });
