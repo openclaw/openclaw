@@ -44,6 +44,7 @@ import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { SettingsSelectRow } from "../config/settings-select-row.tsx";
 import { newSessionModelSearch } from "../new-session/model-location.ts";
+import { createCredentialPresentation } from "../plugins/credential-presentation.ts";
 import { readConfigValue, searchConfigRevision, isSearchConfigSettled } from "./search-config.ts";
 import { renderSearchTestResult } from "./search-results.tsx";
 import { SearchSetup, AdvancedSearchSettings } from "./search-setup.tsx";
@@ -65,6 +66,13 @@ export function SearchPage() {
   const [models, setModels] = createSignal<ModelCatalogEntry[]>([]);
   const [model, setModel] = createSignal("");
   const [setupProvider, setSetupProvider] = createSignal("");
+  const credentialPresentation = createCredentialPresentation(context.router);
+  function selectSetupProvider(provider: string) {
+    if (provider !== setupProvider()) {
+      credentialPresentation.retire();
+    }
+    setSetupProvider(provider);
+  }
   // The localized default seeds an editable draft; locale changes must not replace user input.
   const initialQuery = i18n.t("searchPage.queryDefault");
   const [query, setQuery] = createSignal(initialQuery);
@@ -83,7 +91,7 @@ export function SearchPage() {
     onIdentityChange: () => {
       resetModelOnConnect = true;
       setModel("");
-      setSetupProvider("");
+      selectSetupProvider("");
     },
     invalidateRequests: () => {
       if (active()) {
@@ -128,6 +136,7 @@ export function SearchPage() {
   }
 
   function invalidate() {
+    credentialPresentation.retire();
     invalidateTest();
     setResult(null);
     setModels([]);
@@ -208,7 +217,7 @@ export function SearchPage() {
           setResult(status);
           if (!status.providers.some((provider) => provider.id === setupProvider())) {
             const preferred = status.provider ?? status.route.provider;
-            setSetupProvider(
+            selectSetupProvider(
               status.providers.find((provider) => provider.id === preferred)?.id ??
                 status.providers.find((provider) => provider.available && provider.configured)
                   ?.id ??
@@ -456,7 +465,7 @@ export function SearchPage() {
                       options={configuredOptions()}
                       disabled={disabled()}
                       onChange={(provider) => {
-                        setSetupProvider(provider || setupProvider());
+                        selectSetupProvider(provider || setupProvider());
                         void patch(
                           renderScope,
                           ["tools", "web", "search", "provider"],
@@ -612,7 +621,7 @@ export function SearchPage() {
                       description={selectedProvider()?.hint}
                       value={setupProvider()}
                       options={providerOptions()}
-                      onChange={setSetupProvider}
+                      onChange={selectSetupProvider}
                     />
                     <Show when={selectedProvider()?.id} keyed>
                       {(providerId) => (
@@ -621,6 +630,7 @@ export function SearchPage() {
                           state={configState}
                           context={context}
                           gateway={gateway}
+                          getPresentationLifetime={() => credentialPresentation.lifetime}
                           canEdit={canEdit}
                           busy={busy}
                           commit={(path, value) =>
