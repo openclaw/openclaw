@@ -12,7 +12,7 @@ import {
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
 import { menuContent, mountControls, tabFocus, update } from "./menu-contract.test-support.tsx";
-import { Menu } from "./menu.tsx";
+import { Menu, type MenuItem } from "./menu.tsx";
 import "../resizable-divider.ts";
 import "../../styles/base.css";
 import "../../styles/layout.css";
@@ -25,6 +25,13 @@ const nextFrame = () =>
 function clickLink(link: HTMLAnchorElement, options: MouseEventInit = {}) {
   link.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, ...options }));
 }
+function entries(prefix: string, count: number): MenuItem[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `${prefix}-${index}`,
+    label: `${prefix[0]!.toUpperCase()}${prefix.slice(1)} ${index + 1}`,
+  }));
+}
+
 const originalViewport = { width: window.innerWidth, height: window.innerHeight };
 afterEach(async () => {
   cleanup();
@@ -318,18 +325,9 @@ it.each([
       {
         id: "gateways",
         label: "Gateways",
-        children: [
-          ...Array.from({ length: 9 }, (_, index) => ({
-            id: `gateway-${index}`,
-            label: `Gateway ${index + 1}`,
-          })),
-          { id: "settings", label: "Gateway settings" },
-        ],
+        children: [...entries("gateway", 9), { id: "settings", label: "Gateway settings" }],
       },
-      ...Array.from({ length: 5 }, (_, index) => ({
-        id: `action-${index}`,
-        label: `Action ${index + 1}`,
-      })),
+      ...entries("action", 5),
     ],
     onSelect: selected,
   });

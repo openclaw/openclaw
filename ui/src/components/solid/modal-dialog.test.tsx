@@ -7,12 +7,11 @@ import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlus
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
 import { ModalDialog, OpenClawModalDialog, type ModalDialogProperties } from "../modal-dialog.tsx";
 
-function modalDialog(host: OpenClawModalDialog): HTMLDialogElement {
-  const dialog = host.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog");
-  if (!dialog) {
-    throw new Error("Expected native modal dialog");
-  }
-  return dialog;
+const modalDialog = (host: OpenClawModalDialog) =>
+  host.querySelector<HTMLDialogElement>(":scope > .oc-modal-dialog")!;
+
+function expectOpen(host: OpenClawModalDialog, open: boolean) {
+  expect([host.open, modalDialog(host).open]).toEqual([open, open]);
 }
 
 let restoreDialog: () => void;
@@ -60,12 +59,7 @@ function mount(
     container ? { container } : undefined,
   );
   flush();
-  return {
-    view,
-    get handle() {
-      return handle;
-    },
-  };
+  return { view, handle };
 }
 
 beforeEach(() => {
@@ -91,40 +85,35 @@ describe("Solid native modal policy", () => {
   it("opens a labelled dialog and updates controlled attributes without replacing content", () => {
     const [description, setDescription] = createSignal("Review the operation");
     const [open, setOpen] = createSignal(true);
-    let handle!: OpenClawModalDialog;
-    let draftInput!: HTMLTextAreaElement;
-    render(() => (
-      <ModalDialog
-        label="Confirm action"
-        description={description()}
-        open={open()}
-        initialFocus={() => draftInput}
-        ref={(value) => {
-          handle = value;
-        }}
-      >
-        <textarea aria-label="Draft" autofocus ref={(element) => (draftInput = element)} />
-      </ModalDialog>
-    ));
-    flush();
-    const draft = modalDialog(handle).querySelector("textarea");
+    const { handle } = mount({
+      label: "Confirm action",
+      get description() {
+        return description();
+      },
+      get open() {
+        return open();
+      },
+    });
+    const dialog = modalDialog(handle);
+    const draft = dialog.querySelector("textarea");
     expect(handle).toBeInstanceOf(OpenClawModalDialog);
-    expect(modalDialog(handle).open).toBe(true);
-    expect(modalDialog(handle).getAttribute("role")).toBe("dialog");
-    expect(modalDialog(handle).getAttribute("aria-modal")).toBe("true");
-    expect(modalDialog(handle).getAttribute("aria-label")).toBe("Confirm action");
-    expect(modalDialog(handle).getAttribute("aria-description")).toBe("Review the operation");
+    expect(dialog.open).toBe(true);
+    expect(
+      ["role", "aria-modal", "aria-label", "aria-description"].map((name) =>
+        dialog.getAttribute(name),
+      ),
+    ).toEqual(["dialog", "true", "Confirm action", "Review the operation"]);
     expect(document.openClawModalLayers?.has(handle)).toBe(true);
     setDescription("");
     setOpen(false);
     flush();
-    expect(modalDialog(handle).hasAttribute("aria-description")).toBe(false);
-    expect(modalDialog(handle).open).toBe(false);
+    expect(dialog.hasAttribute("aria-description")).toBe(false);
+    expect(dialog.open).toBe(false);
     expect(document.openClawModalLayers?.has(handle)).toBe(false);
     setOpen(true);
     flush();
-    expect(modalDialog(handle).open).toBe(true);
-    expect(modalDialog(handle).querySelector("textarea")).toBe(draft);
+    expect(dialog.open).toBe(true);
+    expect(dialog.querySelector("textarea")).toBe(draft);
   });
 
   it("publishes each lifecycle phase once from the host with settled focus", async () => {
@@ -167,23 +156,12 @@ describe("Solid native modal policy", () => {
       const initial = operation === "hide";
       const [open, setOpen] = createSignal(initial);
       const changes = vi.fn((next: boolean) => setOpen(next));
-      let host!: OpenClawModalDialog;
-      let confirm!: HTMLButtonElement;
-      render(() => (
-        <ModalDialog
-          open={open()}
-          onOpenChange={changes}
-          initialFocus={() => confirm}
-          ref={(element) => {
-            host = element;
-          }}
-        >
-          <button autofocus ref={(element) => (confirm = element)}>
-            Confirm
-          </button>
-        </ModalDialog>
-      ));
-      flush();
+      const { handle: host } = mount({
+        get open() {
+          return open();
+        },
+        onOpenChange: changes,
+      });
       changes.mockClear();
       const eventName = operation === "show" ? "overlay-show" : "overlay-hide";
       const veto = (event: Event) => event.preventDefault();
@@ -191,8 +169,7 @@ describe("Solid native modal policy", () => {
       setOpen(!initial);
       flush();
       expect(untrack(open)).toBe(initial);
-      expect(host.open).toBe(initial);
-      expect(modalDialog(host).open).toBe(initial);
+      expectOpen(host, initial);
       expect(changes.mock.calls).toEqual([[initial]]);
       flush();
       expect(changes.mock.calls).toEqual([[initial]]);
@@ -207,34 +184,22 @@ describe("Solid native modal policy", () => {
 
   it("keeps only current publications when the controlled owner closes during opening", () => {
     const [open, setOpen] = createSignal(false);
-    let host!: OpenClawModalDialog;
-    let confirm!: HTMLButtonElement;
     const changes = vi.fn((next: boolean) => {
       setOpen(next);
       if (next) {
         host.hide();
       }
     });
-    render(() => (
-      <ModalDialog
-        open={open()}
-        onOpenChange={changes}
-        initialFocus={() => confirm}
-        ref={(element) => {
-          host = element;
-        }}
-      >
-        <button autofocus ref={(element) => (confirm = element)}>
-          Confirm
-        </button>
-      </ModalDialog>
-    ));
-    flush();
+    const { handle: host } = mount({
+      get open() {
+        return open();
+      },
+      onOpenChange: changes,
+    });
     setOpen(true);
     flush();
     expect(untrack(open)).toBe(false);
-    expect(host.open).toBe(false);
-    expect(modalDialog(host).open).toBe(false);
+    expectOpen(host, false);
     expect(changes.mock.calls).toEqual([[true], [false]]);
   });
 
@@ -257,8 +222,7 @@ describe("Solid native modal policy", () => {
     expect(changes).not.toHaveBeenCalled();
     parent.appendChild(handle);
     flush();
-    expect(handle.open).toBe(true);
-    expect(modalDialog(handle).open).toBe(true);
+    expectOpen(handle, true);
     expect(changes).not.toHaveBeenCalled();
   });
 
@@ -276,8 +240,7 @@ describe("Solid native modal policy", () => {
             ? new Event("cancel", { bubbles: true, cancelable: true })
             : new MouseEvent("mousedown", { bubbles: true, detail: 1 }),
         );
-        expect(handle.open).toBe(true);
-        expect(modalDialog(handle).open).toBe(true);
+        expectOpen(handle, true);
         expect(modalDialog(handle).dataset.phase).toBe("open");
         expect(modalDialog(handle).inert).toBe(false);
         expect(document.activeElement).toBe(active);
@@ -317,10 +280,8 @@ describe("Solid native modal policy", () => {
       await completeFrames();
       expect(inner.handle.open).toBe(true);
       outer.handle.hide();
-      expect(outer.handle.open).toBe(false);
-      expect(inner.handle.open).toBe(false);
-      expect(modalDialog(outer.handle).open).toBe(false);
-      expect(modalDialog(inner.handle).open).toBe(false);
+      expectOpen(outer.handle, false);
+      expectOpen(inner.handle, false);
       expect(document.openClawModalLayers?.size).toBe(0);
       expect(document.activeElement).toBe(trigger);
       await completeFrames();

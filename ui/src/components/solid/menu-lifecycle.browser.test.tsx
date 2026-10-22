@@ -27,16 +27,14 @@ async function finishHover() {
   flush();
 }
 
-function renderSpy() {
-  return vi.fn((attributes: MenuItemBindings) => <button {...attributes} />);
+function branch(id: string, children: MenuItem["children"]): MenuItem {
+  return { id, label: id, children };
 }
 
-function branch(
-  id: string,
-  children: MenuItem["children"],
-  extra: Partial<MenuItem> = {},
-): MenuItem {
-  return { id, label: id, children, ...extra };
+async function openBranch(...ids: string[]) {
+  for (const id of ids) {
+    await openMenu(`people-${id}`);
+  }
 }
 
 function liveMenu(
@@ -79,7 +77,7 @@ describe("Solid menu branch lifetime", () => {
   it.each(["array", "factory"] as const)(
     "materializes %s submenus on open and retains their controls across closes",
     async (kind) => {
-      const renderAda = renderSpy();
+      const renderAda = vi.fn((attributes: MenuItemBindings) => <button {...attributes} />);
       const entries = [{ id: "ada", label: "Ada Rivera", render: renderAda }];
       mountMenu({
         lazy: true,
@@ -146,13 +144,9 @@ describe("Solid menu branch lifetime", () => {
     const files = branch("files", [{ id: "read", label: "Read file" }]);
     const view = liveMenu([nested, files]);
     await openMenu();
-    await openMenu("people-browser");
-    await openMenu("people-browser-advanced");
-    await openMenu("people-files");
-    expect(surface("people-browser").matches(":popover-open")).toBe(false);
-    expect(surface("people-browser-advanced").matches(":popover-open")).toBe(false);
-    await openMenu("people-browser");
-    await openMenu("people-browser-advanced");
+    await openBranch("browser", "browser-advanced", "files");
+    expect(openSurfaces()).toEqual([surface(), surface("people-files")]);
+    await openBranch("browser", "browser-advanced");
     view.update([files]);
     await Promise.resolve();
     expect(document.getElementById("people-browser:content")).toBeNull();
@@ -161,8 +155,7 @@ describe("Solid menu branch lifetime", () => {
     await userEvent.keyboard("{Home}");
     expect(document.activeElement).toBe(trigger("people-files"));
     view.update([nested, files]);
-    await openMenu("people-browser");
-    await openMenu("people-browser-advanced");
+    await openBranch("browser", "browser-advanced");
     expect(openSurfaces()).toHaveLength(3);
   });
 
@@ -236,8 +229,7 @@ describe("Solid menu branch lifetime", () => {
     document.addEventListener("overlay-hide", veto);
     try {
       await userEvent.keyboard("{Escape}");
-      expect(surface().matches(":popover-open")).toBe(true);
-      expect(surface("people-assign").matches(":popover-open")).toBe(true);
+      expect(openSurfaces()).toEqual([surface(), surface("people-assign")]);
       expect(document.activeElement).toBe(item("Ada Rivera", "people-assign"));
       expect(surface("people-assign").inert).toBe(false);
       await userEvent.click(outside);

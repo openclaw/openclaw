@@ -13,7 +13,7 @@ import {
   trigger,
 } from "../../test-helpers/solid-menu.tsx";
 import { ModalDialog, type OpenClawModalDialog } from "../modal-dialog.tsx";
-import { Menu } from "./menu.tsx";
+import { Menu, type MenuItem } from "./menu.tsx";
 import { Popover, type PopoverHandle } from "./popover.tsx";
 import "../../styles/base.css";
 import "../../../public/themes/absolutely.css";
@@ -80,6 +80,17 @@ function mountModalMenu() {
 
 function details(label: string) {
   return item(label).querySelector(".oc-menu-item__details")!;
+}
+
+function entries(prefix: string, count: number, padded = false): MenuItem[] {
+  return Array.from({ length: count }, (_, index) => ({
+    id: `${prefix.toLowerCase()}-${index}`,
+    label: `${prefix} ${padded ? String(index + 1).padStart(2, "0") : index + 1}`,
+  }));
+}
+
+function positionTrigger(style: Partial<CSSStyleDeclaration>) {
+  Object.assign(trigger().style, { position: "fixed", ...style });
 }
 
 function expectItemVisible(element: HTMLElement, menu: HTMLElement) {
@@ -163,14 +174,11 @@ describe("native overlay presentation", () => {
           {
             id: "gateways",
             label: "Gateways",
-            children: Array.from({ length: 10 }, (_, index) => ({
-              id: `gateway-${index}`,
-              label: `Gateway ${index + 1}`,
-            })),
+            children: entries("Gateway", 10),
           },
         ],
       });
-      Object.assign(trigger().style, { position: "fixed", left: "350px", top: "400px" });
+      positionTrigger({ left: "350px", top: "400px" });
       await openMenu();
       await openMenu("people-gateways");
       const child = surface("people-gateways");
@@ -189,12 +197,9 @@ describe("native overlay presentation", () => {
       mountMenu({
         placement: "right-start",
         panelClass: "consumer-sized-menu",
-        items: Array.from({ length: 24 }, (_, index) => ({
-          id: `action-${index}`,
-          label: `Action ${index + 1}`,
-        })),
+        items: entries("Action", 24),
       });
-      Object.assign(trigger().style, { position: "fixed", left: "200px", top: "50px" });
+      positionTrigger({ left: "200px", top: "50px" });
       await openMenu();
       // Measure the consumer budget, not WebKit's in-flight entry scale.
       finishElementAnimations(surface());
@@ -224,39 +229,31 @@ describe("native overlay presentation", () => {
           {
             id: "large",
             label: "Many actions",
-            children: Array.from({ length: 28 }, (_, index) => ({
-              id: `action-${index}`,
-              label: `Action ${String(index + 1).padStart(2, "0")}`,
-            })),
+            children: entries("Action", 28, true),
           },
         ],
       });
-      Object.assign(trigger().style, {
-        position: "fixed",
-        right: "8px",
-        bottom: position === "bottom" ? "8px" : "250px",
-      });
+      positionTrigger({ right: "8px", bottom: position === "bottom" ? "8px" : "250px" });
       await openMenu();
       const parentBox = expectWithinViewport(surface());
       if (position === "bottom") {
         expect(parentBox.bottom).toBeLessThanOrEqual(trigger().getBoundingClientRect().top);
       }
       await openMenu("people-large");
-      const childBox = expectWithinViewport(surface("people-large"));
+      const child = surface("people-large");
+      const childBox = expectWithinViewport(child);
       expect(childBox.height).toBeLessThanOrEqual(420);
-      expect(surface("people-large").scrollHeight).toBeGreaterThan(
-        surface("people-large").clientHeight,
-      );
+      expect(child.scrollHeight).toBeGreaterThan(child.clientHeight);
       await userEvent.keyboard("{End}");
       const last = item("Action 28", "people-large");
       expect(document.activeElement).toBe(last);
-      expectItemVisible(last, surface("people-large"));
+      expectItemVisible(last, child);
 
       // Scrolling the menu can hide the focused action; End must reveal it again.
-      surface("people-large").scrollTo({ top: 0, behavior: "instant" });
+      child.scrollTo({ top: 0, behavior: "instant" });
       await userEvent.keyboard("{End}");
       expect(document.activeElement).toBe(last);
-      expectItemVisible(last, surface("people-large"));
+      expectItemVisible(last, child);
     },
   );
 

@@ -91,11 +91,8 @@ it("registers keyed radio refs without untracked reads and retains focused input
   const warnings = vi.spyOn(console, "warn");
   onTestFinished(() => warnings.mockRestore());
   const inputRef = vi.fn();
-  const [choices, setChoices] = createSignal([
-    options[0],
-    { value: "middle", label: "Middle" },
-    options[1],
-  ]);
+  const initial = [options[0], { value: "middle", label: "Middle" }, options[1]];
+  const [choices, setChoices] = createSignal(initial);
   const [value, setValue] = createSignal("first");
   const view = render(() => (
     <SettingsSegmented
@@ -110,11 +107,9 @@ it("registers keyed radio refs without untracked reads and retains focused input
   expect(inputRef).toHaveBeenCalledTimes(3);
   expect(inputRef).toHaveBeenCalledWith("last", last);
   last.focus();
-  setChoices([
-    { value: "first", label: "First updated" },
-    { value: "middle", label: "Middle updated" },
-    { value: "last", label: "Last updated" },
-  ]);
+  setChoices(
+    initial.map((option) => Object.assign({}, option, { label: `${option.label} updated` })),
+  );
   flush();
   last.click();
   flush();
