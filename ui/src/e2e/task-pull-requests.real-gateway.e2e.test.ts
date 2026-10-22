@@ -476,20 +476,20 @@ suite.define(() => {
                 });
                 await withTimeout(
                   page.evaluate((key) => {
-                    const row = document.querySelector(
+                    const diagnosticRow = document.querySelector(
                       '.sidebar-recent-session[data-session-key="' + key + '"]',
                     );
-                    const trigger = row?.querySelector(".sidebar-recent-session__link");
-                    const card = document.querySelector(".session-progress-hovercard");
+                    const trigger = diagnosticRow?.querySelector(".sidebar-recent-session__link");
+                    const diagnosticCard = document.querySelector(".session-progress-hovercard");
                     return {
                       taskPrDocumentHidden: document.hidden,
                       taskPrTriggerPresent: Boolean(trigger),
                       taskPrTriggerFocused: Boolean(trigger && document.activeElement === trigger),
-                      taskPrCardPresent: Boolean(card),
+                      taskPrCardPresent: Boolean(diagnosticCard),
                       taskPrCardVisible:
-                        card?.checkVisibility({ visibilityProperty: true }) ?? false,
+                        diagnosticCard?.checkVisibility({ visibilityProperty: true }) ?? false,
                       taskPrCardRowCount:
-                        card?.querySelectorAll(".session-hovercard__pr-row").length ?? 0,
+                        diagnosticCard?.querySelectorAll(".session-hovercard__pr-row").length ?? 0,
                     };
                   }, parentKey),
                   1_000,
