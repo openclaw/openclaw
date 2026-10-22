@@ -119,21 +119,12 @@ describe("resolveEffectivePluginIds", () => {
   });
 
   it.each([
-    {
-      name: "plugins disabled",
-      policy: { enabled: false },
-    },
-    {
-      name: "denylisted",
-      policy: { deny: ["lossless-claw"] },
-    },
-    {
-      name: "entry disabled",
-      policy: { entries: { "lossless-claw": { enabled: false } } },
-    },
-  ] satisfies Array<{ name: string; policy: NonNullable<OpenClawConfig["plugins"]> }>)(
-    "does not preload a selected context-engine slot when $name",
-    ({ policy }) => {
+    ["plugins disabled", { enabled: false }],
+    ["denylisted", { deny: ["lossless-claw"] }],
+    ["entry disabled", { entries: { "lossless-claw": { enabled: false } } }],
+  ] satisfies Array<[string, NonNullable<OpenClawConfig["plugins"]>]>)(
+    "does not preload a selected context-engine slot when %s",
+    (_name, policy) => {
       expect(
         resolve({ plugins: { ...policy, slots: { contextEngine: "lossless-claw" } } }),
       ).toStrictEqual([]);

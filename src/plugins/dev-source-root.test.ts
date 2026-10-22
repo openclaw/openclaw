@@ -23,29 +23,23 @@ function fixture(stagedCommit?: string) {
   host.root = tempDirs.make("staged-official-plugins-");
   const pluginRoot = path.join(host.root, "dist", "extensions", "codex");
   fs.mkdirSync(pluginRoot, { recursive: true });
-  for (const [file, value] of [
-    ["package.json", { name: "openclaw", version: "2026.10.2" }],
-    [
-      "dist/build-info.json",
-      {
-        commit,
-        ...(stagedCommit
-          ? { stagedOfficialPlugins: { commit: stagedCommit, pluginIds: ["codex"] } }
-          : {}),
-      },
-    ],
-    [
-      "dist/extensions/codex/package.json",
-      {
-        name: "@openclaw/codex",
-        version: "2026.10.2",
-        openclaw: { extensions: ["./index.js"] },
-      },
-    ],
-    ["dist/extensions/codex/openclaw.plugin.json", { id: "codex", configSchema: {} }],
-  ] as const) {
+  const writeJson = (file: string, value: object) => {
     fs.writeFileSync(path.join(host.root, file), JSON.stringify(value));
-  }
+  };
+  const identity = { name: "openclaw", version: "2026.10.2" };
+  writeJson("package.json", identity);
+  writeJson("dist/build-info.json", {
+    commit,
+    ...(stagedCommit
+      ? { stagedOfficialPlugins: { commit: stagedCommit, pluginIds: ["codex"] } }
+      : {}),
+  });
+  writeJson("dist/extensions/codex/package.json", {
+    ...identity,
+    name: "@openclaw/codex",
+    openclaw: { extensions: ["./index.js"] },
+  });
+  writeJson("dist/extensions/codex/openclaw.plugin.json", { id: "codex", configSchema: {} });
   fs.writeFileSync(path.join(pluginRoot, "index.js"), "export default {};\n");
   vi.stubEnv("OPENCLAW_DEV_SOURCE_ROOT", undefined);
   vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", undefined);
