@@ -699,7 +699,7 @@ it("records failed rollups and clears health after retry", async ({ onTestFinish
   await closeStateDatabaseForTest();
 });
 
-it("isolates a malformed transcript event to its session", async () => {
+it("isolates a malformed transcript event to its session", async ({ onTestFinished }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const agentId = "main";
     const storePath = path.join(state.sessionsDir(agentId), "sessions.json");
@@ -731,11 +731,18 @@ it("isolates a malformed transcript event to its session", async () => {
     await appendUsage("healthy-session");
     const database = openOpenClawAgentDatabase({ agentId });
     const latest = database.db
-      .prepare("SELECT seq FROM transcript_events WHERE session_id = ? ORDER BY seq DESC LIMIT 1")
-      .get("corrupt-session") as { seq: number } | undefined;
+      .prepare(
+        "SELECT seq, event_json FROM transcript_events WHERE session_id = ? ORDER BY seq DESC LIMIT 1",
+      )
+      .get("corrupt-session") as { seq: number; event_json: string } | undefined;
     if (!latest) {
       throw new Error("Expected corrupt session transcript");
     }
+    const published = vi.fn();
+    sessionCostUsageNotifications.onUpdated = published;
+    onTestFinished(() => {
+      sessionCostUsageNotifications.onUpdated = () => {};
+    });
     database.db
       .prepare(
         "UPDATE transcript_events SET event_json = ?, event_zstd = NULL WHERE session_id = ? AND seq = ?",
@@ -766,6 +773,28 @@ it("isolates a malformed transcript event to its session", async () => {
     expect(failures).toHaveLength(1);
     expect(failures[0]?.value).toMatchObject({ agentId });
     expect(failures[0]?.value.sessionFile).toContain("sqlite:main:corrupt-session:");
+    expect(published).toHaveBeenCalledExactlyOnceWith({
+      agentId,
+      usageUpdatedAt: expect.any(Number),
+      usageRefreshFailed: true,
+    });
+
+    database.db
+      .prepare(
+        "UPDATE transcript_events SET event_json = ?, event_zstd = NULL WHERE session_id = ? AND seq = ?",
+      )
+      .run(latest.event_json, "corrupt-session", latest.seq);
+    await refreshCostUsageCacheForAgent({
+      config,
+      agentId,
+      sessionFiles: [corruptFile, healthyFile],
+    });
+    expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(2);
+    expect(await openUsageCostRefreshFailures(state.env).entries()).toEqual([]);
+    expect(published).toHaveBeenLastCalledWith({
+      agentId,
+      usageUpdatedAt: expect.any(Number),
+    });
   });
   await closeStateDatabaseForTest();
 });

@@ -39,8 +39,8 @@ export async function refreshCostUsageCacheForAgent(params: {
     if (result.kind !== "refresh") {
       throw new Error("Invalid usage refresh worker result");
     }
-    if (result.changed) {
-      publishSessionCostUsageUpdated(agentId);
+    if (result.changed || result.failedFiles?.length) {
+      publishSessionCostUsageUpdated(agentId, Boolean(result.failedFiles?.length));
     }
     if (result.remainingFiles?.length) {
       params.onRemaining?.(result.remainingFiles);
