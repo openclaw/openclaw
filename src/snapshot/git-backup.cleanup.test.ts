@@ -49,6 +49,10 @@ it.each([
     const rmdir = fs.rmdir;
     const writeFile = fs.writeFile;
     const open = fs.open;
+    const codec = workspace === "codec";
+    const basename = (value: unknown) => path.basename(String(value));
+    const failRestoreWrite = failure && operation !== "create" && !codec;
+    const failCodecOpen = failure && codec;
     const nativeConfig = getFsSafeNativeConfig();
     configureFsSafeNative({ mode: "off" });
     try {
@@ -62,7 +66,7 @@ it.each([
           }
           const warning = vi.spyOn(console, "error").mockImplementation(() => {});
           vi.spyOn(fsSync, "renameSync").mockImplementation((source, destination) => {
-            const name = path.basename(String(source));
+            const name = basename(source);
             const selected =
               name.startsWith(prefix) &&
               (workspace === "backup-index" || !name.startsWith("openclaw-git-backup-index-"));
@@ -76,18 +80,14 @@ it.each([
             }
           });
           vi.spyOn(fs, "rm").mockImplementation(async (...args) => {
-            if (workspace === "codec" && path.basename(String(args[0])).startsWith(prefix)) {
+            if (codec && basename(args[0]).startsWith(prefix)) {
               retained.add(String(args[0]));
               throw removal;
             }
             if (retained.has(String(args[0]))) {
               throw removal;
             }
-            if (
-              failure &&
-              operation === "create" &&
-              path.basename(String(args[0])) === "global-0.sqlite"
-            ) {
+            if (failure && operation === "create" && basename(args[0]) === "global-0.sqlite") {
               throw primary;
             }
             return await rm(...args);
@@ -100,9 +100,7 @@ it.each([
           });
           vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
             if (
-              failure &&
-              operation !== "create" &&
-              workspace !== "codec" &&
+              failRestoreWrite &&
               typeof args[0] === "string" &&
               args[0].includes(`${path.sep}openclaw-git-restore-`)
             ) {
@@ -111,11 +109,7 @@ it.each([
             return await writeFile(...args);
           });
           vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-            if (
-              failure &&
-              workspace === "codec" &&
-              String(args[0]).includes(`${path.sep}.git-backup-restore-`)
-            ) {
+            if (failCodecOpen && String(args[0]).includes(`${path.sep}.git-backup-restore-`)) {
               throw primary;
             }
             return await open(...args);
@@ -143,7 +137,7 @@ it.each([
                 /Warning: Git backup temporary files may remain under .*; cleanup failed:/u,
               ),
             );
-            if (workspace !== "codec") {
+            if (!codec) {
               expect(warning).toHaveBeenCalledWith(
                 expect.stringContaining(cleanup === "rename" ? "indeterminate" : "EACCES"),
               );
@@ -151,11 +145,11 @@ it.each([
             expect(retained.size).toBeGreaterThan(0);
             for (const retainedPath of retained) {
               expect((await fs.lstat(retainedPath)).isDirectory()).toBe(true);
-              if (workspace === "codec") {
+              if (codec) {
                 expect(warning).toHaveBeenCalledWith(expect.stringContaining(retainedPath));
               }
             }
-            if (workspace === "codec") {
+            if (codec) {
               const targetPath = path.join(root, "restored.sqlite");
               if (failure) {
                 await expect(fs.lstat(targetPath)).rejects.toMatchObject({ code: "ENOENT" });
