@@ -99,8 +99,8 @@ it("matches migrated string identities using index searches, including malformed
   }
 });
 
-it("adds resume indexes to populated same-version state without changing canonical rows", async () => {
-  await withOpenClawTestState({ scenario: "minimal", label: "acp-resume-index" }, async (state) => {
+it("adds resume indexes to populated same-version state without changing canonical rows", () =>
+  withOpenClawTestState({ scenario: "minimal", label: "acp-resume-index" }, async (state) => {
     const options = { env: state.env };
     const initial = openOpenClawStateDatabase(options);
     upsertAcpSessionMetaRow(
@@ -138,5 +138,4 @@ it("adds resume indexes to populated same-version state without changing canonic
     expect(resume(reopened.db, "resume")).toEqual([
       { sessionKey: "agent:coder:acp:existing", ...resultFields, agent: "coder" },
     ]);
-  });
-});
+  }));
