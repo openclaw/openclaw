@@ -675,3 +675,37 @@ describe("Hermes migration config mapping", () => {
     ).toBe("beta");
   });
 });
+
+describe("Hermes source encoding", () => {
+  it.each([
+    ["config.yaml", 'skills:\n  config:\n    proof:\n      label: "', '"\n'],
+    [".env", 'OPENAI_API_KEY="', '"\n'],
+    ["auth.json", '{"openai":{"access_token":"', '"}}'],
+  ])("refuses invalid UTF-8 in %s before writing imported state", async (name, prefix, suffix) => {
+    const sourcePath = path.join(fixture.paths.source, name);
+    await writeFile(sourcePath, "");
+    const bytes = Buffer.concat([Buffer.from(prefix), Buffer.from([0xff]), Buffer.from(suffix)]);
+    await fs.writeFile(sourcePath, bytes);
+    const config: OpenClawConfig = { gateway: { mode: "local" } };
+    const before = structuredClone(config);
+    const context = makeTestContext({ config, runtime: makeConfigRuntime(config) });
+
+    await expect(migrationProvider.apply(context)).rejects.toThrow(/UTF-8.*retry migration/s);
+    expect(config).toEqual(before);
+    expect(await fs.readFile(sourcePath)).toEqual(bytes);
+  });
+
+  it("imports repaired YAML without altering valid Unicode", async () => {
+    const label = "café 中文 🦞 literal �";
+    await writeConfig({ skills: { config: { proof: { label } } } });
+    const config: OpenClawConfig = {};
+    const result = await migrationProvider.apply(
+      makeTestContext({ config, runtime: makeConfigRuntime(config) }),
+    );
+
+    expect(result.items.find((item) => item.id === "config:skill-entry:proof")?.status).toBe(
+      "migrated",
+    );
+    expect(config.skills?.entries?.proof?.config?.label).toBe(label);
+  });
+});

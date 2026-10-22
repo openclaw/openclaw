@@ -197,19 +197,19 @@ install_node() {
       const sentinel = "operator/.openclaw/state/sentinel";
       mkdirSync(home);
       put(sentinel, "operator-owned");
-      const nodeDir = path.join(prefix, "tools", "node-v24.21.0");
+      const nodeDir = path.join(prefix, "tools", "node-v24.22.1");
       // Only npm/network is replaced. The real install_openclaw implementation
       // must remain a provision-only seam even when a loaded Gateway is reported.
-      link(testNodeExecPath, "private/tools/node-v24.21.0/bin/node");
+      link(testNodeExecPath, "private/tools/node-v24.22.1/bin/node");
       put(
-        "private/tools/node-v24.21.0/bin/npm",
+        "private/tools/node-v24.22.1/bin/npm",
         `#!/bin/bash
 case "$1" in
   --version) echo 11.15.0 ;;
   config) echo null ;;
   install)
-    mkdir -p "$HOME/../private/tools/node-v24.21.0/lib/node_modules/openclaw/dist"
-    touch "$HOME/../private/tools/node-v24.21.0/lib/node_modules/openclaw/dist/entry.js"
+    mkdir -p "$HOME/../private/tools/node-v24.22.1/lib/node_modules/openclaw/dist"
+    touch "$HOME/../private/tools/node-v24.22.1/lib/node_modules/openclaw/dist/entry.js"
     ;;
   *) exit 4 ;;
 esac

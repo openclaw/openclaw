@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { For, Show } from "solid-js";
+import { For, Loading, Show, children } from "solid-js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import type { CronCompactJob } from "../../../api/types.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
@@ -187,6 +187,7 @@ function RootEntry(props: {
 export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
   const pullRequestsTotal = () => props.pullRequests?.pullRequests.length ?? 0;
   const automationsTotal = () => props.automations?.total ?? props.automations?.items.length ?? 0;
+  const automationNotice = children(() => props.automations?.notice);
 
   return (
     <div class="chat-details-mobile-root">
@@ -281,41 +282,43 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
           </Show>
         </RootGroup>
       </Show>
-      <Show when={automationsTotal() > 0 || props.automations?.notice}>
-        <RootGroup name="automations" label={props.labels.automations}>
-          <Show when={props.automations}>
-            {(collection) => (
-              <>
-                <Show
-                  when={automationsTotal() > 1}
-                  fallback={
-                    <For each={collection().items} keyed={(entry) => entry.value}>
-                      {(entry) => (
-                        <RootEntry
-                          entry={entry()}
-                          icon="clock"
-                          destination={{ kind: "automation", jobId: entry().value }}
-                          root={props}
-                        />
-                      )}
-                    </For>
-                  }
-                >
-                  <Show when={automationsTotal() > 0}>
-                    <RootEntry
-                      entry={collection().summary}
-                      icon="clock"
-                      destination={{ kind: "automations" }}
-                      root={props}
-                    />
+      <Loading>
+        <Show when={automationsTotal() > 0 || automationNotice.toArray().length > 0}>
+          <RootGroup name="automations" label={props.labels.automations}>
+            <Show when={props.automations}>
+              {(collection) => (
+                <>
+                  <Show
+                    when={automationsTotal() > 1}
+                    fallback={
+                      <For each={collection().items} keyed={(entry) => entry.value}>
+                        {(entry) => (
+                          <RootEntry
+                            entry={entry()}
+                            icon="clock"
+                            destination={{ kind: "automation", jobId: entry().value }}
+                            root={props}
+                          />
+                        )}
+                      </For>
+                    }
+                  >
+                    <Show when={automationsTotal() > 0}>
+                      <RootEntry
+                        entry={collection().summary}
+                        icon="clock"
+                        destination={{ kind: "automations" }}
+                        root={props}
+                      />
+                    </Show>
                   </Show>
-                </Show>
-                {collection().notice}
-              </>
-            )}
-          </Show>
-        </RootGroup>
-      </Show>
+                  {automationNotice()}
+                </>
+              )}
+            </Show>
+          </RootGroup>
+        </Show>
+      </Loading>
       <Show when={props.outputs || props.outputsNotice}>
         <RootGroup name="outputs" label={props.labels.generatedFiles}>
           <Show when={props.outputs}>

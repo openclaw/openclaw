@@ -47,7 +47,6 @@ import {
   authorizeSessionSharingTarget,
   hiddenSessionNotFound,
   resolveIncognitoSessionSharingTarget,
-  resolveSessionSharingRole,
   sharingIdentity,
   type SessionSharingTarget,
 } from "./session-sharing-policy.js";
@@ -177,19 +176,21 @@ export function resolveSessionMutationAuthorization(request: SessionMutationAuth
         ? hiddenSessionNotFound(target.canonicalKey)
         : null;
     }
-    const cap = policy ? policy.sessionCap : operatorSessionCap(params.client, cfg);
-    const role = policy
-      ? policy.roleForTarget(target)
-      : resolveSessionSharingRole(
+    return policy
+      ? authorizeSessionSharingTarget(
+          { cfg, client: params.client, target, ...targetOwnership },
           {
-            cfg,
-            client: params.client,
-            target,
-            isMember: resolveSessionSharingMembership(target, identity?.id, members, projection),
+            value: policy.sessionCap,
+            role: policy.roleForTarget(target),
           },
-          { value: cap },
-        );
-    return authorizeSessionSharingTarget(target, role, cap, targetOwnership);
+        )
+      : authorizeSessionSharingTarget({
+          cfg,
+          client: params.client,
+          target,
+          ...targetOwnership,
+          isMember: resolveSessionSharingMembership(target, identity?.id, members, projection),
+        });
   };
   const resolveAuthorizedTarget = (targetRef: SessionMutationTarget) => {
     if (params.preparedTargets) {

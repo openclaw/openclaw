@@ -11,6 +11,7 @@ import * as execRunner from "../../process/exec-runner.js";
 import * as processExec from "../../process/exec.js";
 import type { SpawnResult } from "../../process/exec.js";
 import { resolveWorktreeBase } from "./base-ref.js";
+import { gitIdentity } from "./git-fixture.test-support.js";
 import {
   commandError,
   findGitCheckoutRoot,
@@ -43,10 +44,7 @@ describe("Git ref mutation ownership", () => {
     const root = tempDirs.make("openclaw-git-ref-");
     await requireGit(root, ["init", "--quiet", "-b", "main"]);
     await requireGit(root, [
-      "-c",
-      "user.name=OpenClaw Test",
-      "-c",
-      "user.email=test@localhost",
+      ...gitIdentity,
       "-c",
       "commit.gpgSign=false",
       "commit",

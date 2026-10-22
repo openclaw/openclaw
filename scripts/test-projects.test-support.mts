@@ -3241,6 +3241,10 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
     ["full-release-validation-at-sha", "release-candidate-checklist", packageAcceptance],
   ],
   [
+    "scripts/lib/release-candidate-changelog.mts",
+    ["full-release-validation-at-sha", "release-candidate-checklist"],
+  ],
+  [
     "scripts/lib/clawhub-bootstrap-artifact.mjs",
     ["clawhub-bootstrap-artifact", "verify-clawhub-published-artifact"],
   ],

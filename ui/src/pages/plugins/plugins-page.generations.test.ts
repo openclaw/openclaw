@@ -77,6 +77,31 @@ it("retains installed settings and an unfinished input across transport loss, bu
   }
 });
 
+it("retains installed rows through a failed refresh and its retry", async () => {
+  const first = deferred<ReturnType<typeof createResult>>();
+  const retry = deferred<ReturnType<typeof createResult>>();
+  let response = first.promise;
+  const harness = pageFixture({ "plugins.list": () => response });
+  const { page, find } = await harness.mount("/settings/plugins");
+  const selector = '.plugins-settings-row[data-plugin-id="workboard"]';
+  await waitForSolid(() => expect(find(selector)).not.toBeNull());
+  const row = find(selector);
+  harness.publishGeneration(1);
+  await harness.waitForCall("plugins.list");
+  expect(find(selector)).toBe(row);
+  first.reject(new Error("Synthetic inventory unavailable"));
+  await waitForSolid(() => expect(page.textContent).toContain("Synthetic inventory unavailable"));
+  expect(find(selector)).toBe(row);
+  response = retry.promise;
+  find<HTMLButtonElement>(".plugins-settings-error button")!.click();
+  await waitForSolid(() => expect(harness.calls("plugins.list")).toHaveLength(2));
+  expect(find(selector)).toBe(row);
+  retry.resolve(createResult(createPlugin({ name: "Updated Workboard" })));
+  await waitForSolid(() => expect(find(selector)?.textContent).toContain("Updated Workboard"));
+  expect(find(selector)).toBe(row);
+  expect(page.textContent).not.toContain("Synthetic inventory unavailable");
+});
+
 it.each([
   { access: "admin", granted: ["operator.admin"], revoked: ["operator.read"] },
   { access: "read", granted: ["operator.read"], revoked: [] },

@@ -33,6 +33,7 @@ import {
   withoutExcludedContributionRecords,
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
 import { splitChangelog, writeReleaseChangelog } from "../../scripts/lib/release-changelog.mjs";
+import { renderGithubReleaseNotes } from "../../scripts/render-github-release-notes.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -124,6 +125,58 @@ function runVerifier(
 }
 
 describe("release-note verification", () => {
+  it("verifies extended-stable GitHub notes with their regular-stable context", () => {
+    const cwd = tempDirs.make("openclaw-extended-stable-notes-");
+    const bin = join(cwd, "bin");
+    mkdirSync(bin);
+    git(cwd, ["init", "-q", "-b", "main"]);
+    const version = "2026.8.35";
+    const tag = `v${version}`;
+    const regularStableVersion = "2026.9.5";
+    const changelog = createReleaseNotesFixtureLines().join("\n").replace("2026.7.1", version);
+    writeFileSync(join(cwd, "CHANGELOG.md"), changelog);
+    git(cwd, ["add", "CHANGELOG.md"]);
+    git(cwd, ["commit", "-qm", "initial"]);
+    const target = git(cwd, ["rev-parse", "HEAD"]);
+    const verifiedChangelog = [
+      changelog,
+      "",
+      "### Complete contribution record",
+      "",
+      `This audited record covers the complete HEAD..${target} history: 0 in-range PRs + 0 retained seed-only PRs = 0 unique PRs.`,
+    ].join("\n");
+    writeFileSync(join(cwd, "CHANGELOG.md"), verifiedChangelog);
+    const body = renderGithubReleaseNotes({
+      changelog: verifiedChangelog,
+      version,
+      tag,
+      repository: "openclaw/openclaw",
+      regularStableVersion,
+    }).body;
+    const gh = join(bin, "gh");
+    writeFileSync(
+      gh,
+      `#!${process.execPath}\nprocess.stdout.write(${JSON.stringify(JSON.stringify({ id: 1, body }))});\n`,
+    );
+    chmodSync(gh, 0o755);
+
+    const result = runVerifier(cwd, {
+      version,
+      write: false,
+      extraArgs: [
+        "--release-tag",
+        tag,
+        "--check-github",
+        "--regular-stable-version",
+        regularStableVersion,
+      ],
+      env: { PATH: `${bin}:${process.env.PATH}` },
+    });
+
+    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(0);
+    expect(JSON.parse(result.stdout).github).toMatchObject([{ tag, matches: true }]);
+  });
+
   it.each([
     { previous: "2026.6.11", divergent: false },
     { previous: "2026.7.1-beta.2", divergent: false },

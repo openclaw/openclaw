@@ -85,6 +85,32 @@ it("formats host runtime arguments before routing them to the subsystem logger",
   expect(error).toHaveBeenCalledExactlyOnceWith("failed { retryable: false }");
 });
 
+it.each(["pretty", "compact", "json"] as const)(
+  "keeps explicitly file-only diagnostics out of the %s console",
+  async (consoleStyle) => {
+    const file = logPathTracker.nextPath();
+    setLoggerOverride({ level: "debug", consoleLevel: "debug", consoleStyle, file });
+    const consoleLog = installConsoleMethodSpy("log");
+    const log = createSubsystemLogger("diagnostic");
+
+    log.info("phase observation", { consoleMessage: false, phase: "selected" });
+    log.debug("timing observation", { consoleMessage: false, elapsedMs: 12 });
+
+    expect(consoleLog).not.toHaveBeenCalled();
+    const records = await readRecords(file);
+    expect(records.map((record) => record.message)).toEqual([
+      "phase observation",
+      "timing observation",
+    ]);
+    expect(records.map((record) => record["1"])).toEqual([
+      { phase: "selected" },
+      { elapsedMs: 12 },
+    ]);
+    log.debug("readable diagnostic remains visible");
+    expect(consoleLog).toHaveBeenCalledOnce();
+  },
+);
+
 describe("createSubsystemLogger().isEnabled", () => {
   it.each([
     ["guest", undefined, "WARN"],
