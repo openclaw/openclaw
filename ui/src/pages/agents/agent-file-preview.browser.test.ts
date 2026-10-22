@@ -81,6 +81,7 @@ function renderPreview(
     readData() {
       return { ...createAgentViewTestProps().readData(), ...this };
     },
+    presentationRetired: createAgentViewTestProps().presentationRetired,
     agentId: "main",
     listRead: null,
     agentFilesList: {
@@ -89,7 +90,8 @@ function renderPreview(
       files: [{ name: "AGENTS.md", path: "/synthetic/workspace/AGENTS.md", missing: false }],
     },
     agentFilesLoading: false,
-    agentFilesError: null,
+    agentFileRead: null,
+    agentFileOutcome: null,
     agentFileActive: "AGENTS.md",
 
     agentFileSaving: false,

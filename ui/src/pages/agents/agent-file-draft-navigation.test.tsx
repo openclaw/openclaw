@@ -1,10 +1,11 @@
 /* @vitest-environment jsdom */
+import { createMemo } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError, type GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
-import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import {
   agentsCapability,
   agentsList,
@@ -25,6 +26,7 @@ it.each([
   "missing file",
   "matching external update",
   "pending save",
+  "pending reconnect",
   "connection replacement",
   "reconnect",
 ])("retains an unsaved file edit across %s", async (transition) => {
@@ -64,7 +66,7 @@ it.each([
           });
         }
         mainContent = params.content ?? "";
-        if (transition === "pending save") {
+        if (transition === "pending save" || transition === "pending reconnect") {
           mainHash = "c".repeat(64);
           await pendingSave.promise;
         }
@@ -113,11 +115,12 @@ it.each([
     context,
     agentsRouteData(currentGateway, roster, "main", selection),
   );
-  const mounted = mountSolid(Agents, page.read());
+  const mounted = mountSolid(() => {
+    const props = createMemo(() => page.read());
+    return <Agents {...props()} />;
+  });
   const { container } = mounted;
-  const paint = () => mounted.update(page.read());
   const textarea = () => {
-    paint();
     const input = container.querySelector<HTMLTextAreaElement>(".agent-file-textarea");
     expect(input).not.toBeNull();
     return input!;
@@ -130,12 +133,19 @@ it.each([
       ).toBeDefined();
       expect(page.read().readData().agentFilesList?.agentId).toBe(selection.state.selectedId);
       expect(page.read().readData().agentFilesLoading).toBe(false);
-      paint();
-      expect(container.querySelector(".agent-file-textarea")).not.toBeNull();
+      const data = page.read().readData();
+      const editor = data.agentFileEditors[data.agentFileActive ?? ""];
+      expect(container.querySelector<HTMLTextAreaElement>(".agent-file-textarea")?.value).toBe(
+        editor?.draft ?? editor?.content,
+      );
+      expect(
+        container.querySelector<HTMLButtonElement>(
+          '.agent-file-tabs [role="tab"][aria-selected="true"]',
+        )?.disabled,
+      ).toBe(false);
     });
   };
   const tab = (name: string) => {
-    paint();
     const target = container.querySelector<HTMLButtonElement>(
       `.agent-file-tabs [role="tab"][data-tab-value="${name}"]`,
     );
@@ -143,7 +153,6 @@ it.each([
     target!.click();
   };
   const save = () => {
-    paint();
     const button = container.querySelector<HTMLButtonElement>(".agent-file-actions .primary");
     expect(button).not.toBeNull();
     return button!;
@@ -156,6 +165,7 @@ it.each([
     editor.value = draft;
     editor.dispatchEvent(new Event("input", { bubbles: true }));
     expect(textarea().value).toBe(draft);
+    await vi.waitFor(() => expect(save().disabled).toBe(false));
     if (transition === "file tabs") {
       tab("SOUL.md");
       await settle();
@@ -163,22 +173,39 @@ it.each([
       tab("AGENTS.md");
       await settle();
     } else if (transition !== "reconnect") {
-      if (transition === "pending save") {
+      if (transition === "pending save" || transition === "pending reconnect") {
         save().click();
-        await vi.waitFor(() =>
+        await vi.waitFor(() => {
           expect(request).toHaveBeenCalledWith("agents.files.set", {
             agentId: "main",
             name: "AGENTS.md",
             content: draft,
             expectedWorkspace: "/tmp/main",
             expectedHash: "a".repeat(64),
-          }),
-        );
+          });
+          expect(save().textContent).toContain("Saving");
+          expect(save().disabled).toBe(true);
+        });
+        // The next user input starts in a new browser task, after the action's first frame.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 0);
+        });
+      }
+      if (transition === "pending reconnect") {
+        emitGatewaySnapshot(currentGateway, { ...connected, phase: "reconnecting" });
+        emitGatewaySnapshot(currentGateway, connected);
+        await settle();
+        expect(save().textContent).not.toContain("Saving");
+        expect(textarea().disabled).toBe(false);
+        pendingSave.resolve();
+        return;
       }
       selection.set("research");
       await settle();
       expect(textarea().value).toBe("research AGENTS.md saved");
       if (transition === "pending save") {
+        expect(save().textContent).not.toContain("Saving");
+        expect(textarea().disabled).toBe(false);
         pendingSave.resolve();
         await request.mock.results.find(
           (_, index) => request.mock.calls[index]?.[0] === "agents.files.set",
@@ -216,7 +243,6 @@ it.each([
       expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe("changed on disk");
       save().click();
       await vi.waitFor(() => {
-        paint();
         expect(container.textContent).toContain("File changed on disk");
       });
       expect(request).toHaveBeenLastCalledWith("agents.files.set", {
@@ -239,6 +265,7 @@ it.each([
       const next = textarea();
       next.value = "next edit";
       next.dispatchEvent(new Event("input", { bubbles: true }));
+      await vi.waitFor(() => expect(save().disabled).toBe(false));
       save().click();
       await vi.waitFor(() =>
         expect(page.read().readData().agentFileEditors["AGENTS.md"]?.content).toBe("next edit"),
@@ -256,6 +283,6 @@ it.each([
     pendingSave.resolve();
     page.dispose();
     selection.dispose();
-    mounted.dispose();
+    mounted.unmount();
   }
 });
