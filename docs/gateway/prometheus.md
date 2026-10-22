@@ -1138,7 +1138,10 @@ telemetry ports. A busy worker processes the request when its event loop resumes
 exports are suppressed in the meantime.
 
 The histogram is absent until the first observation, so absence does not prove
-zero GC. Queue drops, the series cap, observation gaps and process restarts limit
+zero GC. At startup, the exporter reserves four slots within the shared series
+cap for native main-thread GC (`reason="other"`), so startup traffic cannot prevent
+these histograms from appearing later. Reservation does not add observations.
+Queue drops, the series cap for other GC labels, observation gaps and process restarts limit
 coverage. Diagnostics disable/re-enable preserves the exporter's existing
 counters; restarting the exporter resets them as usual. One shared native profiler
 per isolate drains on an unreferenced one-second timer instead of scheduling
