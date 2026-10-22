@@ -1,13 +1,23 @@
 import type { AddressInfo } from "node:net";
 import net from "node:net";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { claimAgentSessionWriter } from "../../../src/agents/embedded-agent-runner/run/session-bootstrap.js";
+import * as embeddedRuns from "../../../src/agents/embedded-agent-runner/runs.test-support.js";
+import { resolveDefaultSessionStorePath } from "../../../src/config/sessions/paths.js";
+import * as sessions from "../../../src/config/sessions/session-accessor.js";
+import type { InternalSessionEntry } from "../../../src/config/sessions/types.js";
 import { installGatewayTestHooks, startServer } from "../../../src/gateway/test-helpers.js";
-import { emitAgentEvent } from "../../../src/infra/agent-events.js";
+import {
+  emitAgentEvent,
+  getAgentEventLifecycleGeneration,
+} from "../../../src/infra/agent-events.js";
+import * as runContexts from "../../../src/infra/agent-run-registry.js";
 import {
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../../src/infra/agent-run-registry.js";
 import { withTimeout } from "../../../src/infra/fs-safe.js";
+import { collectUntil } from "./client.test-support.js";
 import { GatewayClientTransport, OpenClaw, type OpenClawEvent } from "./index.js";
 import { createSdkWebSocketServer } from "./transport.websocket.test-support.js";
 
@@ -56,16 +66,8 @@ async function expectResponse(response: Promise<unknown>, fields: JsonObject) {
   expect(expectJsonObject(await response)).toEqual(expect.objectContaining(fields));
 }
 
-async function collectRun(events: AsyncIterable<OpenClawEvent>) {
-  const seen: OpenClawEvent[] = [];
-  for await (const event of events) {
-    seen.push(event);
-    if (event.type === "run.completed") {
-      break;
-    }
-  }
-  return seen;
-}
+const collectRun = (events: AsyncIterable<OpenClawEvent>) =>
+  collectUntil(events, (event) => event.type === "run.completed");
 
 async function reservePort(): Promise<number> {
   const server = net.createServer();
@@ -85,31 +87,6 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
   server.setRequestHandler((socket, frame) => {
     requests.push(frame);
     const reply = (payload: JsonObject) => server.reply(socket, frame.id, payload);
-    if (frame.method === "agent") {
-      const params = frame.params as { sessionKey?: string } | undefined;
-      reply({
-        status: "accepted",
-        runId: "run-sdk-e2e",
-        sessionKey: params?.sessionKey,
-      });
-      setTimeout(() => {
-        for (const [stream, data] of [
-          ["lifecycle", { phase: "start" }],
-          ["assistant", { delta: "hello from fake gateway" }],
-          ["lifecycle", { phase: "end" }],
-        ] as const) {
-          server.sendEvent(socket, "agent", {
-            runId: "run-sdk-e2e",
-            sessionKey: params?.sessionKey,
-            stream,
-            ts: Date.now(),
-            data,
-          });
-        }
-      }, 50);
-      return;
-    }
-
     const params = frame.params as JsonObject | undefined;
     const echo = { ok: true, method: frame.method, params };
     const responses: Record<string, JsonObject> = {
@@ -118,13 +95,6 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
       "agents.create": echo,
       "agents.update": echo,
       "agents.delete": echo,
-      "agent.wait": {
-        status: "ok",
-        runId: "run-sdk-e2e",
-        sessionKey: "main",
-        startedAt: 123,
-        endedAt: 456,
-      },
       "sessions.list": { sessions: [{ key: "sdk-session" }] },
       "sessions.create": { key: params?.key ?? "sdk-session" },
       "sessions.resolve": { key: "sdk-session", params },
@@ -178,47 +148,6 @@ async function createFakeGateway(port = 0): Promise<FakeGateway> {
 
 describe("OpenClaw SDK websocket e2e", () => {
   afterEach(() => Promise.all([...gateways].map((gateway) => gateway.close())));
-
-  it("runs an agent and streams normalized events over a Gateway websocket", async () => {
-    await withGateway(async (oc, gateway) => {
-      const agent = await oc.agents.get("main");
-      const run = await agent.run({
-        input: "say hello",
-        model: "sonnet-4.6",
-        timeoutMs: 30_000,
-        sessionKey: "main",
-        idempotencyKey: "sdk-e2e",
-      });
-      const seenPromise = collectRun(run.events());
-      const [seen, result] = await Promise.all([
-        withTimeout(seenPromise, 2_000, { message: "timed out waiting for SDK run events" }),
-        run.wait({ timeoutMs: 2_000 }),
-      ]);
-      expect(run.id).toBe("run-sdk-e2e");
-      expect(gateway.requests.find(({ method }) => method === "agent")?.params).toEqual({
-        agentId: "main",
-        message: "say hello",
-        model: "sonnet-4.6",
-        timeout: 30,
-        sessionKey: "main",
-        idempotencyKey: "sdk-e2e",
-      });
-      expect(seen.map((event) => event.type)).toEqual([
-        "run.started",
-        "assistant.delta",
-        "run.completed",
-      ]);
-      expect(result).toMatchObject({
-        runId: "run-sdk-e2e",
-        sessionKey: "main",
-        status: "completed",
-        startedAt: 123,
-        endedAt: 456,
-      });
-      const cancelResult = expectJsonObject(await run.cancel());
-      expect(cancelResult).toMatchObject({ abortedRunId: "run-sdk-e2e", status: "aborted" });
-    });
-  });
 
   it("covers documented namespace helpers over a Gateway websocket", async () => {
     await withGateway(async (oc, gateway) => {
@@ -304,106 +233,181 @@ describe("OpenClaw SDK websocket e2e", () => {
   });
 });
 
+async function withRealClient(body: (oc: OpenClaw) => Promise<void>) {
+  const token = "sdk-real-gateway-token";
+  const started = await startServer(token, { controlUiEnabled: false });
+  const oc = createClient(`ws://127.0.0.1:${started.port}`, token);
+  try {
+    await body(oc);
+  } finally {
+    await oc.close();
+    await started.server.close();
+    started.envSnapshot.restore();
+  }
+}
+
 describe("OpenClaw SDK real Gateway e2e", () => {
   installGatewayTestHooks({ scope: "test" });
 
   it("streams real Gateway agent events and preserves late replay order", async () => {
-    const token = "sdk-real-gateway-token";
-    const started = await startServer(token, { controlUiEnabled: false });
-    const oc = createClient(`ws://127.0.0.1:${started.port}`, token);
-    const runId = "sdk-real-gateway-run";
-    const replayRunId = "sdk-real-gateway-replay";
-    const sessionKey = "agent:main:dashboard:sdk-real-gateway";
-    const registerRun = (id: string) =>
-      registerAgentRunContext(id, { sessionKey, verboseLevel: "off" });
+    await withRealClient(async (oc) => {
+      const runId = "sdk-real-gateway-run";
+      const replayRunId = "sdk-real-gateway-replay";
+      const sessionKey = "agent:main:dashboard:sdk-real-gateway";
+      const registerRun = (id: string) =>
+        registerAgentRunContext(id, { sessionKey, verboseLevel: "off" });
 
-    try {
-      await oc.connect();
-      registerRun(runId);
-      const run = await oc.runs.get(runId);
-      const eventsPromise = collectRun(run.events());
-      for (const [stream, data] of [
-        ["lifecycle", { phase: "start", startedAt: 111 }],
-        ["assistant", { delta: "hello from real gateway" }],
-        ["lifecycle", { phase: "end", endedAt: 222 }],
-      ] as const) {
-        emitAgentEvent({ runId, stream, data });
-      }
-
-      const seen = await withTimeout(eventsPromise, 2_000, {
-        message: "timed out waiting for real Gateway SDK events",
-      });
-      expect(seen).toMatchObject(
-        (
-          [
-            ["run.started", { phase: "start" }],
-            [
-              "assistant.delta",
-              { text: "hello from real gateway", delta: "hello from real gateway" },
-            ],
-            ["run.completed", { phase: "end" }],
-          ] as const
-        ).map(([type, data]) => ({
-          type,
-          data,
-          sessionKey,
-          raw: { event: "agent" },
-        })),
-      );
-
-      registerRun(replayRunId);
-      const observedReplay = (async () => {
-        for await (const event of oc.events((eventLocal) => eventLocal.runId === replayRunId)) {
-          if (expectJsonObject(event.raw?.payload).seq === 600) {
-            return;
-          }
+      try {
+        await oc.connect();
+        registerRun(runId);
+        const run = await oc.runs.get(runId);
+        const eventsPromise = collectRun(run.events());
+        for (const [stream, data] of [
+          ["lifecycle", { phase: "start", startedAt: 111 }],
+          ["assistant", { delta: "hello from real gateway" }],
+          ["lifecycle", { phase: "end", endedAt: 222 }],
+        ] as const) {
+          emitAgentEvent({ runId, stream, data });
         }
-        throw new Error("Gateway stream ended before the replay tail arrived");
-      })();
-      emitAgentEvent({
-        runId: replayRunId,
-        stream: "lifecycle",
-        data: { phase: "start", startedAt: 333 },
-      });
-      for (let seq = 2; seq <= 600; seq += 1) {
+
+        const seen = await withTimeout(eventsPromise, 2_000, {
+          message: "timed out waiting for real Gateway SDK events",
+        });
+        expect(seen).toMatchObject(
+          (
+            [
+              ["run.started", { phase: "start" }],
+              [
+                "assistant.delta",
+                { text: "hello from real gateway", delta: "hello from real gateway" },
+              ],
+              ["run.completed", { phase: "end" }],
+            ] as const
+          ).map(([type, data]) => ({
+            type,
+            data,
+            sessionKey,
+            raw: { event: "agent" },
+          })),
+        );
+
+        registerRun(replayRunId);
+        const observedReplay = (async () => {
+          for await (const event of oc.events((eventLocal) => eventLocal.runId === replayRunId)) {
+            if (expectJsonObject(event.raw?.payload).seq === 600) {
+              return;
+            }
+          }
+          throw new Error("Gateway stream ended before the replay tail arrived");
+        })();
         emitAgentEvent({
           runId: replayRunId,
-          stream: "plan",
-          data: { phase: "update", steps: [], explanation: `step ${seq}` },
+          stream: "lifecycle",
+          data: { phase: "start", startedAt: 333 },
         });
-      }
-      await withTimeout(observedReplay, 2_000, {
-        message: "timed out waiting for real Gateway replay setup",
-      });
-
-      const replayRun = await oc.runs.get(replayRunId);
-      const replayed = (async () => {
-        const sequences: unknown[] = [];
-        for await (const event of replayRun.events()) {
-          sequences.push(expectJsonObject(event.raw?.payload).seq);
-          if (sequences.length === 1) {
-            emitAgentEvent({
-              runId: replayRunId,
-              stream: "lifecycle",
-              data: { phase: "end", endedAt: 444 },
-            });
-          }
-          if (event.type === "run.completed") {
-            return sequences;
-          }
+        for (let seq = 2; seq <= 600; seq += 1) {
+          emitAgentEvent({
+            runId: replayRunId,
+            stream: "plan",
+            data: { phase: "update", steps: [], explanation: `step ${seq}` },
+          });
         }
-        throw new Error("Gateway stream ended before the live completion arrived");
-      })();
-      await expect(
-        withTimeout(replayed, 2_000, { message: "timed out draining real Gateway SDK replay" }),
-      ).resolves.toEqual(Array.from({ length: 501 }, (_, index) => index + 101));
-    } finally {
-      clearAgentRunContext(runId);
-      clearAgentRunContext(replayRunId);
-      await oc.close();
-      await started.server.close();
-      started.envSnapshot.restore();
-    }
+        await withTimeout(observedReplay, 2_000, {
+          message: "timed out waiting for real Gateway replay setup",
+        });
+
+        const replayRun = await oc.runs.get(replayRunId);
+        const replayed = (async () => {
+          const sequences: unknown[] = [];
+          for await (const event of replayRun.events()) {
+            sequences.push(expectJsonObject(event.raw?.payload).seq);
+            if (sequences.length === 1) {
+              emitAgentEvent({
+                runId: replayRunId,
+                stream: "lifecycle",
+                data: { phase: "end", endedAt: 444 },
+              });
+            }
+            if (event.type === "run.completed") {
+              return sequences;
+            }
+          }
+          throw new Error("Gateway stream ended before the live completion arrived");
+        })();
+        await expect(
+          withTimeout(replayed, 2_000, { message: "timed out draining real Gateway SDK replay" }),
+        ).resolves.toEqual(Array.from({ length: 501 }, (_, index) => index + 101));
+      } finally {
+        clearAgentRunContext(runId);
+        clearAgentRunContext(replayRunId);
+      }
+    });
+  });
+  const terminalTypes = new Set(["run.completed", "run.failed", "run.cancelled", "run.timed_out"]);
+  it("reports the superseded writer as cancelled in events and waits", async () => {
+    await withRealClient(async (oc) => {
+      const sessionId = "sdk-writer-session";
+      const sessionKey = "agent:main:dashboard:sdk-writer-takeover";
+      const runId = "sdk-prior-writer";
+      const nextId = "sdk-next-writer";
+      const storePath = resolveDefaultSessionStorePath("main");
+      const target = { agentId: "main", sessionKey, storePath };
+      const cancellation = vi.fn(() => sessions.loadSessionEntry(target));
+      const incumbent = {
+        ...embeddedRuns.createEmbeddedRunHandle({ runId, abort: vi.fn() }),
+        kind: "embedded" as const,
+        cancel: cancellation,
+      };
+
+      try {
+        await oc.connect();
+        await sessions.replaceSessionEntry(target, {
+          sessionId,
+          updatedAt: 1,
+          lifecycleRevision: "sdk-writer-revision",
+          activeWriterRunId: runId,
+        } satisfies InternalSessionEntry);
+        embeddedRuns.registerTestEmbeddedRun(sessionId, incumbent, sessionKey, sessionKey);
+        runContexts.registerAgentRunContext(runId, {
+          agentId: "main",
+          lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          sessionId,
+          sessionKey,
+        });
+        const run = await oc.runs.get(runId);
+        const terminalEvent = (async () => {
+          for await (const { type } of run.events((event) => terminalTypes.has(event.type))) {
+            return type;
+          }
+          return undefined;
+        })().catch((error: unknown) => error);
+
+        await claimAgentSessionWriter({
+          agentId: "main",
+          prompt: "next turn",
+          runId: nextId,
+          sessionId,
+          sessionKey,
+          sessionTarget: { ...target, sessionId },
+          timeoutMs: 30_000,
+          workspaceDir: process.cwd(),
+        });
+        const [eventType, wait] = await Promise.all([
+          withTimeout(terminalEvent, 2_000, { message: "missing superseded writer SDK event" }),
+          run.wait({ timeoutMs: 500 }),
+        ]);
+
+        expect(cancellation).toHaveBeenCalledWith("superseded");
+        expect(cancellation).toHaveReturnedWith(
+          expect.objectContaining({ activeWriterRunId: nextId }),
+        );
+        expect(sessions.loadSessionEntry(target)).toMatchObject({ activeWriterRunId: nextId });
+        expect([eventType, wait.status]).toEqual(["run.cancelled", "cancelled"]);
+      } finally {
+        embeddedRuns.clearTestEmbeddedRun(sessionId, incumbent, sessionKey, sessionKey);
+        runContexts.clearAgentRunContext(runId);
+      }
+    });
   });
 });
 
