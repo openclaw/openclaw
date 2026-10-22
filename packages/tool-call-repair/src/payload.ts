@@ -15,6 +15,7 @@ import {
   isPlainTextToolNameChar,
   scanJsonObject,
   type JsonObjectScanState,
+  scanToolCallNameEnd,
   scanXmlishToolCall,
   skipHorizontalWhitespace,
   skipLineIndentation,
@@ -105,17 +106,6 @@ function isLiteralPrefixAt(text: string, start: number, literal: string): boolea
   return start >= 0 && available < literal.length && literal.startsWith(text.slice(start));
 }
 
-function scanToolNameEnd(text: string, start: number): number | null {
-  let end = start;
-  while (isPlainTextToolNameChar(text[end])) {
-    if (end - start === MAX_PLAIN_TEXT_TOOL_NAME_CHARS) {
-      return null;
-    }
-    end += 1;
-  }
-  return end;
-}
-
 function candidate<NameComplete extends boolean>(
   syntax: PlainTextJsonToolCallSyntax,
   name: PlainTextJsonToolCallSpan,
@@ -140,8 +130,8 @@ function scanBracketOpening(
     return { kind: "prefix" };
   }
   const nameStart = cursor;
-  const nameEnd = scanToolNameEnd(text, nameStart);
-  if (nameEnd === null) {
+  const nameEnd = scanToolCallNameEnd(text, nameStart, isPlainTextToolNameChar);
+  if (nameEnd - nameStart > MAX_PLAIN_TEXT_TOOL_NAME_CHARS) {
     return { kind: "invalid", at: nameStart + MAX_PLAIN_TEXT_TOOL_NAME_CHARS };
   }
   const name = { start: nameStart, end: nameEnd };
@@ -207,8 +197,8 @@ function scanHarmonyOpening(text: string, start: number): PlainTextJsonToolCallO
   cursor += "to=".length;
 
   const nameStart = cursor;
-  const nameEnd = scanToolNameEnd(text, nameStart);
-  if (nameEnd === null) {
+  const nameEnd = scanToolCallNameEnd(text, nameStart, isPlainTextToolNameChar);
+  if (nameEnd - nameStart > MAX_PLAIN_TEXT_TOOL_NAME_CHARS) {
     return { kind: "invalid", at: nameStart + MAX_PLAIN_TEXT_TOOL_NAME_CHARS };
   }
   const name = { start: nameStart, end: nameEnd };

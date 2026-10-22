@@ -432,6 +432,7 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
             executor,
             runId,
             originalRecoveryCapture: params.opts.run?.originalRecoveryCapture,
+            busyTimeoutMs: params.opts.run?.busyTimeoutMs,
             root: params.root,
             requester: authority.requester?.requester,
             opts: {

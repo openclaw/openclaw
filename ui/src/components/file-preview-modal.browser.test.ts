@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { nextFrame } from "../test-helpers/modal-dialog.ts";
-import type { OpenClawModalDialog } from "./modal-dialog.ts";
+import type { OpenClawModalDialog } from "./modal-dialog.tsx";
 import "./file-preview-modal-registration.ts";
 
 const browserMode = "__vitest_browser__" in globalThis;

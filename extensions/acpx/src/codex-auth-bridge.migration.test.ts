@@ -3,8 +3,9 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import * as jsonReader from "@openclaw/fs-safe/json";
 import { describe, expect, it, vi } from "vitest";
-import { OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
+import { CODEX_ACP_PACKAGE, OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { prepareAcpxCodexAuthConfig } from "./codex-auth-bridge.js";
 import { useAuthBridgeFixture } from "./codex-auth-bridge.test-support.js";
 import { splitCommandParts, type AcpxAgentCommand } from "./command-line.js";
@@ -14,7 +15,11 @@ vi.mock("@openclaw/fs-safe/json", async (importOriginal) => ({
 }));
 
 const execFileAsync = promisify(execFile);
-const baseFixture = useAuthBridgeFixture();
+const baseFixture = useAuthBridgeFixture((codexBin) =>
+  vi
+    .spyOn(jsonReader, "tryReadJson")
+    .mockResolvedValueOnce({ name: CODEX_ACP_PACKAGE, bin: codexBin }),
+);
 
 function fixture() {
   const { root, stateDir, config, prepare, sourceConfig } = baseFixture();

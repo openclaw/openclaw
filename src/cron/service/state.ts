@@ -6,8 +6,6 @@ import type { SessionEntryCurrentCheck } from "../../config/sessions/session-ent
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import type { CronConfig } from "../../config/types.cron.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../../infra/gateway-scheduler.js";
-import type { HeartbeatRunResult, HeartbeatWakeRequest } from "../../infra/heartbeat-wake.js";
-import type { SessionEventWakeWaitOptions } from "../../infra/session-event-wake.js";
 import { LEGACY_IMPLICIT_AGENT_ID } from "../../routing/session-key.js";
 import type { ReplyOperationObservation } from "../../sessions/reply-operation-state.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
@@ -107,6 +105,8 @@ export type CronServiceDeps = {
   cronConfig?: CronConfig;
   /** Host-owned, read-only diagnostics before startup recovery can dispatch loaded jobs. */
   describeJobLoadWarning?: (job: CronStoredJob) => string | undefined;
+  /** Disallow automation jobs that run commands or scripts on the host. */
+  hostExecutionDisabled?: boolean;
   resolveUserTimezone?: () => string | undefined;
   /** Resident admission facts; normal reply admission owns recovery barriers. */
   isExecutionIdle?: (
@@ -175,16 +175,6 @@ export type CronServiceDeps = {
   }) => DeliveryContext | undefined | Promise<DeliveryContext | undefined>;
   /** Binds the Gateway for complete scheduled operations, including admission and settlement. */
   runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
-  requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
-  /** Waits for the terminal result of a cron-owned coalesced heartbeat wake. */
-  requestHeartbeatAndWait?: (
-    opts: HeartbeatWakeRequest,
-    lifecycle: SessionEventWakeWaitOptions,
-  ) => Promise<HeartbeatRunResult>;
-  /** Resolves the outer watchdog for an awaited heartbeat handoff. */
-  resolveHeartbeatTimeoutMs?: (
-    opts: HeartbeatWakeRequest & { agentId: string },
-  ) => number | undefined;
   /** Producer events enter ordinary session admission even when scheduling is disabled. */
   enqueueSessionEvent?: (
     text: string,
@@ -395,6 +385,34 @@ export type CronServiceState = {
   storeLoadedAtMs: number | null;
 };
 
+export const CRON_HOST_EXECUTION_DISABLED_MESSAGE =
+  "Automation jobs that execute on the Gateway host are disabled by OPENCLAW_DISABLE_CRON_HOST_EXECUTION; contact the Gateway deployment administrator to enable them.";
+
+/** Triggers and process-backed schedules can start host work independently of the job payload. */
+export function describeCronHostExecutionRestriction(
+  job: CronStoredJob,
+  hostExecutionDisabled: boolean | undefined,
+): string | undefined {
+  if (
+    hostExecutionDisabled &&
+    (job.payload.kind === "command" ||
+      job.payload.kind === "script" ||
+      job.schedule.kind === "on-exit" ||
+      (job.schedule.kind === "stream" && !job.streamSandbox) ||
+      job.trigger)
+  ) {
+    return CRON_HOST_EXECUTION_DISABLED_MESSAGE;
+  }
+  return undefined;
+}
+
+export function assertCronHostExecutionAllowed(state: CronServiceState, job: CronStoredJob): void {
+  const reason = describeCronHostExecutionRestriction(job, state.deps.hostExecutionDisabled);
+  if (reason) {
+    throw new TypeError(reason);
+  }
+}
+
 export function createCronServiceState(deps: CronServiceDeps): CronServiceState {
   // The public CronService constructor shipped before roster-aware callers.
   // Preserve its implicit owner unless a static or dynamic configured default exists.
@@ -505,7 +523,7 @@ export type CronAddOptions = {
   skillLibrarySelections?: CronStoredJob["skillLibrarySelections"];
   matchesExisting?: (job: CronJob) => boolean;
   enabledExplicit?: boolean;
-  /** Gateway/doctor-owned heartbeat jobs require this opt-in at service creation. */
+  /** Reserved declaration namespaces require trusted ownership at creation. */
   systemOwned?: boolean;
   /** Trusted creator provenance persisted with new jobs; never accepted from public input. */
   createdActor?: SessionCreatedActor;

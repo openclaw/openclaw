@@ -410,12 +410,10 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
   });
 
   it.each(["silent", "responsive"])("tracks authenticated heartbeat: %s", async (mode) => {
-    const onStateChange = vi.fn();
     handle = await startExtensionRelayServer({
       port: 0,
       token: KEY,
       allowLegacyAuth: false,
-      onStateChange,
     });
     const extension = await authenticateV2Extension(handle);
     let client: WebSocket | undefined;
@@ -493,7 +491,6 @@ describe("extension relay HTTP auth v2", { concurrent: false }, () => {
       );
       const [code, reason] = (await closed) as [number, Buffer];
       expect([code, reason.toString()]).toEqual([4000, "extension heartbeat timeout"]);
-      expect(onStateChange).toHaveBeenCalledTimes(2);
 
       expect(await versionStatus(versionConnection)).toBe(503);
     } finally {

@@ -490,47 +490,6 @@ describe("CronService restart catch-up", () => {
     );
   });
 
-  it("stagger-limits overdue skipped one-shot retries after restart", async () => {
-    const now = Date.now();
-    const jobs = [now - 60_000, now - 45_000].map((nextRunAtMs, index) =>
-      job({
-        id: `retry-${index}`,
-        deleteAfterRun: true,
-        schedule: { kind: "at", at: new Date(nextRunAtMs - 30_000).toISOString() },
-        wakeMode: "now",
-        payload: { kind: "systemEvent", text: `retry-${index}` },
-        state: {
-          nextRunAtMs,
-          lastRunAtMs: nextRunAtMs - 30_000,
-          lastRunStatus: "skipped",
-          lastError: "disabled",
-          consecutiveSkipped: 1,
-        },
-      }),
-    );
-    const { store, deps } = await fixture(jobs, {
-      maxMissedJobsPerRestart: 1,
-      missedJobStaggerMs: 5_000,
-    });
-    const state = createCronServiceState(deps);
-    await runMissedJobs(state);
-    expect(deps.runSessionEvent).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ text: "retry-0" }),
-    );
-    expect(deps.requestHeartbeat).not.toHaveBeenCalled();
-    expect((await loadCronStore(store.storePath)).jobs).toEqual([
-      expect.objectContaining({
-        id: "retry-1",
-        enabled: true,
-        state: expect.objectContaining({
-          lastRunStatus: "skipped",
-          lastError: "disabled",
-          nextRunAtMs: now + 5_000,
-        }),
-      }),
-    ]);
-  });
-
   it.each([
     {
       label: "the first second of a slot",

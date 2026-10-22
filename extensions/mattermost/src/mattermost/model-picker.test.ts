@@ -1,4 +1,3 @@
-// Mattermost tests cover model picker plugin behavior.
 import path from "node:path";
 import {
   getSessionEntryAsync,
@@ -127,20 +126,11 @@ describe("Mattermost model picker", () => {
         entries: { support: { model: "openai/gpt-5" } },
       },
     };
-    const providerData = {
-      ...data,
-      byProvider: new Map([
-        ["anthropic", new Set(["claude-opus-4-5"])],
-        ["openai", new Set(["gpt-5"])],
-      ]),
-      resolvedDefault: { provider: "openai", model: "gpt-5" },
-    };
-
     expect(
       await resolveMattermostModelPickerCurrentModel({
         cfg,
         route: { agentId: "support", sessionKey: "agent:support:main" },
-        data: providerData,
+        data: { ...data, resolvedDefault: { provider: "openai", model: "gpt-5" } },
         sessionEntry: undefined,
       }),
     ).toBe("openai/gpt-5");
@@ -153,12 +143,14 @@ describe("Mattermost model picker", () => {
     const parentSessionKey = "agent:support:mattermost:default:channel-1";
     const childSessionKey = "agent:support:mattermost:default:child-with-explicit-parent";
     const directSessionKey = "agent:support:mattermost:default:direct-1";
-    const save = (sessionKey: string, channel: string, entry: SessionEntry) =>
+    const save = (sessionKey: string, channel: string, entry: Partial<SessionEntry>) =>
       upsertSessionEntry({
         agentId: "support",
         storePath: supportStorePath,
         sessionKey,
         entry: {
+          sessionId: sessionKey,
+          updatedAt: 1,
           chatType: "channel",
           delivery: normalizeSessionDeliveryState({ context: { channel } }),
           ...entry,
@@ -167,19 +159,11 @@ describe("Mattermost model picker", () => {
     await save(parentSessionKey, "channel-1", {
       providerOverride: "anthropic",
       modelOverride: "claude-sonnet-4-5",
-      sessionId: "parent-session",
-      updatedAt: 1,
     });
-    await save(childSessionKey, "child-with-explicit-parent", {
-      parentSessionKey,
-      sessionId: "child-session",
-      updatedAt: 2,
-    });
+    await save(childSessionKey, "child-with-explicit-parent", { parentSessionKey });
     await save(directSessionKey, "direct-1", {
       providerOverride: "openai",
       modelOverride: "gpt-5",
-      sessionId: "direct-session",
-      updatedAt: 3,
     });
     const currentModel = async (sessionKey: string, loadEntry = true) =>
       resolveMattermostModelPickerCurrentModel({

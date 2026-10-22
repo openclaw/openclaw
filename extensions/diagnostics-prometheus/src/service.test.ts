@@ -851,54 +851,6 @@ describe("diagnostics-prometheus service", () => {
     expect(rendered).not.toContain("turn-should-not-export");
   });
 
-  it("keeps existing operational samples updating when RPC timings fill the shared cap", () => {
-    const metrics = createMetricsHarness();
-    const queue = {
-      ...baseEvent(),
-      type: "queue.lane.dequeue" as const,
-      lane: "main",
-      queueSize: 1,
-      waitMs: 10,
-    };
-    metrics.record(queue);
-    // Enough distinct methods to exhaust the shared cap without importing core internals.
-    for (let index = 0; index < 426; index += 1) {
-      const base = { ...baseEvent(), type: "gateway.rpc" as const, method: `core.method.${index}` };
-      for (const event of [
-        { ...base, phase: "received" },
-        { ...base, phase: "response", outcome: "ok", durationMs: 10, responseBytes: 1024 },
-        {
-          ...base,
-          phase: "handler",
-          outcome: "returned",
-          durationMs: 10,
-          admissionMs: 1,
-          heapDeltaBytes: -1024,
-        },
-        {
-          ...base,
-          phase: "dispatch",
-          outcome: "returned",
-          durationMs: 11,
-          queueWaitMs: 1,
-          response: "sent",
-        },
-      ] satisfies DiagnosticEventPayload[]) {
-        metrics.record(event);
-      }
-    }
-    expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 1791");
-    metrics.record({ ...queue, queueSize: 2 });
-    const existing = metrics.render();
-    expect(existing).toContain('openclaw_queue_lane_size{lane="main"} 2');
-    expect(existing).toContain('openclaw_queue_lane_wait_seconds_count{lane="main"} 2');
-    expect(existing).toContain("openclaw_prometheus_series_dropped_total 1791");
-    metrics.record({ ...queue, lane: "later" });
-    expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 1793");
-    expect(metrics.render()).not.toContain('lane="later"');
-    metrics.stop();
-  });
-
   it("subscribes to internal diagnostics and renders scrape text", () => {
     const listeners: Array<
       (

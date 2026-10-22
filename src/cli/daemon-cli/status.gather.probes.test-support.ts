@@ -41,7 +41,7 @@ export const callGatewayStatusProbe = vi.fn<
 export type PortUsageTestSummary = Omit<PortUsage, "errors">;
 export type PortUsageInspectionOptions = { probeHosts?: readonly string[] };
 
-const freePort = (port: number): PortUsageTestSummary => ({
+export const freePort = (port: number): PortUsageTestSummary => ({
   port,
   status: "free",
   listeners: [],

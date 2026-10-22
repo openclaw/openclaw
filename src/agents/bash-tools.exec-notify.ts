@@ -407,6 +407,7 @@ export async function maybeNotifyOnExit(
         processSessionInstanceId(session),
         {
           ...eventOptions,
+          sourceRunId: session.originRunId,
           assertAcceptanceCurrent: session.assertExitNotificationAcceptanceCurrent,
           onAdopted: session.clearExitNotification,
         },

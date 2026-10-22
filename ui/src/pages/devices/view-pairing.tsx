@@ -1,6 +1,6 @@
 import { For, Show } from "solid-js";
 import { handleCopyButton } from "../../components/copy-button-state.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
 import { CopyButton } from "../../components/solid/copy-button.tsx";
 import { Icon } from "../../components/solid/icon.tsx";
 import { registerDevicesEnglish } from "../../i18n/locales/en-devices.ts";
@@ -331,6 +331,18 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
             <Show when={setup()}>
               {(current) => (
                 <>
+                  <Show when={props.pendingCount > 0}>
+                    <button
+                      class="btn btn--sm"
+                      type="button"
+                      onClick={() => props.onManageDevices()}
+                    >
+                      {t("devices.pairing.review")}
+                    </button>
+                  </Show>
+                  <button class="btn" type="button" onClick={() => props.onRefresh()}>
+                    <Icon name="refresh" /> {t("devices.pairing.newCode")}
+                  </button>
                   <Show when={!isNodeSetup()}>
                     <For each={[current().setupCode]}>
                       {(code) => {
@@ -351,18 +363,6 @@ export function DevicePairSetup(props: DevicePairSetupProps) {
                         );
                       }}
                     </For>
-                  </Show>
-                  <button class="btn" type="button" onClick={() => props.onRefresh()}>
-                    <Icon name="refresh" /> {t("devices.pairing.newCode")}
-                  </button>
-                  <Show when={props.pendingCount > 0}>
-                    <button
-                      class="btn btn--sm"
-                      type="button"
-                      onClick={() => props.onManageDevices()}
-                    >
-                      {t("devices.pairing.review")}
-                    </button>
                   </Show>
                 </>
               )}

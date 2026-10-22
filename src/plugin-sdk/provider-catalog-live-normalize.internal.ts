@@ -1,5 +1,9 @@
 import { normalizeUpstreamModelPricing } from "@openclaw/model-catalog-core/model-catalog-pricing";
+import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { asBoolean } from "../utils/boolean.js";
+import { readParsedField } from "../utils/string-readers.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./provider-model-shared.js";
 
 export type UpstreamProviderCatalogModel = Record<string, unknown> & {
@@ -38,13 +42,7 @@ export function readLiveModelCatalogStringField(
   keys: string | readonly string[],
 ): string | undefined {
   const record = asOptionalRecord(row);
-  for (const key of typeof keys === "string" ? [keys] : keys) {
-    const value = record?.[key];
-    if (typeof value === "string" && value.trim()) {
-      return value.trim();
-    }
-  }
-  return undefined;
+  return record && readParsedField(record, keys, normalizeOptionalString);
 }
 
 export function readLiveModelCatalogBooleanField(
@@ -52,13 +50,7 @@ export function readLiveModelCatalogBooleanField(
   keys: string | readonly string[],
 ): boolean | undefined {
   const record = asOptionalRecord(row);
-  for (const key of typeof keys === "string" ? [keys] : keys) {
-    const value = record?.[key];
-    if (typeof value === "boolean") {
-      return value;
-    }
-  }
-  return undefined;
+  return record && readParsedField(record, keys, asBoolean);
 }
 
 export function readLiveModelCatalogPositiveSafeIntegerField(
@@ -66,13 +58,7 @@ export function readLiveModelCatalogPositiveSafeIntegerField(
   keys: string | readonly string[],
 ): number | undefined {
   const record = asOptionalRecord(row);
-  for (const key of typeof keys === "string" ? [keys] : keys) {
-    const value = record?.[key];
-    if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
-      return value;
-    }
-  }
-  return undefined;
+  return record && readParsedField(record, keys, asPositiveSafeInteger);
 }
 
 export function isUpstreamProviderCatalogModel(
