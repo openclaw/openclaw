@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
-import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.js";
@@ -149,14 +148,9 @@ export function requireNonEmptyString(value: string | undefined, label: string):
 }
 
 export async function removeSessionWorktree(key: string | undefined) {
-  const worktree = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
-  if (worktree) {
-    await managedWorktrees.remove({
-      id: worktree.id,
-      reason: "test-cleanup",
-      allowSnapshotLoss: true,
-    });
-  }
+  const { removeOwnedSessionWorktree } =
+    await import("./server.sessions.create.projects.test-support.js");
+  await removeOwnedSessionWorktree(key);
 }
 
 export async function withFixedOwnerSessionStore(

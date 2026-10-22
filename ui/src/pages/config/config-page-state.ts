@@ -53,12 +53,7 @@ import {
   readSystemInfo,
   SYSTEM_INFO_POLL_INTERVAL_MS,
 } from "../../lib/system-info.ts";
-import {
-  discoverRealtimeTalkCameras,
-  discoverRealtimeTalkInputs,
-  observeRealtimeTalkDevices,
-  realtimeTalkDeviceIssueMessage,
-} from "../chat/talk/input.ts";
+import { observeRealtimeTalkDevices } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
 import { createConfigPageModels } from "./config-page-models.ts";
 import {
@@ -72,6 +67,7 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
+import { refreshMediaDevice } from "./media-device-discovery.ts";
 import { admitMemoryRoute } from "./memory-route-admission.ts";
 import {
   configTargetIdFromHash,
@@ -83,6 +79,7 @@ import {
   buildSessionObserverUtilityModelPatch,
   type SessionObserverModelSelection,
 } from "./session-observer-settings.ts";
+import { createConfigUpdatesPresentation } from "./updates-page-presentation.ts";
 import { createConfigViewState, createMediaDeviceState } from "./view-state.ts";
 import type * as View from "./view-state.ts";
 
@@ -160,7 +157,7 @@ export function createConfigPage(
   const customThemeImportOwner = new themeImport.CustomThemeImportOwner(invalidate);
   let configViewState: View.ConfigViewState = createConfigViewState();
   let runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
-  let updateStatusClient: GatewayBrowserClient | null = null;
+  const updates = createConfigUpdatesPresentation(context);
   let mediaDeviceWatch: (() => void) | null = null;
   const mediaDevices = {
     microphone: createMediaDeviceState(),
@@ -270,7 +267,7 @@ export function createConfigPage(
       systemInfoUnavailable = false;
       observerModels.reset();
       resetConfigViewState();
-      updateStatusClient = null;
+      updates.reset();
       previousGateway = gateway;
       previousClient = snapshot.client;
       previousHello = snapshot.hello;
@@ -292,16 +289,7 @@ export function createConfigPage(
       observerModels.refresh();
     }
     syncAppearanceRequests();
-    const updateClient =
-      pageId === "updates" && canCallGatewayMethod(snapshot, "update.status", "operator.admin")
-        ? snapshot.client
-        : null;
-    if (updateClient !== updateStatusClient) {
-      updateStatusClient = updateClient;
-      if (updateClient) {
-        void context.overlays.refreshUpdateStatus();
-      }
-    }
+    updates.synchronize(pageId);
     const campaign = context.overlays.snapshot.updateSchedule?.campaign;
     const ticking =
       pageId === "updates" &&
@@ -317,7 +305,7 @@ export function createConfigPage(
       for (const kind of ["microphone", "camera"] as const) {
         if (!mediaDevices[kind].loaded) {
           mediaDevices[kind].loaded = true;
-          void refreshMediaDevices(kind, false);
+          void refreshMediaDevice(mediaDevices[kind], kind, false, invalidate);
         }
       }
       if (snapshot.phase === "connected") {
@@ -465,39 +453,6 @@ export function createConfigPage(
     }
   }
 
-  async function refreshMediaDevices(kind: "microphone" | "camera", requestPermission: boolean) {
-    const device = mediaDevices[kind];
-    if (device.loading) {
-      device.requestsPermission ||= requestPermission;
-      return;
-    }
-    device.loading = true;
-    device.requestsPermission = requestPermission;
-    device.error = null;
-    invalidate();
-    try {
-      const discover =
-        kind === "microphone" ? discoverRealtimeTalkInputs : discoverRealtimeTalkCameras;
-      const result = await discover(() => device.requestsPermission);
-      device.devices = result.devices;
-      device.permissionRequired = result.permissionRequired;
-      device.error = result.issue
-        ? realtimeTalkDeviceIssueMessage(
-            result.issue,
-            kind === "microphone" ? "audioinput" : "videoinput",
-          )
-        : null;
-    } catch (error) {
-      // Discovery is best-effort in blocked/inactive contexts; a rejection
-      // must not wedge the picker in its loading state.
-      device.error = formatUiError(error);
-    } finally {
-      device.loading = false;
-      device.requestsPermission = false;
-      invalidate();
-    }
-  }
-
   function synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
     if (runtimeConfig !== runtimeConfigSource) {
       if (runtimeConfigSource) {
@@ -583,6 +538,7 @@ export function createConfigPage(
     const request = ++cameraSelectionRequest;
     const videoDeviceId = deviceId.trim() || undefined;
     mediaDevices.camera.error = null;
+    mediaDevices.camera.discovery = null;
     invalidate();
     try {
       await switchActiveRealtimeTalkCameras(videoDeviceId);
@@ -778,12 +734,12 @@ export function createConfigPage(
       customThemeLabel: settings.customTheme?.label ?? null,
       customThemeSourceUrl: settings.customTheme?.sourceUrl ?? null,
       customThemeImportUrl: customThemeImportOwner.snapshot.url,
-      customThemeImportBusy: customThemeImportOwner.snapshot.busy,
+      customThemeImportCompletion: customThemeImportOwner.completedImport,
       customThemeImportMessage: customThemeImportOwner.snapshot.message,
       customThemeImportExpanded: customThemeImportOwner.snapshot.expanded,
       onCustomThemeImportUrlChange: (next: string) => customThemeImportOwner.setUrl(next),
-      onImportCustomTheme: () => {
-        void customThemeImportOwner.import({
+      onImportCustomTheme: () =>
+        customThemeImportOwner.import({
           config: context.runtimeConfig.state,
           hasCustomTheme: Boolean(settings.customTheme),
           readTheme: () => settings.theme,
@@ -795,8 +751,7 @@ export function createConfigPage(
               t(reason === "loading" ? "common.loading" : "common.unsavedChanges"),
             imported: (label) => t("configPage.themeImported", { name: label }),
           },
-        });
-      },
+        }),
       onClearCustomTheme: () => {
         customThemeImportOwner.clear({
           apply: () =>
@@ -901,14 +856,16 @@ export function createConfigPage(
         selectedDeviceId: settings.realtimeTalkInputDeviceId ?? "",
       },
       composerHoldToRecord: settings.composerHoldToRecord !== false,
-      onMicrophoneRefresh: () => void refreshMediaDevices("microphone", true),
+      onMicrophoneRefresh: () =>
+        void refreshMediaDevice(mediaDevices.microphone, "microphone", true, invalidate),
       onMicrophoneSelect: (deviceId: string) =>
         applySettings({ realtimeTalkInputDeviceId: deviceId.trim() || undefined }),
       camera: {
         ...mediaDevices.camera,
         selectedDeviceId: settings.realtimeTalkVideoDeviceId ?? "",
       },
-      onCameraRefresh: () => void refreshMediaDevices("camera", true),
+      onCameraRefresh: () =>
+        void refreshMediaDevice(mediaDevices.camera, "camera", true, invalidate),
       onCameraSelect: (deviceId: string) => void selectCamera(deviceId),
       gatewayUrl: context.gateway.connection.gatewayUrl,
       assistantName: applicationConfig.read().assistantIdentity.name,
@@ -926,13 +883,13 @@ export function createConfigPage(
       onNativeNotificationsSendTest: () => context.nativeNotifications?.sendTest(),
       // Downstream equality checks need a new value for the mutable owner snapshot.
       webPush: { ...webPush.read() },
-      onWebPushSubscribe: () => void context.webPush.run({ kind: "enable" }),
-      onWebPushUnsubscribe: () => void context.webPush.run({ kind: "disable" }),
-      onWebPushTest: () => void context.webPush.run({ kind: "test" }),
+      onWebPushSubscribe: () => context.webPush.run({ kind: "enable" }),
+      onWebPushUnsubscribe: () => context.webPush.run({ kind: "disable" }),
+      onWebPushTest: () => context.webPush.run({ kind: "test" }),
       onWebPushSetUserPreferences: (preferences: Push.WebPushNotificationPreferences) =>
-        void context.webPush.run({ kind: "set", scope: "user", preferences }),
+        context.webPush.run({ kind: "set", scope: "user", preferences }),
       onWebPushSetDevicePreferences: (preferences: Push.WebPushDevicePreferences) =>
-        void context.webPush.run({ kind: "set", scope: "device", preferences }),
+        context.webPush.run({ kind: "set", scope: "device", preferences }),
     };
   }
   const refresh = () => {
@@ -962,8 +919,8 @@ export function createConfigPage(
     );
     customThemeImportOwner.connect(context.gateway.connection.gatewayUrl);
     mediaDeviceWatch = observeRealtimeTalkDevices(() => {
-      void refreshMediaDevices("microphone", false);
-      void refreshMediaDevices("camera", false);
+      void refreshMediaDevice(mediaDevices.microphone, "microphone", false, invalidate);
+      void refreshMediaDevice(mediaDevices.camera, "camera", false, invalidate);
     });
     synchronize();
     return () => {
@@ -995,5 +952,6 @@ export function createConfigPage(
     nowMs,
     mutationDisabled,
     updateBusy,
+    updates,
   };
 }

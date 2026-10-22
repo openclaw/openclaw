@@ -394,7 +394,6 @@ export async function runMantisDiscordSmoke(
 
     summary.status = "pass";
   } catch (error) {
-    summary.status = "fail";
     summary.message = summary.message ?? {
       id: "",
       posted: false,
@@ -411,7 +410,6 @@ export async function runMantisDiscordSmoke(
     );
   } finally {
     summary.finishedAt = new Date().toISOString();
-    await fs.mkdir(outputDir, { recursive: true });
     const published = buildPublishedMantisDiscordSmokeSummary(summary, sensitiveValues);
     await fs.writeFile(reportPath, renderMantisDiscordSmokeReport(published), "utf8");
     await fs.writeFile(summaryPath, `${JSON.stringify(published, null, 2)}\n`, "utf8");

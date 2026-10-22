@@ -32,7 +32,7 @@ import { createRetainedAgentDatabaseMatcher } from "../state/agent-deletion-disc
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
-type PlaintextCredential = { key: string; provider: string };
+type PlaintextCredential = { key: string; provider: string; catalog: boolean };
 
 function emptyStore(): AuthProfileStore {
   return { version: AUTH_STORE_VERSION, profiles: {} };
@@ -51,29 +51,25 @@ function credentialMatches(
   );
 }
 
-function matchesProviderEnvRefMarker(
-  cfg: OpenClawConfig,
-  provider: string,
-  value: string,
-): boolean {
-  const ref = resolveProviderConfigSecretInput(cfg, provider).ref;
-  if (ref?.source !== "env") {
-    return false;
-  }
-  // Generated env markers are provider-scoped. Treating every uppercase value
-  // as a marker would discard valid literal credentials.
-  const id = ref.id.trim();
-  const candidate = value.trim();
-  return candidate === id || candidate === `$${id}` || candidate === `\${${id}}`;
+function hasProviderSecretRef(store: AuthProfileStore, provider: string): boolean {
+  return Object.values(store.profiles).some(
+    (credential) =>
+      normalizeProviderId(credential.provider) === normalizeProviderId(provider) &&
+      ((credential.type === "api_key" && credential.keyRef !== undefined) ||
+        (credential.type === "token" && credential.tokenRef !== undefined)),
+  );
 }
 
 function findProviderSecretRefProfiles(store: AuthProfileStore, cfg: OpenClawConfig) {
-  return Object.entries(store.profiles).filter(
-    ([, credential]) =>
-      credential.type === "api_key" &&
-      credential.key &&
-      matchesProviderEnvRefMarker(cfg, credential.provider, credential.key),
-  );
+  return Object.entries(store.profiles).filter(([, credential]) => {
+    if (credential.type !== "api_key" || !credential.key) {
+      return false;
+    }
+    const ref = resolveProviderConfigSecretInput(cfg, credential.provider).ref;
+    const id = ref?.id.trim();
+    // Only this provider's declared env markers are non-secret; uppercase keys can be real.
+    return ref?.source === "env" && [id, `$${id}`, `\${${id}}`].includes(credential.key.trim());
+  });
 }
 
 function collectCredentials(
@@ -81,6 +77,7 @@ function collectCredentials(
   store: AuthProfileStore,
   blockedStores: readonly AuthProfileStore[] = [],
   cfg?: OpenClawConfig,
+  catalog = false,
 ): PlaintextCredential[] {
   if (!isRecord(providers)) {
     return [];
@@ -90,11 +87,12 @@ function collectCredentials(
       return [];
     }
     const key = entry.apiKey;
-    const credential = { provider, key };
+    const credential = { provider, key, catalog };
     if (
       !key.trim() ||
       // An authored SecretRef owns this provider; generated catalog copies are never fallbacks.
       (cfg && resolveProviderConfigSecretInput(cfg, provider).ref) ||
+      (catalog && hasProviderSecretRef(store, provider)) ||
       isNonSecretApiKeyMarker(key) ||
       store.profiles[key] !== undefined ||
       findMatchingProfileId(store, credential, blockedStores) !== undefined
@@ -160,9 +158,8 @@ async function persistCredentials(params: {
   agentDir?: string;
   blockedStores?: readonly AuthProfileStore[];
   credentials: readonly PlaintextCredential[];
-  inheritedStore?: AuthProfileStore;
+  env: NodeJS.ProcessEnv;
   invalidProfiles: ReadonlyArray<[string, AuthProfileCredential]>;
-  stateDir: string;
 }): Promise<{ migrated: number; removed: number }> {
   const credentials = uniqueCredentials(params.credentials);
   const { invalidProfiles } = params;
@@ -172,12 +169,13 @@ async function persistCredentials(params: {
   const blockedStores = params.blockedStores ?? [];
   const profileIds = new Map<string, PlaintextCredential>();
   let added = 0;
+  let inheritedStore: AuthProfileStore | null | undefined;
   let removedProfiles: [string, AuthProfileCredential][] = [];
   const updated = await updateAuthProfileStoreWithLock({
     agentDir: params.agentDir,
-    stateDir: params.stateDir,
+    stateDir: resolveStateDir(params.env),
     saveOptions: { filterExternalAuthProfiles: false, syncExternalCli: false },
-    updater: (localStore) => {
+    updater: (localStore, _owner, sharedStore) => {
       // Confirmation can pause while another writer replaces a marker. Only remove
       // the exact credential observed before prompting, including its references.
       removedProfiles = invalidProfiles.filter(([profileId, credential]) =>
@@ -192,10 +190,14 @@ async function persistCredentials(params: {
           }),
         );
       }
-      const effectiveStore = params.inheritedStore
-        ? mergeAuthProfileStores(params.inheritedStore, localStore)
+      inheritedStore = sharedStore;
+      const effectiveStore = sharedStore
+        ? mergeAuthProfileStores(sharedStore, localStore)
         : localStore;
       for (const credential of credentials) {
+        if (credential.catalog && hasProviderSecretRef(effectiveStore, credential.provider)) {
+          continue;
+        }
         const profileId =
           findMatchingProfileId(effectiveStore, credential, blockedStores) ??
           allocateProfileId(effectiveStore, credential, blockedStores);
@@ -219,12 +221,9 @@ async function persistCredentials(params: {
   }
   const persisted = params.agentDir
     ? loadPersistedAuthProfileStore(params.agentDir)
-    : loadPersistedSharedAuthProfileStore({
-        ...process.env,
-        OPENCLAW_STATE_DIR: params.stateDir,
-      });
-  const effectivePersisted = params.inheritedStore
-    ? mergeAuthProfileStores(params.inheritedStore, persisted ?? emptyStore())
+    : loadPersistedSharedAuthProfileStore(params.env);
+  const effectivePersisted = inheritedStore
+    ? mergeAuthProfileStores(inheritedStore, persisted ?? emptyStore())
     : persisted;
   for (const [profileId, credential] of removedProfiles) {
     if (isDeepStrictEqual(persisted?.profiles[profileId], credential)) {
@@ -320,7 +319,9 @@ export async function maybeMigrateModelCatalogCredentials(params: {
     return {
       agentDir,
       credentials: uniqueCredentials(
-        providers.flatMap((entries) => collectCredentials(entries, effectiveStore, [], params.cfg)),
+        providers.flatMap((entries) =>
+          collectCredentials(entries, effectiveStore, [], params.cfg, true),
+        ),
       ),
       invalidProfiles:
         agentDir === mainAgentDir ? [] : findProviderSecretRefProfiles(localStore, params.cfg),
@@ -370,14 +371,12 @@ export async function maybeMigrateModelCatalogCredentials(params: {
       credentials: configCredentials,
       invalidProfiles: invalidMainProfiles,
     };
-    // Refresh shared credentials only after their migration attempt has settled.
-    const migratedMainStore = loadPersistedSharedAuthProfileStore(env) ?? mainStore;
     for (const { agentDir, credentials, invalidProfiles } of catalogImports) {
       yield {
         description: `model credentials for ${shortenHomePath(agentDir)}`,
         credentials,
         invalidProfiles,
-        ...(agentDir === mainAgentDir ? {} : { agentDir, inheritedStore: migratedMainStore }),
+        ...(agentDir === mainAgentDir ? {} : { agentDir }),
       };
     }
   }
@@ -385,7 +384,7 @@ export async function maybeMigrateModelCatalogCredentials(params: {
   let removed = 0;
   for (const { description, ...target } of migrationTargets()) {
     try {
-      const result = await persistCredentials({ ...target, stateDir });
+      const result = await persistCredentials({ ...target, env });
       migrated += result.migrated;
       removed += result.removed;
     } catch (error) {

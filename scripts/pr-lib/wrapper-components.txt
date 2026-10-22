@@ -646,7 +646,6 @@ src/config/patch-replace-paths.ts
 src/config/paths.ts
 src/config/plugin-auto-enable.channels.ts
 src/config/plugin-auto-enable.materialize.ts
-src/config/plugin-auto-enable.prefer-over.ts
 src/config/plugin-install-record-map.ts
 src/config/plugins-allowlist.ts
 src/config/provider-policy.ts
@@ -1715,7 +1714,6 @@ src/proxy-capture/child-transport.ts
 src/proxy-capture/cli-contract.ts
 src/proxy-capture/env.ts
 src/proxy-capture/header-redaction.ts
-src/proxy-capture/paths.ts
 src/proxy-capture/runtime-cleanup.ts
 src/proxy-capture/runtime-deferral.ts
 src/proxy-capture/runtime-fetch-patch.ts
@@ -2327,6 +2325,7 @@ packages/gateway-protocol/src/schema/agent-database-admission.ts
 packages/gateway-protocol/src/schema/agent-summary-enums.ts
 packages/gateway-protocol/src/schema/agents-avatar-generate.ts
 packages/gateway-protocol/src/schema/agents-list-session-placement.ts
+packages/gateway-protocol/src/schema/agents-create.ts
 packages/gateway-protocol/src/schema/agents-models-skills.ts
 packages/gateway-protocol/src/schema/background-preferences.ts
 packages/gateway-protocol/src/schema/board.ts
@@ -2439,6 +2438,7 @@ src/config/sessions/session-actor-memory-entry-guards.ts
 src/config/sessions/session-actor-memory-entry-install.ts
 src/config/sessions/session-actor-memory-entry.ts
 src/config/sessions/session-actor-memory-events.ts
+src/config/sessions/session-prior-workspace-boundary.ts
 src/config/sessions/session-actor-memory-fork.ts
 src/config/sessions/session-actor-memory-goals.ts
 src/config/sessions/session-actor-memory-history-anchors.ts

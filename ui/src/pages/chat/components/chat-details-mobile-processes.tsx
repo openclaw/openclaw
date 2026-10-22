@@ -1,16 +1,19 @@
 import { For, Show, createMemo } from "solid-js";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { registerProcessesEnglish } from "../../../i18n/locales/en-processes.ts";
 import { registerSessionOrganizationEnglish } from "../../../i18n/locales/en-session-organization.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import type { ProcessesPanelData } from "../processes-panel-data.ts";
 import { ChatDetailsProcessRow } from "./chat-details-process-row.tsx";
 
+registerEnglishCatalog(registerChatSessionEnglish);
+
 registerEnglishCatalog(registerProcessesEnglish);
 registerEnglishCatalog(registerSessionOrganizationEnglish);
 
 export type ChatDetailsMobileProcessesProps = {
   /** The session host retains the native ProcessesPanelData projection and its demand. */
-  data: Pick<ProcessesPanelData["snapshot"], "rows" | "error" | "loading"> &
+  data: Pick<ProcessesPanelData["snapshot"], "rows" | "error" | "errorKind" | "loading"> &
     Pick<ProcessesPanelData, "refresh">;
   presented: boolean;
   onOpen?: () => void;
@@ -25,7 +28,7 @@ export function ChatDetailsMobileProcesses(props: ChatDetailsMobileProcessesProp
   );
   return (
     <div class="chat-details-mobile-processes">
-      <Show when={rows().length === 0 && props.data.error}>
+      <Show when={rows().length === 0 && props.data.errorKind !== "read" && props.data.error}>
         <div class="chat-details-mobile-processes__error" role="status">
           <span>{t("chat.sessionDetails.processesError")}</span>
           <button

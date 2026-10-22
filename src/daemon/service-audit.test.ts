@@ -11,6 +11,7 @@ import {
 } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
 import {
+  execSystemctlMock,
   execSystemctlUserMock,
   hasIssue,
   resetServiceAuditMocks,
@@ -352,14 +353,17 @@ describe("auditGatewayServiceConfig systemd", () => {
   const auditUnit = (timeoutMs?: number) => audit({}, { env: env(), timeoutMs });
   const network = ["After=network-online.target", "Wants=network-online.target", "RestartSec=5"];
   async function writeUnit(lines: string[]) {
+    // systemd reads dependencies only from [Unit]; everything else here is a service directive.
+    const isUnitKey = (line: string) => /^(?:After|Wants)=/.test(line);
     await fs.mkdir(path.dirname(unitPath), { recursive: true });
     await fs.writeFile(
       unitPath,
       [
         "[Unit]",
         "Description=OpenClaw Gateway",
+        ...lines.filter(isUnitKey),
         "[Service]",
-        ...lines,
+        ...lines.filter((line) => !isUnitKey(line)),
         "ExecStart=/usr/bin/node gateway",
         "",
         "[Install]",
@@ -412,10 +416,47 @@ describe("auditGatewayServiceConfig systemd", () => {
         "openclaw-audit.service",
         "--no-page",
         "--property",
-        "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec",
+        "After,Wants,RestartUSec,KillMode,LoadState,TimeoutStopUSec,ControlGroup",
       ],
       321,
     );
+  });
+
+  it.each([
+    ["5s", true],
+    ["1min 30s", false],
+    ["0", false],
+    ["infinity", false],
+    [undefined, false],
+  ] as const)("reports host shutdown limits separately (%s)", async (timeout, warned) => {
+    await writeUnit([...network, "KillMode=mixed", "TimeoutStopSec=330"]);
+    manager([
+      "LoadState=loaded",
+      "After=network-online.target",
+      "Wants=network-online.target",
+      "RestartUSec=5s",
+      "KillMode=mixed",
+      "TimeoutStopUSec=5min 30s",
+      "ControlGroup=/user.slice/user-1000.slice/user@1000.service/app.slice/openclaw-audit.service",
+    ]);
+    execSystemctlMock.mockResolvedValue({
+      code: timeout ? 0 : 1,
+      stdout: timeout ? `LoadState=loaded\nTimeoutStopUSec=${timeout}` : "",
+      stderr: "",
+      termination: "exit",
+    });
+    const result = await auditUnit(321);
+    expect(systemdCodes(result)).toEqual(warned ? ["systemd-user-manager-stop-timeout"] : []);
+    if (warned) {
+      expect(result.issues).toContainEqual(
+        expect.objectContaining({
+          message: expect.stringContaining(
+            "/etc/systemd/system/user@1000.service.d/zz-openclaw-stop-timeout.conf",
+          ),
+          detail: "user@1000.service: 5s (system manager)",
+        }),
+      );
+    }
   });
 
   it("does not repair masked manager defaults or fall back to the base unit", async () => {

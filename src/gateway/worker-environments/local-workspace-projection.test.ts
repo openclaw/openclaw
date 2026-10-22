@@ -237,7 +237,7 @@ it("expires an old runtime-file baseline while preserving unaccepted source", as
   await proveGeneratedWorkspaceExpiry(owner);
 });
 
-it.each([false, true])("settles stopped commands (parent disposed: %s)", async (disposed) => {
+it.each([false, true])("settles command checkpoints (parent disposed: %s)", async (disposed) => {
   const { proveStoppedLocalWorkspaceCheckpoint } =
     await import("./local-workspace-cancellation.test-support.js");
   await proveStoppedLocalWorkspaceCheckpoint(owner, disposed);
@@ -337,7 +337,7 @@ it("seeds independent source-only Git and reconciles edits without host metadata
   await writeText(canonical, "source.txt", "canonical edit\n");
   await writeText(canonical, "untracked.txt", "admitted source\n");
   const manifests = await import("./workspace-manifest-worker.js");
-  const capture = vi.spyOn(manifests, "captureWorkspaceSnapshot");
+  const capture = vi.spyOn(manifests, "captureWorkspaceManifestDocument");
   const projection = await prepare();
   // The unpublished guest needs one baseline traversal; it cannot have guest edits yet.
   expect(capture.mock.calls.filter(([input]) => input.root !== canonical)).toHaveLength(1);

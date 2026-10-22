@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, For, useContext } from "solid-js";
+import { createMemo, Errored, For, Loading, Show, useContext } from "solid-js";
 import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import { providerDisplayLabel } from "../../../components/provider-icon.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -12,6 +12,7 @@ import {
   isModelPickerOptionSelected,
   modelPickerOptionKey,
   type ChatModelPickerOption as ModelPickerOption,
+  type ChatModelPickerTargetGroup,
 } from "./chat-model-picker-options.ts";
 import {
   ChatModelPickerOption,
@@ -83,9 +84,7 @@ function prepareChatModelPickerPanel(params: ChatModelPickerParams) {
   );
   const targetGroups = params.targetGroups ?? [];
   const targetOptionCount = targetGroups.reduce((count, group) => count + group.options.length, 0);
-  const hasOptions =
-    params.modelOptions.length + targetOptionCount > 0 ||
-    targetGroups.some((group) => group.status !== "ready");
+  const hasOptions = params.modelOptions.length > 0 || targetGroups.length > 0;
   const hasSelectableModelOptions = params.modelOptions.some((option) => !option.disabled);
   return {
     orderedProviderGroups,
@@ -214,6 +213,49 @@ export function ChatModelPickerPanel(panel: {
     panel.params.onTargetSelect?.(groupId, value);
     panel.onSelectionClose(event);
   };
+  function TargetOptions(props: { group: ChatModelPickerTargetGroup }) {
+    const options = createMemo(() => props.group.completion.promise);
+    return (
+      <ModelList label={props.group.label} id={`target:${props.group.id}`}>
+        <For each={options()} keyed={(entry) => entry.value}>
+          {(entry, index) => (
+            <ChatModelPickerTargetOption
+              disabled={panel.params.disabled}
+              entry={entry()}
+              groupId={props.group.id}
+              groupLabel={props.group.label}
+              index={state().orderedOptions.length + index()}
+              onSelect={selectTarget}
+            />
+          )}
+        </For>
+      </ModelList>
+    );
+  }
+  function TargetState(props: { group: ChatModelPickerTargetGroup; error?: boolean }) {
+    return (
+      <>
+        <ChatModelCatalogState
+          state={{ hasSnapshot: false, status: props.error ? "error" : "loading" }}
+          hasOptions={false}
+          hasSelectableOptions={false}
+          errorLabel={props.group.errorLabel}
+          retryTarget={
+            panel.params.onTargetRetry
+              ? {
+                  disabled: panel.params.disabled,
+                  groupId: props.group.id,
+                  onRetry: panel.params.onTargetRetry!,
+                }
+              : undefined
+          }
+        />
+        <ModelList label={props.group.label} id={`target:${props.group.id}`}>
+          {null}
+        </ModelList>
+      </>
+    );
+  }
   function ModelOption(props: { entry: ModelPickerOption }) {
     return (
       <ChatModelPickerOption
@@ -452,37 +494,13 @@ export function ChatModelPickerPanel(panel: {
                         </span>
                         <span>{group().label}</span>
                       </div>
-                      {group().status !== "ready" ? (
-                        <ChatModelCatalogState
-                          state={{ hasSnapshot: false, status: group().status }}
-                          hasOptions={false}
-                          hasSelectableOptions={false}
-                          errorLabel={group().errorLabel}
-                          retryTarget={
-                            panel.params.onTargetRetry
-                              ? {
-                                  disabled: panel.params.disabled,
-                                  groupId: group().id,
-                                  onRetry: panel.params.onTargetRetry!,
-                                }
-                              : undefined
-                          }
-                        />
-                      ) : undefined}
-                      <ModelList label={group().label} id={`target:${group().id}`}>
-                        <For each={group().options} keyed={(entry) => entry.value}>
-                          {(entry, index) => (
-                            <ChatModelPickerTargetOption
-                              disabled={panel.params.disabled}
-                              entry={entry()}
-                              groupId={group().id}
-                              groupLabel={group().label}
-                              index={state().orderedOptions.length + index()}
-                              onSelect={selectTarget}
-                            />
-                          )}
-                        </For>
-                      </ModelList>
+                      <Show when={group().completion} keyed>
+                        <Errored fallback={() => <TargetState group={group()} error />}>
+                          <Loading fallback={<TargetState group={group()} />}>
+                            <TargetOptions group={group()} />
+                          </Loading>
+                        </Errored>
+                      </Show>
                     </section>
                   )}
                 </For>

@@ -22,7 +22,8 @@ export type SessionDiffViewBindings = {
   props: SessionDiffProps;
   desktop: Accessor<boolean>;
   mobile: Accessor<boolean>;
-  collapsedPaths: Accessor<Set<string>>;
+  collapsedFiles: Readonly<Record<string, true>>;
+  isCollapsed: (path: string) => boolean;
   scope: Accessor<SessionDiffScope>;
   split: Accessor<boolean>;
   wrap: Accessor<boolean>;
@@ -91,7 +92,8 @@ export function totalDiffStat(files: readonly SessionDiffFile[]) {
   return total;
 }
 export function splitPath(filePath: string) {
-  const normalized = filePath.replaceAll("\\", "/");
+  // Git reports an untracked nested repository with a trailing directory separator.
+  const normalized = filePath.replaceAll("\\", "/").replace(/\/$/, "");
   const separator = normalized.lastIndexOf("/");
   return separator < 0
     ? { directory: "", name: normalized }

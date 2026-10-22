@@ -112,6 +112,13 @@ describe("steering input custody", () => {
       delete initialQueue.allowCollaborativeSteering;
       const steeringConfig: typeof initialConfig = {
         ...initialConfig,
+        agents: {
+          ...initialConfig.agents,
+          defaults: {
+            ...initialConfig.agents?.defaults,
+            model: { primary: "openai/gpt-test" },
+          },
+        },
         messages: {
           ...initialConfig.messages,
           queue: {
@@ -414,18 +421,25 @@ describe("steering input custody", () => {
           expect(ownerUserContext).not.toContain(incomingProfile.id);
         }
         fixture.beforeApprove.mockClear();
-        const queueMessage = vi.fn<ReplyBackendMessageInjectionV2["queueMessage"]>(
-          async (text, options, assertCurrent) =>
-            steerActiveSessionWithOptionalDeliveryWait(
-              session,
-              text,
-              options,
-              fixture.scope.sessionKey,
-              () => {
-                assertCurrent();
-                return true;
-              },
-            ),
+        const queueMessage = vi.fn<
+          NonNullable<ReplyBackendMessageInjectionV2["queueMessageAsync"]>
+        >(async (text, options, preparation, authorityKind) =>
+          steerActiveSessionWithOptionalDeliveryWait(
+            session,
+            text,
+            options,
+            fixture.scope.sessionKey,
+            () => {
+              preparation.assertCurrent();
+              return true;
+            },
+            {
+              kind: authorityKind,
+              assertCurrent: preparation.assertCurrent,
+              toolAuthorityPreparation: preparation,
+            },
+            preparation.prepareCurrent,
+          ),
         );
         operation.attachBackend({
           kind: "embedded",
@@ -435,7 +449,14 @@ describe("steering input custody", () => {
           supportsCrossProfileSteering:
             scenario !== "same grant" && scenario !== "no native admission across profiles",
           cancel: vi.fn(),
-          messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
+          messageInjectionV2: {
+            version: 2,
+            isAvailable: () => true,
+            queueMessage: async () => {
+              throw new Error("Expected the current prepared embedded steering boundary");
+            },
+            queueMessageAsync: queueMessage,
+          },
         });
         const dispatch = createDispatchTestHarness({
           connId: reconnectedClient.connId,
@@ -470,9 +491,10 @@ describe("steering input custody", () => {
           expect(dispatch.send).toHaveBeenCalledWith(expect.objectContaining({ ok: true }));
         }
         if (accepted) {
-          expect(session.getSteeringMessages()).toEqual([
-            expect.stringContaining(fixture.params.message),
-          ]);
+          expect(
+            session.getSteeringMessages(),
+            JSON.stringify(vi.mocked(fixture.context.logGateway.warn).mock.calls),
+          ).toEqual([expect.stringContaining(fixture.params.message)]);
           expect(queueMessage).toHaveBeenCalledOnce();
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
         } else {

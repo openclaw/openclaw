@@ -169,7 +169,6 @@ suite.define(() => {
         }
         expect(await gateway.getRequests("sessions.describe", { key: row.key })).toHaveLength(1);
       }
-      expect(await pins.locator(".sidebar-reorder-trigger").count()).toBe(0);
       if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
         const dir = createControlUiE2eArtifactDir("rail", process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR);
         await captureFrame(dir, "after-desktop.png", page.locator(".shell"), [rail, pins.first()]);

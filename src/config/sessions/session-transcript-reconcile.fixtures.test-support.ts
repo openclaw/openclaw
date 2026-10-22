@@ -1,7 +1,10 @@
 import type { SQLInputValue } from "node:sqlite";
+import type { Worker } from "node:worker_threads";
 import { afterEach, expect, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
+import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import type { SqlConnection } from "../../infra/sql-connection.js";
 import type {
   SqliteWorkerOperations,
@@ -10,6 +13,8 @@ import type {
 import * as workerStore from "../../infra/sqlite-worker-store.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
+import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
 
@@ -34,8 +39,12 @@ export function expectRows(
   expect(rows(db, sql, ...bindings)).toEqual(expected);
 }
 
-export const rebuildState = (db: SqlConnection) =>
-  row(db, "SELECT needs_rebuild FROM session_transcript_index_state");
+export const rebuildState = (db: SqlConnection, sessionId?: string) =>
+  row(
+    db,
+    `SELECT needs_rebuild FROM session_transcript_index_state${sessionId ? " WHERE session_id = ?" : ""}`,
+    ...(sessionId ? [sessionId] : []),
+  );
 
 export const expectReconciled = (result: Promise<unknown>, reconciledSessions = 1) =>
   expect(result).resolves.toEqual({ reconciledSessions });
@@ -94,6 +103,26 @@ export async function closeReconcileDatabases(stateDir?: string) {
   await closeOpenClawStateDatabaseAsync();
 }
 
+export function acquireReconcileGatewayOwner(
+  context: OpenClawStateWorkerContext,
+  state: OpenClawTestState,
+  owned: boolean,
+) {
+  return owned
+    ? acquireGatewayStateOwner({
+        databasePath: context.admission.databasePath,
+        payload: {
+          pid: process.pid,
+          processNamespace: readGatewayLockProcessNamespace(),
+          createdAt: new Date().toISOString(),
+          configPath: state.configPath,
+          stateDir: state.stateDir,
+          role: "gateway",
+        },
+      })
+    : undefined;
+}
+
 // Intercept only execution; preserve the real operation's admission and lifetime arguments.
 export function interceptWorkerExecution(
   intercept: <Operations extends SqliteWorkerOperations>(
@@ -113,18 +142,30 @@ export function interceptWorkerExecution(
 export function holdReconcileAck(
   observer: ReturnType<typeof useReconcileWorkerObserver>,
   stage: "plan-start" | "plan-finish",
+  sessionId?: string,
 ) {
   const paused = createDeferred();
   let release: (() => void) | undefined;
-  observer.onTask = ({ port, observeMessage }) => {
+  let worker: Worker | undefined;
+  let released = false;
+  const plannerLeases = new Map<string, string>();
+  observer.onTask = ({ input, worker: created, port, observeMessage }) => {
+    worker = created;
+    if (input.mode === "disk") {
+      plannerLeases.set(input.path, input.leaseId);
+    }
     let holding = false;
     observeMessage((message) => {
-      holding = message.type === stage;
+      holding =
+        message.type === stage &&
+        (sessionId === undefined ||
+          (message.type === "plan-start" && message.plan.sessionId === sessionId) ||
+          (message.type === "plan-finish" && message.sessionId === sessionId));
     });
     const post = port.postMessage.bind(port);
     port.postMessage = (message, transferList) => {
       const options = Array.isArray(transferList) ? { transfer: transferList } : transferList;
-      if (holding) {
+      if (holding && !released) {
         holding = false;
         release = () => post(message, options);
         paused.resolve();
@@ -133,5 +174,14 @@ export function holdReconcileAck(
       }
     };
   };
-  return { paused: paused.promise, release: () => release?.() };
+  return {
+    paused: paused.promise,
+    plannerLeases,
+    threadId: () => worker?.threadId,
+    release: () => {
+      // A targeted lifecycle fence releases permanently; unscoped callers may hold later plans.
+      released = sessionId !== undefined;
+      release?.();
+    },
+  };
 }

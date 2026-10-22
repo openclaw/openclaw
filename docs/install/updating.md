@@ -39,11 +39,29 @@ are reported by the scheduler without restarting the Gateway.
 
 **Updates always work** (`openclaw update` finishes best effort everywhere). Changes to update, Doctor, service lifecycle, migrations, plugin loading: state their update behavior. Installed updater runs first, can't be patched; candidate fixes key on markers shipped drivers set; existing operator state = input. Recoverable hiccups → recorded warnings; back up before mutating, let rollback restore it; refuse only for named data risk with previous Gateway kept running. Timeouts and budgets: generous, derived from measured state, sized for slow hardware. Proof: published-driver × candidate cell.
 
+Candidate state workers drop advisory progress when stderr is temporarily full.
+Dropped writes do not consume the legacy progress budget, so reporting resumes
+when the pipe becomes writable. The worker must contain this repair; it does not
+change an older worker that is already running.
+
+Supervisor-managed migrations also validate Doctor's repairable projection before
+rejecting retired config fields such as `agents.defaults.heartbeat`. They preserve
+the original config and database backups before Doctor migrates the state and
+converts heartbeats to Automations. Unknown keys and invalid heartbeat settings
+still refuse admission. Repeating the migration preserves the converted jobs and
+does not repeat the heartbeat delivery notice.
+
 Before replacing a Git checkout's build or an installed package, the updater
 retains its running runtime. Late module imports and background workers keep
 using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
+
+Source updates qualify the installed pnpm launcher outside the checkout so even
+its version probe cannot rewrite the checkout's lockfile. If another version is
+needed, the updater uses a temporary Corepack shim or npm-installed pnpm matching
+the checkout's pin. This requires the installed updater to contain the fix;
+staging a newer candidate does not change an older updater's initial probe.
 
 Candidate pnpm installs use a project-local virtual dependency graph while
 reusing the configured package store. This also applies when pnpm uses hoisted
@@ -81,6 +99,13 @@ previous build. The refusal names the maintenance process and tells you to let
 it finish before retrying `openclaw update`. An explicit update timeout and
 cancellation still bound these waits; live ownership and recovery checks remain
 required before activation.
+
+The updater retains its admitted SQLite writer wait allowance through finalization,
+including candidate handoff and standalone repair. A writer that outlasts SQLite's
+ordinary wait can finish before required recovery evidence and the final outcome
+are recorded. Optional history bookkeeping still uses its short wait and warns
+without stopping the update. This applies to the installed updater; the candidate
+also preserves the step allowance passed by older installed updaters.
 
 `openclaw update status` reports confirmed driver loss without changing the
 recorded run, and names `openclaw update repair` as the next action. Repair or the
@@ -136,6 +161,13 @@ placement is unchanged. Installed plugin projects, retained native admissions,
 and recovery or migration backups remain with their existing durable owners;
 `TMPDIR` does not relocate those writes or remove the need for free space on the
 installation and state filesystems.
+
+Plugin source capture repairs stale dependency links without changing real
+dependency directories. POSIX replacements are staged before publication;
+Windows removes only the junction or symlink before recreating and verifying it.
+A failed link leaves that plugin unprepared with a named error. Doctor retains
+its pending migration obligation while other plugins' migrations continue.
+This repair applies when the candidate loads plugin contracts during Doctor.
 
 ### Migration integrity checks
 
@@ -1261,8 +1293,13 @@ verification facts, and the next action when needed. Failed-step summaries prese
 the initiating cause ahead of trailing recovery advice, using recorded failure
 facts when available. Local run history retains verification findings and backup
 recovery paths separately from the excerpt. A run sends each notice at most once;
-an update that stops before restart sends only the notices for phases it reached. If the update cannot
-start, the bot records and explains why and provides the manual command when available.
+an update that stops before restart sends only the notices for phases it reached.
+Restart recovery reuses an already-recorded completion notice even if later
+verification changes the outcome. The run report remains the current source for
+that outcome. A milestone with no eligible delivery target is recorded as skipped
+instead of retried on every recovery check.
+
+If the update cannot start, the bot records and explains why and provides the manual command when available.
 The agent relays the returned recovery instructions to the operator. Manual
 update commands run in a terminal outside the Gateway service; the agent must
 not execute them in the shell of the Gateway hosting its session. A missing

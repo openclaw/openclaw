@@ -1139,11 +1139,16 @@ openclaw-plugins-page
   height: 1em;
 }
 .plugin-catalog-detail__security-score {
+  /* The hover fill bleeds past the label and bars so neither sits flush with its edge. */
+  --plugin-security-score-bleed: 8px;
+
   display: grid;
   grid-template-columns: 1fr repeat(3, 26px);
   align-items: center;
   gap: 6px;
-  padding: 8px 0;
+  margin-inline: calc(-1 * var(--plugin-security-score-bleed));
+  padding: 8px var(--plugin-security-score-bleed);
+  border-radius: var(--radius-md);
 }
 .plugin-catalog-detail__security-score strong {
   font-size: var(--control-ui-text-sm);

@@ -1,8 +1,9 @@
 import { readFileSync, realpathSync, writeFileSync, writeSync } from "node:fs";
 import { Session } from "node:inspector/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { availableParallelism } from "node:os";
 import { fileURLToPath } from "node:url";
-import { getHeapSpaceStatistics, queryObjects, writeHeapSnapshot } from "node:v8";
+import v8, { getHeapSpaceStatistics, queryObjects, writeHeapSnapshot } from "node:v8";
 import { isMainThread } from "node:worker_threads";
 import { getWorkerMessageMetrics } from "../../src/infra/worker-message-metrics.ts";
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
@@ -74,7 +75,19 @@ if (isMainThread) {
   // process birth and does not include the profiler's own module import cost.
   const initialResources = sampleResources();
   const inspector = new Session();
-  const workers = new GatewayBenchWorkerProfiler(inspector);
+  let workerMemoryModule: typeof import("../../src/infra/worker-cpu.ts") | undefined;
+  const workers = new GatewayBenchWorkerProfiler(inspector, (threadId) => {
+    // Retain registry identity before a short-lived worker disappears between resource samples.
+    const memory = workerMemoryModule?.sampleTrackedWorkerMemory();
+    if (!memory) {
+      return undefined;
+    }
+    return (
+      memory.workerHeaps.find((worker) => worker.threadId === threadId)?.script ??
+      memory.workerMemoryMissing.find((worker) => worker.threadId === threadId)?.script ??
+      null
+    );
+  });
   let inspectorConnected = false;
   const traceGc = process.execArgv.includes("--trace-gc-nvp");
   const markGc = (phase: string, profilePath?: string) => {
@@ -104,6 +117,31 @@ if (isMainThread) {
     GatewayProfileCommand["kind"],
     ReturnType<typeof getWorkerMessageMetrics>
   >();
+  const deserializeCaptures = new Map<
+    GatewayProfileCommand["kind"],
+    Map<string, { count: number; bytes: number }>
+  >();
+  const nativeDeserialize = v8.deserialize;
+  const measuredDeserialize: typeof v8.deserialize = (buffer) => {
+    const value: unknown = nativeDeserialize(buffer);
+    const kind =
+      value !== null &&
+      typeof value === "object" &&
+      "kind" in value &&
+      typeof value.kind === "string"
+        ? value.kind
+        : "untyped";
+    for (const groups of deserializeCaptures.values()) {
+      let metric = groups.get(kind);
+      if (!metric) {
+        metric = { count: 0, bytes: 0 };
+        groups.set(kind, metric);
+      }
+      metric.count++;
+      metric.bytes += buffer.byteLength;
+    }
+    return value;
+  };
   const namedDiagnostics = new Map<
     string | undefined,
     ReturnType<typeof startGatewayBenchDiagnostics>
@@ -157,8 +195,11 @@ if (isMainThread) {
           };
         }
         // Native benchmark children do not load the Gateway's source registry or loader.
+        if (message.includeWorkers) {
+          workerMemoryModule ??= await import("../../src/infra/worker-cpu.ts");
+        }
         const workerMemory = message.includeWorkers
-          ? (await import("../../src/infra/worker-cpu.ts")).sampleTrackedWorkerMemory()
+          ? workerMemoryModule?.sampleTrackedWorkerMemory()
           : undefined;
         const resources = message.initial
           ? initialResources
@@ -253,6 +294,9 @@ if (isMainThread) {
         if (active.has(message.kind)) {
           throw new Error(`Gateway ${message.kind} profile already started`);
         }
+        if (message.includeWorkers) {
+          workerMemoryModule ??= await import("../../src/infra/worker-cpu.ts");
+        }
         if (message.kind === "cpu") {
           await inspector.post("Profiler.enable");
           await inspector.post("Profiler.setSamplingInterval", {
@@ -270,16 +314,25 @@ if (isMainThread) {
         }
         active.add(message.kind);
         if (message.includeWorkers) {
-          await workers.start(message.kind, message.profilePath);
+          await workers.start(message.kind, message.profilePath, message);
         }
         diagnosticCaptures.set(message.kind, startGatewayBenchDiagnostics());
         workerMessageStarts.set(message.kind, getWorkerMessageMetrics());
+        deserializeCaptures.set(message.kind, new Map());
+        v8.deserialize = measuredDeserialize;
+        syncBuiltinESMExports();
         if (message.kind === "heap") {
           markGc("heap-start", message.profilePath);
         }
       } else if (message.action === "stop") {
         if (!active.has(message.kind)) {
           throw new Error(`Gateway ${message.kind} profile has not started`);
+        }
+        const deserialized = Object.fromEntries(deserializeCaptures.get(message.kind) ?? []);
+        deserializeCaptures.delete(message.kind);
+        if (deserializeCaptures.size === 0) {
+          v8.deserialize = nativeDeserialize;
+          syncBuiltinESMExports();
         }
         if (message.kind === "heap") {
           // Exclude diagnostics aggregation and profile materialization from promotion.
@@ -304,15 +357,23 @@ if (isMainThread) {
           })
           .filter((counter) => counter.messages > 0);
         try {
-          const { profile } =
+          // Stop worker sampling before materializing the main profile and its sidecars.
+          const [{ profile }] = await Promise.all([
             message.kind === "cpu"
-              ? await inspector.post("Profiler.stop")
-              : await inspector.post("HeapProfiler.stopSampling");
+              ? inspector.post("Profiler.stop")
+              : inspector.post("HeapProfiler.stopSampling"),
+            workers.stop(message.kind),
+          ]);
           active.delete(message.kind);
           writeFileSync(message.profilePath, JSON.stringify(profile), { mode: 0o600 });
           writeFileSync(
             `${message.profilePath}.worker-messages.json`,
             JSON.stringify(workerMessages),
+            { mode: 0o600 },
+          );
+          writeFileSync(
+            `${message.profilePath}.deserialize.json`,
+            JSON.stringify({ scope: "main-isolate", groups: deserialized }),
             { mode: 0o600 },
           );
           if (diagnostics) {
@@ -338,6 +399,9 @@ if (isMainThread) {
     );
   });
   process.once("disconnect", () => {
+    v8.deserialize = nativeDeserialize;
+    syncBuiltinESMExports();
+    deserializeCaptures.clear();
     for (const finish of namedDiagnostics.values()) {
       finish();
     }

@@ -28,7 +28,6 @@
   padding-inline-end: 16px;
   text-overflow: clip;
   white-space: nowrap;
-  mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
 }
 
 .chat-environment-desktop__summary > .chat-environment-desktop__branch:last-child {
@@ -76,4 +75,9 @@
 [data-details-group="environment"] .chat-details__row .chat-environment-desktop__machine-icon {
   flex: none;
   overflow: visible;
+}
+
+.chat-environment-desktop__summary
+  > .chat-environment-desktop__branch[data-scrollable="true"]:last-child:dir(rtl) {
+  mask-image: linear-gradient(to left, black calc(100% - 16px), transparent);
 }

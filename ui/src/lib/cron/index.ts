@@ -9,7 +9,11 @@ import type { CronJob, CronRunResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
 import { toNumber } from "../format.ts";
 import { parseCronDurationMs } from "./decimal.ts";
-import { hasUnchangedCronSchedule, buildCronSchedule } from "./form-schedule.ts";
+import {
+  hasUnchangedCronSchedule,
+  buildCronSchedule,
+  parseCronScheduleAt,
+} from "./form-schedule.ts";
 import { isReadOnlyCronPayload, jobToForm, normalizeCronFormState } from "./form.ts";
 import { loadCronJobsPage } from "./jobs-full.ts";
 import { retireCronJobsRequest } from "./jobs.ts";
@@ -53,8 +57,7 @@ export function validateCronForm(form: CronFormState): CronFieldErrors {
       errors.eventArguments = "cron.events.eventArgumentsInvalid";
     }
   } else if (form.scheduleKind === "at") {
-    const ms = Date.parse(form.scheduleAt);
-    if (!Number.isFinite(ms)) {
+    if (!parseCronScheduleAt(form.scheduleAt)) {
       errors.scheduleAt = "cron.errors.scheduleAtInvalid";
     }
   } else if (form.scheduleKind === "every") {
@@ -158,10 +161,10 @@ async function withCronBusy(
     reportFeedback: (message: string) => void,
     isCurrent: () => boolean,
   ) => Promise<void>,
-) {
+): Promise<string | null | void> {
   const client = state.client;
   if (!client || !state.connected || state.cronBusy) {
-    return;
+    return undefined;
   }
   const target = job ? { id: job.id, name: job.displayName ?? job.name } : null;
   const operation = {};
@@ -181,6 +184,7 @@ async function withCronBusy(
     await run(client, reportFeedback, isCurrent);
   } catch (err) {
     reportFeedback(formatUiError(err));
+    return isCurrent() ? state.cronError : null;
   } finally {
     if (isCurrent()) {
       activeCronMutations.delete(state);
@@ -188,6 +192,7 @@ async function withCronBusy(
       state.cronBusy = false;
     }
   }
+  return undefined;
 }
 
 function requireCronConfigRevision(revision: string | null | undefined): string {
@@ -381,11 +386,9 @@ export async function addCronJob(state: CronState): Promise<CronSaveResult> {
                 accountId: deliveryAccountId,
                 bestEffort: form.deliveryBestEffort,
               }),
-          threadId: ownerTarget
-            ? editingJob?.delivery?.threadId !== undefined
-              ? null
-              : undefined
-            : form.deliveryThreadId,
+          threadId:
+            (!ownerTarget ? form.deliveryThreadId : undefined) ??
+            (editingJob?.delivery?.threadId !== undefined ? null : undefined),
           ...(selectedDeliveryMode === "announce" && form.deliveryCompletionDestination
             ? { completionDestination: form.deliveryCompletionDestination }
             : {}),
@@ -575,7 +578,7 @@ export async function runCronJob(state: CronState, jobId: string, mode: "force" 
     state.cronEditingJob?.id === jobId
       ? state.cronEditingJob
       : (state.cronJobs.find((candidate) => candidate.id === jobId) ?? { id: jobId, name: jobId });
-  await withCronBusy(state, job, async (client, reportFeedback, isCurrent) => {
+  return withCronBusy(state, job, async (client, reportFeedback, isCurrent) => {
     const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode });
     if (!isCurrent()) {
       return;

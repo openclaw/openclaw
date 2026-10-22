@@ -152,61 +152,62 @@ export async function resolveCreateTarget(
 }
 
 type CatalogTargetOwner = { agentId: string; client: GatewayBrowserClient };
-type CatalogTargetDiscoveryState =
-  | { status: "idle" }
-  | {
-      status: "loading";
-      owner: CatalogTargetOwner;
-    }
-  | { status: "ready"; owner: CatalogTargetOwner; targets: ChatModelPickerTargetGroup["options"] }
-  | { status: "error"; owner: CatalogTargetOwner };
+type CatalogTargetRead = {
+  owner: CatalogTargetOwner;
+  completion: ChatModelPickerTargetGroup["completion"];
+  options?: ChatModelPickerTargetGroup["options"];
+  canRetry: boolean;
+};
 
 export class CatalogTargetDiscovery {
-  private state: CatalogTargetDiscoveryState = { status: "idle" };
+  private read: CatalogTargetRead | undefined;
 
   constructor(private readonly notify: () => void) {}
 
   clear() {
-    const previous = this.state;
-    this.state = { status: "idle" };
-    if (previous.status !== "idle") {
+    const previous = this.read;
+    this.read = undefined;
+    if (previous) {
       this.notify();
     }
   }
 
   private startRequest(owner: CatalogTargetOwner) {
-    this.state = { status: "loading", owner };
+    const read: CatalogTargetRead = {
+      owner,
+      canRetry: false,
+      completion: {
+        promise: owner.client
+          .request<SessionsCatalogListResult>("sessions.catalog.list", {
+            agentId: owner.agentId,
+            metadataOnly: true,
+          })
+          .then(
+            (result) => {
+              const options = result.catalogs
+                .filter((catalog) => catalog.capabilities.startTerminal === true)
+                .map(({ id, label }) => ({ value: id, label }));
+              if (this.read === read) {
+                read.options = options;
+                this.notify();
+              }
+              return options;
+            },
+            (error: unknown) => {
+              if (this.read === read) {
+                // Retry admission stays synchronous at the discovery owner.
+                read.canRetry = true;
+                this.notify();
+              }
+              throw error;
+            },
+          ),
+      },
+    };
+    // A scope can retire before its renderer observes the rejected receipt.
+    void read.completion.promise.catch(() => {});
+    this.read = read;
     this.notify();
-    void owner.client
-      .request<SessionsCatalogListResult>("sessions.catalog.list", {
-        agentId: owner.agentId,
-        metadataOnly: true,
-      })
-      .then(
-        (result) => {
-          if (
-            this.state.status === "idle" ||
-            this.state.owner.client !== owner.client ||
-            this.state.owner.agentId !== owner.agentId
-          ) {
-            return;
-          }
-          this.state = {
-            status: "ready",
-            owner,
-            targets: result.catalogs
-              .filter((catalog) => catalog.capabilities.startTerminal === true)
-              .map(({ id, label }) => ({ value: id, label })),
-          };
-          this.notify();
-        },
-        () => {
-          if (this.state.status !== "idle" && this.state.owner === owner) {
-            this.state = { status: "error", owner };
-            this.notify();
-          }
-        },
-      );
   }
 
   load(context: ApplicationContext | undefined, agentId: string, enabled: boolean) {
@@ -224,9 +225,9 @@ export class CatalogTargetDiscovery {
       return;
     }
     const owner = { agentId: normalizedAgentId, client };
-    const current = this.state;
+    const current = this.read;
     if (
-      current.status !== "idle" &&
+      current &&
       current.owner.client === owner.client &&
       current.owner.agentId === owner.agentId
     ) {
@@ -238,9 +239,9 @@ export class CatalogTargetDiscovery {
   }
 
   retry(client: GatewayBrowserClient | undefined, agentId: string) {
-    const targetDiscovery = this.state;
+    const targetDiscovery = this.read;
     if (
-      targetDiscovery.status === "error" &&
+      targetDiscovery?.canRetry &&
       targetDiscovery.owner.client === client &&
       targetDiscovery.owner.agentId === agentId
     ) {
@@ -249,11 +250,8 @@ export class CatalogTargetDiscovery {
   }
 
   groups(): readonly ChatModelPickerTargetGroup[] | undefined {
-    const discovery = this.state;
-    if (
-      discovery.status === "idle" ||
-      (discovery.status === "ready" && !discovery.targets.length)
-    ) {
+    const discovery = this.read;
+    if (!discovery || discovery.options?.length === 0) {
       return undefined;
     }
     return [
@@ -261,8 +259,8 @@ export class CatalogTargetDiscovery {
         errorLabel: t("newSession.cliAgentsUnavailable"),
         id: "cliAgents",
         label: t("newSession.cliAgentsGroup"),
-        options: discovery.status === "ready" ? discovery.targets : [],
-        status: discovery.status,
+        options: discovery.options ?? [],
+        completion: discovery.completion,
       },
     ];
   }

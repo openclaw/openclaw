@@ -179,7 +179,7 @@ export async function runClientCredentialOperationAsync(
         }
       }
       // An uncertain app dispatch is terminal. Offline custody requires no app
-      // request, an explicit unowned-root refusal, or held maintenance admission.
+      // request, a definite predispatch refusal, or held maintenance admission.
       const retried = await offline();
       if (retried.kind === "result") {
         return retried.result;

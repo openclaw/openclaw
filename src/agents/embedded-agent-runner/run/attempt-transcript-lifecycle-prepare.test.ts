@@ -67,11 +67,12 @@ function observeCreation(
   sessionId: string,
   listener: Parameters<typeof onSessionIdentityMutation>[0],
 ) {
-  return onSessionIdentityMutation((event) => {
+  const unsubscribe = onSessionIdentityMutation((event) => {
     if (event.kind === "create" && event.current.sessionId === sessionId) {
       listener(event);
     }
   });
+  return { [Symbol.dispose]: unsubscribe };
 }
 async function appendInitial(
   kind: (typeof initialWriteKinds)[number],
@@ -481,17 +482,14 @@ it.each([false, true])("acknowledges only persisted tool results (incognito=%s)"
 it("keeps an atomic first append committed when publication revokes its run", () =>
   withInitialWriter(async ({ controller, manager, promptState, target }) => {
     const failure = new Error("revoke after actor commit");
-    const unsubscribe = observeCreation(target.sessionId, () => controller.abort(failure));
-    try {
-      await expect(manager.appendMessageAsync(userMessage)).rejects.toThrow();
-      expect(promptState.sessionWriterFence).toBeDefined();
-      expect(readEvents(target)).toMatchObject([
-        { type: "session" },
-        { type: "message", message: userMessage },
-      ]);
-    } finally {
-      unsubscribe();
-    }
+    using observer = observeCreation(target.sessionId, () => controller.abort(failure));
+    void observer;
+    await expect(manager.appendMessageAsync(userMessage)).rejects.toThrow();
+    expect(promptState.sessionWriterFence).toBeDefined();
+    expect(readEvents(target)).toMatchObject([
+      { type: "session" },
+      { type: "message", message: userMessage },
+    ]);
   }));
 
 it("does not replay an actor append whose outcome is unknown", () =>
@@ -819,31 +817,28 @@ it("publishes no initial claim or identity for a rolled-back outer transaction",
   withInitialWriter(async ({ manager, openManager, promptState, runParams, target }) => {
     const rollback = new Error("roll back first persistence");
     const identities: unknown[] = [];
-    const unsubscribe = observeCreation(target.sessionId, (event) => identities.push(event));
-    try {
-      expect(() =>
-        runOpenClawAgentWriteTransaction(
-          () => {
-            manager.appendMessage(userMessage);
-            expect(promptState.sessionWriterFence).toBeUndefined();
-            throw rollback;
-          },
-          { agentId: target.agentId, path: target.storePath },
-        ),
-      ).toThrow(rollback);
-      expect(promptState.sessionWriterFence).toBeUndefined();
-      expect(loadSessionEntry(target)).toBeUndefined();
-      expect(readEvents(target)).toEqual([]);
-      expect(identities).toEqual([]);
-      expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(true);
+    using observer = observeCreation(target.sessionId, (event) => identities.push(event));
+    void observer;
+    expect(() =>
+      runOpenClawAgentWriteTransaction(
+        () => {
+          manager.appendMessage(userMessage);
+          expect(promptState.sessionWriterFence).toBeUndefined();
+          throw rollback;
+        },
+        { agentId: target.agentId, path: target.storePath },
+      ),
+    ).toThrow(rollback);
+    expect(promptState.sessionWriterFence).toBeUndefined();
+    expect(loadSessionEntry(target)).toBeUndefined();
+    expect(readEvents(target)).toEqual([]);
+    expect(identities).toEqual([]);
+    expect(isSessionControllerWorkActive(target.storePath, [target.sessionKey])).toBe(true);
 
-      (await openManager()).appendMessage(userMessage);
-      expect(promptState.sessionWriterFence?.expectedWriterRunId).toBe(runParams.runId);
-      expect(loadSessionEntry(target)).toMatchObject({ activeWriterRunId: runParams.runId });
-      expect(identities).toHaveLength(1);
-    } finally {
-      unsubscribe();
-    }
+    (await openManager()).appendMessage(userMessage);
+    expect(promptState.sessionWriterFence?.expectedWriterRunId).toBe(runParams.runId);
+    expect(loadSessionEntry(target)).toMatchObject({ activeWriterRunId: runParams.runId });
+    expect(identities).toHaveLength(1);
   }));
 
 it("commits the initial metadata pair in one actor append and adopts later metadata", () =>
@@ -889,45 +884,42 @@ it.each(["message", "model", "initial metadata"] as const)(
     withInitialWriter(async ({ controller, manager, promptState, runParams, target }) => {
       const callerError = new Error("caller cancelled from committed identity observer");
       let observedFence: typeof promptState.sessionWriterFence;
-      const unsubscribe = observeCreation(target.sessionId, () => {
+      using observer = observeCreation(target.sessionId, () => {
         observedFence = promptState.sessionWriterFence;
         controller.abort(callerError);
       });
-      try {
-        const failure = await (
-          kind === "initial metadata"
-            ? manager[sessionManagerAppendInitialMetadata]("test-provider", "test-model", "high")
-            : appendInitial(kind, manager)
-        ).catch((error: unknown) => error);
-        if (kind === "message") {
-          expect(failure).toBe(callerError);
-        } else {
-          expect(failure).toBeInstanceOf(SessionMetadataCommittedError);
-          expect(isRecordedModelFallbackStop(failure)).toBe(true);
-        }
-        expect(observedFence).toEqual({
-          expectedLifecycleRevision: undefined,
-          expectedWriterRunId: runParams.runId,
-        });
-        expect(promptState.sessionWriterFence).toEqual(observedFence);
-        expect(loadSessionEntry(target)).toMatchObject({
-          sessionId: target.sessionId,
-          activeWriterRunId: runParams.runId,
-        });
-        const events = readEvents(target);
-        if (kind === "message") {
-          expect(events).toEqual([]);
-        } else {
-          expect(events).toMatchObject([
-            { type: "session" },
-            { type: "model_change", provider: "test-provider", modelId: "test-model" },
-            ...(kind === "initial metadata"
-              ? [{ type: "thinking_level_change", thinkingLevel: "high" }]
-              : []),
-          ]);
-        }
-      } finally {
-        unsubscribe();
+      void observer;
+      const failure = await (
+        kind === "initial metadata"
+          ? manager[sessionManagerAppendInitialMetadata]("test-provider", "test-model", "high")
+          : appendInitial(kind, manager)
+      ).catch((error: unknown) => error);
+      if (kind === "message") {
+        expect(failure).toBe(callerError);
+      } else {
+        expect(failure).toBeInstanceOf(SessionMetadataCommittedError);
+        expect(isRecordedModelFallbackStop(failure)).toBe(true);
+      }
+      expect(observedFence).toEqual({
+        expectedLifecycleRevision: undefined,
+        expectedWriterRunId: runParams.runId,
+      });
+      expect(promptState.sessionWriterFence).toEqual(observedFence);
+      expect(loadSessionEntry(target)).toMatchObject({
+        sessionId: target.sessionId,
+        activeWriterRunId: runParams.runId,
+      });
+      const events = readEvents(target);
+      if (kind === "message") {
+        expect(events).toEqual([]);
+      } else {
+        expect(events).toMatchObject([
+          { type: "session" },
+          { type: "model_change", provider: "test-provider", modelId: "test-model" },
+          ...(kind === "initial metadata"
+            ? [{ type: "thinking_level_change", thinkingLevel: "high" }]
+            : []),
+        ]);
       }
     }),
 );

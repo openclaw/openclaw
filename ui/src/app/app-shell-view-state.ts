@@ -3,10 +3,11 @@ import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import type { SettingsSidebarFallbackProps } from "../components/settings-sidebar-lazy.tsx";
-import { isGatewayConnectionAttemptPending, resolveGatewayStatus } from "../lib/gateway-status.ts";
+import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
+import { isClawsAvailable } from "../pages/claws/availability.ts";
 import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
@@ -206,7 +207,10 @@ export function readShellView(host: ShellViewHost) {
     activeRouteId: activeRoute,
     router: runtime.router,
     activePluginTabId: activePluginRef ? pluginTabKey(activePluginRef) : "",
-    enabledRouteIds: APP_ROUTE_IDS,
+    enabledRouteIds:
+      isClawsAvailable(context.runtimeConfig.state) === true
+        ? APP_ROUTE_IDS
+        : APP_ROUTE_IDS.filter((routeId) => routeId !== "claws"),
     sessionKey: host.activeSessionKey,
     connected: gatewayConnected,
     connectionStatus,
@@ -246,7 +250,6 @@ export function readShellView(host: ShellViewHost) {
       ? (host.storedOutboxes?.total ?? 0) + (gatewaySnapshot.deferredIntentCount ?? 0)
       : 0,
     onRetry: callbacks.retryGateway,
-    retryPending: isGatewayConnectionAttemptPending(gatewaySnapshot),
   };
   const mobileGatewayStatus =
     mobileNavLayout && !navDrawerOpen && !nativeEmbed ? gatewayStatus : null;

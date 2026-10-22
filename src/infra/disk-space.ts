@@ -75,11 +75,9 @@ export function formatDiskSpaceBytes(bytes: number): string {
 export function createLowDiskSpaceWarning(params: {
   targetPath: string;
   purpose: string;
-  thresholdBytes?: number;
 }): string | null {
-  const thresholdBytes = params.thresholdBytes ?? LOW_DISK_SPACE_WARNING_THRESHOLD_BYTES;
   const snapshot = tryReadDiskSpace(params.targetPath);
-  if (!snapshot || snapshot.availableBytes >= thresholdBytes) {
+  if (!snapshot || snapshot.availableBytes >= LOW_DISK_SPACE_WARNING_THRESHOLD_BYTES) {
     return null;
   }
   const location =

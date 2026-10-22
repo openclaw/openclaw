@@ -1,8 +1,10 @@
+import fs from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   persistedText,
   timedText,
@@ -109,6 +111,74 @@ async function restoredSteer(name: string, age: number, offset: number, seq: num
 }
 
 suite.define(() => {
+  it("removes the typed /steer queue chip after consumption while the original run stays active", async () => {
+    const { page } = await newChatPage(suite);
+    const runId = "active-run";
+    const sessionKey = "agent:main:main";
+    const sessionInfo = { key: sessionKey, activeRunIds: [runId], hasActiveRun: true };
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        persistedText("user", "Check how the metrics file is populated.", {
+          id: "original-user",
+          idempotencyKey: `${runId}:user`,
+          seq: 1,
+        }),
+      ],
+      inFlightRun: { runId, text: "Checking the metrics pipeline." },
+      sessionInfo,
+    });
+    await page.goto(`${suite.server.baseUrl}chat`);
+    const stop = page.getByRole("button", { name: "Stop generating" });
+    await stop.waitFor();
+    const steerText = "Keep the numbers in metrics.json, not USER.md.";
+    await gateway.deferNext("chat.send");
+    await chatComposer(page).fill(`/steer ${steerText}`);
+    await chatComposer(page).press("Control+Enter");
+    const sent = await gateway.waitForRequest("chat.send");
+    const params = requireRecord(sent.params);
+    expect(params).toMatchObject({ sessionKey, message: steerText, queueMode: "steer" });
+    const steerRunId = requireString(params.idempotencyKey, "steer input identity");
+    await gateway.resolveDeferred("chat.send", { runId: steerRunId, status: "started" });
+    const steerMessage = persistedText("user", steerText, {
+      id: "consumed-steer",
+      idempotencyKey: `${steerRunId}:user`,
+      seq: 2,
+      steerTargetRunId: runId,
+    });
+    await gateway.emitGatewayEvent("session.message", {
+      ...sessionInfo,
+      sessionKey,
+      clientRunId: steerRunId,
+      message: steerMessage,
+      messageId: "consumed-steer",
+      messageSeq: 2,
+    });
+    const reply = "Understood. I will verify metrics.json and leave USER.md unchanged.";
+    await gateway.emitGatewayEvent(
+      "chat",
+      chatEvent(runId, sessionKey, "delta", {
+        message: textMessage("assistant", reply),
+      }),
+    );
+    const userBubble = page.locator(".chat-group.user", { hasText: steerText });
+    const replyBubble = chatTranscript(page).getByText(reply, { exact: true });
+    await expectCount(userBubble, 1);
+    await replyBubble.waitFor();
+    await stop.waitFor();
+    const parent = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    if (parent) {
+      const dir = createControlUiE2eArtifactDir("consumed-slash-steer", parent);
+      const frame = await takeControlUiScreenshotFrame(
+        page,
+        chatTranscript(page),
+        [userBubble, replyBubble, stop],
+        { animations: "disabled" },
+      );
+      await fs.writeFile(path.join(dir, "consumed-steer.png"), frame.png);
+    }
+    await expectCount(page.locator(".chat-queue__item"), 0);
+  });
+
   it("preserves a non-steer server default for active-run follow-ups", async () => {
     const { page } = await newChatPage(suite);
     const runtimeConfig = {

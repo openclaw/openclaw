@@ -12,24 +12,16 @@ import {
   createActiveRun,
   createHandler,
   createTranscriptUpdateBroadcastHandler,
-  listAccessorSessionEntriesReadOnlyMock,
   loadAccessorSessionEntryReadOnlyMock,
-  loadGatewaySessionEntryReadOnlyMock,
-  loadGatewaySessionRowMock,
   readSessionMessageByIdAsyncMock as readMessage,
   readSessionMessageCountAsyncMock as readCount,
   projectChatDisplayMessageMock,
-  runtimeConfigState,
-  sessionRow,
+  resetSessionEventMocks,
+  transcriptTarget,
 } from "./server-session-events.test-support.js";
 
 type Update = Parameters<ReturnType<typeof createTranscriptUpdateBroadcastHandler>>[0];
-const target = {
-  agentId: "main",
-  sessionId: "sess-main",
-  sessionKey: "agent:main:main",
-  storePath: "/tmp/recovery.sqlite",
-};
+const target = transcriptTarget("/tmp/recovery.sqlite");
 const update = (overrides: Partial<Update>): Update => ({ target, ...overrides });
 const stored = (message: unknown, seq = 2) => ({ found: true, oversized: false, seq, message });
 const diagnostic = (runId: string, text?: string, errorMessage?: string) => ({
@@ -41,16 +33,8 @@ const diagnostic = (runId: string, text?: string, errorMessage?: string) => ({
 });
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  resetSessionEventMocks();
   projectChatDisplayMessageMock.mockImplementation(projectChatDisplayMessage);
-  listAccessorSessionEntriesReadOnlyMock.mockReturnValue([]);
-  loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
-  loadGatewaySessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
-  loadGatewaySessionRowMock.mockReturnValue(sessionRow);
-  readCount.mockReset().mockResolvedValue(undefined);
-  readMessage.mockReset();
-  runtimeConfigState.value = {};
-  sessionRow.key = "agent:main:main";
 });
 
 it("does not turn queued diagnostic errors into a history invalidation", async ({ signal }) => {

@@ -6,26 +6,29 @@ const outside = { kind: "not-control-ui" } as const;
 const notFound = { kind: "not-found" } as const;
 
 describe("isControlUiApprovalDocumentPath", () => {
-  it.each([
-    { basePath: "", pathname: "/approve" },
-    { basePath: "", pathname: "/approve/" },
-    { basePath: "", pathname: "/approve/plugin%3Arequest.json" },
-    { basePath: "/openclaw", pathname: "/openclaw/approve/exec%3Aa%2Fb" },
-  ])("reserves $pathname", ({ basePath, pathname }) => {
-    expect(isControlUiApprovalDocumentPath({ basePath, pathname })).toBe(true);
-  });
-
-  it.each([
-    { basePath: "", pathname: "/approvals/id" },
-    { basePath: "", pathname: "/approve/id/extra" },
-    { basePath: "/openclaw", pathname: "/approve/id" },
-  ])("does not reserve $pathname", ({ basePath, pathname }) => {
-    expect(isControlUiApprovalDocumentPath({ basePath, pathname })).toBe(false);
+  it.each<[string, string, boolean]>([
+    ["", "/approve", true],
+    ["", "/approve/", true],
+    ["", "/approve/plugin%3Arequest.json", true],
+    ["/openclaw", "/openclaw/approve/exec%3Aa%2Fb", true],
+    ["", "/approvals/id", false],
+    ["", "/approve/id/extra", false],
+    ["/openclaw", "/approve/id", false],
+  ])("reserves %s %s: %s", (basePath, pathname, expected) => {
+    expect(isControlUiApprovalDocumentPath({ basePath, pathname })).toBe(expected);
   });
 });
 
 const mountedChat = { basePath: "/openclaw", pathname: "/openclaw/chat", method: "HEAD" };
 type Route = Partial<Parameters<typeof classifyControlUiRequest>[0]>;
+const classify = (route: Route) =>
+  classifyControlUiRequest({
+    basePath: "",
+    pathname: "/chat",
+    search: "",
+    method: "GET",
+    ...route,
+  });
 
 describe("Control UI SPA fallback Accept routing", () => {
   it.each<[string, string | undefined, boolean, Route?]>([
@@ -80,16 +83,7 @@ describe("Control UI SPA fallback Accept routing", () => {
       { pathname: "/settings/plugins" },
     ],
   ])("classifies %s", (_name, accept, expected, route) => {
-    expect(
-      classifyControlUiRequest({
-        basePath: "",
-        pathname: "/chat",
-        search: "",
-        method: "GET",
-        accept,
-        ...route,
-      }),
-    ).toEqual({ kind: "serve", spaFallback: expected });
+    expect(classify({ accept, ...route })).toEqual({ kind: "serve", spaFallback: expected });
   });
 });
 
@@ -135,14 +129,7 @@ describe("classifyControlUiRequest", () => {
       ["returns not-found for legacy ui routes", "/ui/settings", "GET", notFound],
       ["falls through non-read requests", "/imessage-webhook", "POST", outside],
     ])("%s", (_name, pathname, method, expected) => {
-      expect(
-        classifyControlUiRequest({
-          basePath: "",
-          pathname,
-          search: "",
-          method,
-        }),
-      ).toEqual(expected);
+      expect(classify({ pathname, method })).toEqual(expected);
     });
   });
 
@@ -152,15 +139,7 @@ describe("classifyControlUiRequest", () => {
       ["JSON catalogue", "/plugins", "application/json", outside],
       ["JSON catalogue slash", "/plugins/", "application/json", outside],
     ] as const)("%s", (_name, pathname, accept, expected) => {
-      expect(
-        classifyControlUiRequest({
-          basePath: "",
-          pathname,
-          search: "",
-          method: "GET",
-          accept,
-        }),
-      ).toEqual(expected);
+      expect(classify({ pathname, accept })).toEqual(expected);
     });
   });
 
@@ -181,14 +160,7 @@ describe("classifyControlUiRequest", () => {
       ["write entrypoint", "/openclaw", "", "POST", outside],
       ["write subroute", "/openclaw/webhook", "", "PATCH", outside],
     ])("%s", (_name, pathname, search, method, expected) => {
-      expect(
-        classifyControlUiRequest({
-          basePath: "/openclaw",
-          pathname,
-          search,
-          method,
-        }),
-      ).toEqual(expected);
+      expect(classify({ basePath: "/openclaw", pathname, search, method })).toEqual(expected);
     });
   });
 });

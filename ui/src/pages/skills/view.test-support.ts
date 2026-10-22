@@ -66,7 +66,6 @@ export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
     clawhubIconUrls: value("clawhubIconUrls", {}),
     clawhubDetail: value("clawhubDetail", null),
     clawhubDetailRef: value("clawhubDetailRef", null),
-    clawhubDetailLoading: value("clawhubDetailLoading", false),
     clawhubDetailError: value("clawhubDetailError", null),
     clawhubInstallMessage: value("clawhubInstallMessage", null),
     clawhubVerdicts: value("clawhubVerdicts", {}),
@@ -78,6 +77,12 @@ export function createProps(overrides: SkillsTestOverrides = {}): SkillsProps {
     skillCardErrors: value("skillCardErrors", {}),
   };
   return {
+    readClawHubDetail: () => {
+      if (state.clawhubDetailError) {
+        throw new Error(state.clawhubDetailError);
+      }
+      return state.clawhubDetail;
+    },
     canUpdate: true,
     canInstall: true,
     loading: state.skillsLoading,

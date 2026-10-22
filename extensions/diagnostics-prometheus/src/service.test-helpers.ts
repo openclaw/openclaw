@@ -1,9 +1,12 @@
 import { createServer } from "node:http";
 import { expectDefined } from "@openclaw/normalization-core";
 import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
+import { createMockServerResponse } from "openclaw/plugin-sdk/test-env";
+import { expect } from "vitest";
 import type {
   DiagnosticEventMetadata,
   DiagnosticEventPayload,
+  OpenClawPluginHttpRouteHandler,
   OpenClawPluginServiceContext,
 } from "../api.js";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
@@ -27,6 +30,16 @@ export type TrustedExporterInternalDiagnostics = NonNullable<
 
 export function baseEvent(): Pick<DiagnosticEventPayload, "seq" | "ts"> {
   return { seq: 1, ts: 1700000000000 };
+}
+
+export function scrapeMetrics(handler: OpenClawPluginHttpRouteHandler): string {
+  const response = createMockServerResponse();
+  response.req.method = "GET";
+  response.req.url = "/api/diagnostics/prometheus";
+  expect(handler(response.req, response)).toBe(true);
+  expect(response.statusCode).toBe(200);
+  expect(response.headersSent).toBe(true);
+  return expectDefined(response.body, "Prometheus scrape body");
 }
 
 export function createMetricsHarness(
@@ -71,6 +84,7 @@ export function createMetricsHarness(
   start();
   return {
     handler: exporter.handler,
+    logger: context.logger,
     record(event: EventInput, metadata: DiagnosticEventMetadata = trusted) {
       expectDefined(listener, "Prometheus diagnostics listener")(
         { ...baseEvent(), ...event },
@@ -78,7 +92,7 @@ export function createMetricsHarness(
         {},
       );
     },
-    render: exporter.render,
+    render: () => scrapeMetrics(exporter.handler),
     start,
     stop: () => exporter.service.stop?.(),
   };

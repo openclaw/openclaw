@@ -61,6 +61,7 @@ import {
   refreshChatMetadata,
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
+import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { publishChatWorkContext } from "./chat-work-context.ts";
 import { resolveChatAttachmentLimits } from "./components/chat-attachment-admission.ts";
 import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
@@ -304,6 +305,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       if (pageState.chatMetadataIsPresented?.()) {
         void refreshChatMetadata(pageState);
         this.resumeDeferredSessionHydration();
+        this.markSessionRead(selectedChatSessionRow(pageState));
         void this.refreshTaskSuggestions({ automatic: true });
       }
     };

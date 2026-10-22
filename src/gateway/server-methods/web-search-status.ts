@@ -262,6 +262,8 @@ export async function prepareWebSearchStatus(
         authStore: catalog.authStore,
         modelApi: evaluation.selectedRoute?.api ?? entry.api,
         modelBaseUrl: evaluation.selectedRoute?.baseUrl ?? entry.baseUrl,
+        modelParams: entry.params,
+        pluginMetadataSnapshot: catalog.metadataSnapshot,
       });
       if (status.model.runtime === "openclaw" && native.kind === "native") {
         status.route = {

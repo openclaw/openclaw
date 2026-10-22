@@ -104,6 +104,8 @@ it.each(["success", "cleanup failure", "encoding failure"] as const)(
         expect(fixture.state.connections[1]?.database.isOpen, first.frames.join("\n")).toBe(true);
         const retry = invoke("migrations.memory.apply", params);
         const retryRun = retry.run();
+        await Promise.resolve();
+        expect(retry.respond).not.toHaveBeenCalled();
         fixture.state.resumeApply.resolve();
         await Promise.all([firstRun, retryRun]);
         expect([first.frames.length, retry.frames.length]).toEqual([1, 1]);

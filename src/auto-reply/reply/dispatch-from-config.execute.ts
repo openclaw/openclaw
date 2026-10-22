@@ -242,6 +242,9 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                     },
                   }),
               onReasoningStream,
+              onReasoningProgress: wrapProgressCallback(params.replyOptions?.onReasoningProgress, {
+                forwardWhenSourceDeliverySuppressed: true,
+              }),
               streamReasoningInNonStreamModes: params.replyOptions?.streamReasoningInNonStreamModes,
               onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),
               onAssistantMessageStart: wrapProgressCallback(

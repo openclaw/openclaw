@@ -15,9 +15,12 @@ import type { resolveOsSummary } from "../infra/os-summary.js";
 import { formatPluginCompatibilityNotice } from "../plugins/status-compatibility.js";
 import type { SecurityAuditReport } from "../security/audit.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
-import type { StatusSummary } from "../status/summary.js";
-import { formatDeliveryQueueHealthLine, formatHealthChannelLines } from "./health-format.js";
-import type { HealthSummary } from "./health.js";
+import {
+  formatConfigReloadHealthLine,
+  formatContextEngineHealthLine,
+  formatDeliveryQueueHealthLine,
+  formatHealthChannelLines,
+} from "./health-format.js";
 import { formatSqliteWalHealthWarning } from "./sqlite-wal-health.js";
 import {
   buildStatusChannelsTableRows,
@@ -37,178 +40,6 @@ const statusHealthColumns: TableColumn[] = [
   { key: "Status", header: "Status", minWidth: 8 },
   { key: "Detail", header: "Detail", flex: true, minWidth: 28 },
 ];
-
-function buildStatusSecurityAuditLines(params: {
-  securityAudit: {
-    summary: { critical: number; warn: number; info: number };
-    findings: Array<{
-      severity: "critical" | "warn" | "info";
-      title: string;
-      detail: string;
-      remediation?: string | null;
-    }>;
-  };
-}) {
-  const fmtSummary = (value: { critical: number; warn: number; info: number }) => {
-    return [
-      theme.error(`${value.critical} critical`),
-      theme.warn(`${value.warn} warn`),
-      theme.muted(`${value.info} info`),
-    ].join(" · ");
-  };
-  const lines = [theme.muted(`Summary: ${fmtSummary(params.securityAudit.summary)}`)];
-  const importantFindings = params.securityAudit.findings.filter(
-    (f) => f.severity === "critical" || f.severity === "warn",
-  );
-  if (importantFindings.length === 0) {
-    lines.push(theme.muted("No critical or warn findings detected."));
-  } else {
-    const severityLabel = (sev: "critical" | "warn" | "info") =>
-      sev === "critical"
-        ? theme.error("CRITICAL")
-        : sev === "warn"
-          ? theme.warn("WARN")
-          : theme.muted("INFO");
-    const sevRank = (sev: "critical" | "warn" | "info") =>
-      sev === "critical" ? 0 : sev === "warn" ? 1 : 2;
-    const shown = importantFindings
-      // Always show critical findings before warnings, regardless of audit insertion order.
-      .toSorted((a, b) => sevRank(a.severity) - sevRank(b.severity))
-      .slice(0, 6);
-    for (const finding of shown) {
-      lines.push(`  ${severityLabel(finding.severity)} ${finding.title}`);
-      lines.push(`    ${shortenText(finding.detail.replaceAll("\n", " "), 160)}`);
-      if (finding.remediation?.trim()) {
-        lines.push(`    ${theme.muted(`Fix: ${finding.remediation.trim()}`)}`);
-      }
-    }
-    if (importantFindings.length > shown.length) {
-      lines.push(theme.muted(`… +${importantFindings.length - shown.length} more`));
-    }
-  }
-  lines.push(theme.muted(`Full report: ${formatCliCommand("openclaw security audit")}`));
-  lines.push(theme.muted(`Deep check: ${formatCliCommand("openclaw security audit --deep")}`));
-  return lines;
-}
-
-function buildStatusHealthRows(params: {
-  health: HealthSummary;
-  sqliteWal?: StatusSummary["sqliteWal"];
-}) {
-  const rows: Array<{ Item: string; Status: string; Detail: string }> = [
-    {
-      Item: "Gateway",
-      Status: theme.success("reachable"),
-      Detail: `${params.health.durationMs}ms`,
-    },
-  ];
-  const childRuntimeWarning = params.health.childRuntime
-    ? formatMissingChildRuntimeWarning(params.health.childRuntime)
-    : undefined;
-  if (childRuntimeWarning) {
-    rows.push({
-      Item: "Gateway runtime",
-      Status: theme.warn("WARN"),
-      Detail: childRuntimeWarning,
-    });
-  }
-  const sqliteWalWarning = formatSqliteWalHealthWarning(params.sqliteWal);
-  if (sqliteWalWarning) {
-    rows.push({ Item: "SQLite WAL", Status: theme.warn("WARN"), Detail: sqliteWalWarning });
-  }
-  if (params.health.eventLoop) {
-    rows.push({
-      Item: "Event loop",
-      Status: params.health.eventLoop.degraded ? theme.warn("WARN") : theme.success("OK"),
-      Detail: formatEventLoopHealthDetail(params.health.eventLoop),
-    });
-  }
-  const healthLines = formatHealthChannelLines(params.health, { accountMode: "all" });
-  const deliveryQueueLine = formatDeliveryQueueHealthLine(params.health);
-  if (deliveryQueueLine) {
-    healthLines.push(deliveryQueueLine);
-  }
-  for (const line of healthLines) {
-    const colon = line.indexOf(":");
-    if (colon === -1) {
-      continue;
-    }
-    const item = line.slice(0, colon).trim();
-    const detail = line.slice(colon + 1).trim();
-    const normalized = normalizeLowercaseStringOrEmpty(detail);
-    // Shared health text uses known prefixes to classify table status chips.
-    const status =
-      normalized === "healthy" || normalized.startsWith("ok") || normalized.startsWith("configured")
-        ? theme.success("OK")
-        : normalized.startsWith("not configured") || normalized.startsWith("disabled")
-          ? theme.muted("OFF")
-          : normalized.startsWith("linked")
-            ? theme.success("LINKED")
-            : normalized.startsWith("not linked")
-              ? theme.warn("UNLINKED")
-              : theme.warn("WARN");
-    rows.push({ Item: item, Status: status, Detail: detail });
-  }
-  return rows;
-}
-
-function formatEventLoopHealthDetail(eventLoop: NonNullable<HealthSummary["eventLoop"]>): string {
-  const parts = [
-    eventLoop.degraded && eventLoop.degradedSinceMs != null
-      ? `degraded for ${formatDurationCompact(eventLoop.degradedSinceMs) ?? "0s"}`
-      : null,
-    eventLoop.reasons.length > 0 ? `reasons ${eventLoop.reasons.join(",")}` : "healthy",
-    `max ${Math.round(eventLoop.delayMaxMs)}ms`,
-    `p99 ${Math.round(eventLoop.delayP99Ms)}ms`,
-    `util ${eventLoop.utilization}`,
-    `cpu ${eventLoop.cpuCoreRatio}`,
-  ];
-  return parts.filter((part): part is string => part !== null).join(" · ");
-}
-
-/** Explains sessions pinned to a selected model different from the current configured default. */
-function buildStatusModelSelectionLines(recent: StatusSummary["sessions"]["recent"]) {
-  const mismatches = recent.filter((sess) => {
-    if (!sess.configuredModel || !sess.selectedModel || !sess.modelSelectionReason) {
-      return false;
-    }
-    return (
-      sess.configuredModel !== sess.selectedModel &&
-      // Runtime aliases such as provider-qualified model refs should not warn as real mismatches.
-      !areRuntimeModelRefsEquivalent(sess.configuredModel, sess.selectedModel)
-    );
-  });
-  if (mismatches.length === 0) {
-    return [];
-  }
-
-  const lines: string[] = [];
-  for (const sess of mismatches.slice(0, 3)) {
-    const key = shortenText(sess.key, 48);
-    const configured = sess.configuredModel ?? "unknown";
-    const selected = sess.selectedModel ?? "unknown";
-    const isFallback = sess.modelSelectionReason === "fallback selected";
-    const intro = isFallback
-      ? `Session ${key} is running ${selected} (auto fallback); config primary is ${configured}.`
-      : `Session ${key} is pinned to ${selected}; config primary ${configured} will apply to new/unpinned sessions.`;
-    const reasonLine = `  Reason: ${sess.modelSelectionReason ?? "session override"}`;
-    const clearLine = isFallback
-      ? "  Action: check provider availability or retry with /model"
-      : "  Clear with: /model default";
-    lines.push(
-      theme.warn(intro),
-      `  Configured default: ${configured}`,
-      `  Session selected: ${selected}`,
-      reasonLine,
-      clearLine,
-      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-strictness",
-    );
-  }
-  if (mismatches.length > 3) {
-    lines.push(theme.muted(`  … +${mismatches.length - 3} more pinned session(s)`));
-  }
-  return lines;
-}
 
 export async function buildStatusCommandReportLines(
   input: Omit<
@@ -261,16 +92,60 @@ export async function buildStatusCommandReportLines(
     // Verbose mode exposes prompt-cache details because it can widen rows substantially.
     ...(params.opts.verbose ? [{ key: "Cache", header: "Cache", minWidth: 16, flex: true }] : []),
   ] satisfies TableColumn[];
-  const securityAuditLines = params.securityAudit
-    ? buildStatusSecurityAuditLines({
-        securityAudit: params.securityAudit,
-      })
-    : [
-        theme.muted(
-          `Skipped in fast status. Full report: ${formatCliCommand("openclaw security audit")}`,
-        ),
-        theme.muted(`Deep check: ${formatCliCommand("openclaw status --deep")}`),
-      ];
+  const securityAudit = params.securityAudit;
+  let securityAuditLines: string[];
+  if (securityAudit) {
+    const fmtSummary = (value: { critical: number; warn: number; info: number }) => {
+      return [
+        theme.error(`${value.critical} critical`),
+        theme.warn(`${value.warn} warn`),
+        theme.muted(`${value.info} info`),
+      ].join(" · ");
+    };
+    securityAuditLines = [theme.muted(`Summary: ${fmtSummary(securityAudit.summary)}`)];
+    const importantFindings = securityAudit.findings.filter(
+      (f) => f.severity === "critical" || f.severity === "warn",
+    );
+    if (importantFindings.length === 0) {
+      securityAuditLines.push(theme.muted("No critical or warn findings detected."));
+    } else {
+      const severityLabel = (sev: "critical" | "warn" | "info") =>
+        sev === "critical"
+          ? theme.error("CRITICAL")
+          : sev === "warn"
+            ? theme.warn("WARN")
+            : theme.muted("INFO");
+      const sevRank = (sev: "critical" | "warn" | "info") =>
+        sev === "critical" ? 0 : sev === "warn" ? 1 : 2;
+      const shown = importantFindings
+        // Always show critical findings before warnings, regardless of audit insertion order.
+        .toSorted((a, b) => sevRank(a.severity) - sevRank(b.severity))
+        .slice(0, 6);
+      for (const finding of shown) {
+        securityAuditLines.push(`  ${severityLabel(finding.severity)} ${finding.title}`);
+        securityAuditLines.push(`    ${shortenText(finding.detail.replaceAll("\n", " "), 160)}`);
+        if (finding.remediation?.trim()) {
+          securityAuditLines.push(`    ${theme.muted(`Fix: ${finding.remediation.trim()}`)}`);
+        }
+      }
+      if (importantFindings.length > shown.length) {
+        securityAuditLines.push(theme.muted(`… +${importantFindings.length - shown.length} more`));
+      }
+    }
+    securityAuditLines.push(
+      theme.muted(`Full report: ${formatCliCommand("openclaw security audit")}`),
+    );
+    securityAuditLines.push(
+      theme.muted(`Deep check: ${formatCliCommand("openclaw security audit --deep")}`),
+    );
+  } else {
+    securityAuditLines = [
+      theme.muted(
+        `Skipped in fast status. Full report: ${formatCliCommand("openclaw security audit")}`,
+      ),
+      theme.muted(`Deep check: ${formatCliCommand("openclaw status --deep")}`),
+    ];
+  }
   const width = params.tableWidth;
   const pluginCompatibilityLines =
     params.pluginCompatibility.length === 0
@@ -308,7 +183,42 @@ export async function buildStatusCommandReportLines(
         theme.muted(`Inspect: ${formatCliCommand("openclaw devices list")}`),
       ]
     : [];
-  const modelSelectionLines = buildStatusModelSelectionLines(params.summary.sessions.recent);
+  // Explain sessions pinned to a model different from the current configured default.
+  const mismatches = params.summary.sessions.recent.filter((sess) => {
+    if (!sess.configuredModel || !sess.selectedModel || !sess.modelSelectionReason) {
+      return false;
+    }
+    return (
+      sess.configuredModel !== sess.selectedModel &&
+      // Runtime aliases such as provider-qualified model refs should not warn as real mismatches.
+      !areRuntimeModelRefsEquivalent(sess.configuredModel, sess.selectedModel)
+    );
+  });
+  const modelSelectionLines: string[] = [];
+  for (const sess of mismatches.slice(0, 3)) {
+    const key = shortenText(sess.key, 48);
+    const configured = sess.configuredModel ?? "unknown";
+    const selected = sess.selectedModel ?? "unknown";
+    const isFallback = sess.modelSelectionReason === "fallback selected";
+    const intro = isFallback
+      ? `Session ${key} is running ${selected} (auto fallback); config primary is ${configured}.`
+      : `Session ${key} is pinned to ${selected}; config primary ${configured} will apply to new/unpinned sessions.`;
+    const reasonLine = `  Reason: ${sess.modelSelectionReason ?? "session override"}`;
+    const clearLine = isFallback
+      ? "  Action: check provider availability or retry with /model"
+      : "  Clear with: /model default";
+    modelSelectionLines.push(
+      theme.warn(intro),
+      `  Configured default: ${configured}`,
+      `  Session selected: ${selected}`,
+      reasonLine,
+      clearLine,
+      "  Docs: https://docs.openclaw.ai/concepts/models#selection-source-and-fallback-strictness",
+    );
+  }
+  if (mismatches.length > 3) {
+    modelSelectionLines.push(theme.muted(`  … +${mismatches.length - 3} more pinned session(s)`));
+  }
   const channelsColumns = statusChannelsTableColumns;
   const channelsRows = buildStatusChannelsTableRows({
     rows: params.channels.rows,
@@ -337,17 +247,86 @@ export async function buildStatusCommandReportLines(
       ? theme.muted(`… +${params.summary.queuedSystemEvents.length - 5} more`)
       : null;
   const healthColumns = params.health ? statusHealthColumns : undefined;
-  const healthRows = params.health
-    ? buildStatusHealthRows({
-        health: params.health,
-        sqliteWal: params.summary.sqliteWal,
-      })
-    : undefined;
+  let healthRows: Array<{ Item: string; Status: string; Detail: string }> | undefined;
+  if (params.health) {
+    const health = params.health;
+    const sqliteWal = params.summary.sqliteWal;
+    healthRows = [
+      { Item: "Gateway", Status: theme.success("reachable"), Detail: `${health.durationMs}ms` },
+    ];
+    const childRuntimeWarning = health.childRuntime
+      ? formatMissingChildRuntimeWarning(health.childRuntime)
+      : undefined;
+    if (childRuntimeWarning) {
+      healthRows.push({
+        Item: "Gateway runtime",
+        Status: theme.warn("WARN"),
+        Detail: childRuntimeWarning,
+      });
+    }
+    const sqliteWalWarning = formatSqliteWalHealthWarning(sqliteWal);
+    if (sqliteWalWarning) {
+      healthRows.push({ Item: "SQLite WAL", Status: theme.warn("WARN"), Detail: sqliteWalWarning });
+    }
+    if (health.eventLoop) {
+      const eventLoop = health.eventLoop;
+      const eventLoopStatus = eventLoop.degraded ? theme.warn("WARN") : theme.success("OK");
+      const parts = [
+        eventLoop.degraded && eventLoop.degradedSinceMs != null
+          ? `degraded for ${formatDurationCompact(eventLoop.degradedSinceMs) ?? "0s"}`
+          : null,
+        eventLoop.reasons.length > 0 ? `reasons ${eventLoop.reasons.join(",")}` : "healthy",
+        `max ${Math.round(eventLoop.delayMaxMs)}ms`,
+        `p99 ${Math.round(eventLoop.delayP99Ms)}ms`,
+        `util ${eventLoop.utilization}`,
+        `cpu ${eventLoop.cpuCoreRatio}`,
+      ];
+      healthRows.push({
+        Item: "Event loop",
+        Status: eventLoopStatus,
+        Detail: parts.filter((part): part is string => part !== null).join(" · "),
+      });
+    }
+    const warningLines = [
+      formatContextEngineHealthLine(health),
+      formatDeliveryQueueHealthLine(health),
+      formatConfigReloadHealthLine(health),
+    ].filter((line): line is string => line !== null);
+    const healthLines = [
+      ...formatHealthChannelLines(health, { accountMode: "all" }),
+      ...warningLines,
+    ];
+    for (const line of healthLines) {
+      const colon = line.indexOf(":");
+      if (colon === -1) {
+        continue;
+      }
+      const item = line.slice(0, colon).trim();
+      const detail = line.slice(colon + 1).trim();
+      const normalized = normalizeLowercaseStringOrEmpty(detail);
+      // Auxiliary failures warn; intentionally disabled channel accounts remain OFF.
+      const status = warningLines.includes(line)
+        ? theme.warn("WARN")
+        : normalized === "healthy" ||
+            normalized.startsWith("ok") ||
+            normalized.startsWith("configured")
+          ? theme.success("OK")
+          : normalized.startsWith("not configured") || normalized.startsWith("disabled")
+            ? theme.muted("OFF")
+            : normalized.startsWith("linked")
+              ? theme.success("LINKED")
+              : normalized.startsWith("not linked")
+                ? theme.warn("UNLINKED")
+                : theme.warn("WARN");
+      healthRows.push({ Item: item, Status: status, Detail: detail });
+    }
+  }
   const usageLines = params.usageLines;
   const updateHint = formatUpdateAvailableHint(params.surface.update);
   const footerLines = [
     "FAQ: https://docs.openclaw.ai/faq",
     "Troubleshooting: https://docs.openclaw.ai/troubleshooting",
+    "Support: https://community.openclaw.ai/",
     ...(updateHint ? ["", theme.warn(updateHint)] : []),
     "Next steps:",
     `  Need to share?      ${formatCliCommand("openclaw status --all")}`,

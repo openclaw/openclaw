@@ -6,10 +6,9 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import { isGatewayProtocolResponseError } from "../../packages/gateway-client/src/protocol-request.js";
 import {
-  BUILD_STAMP_FILE,
-  resolveGitHead,
-  RUNTIME_POSTBUILD_STAMP_FILE,
-} from "../../scripts/lib/local-build-metadata.mts";
+  createFixtureRequest,
+  verifyBuiltGatewayHead,
+} from "../../test/helpers/gateway-built-fixture.js";
 import { acquireGatewayTestClient } from "../../test/helpers/gateway-client.js";
 import { writeOpenAiResponsesText } from "../../test/helpers/openai-responses-sse.js";
 import {
@@ -19,7 +18,6 @@ import {
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
 import { runQaGatewayTestFixture } from "../../test/helpers/qa-gateway-test-lifetime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { GatewayClientRequestOptions } from "./client.js";
 
 const PROVIDERS = ["route-proof-stable", "route-proof-dynamic"] as const;
 const PLUGIN_ID = "route-model-proof";
@@ -93,7 +91,6 @@ it(
   { timeout: 180_000 },
   async (context) => {
     const repoRoot = process.cwd();
-    let head: ReturnType<typeof resolveGitHead> | undefined;
     const requests: Array<{ model: string; maxTokens: string | undefined }> = [];
     let unexpectedCredential = false;
     const handlers = new Set<Promise<void>>();
@@ -141,19 +138,7 @@ it(
     const proof = await runQaGatewayTestFixture(
       context,
       async ({ signal, verifyCleanup }) => {
-        head = resolveGitHead({ cwd: repoRoot });
-        expect(head).toMatch(/^[0-9a-f]{40}$/u);
-        await fs.access(path.join(repoRoot, "dist/index.js"));
-        signal.throwIfAborted();
-        for (const [file, field] of [
-          [BUILD_STAMP_FILE, "head"],
-          [RUNTIME_POSTBUILD_STAMP_FILE, "head"],
-          ["build-info.json", "commit"],
-        ] as const) {
-          const metadata = JSON.parse(await fs.readFile(path.join(repoRoot, "dist", file), "utf8"));
-          signal.throwIfAborted();
-          expect(metadata[field], file).toBe(head);
-        }
+        const head = await verifyBuiltGatewayHead(repoRoot, signal);
         await new Promise<void>((resolve, reject) => {
           server.once("error", reject);
           server.listen(0, "127.0.0.1", () => {
@@ -210,7 +195,6 @@ it(
             defaults: {
               workspace: gateway.state.workspaceDir,
               skipBootstrap: true,
-              heartbeat: { every: "0m" },
               model: { primary: `${PROVIDERS[0]}/stable`, fallbacks: [] },
               models: Object.fromEntries(
                 PROVIDERS.flatMap((provider) =>
@@ -283,17 +267,7 @@ it(
           },
         );
         signal.throwIfAborted();
-        const activeClient = client;
-        const request = async <T = Record<string, unknown>>(
-          method: string,
-          params: unknown = {},
-          options: GatewayClientRequestOptions = {},
-        ): Promise<T> => {
-          signal.throwIfAborted();
-          const result = await activeClient.request<T>(method, params, { signal, ...options });
-          signal.throwIfAborted();
-          return result;
-        };
+        const request = createFixtureRequest(client, signal);
         // Measure reuse after startup publication has settled its runtime facts.
         const refreshCatalog = () =>
           request("models.list", { agentId: "main", view: "all", refresh: true });
