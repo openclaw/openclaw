@@ -156,7 +156,7 @@ describe("Twitch message-tool delivery", () => {
         expect.soft(completed).toEqual([expect.objectContaining(expectedAudit)]);
         expect(await loadUnfinishedDeliveries(state.stateDir)).toEqual([]);
 
-        const agent = {} as Agent;
+        const agent = { state: { tools: [] } } as unknown as Agent;
         const delivered = vi.fn();
         installMessageToolTerminalHook({
           agent,
