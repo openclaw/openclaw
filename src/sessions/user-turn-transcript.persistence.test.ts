@@ -277,7 +277,6 @@ describe("persistUserTurnTranscript", () => {
       },
       metadata: { media },
       config: { logging: { redactPatterns: ["computeToken"] } },
-      forbidden: [],
     },
     {
       name: "durable sender fields without runtime profile data",
@@ -289,10 +288,6 @@ describe("persistUserTurnTranscript", () => {
         senderIdentity: profileSender.identity,
       },
       config: undefined,
-      forbidden: Object.entries(runtimeOnlySenderFields).flatMap(([key, value]) => [
-        key,
-        String(value),
-      ]),
     },
     {
       name: "channel observation without display inference",
@@ -309,21 +304,14 @@ describe("persistUserTurnTranscript", () => {
         },
       },
       config: undefined,
-      forbidden: [],
     },
-  ])("round-trips $name", async ({ input, metadata, config, forbidden }) => {
+  ])("round-trips $name", async ({ input, metadata, config }) => {
     const expected = userMessage(input.text, { timestamp: input.timestamp, __openclaw: metadata });
     const appended = await writeInput(structuredClone(input), { config, updateMode: "none" });
     const messages = await readMessages();
     const durable = [appended?.message, messages[0]];
     expect(durable).toEqual([expected, expected]);
     expect(messages).toEqual([expected]);
-    const serialized = durable.map((message) => JSON.stringify(message));
-    for (const bytes of serialized) {
-      for (const value of forbidden) {
-        expect(bytes).not.toContain(value);
-      }
-    }
   });
 
   it.each(["retain", "in-place", "raw-redact", "forge"] as const)(

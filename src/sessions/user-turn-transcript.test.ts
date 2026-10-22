@@ -52,16 +52,15 @@ describe("user turn transcript persistence", () => {
       }),
     "openclaw-user-turn-persist-",
   );
-  beforeEach(() => setRuntimeConfigSnapshot({}));
   const makeTarget = (sessionId?: string, dir = sessionDirs.make()) =>
     createSqliteTranscriptTarget({ dir, sessionId });
-  const unusedRecorderTarget = {
-    agentId: "main",
-    sessionEntry: undefined,
-    sessionId: "unused-session",
-    sessionKey: "agent:main:unused",
-    storePath: "/tmp/openclaw-unused-sessions.json",
-  };
+  let defaultTarget: ReturnType<typeof makeTarget> | undefined;
+  beforeEach(() => {
+    defaultTarget = undefined;
+    setRuntimeConfigSnapshot({});
+  });
+  const getTarget = () => (defaultTarget ??= makeTarget());
+  const readMessages = () => readTranscriptMessages(getTarget());
 
   function userInput(text: string, idempotencyKey?: string) {
     return { text, timestamp: 123, ...(idempotencyKey ? { idempotencyKey } : {}) };
@@ -69,7 +68,7 @@ describe("user turn transcript persistence", () => {
 
   function record(
     input: UserTurnInput,
-    target: Parameters<typeof createUserTurnTranscriptRecorder>[0]["target"] = unusedRecorderTarget,
+    target: Parameters<typeof createUserTurnTranscriptRecorder>[0]["target"] = getTarget,
     options: Omit<Parameters<typeof createUserTurnTranscriptRecorder>[0], "input" | "target"> = {},
   ) {
     return createUserTurnTranscriptRecorder({ input, target, ...options });
@@ -323,10 +322,9 @@ describe("user turn transcript persistence", () => {
 
   describe("createUserTurnTranscriptRecorder", () => {
     it("adopts a prepared projection only after commitment and reuses it from another recorder", async () => {
-      const target = makeTarget();
       const input = userInput("original", "shared-projection");
-      const first = record(input, target);
-      const second = record(input, target);
+      const first = record(input);
+      const second = record(input);
       await first.persistApproved();
       await second.persistApproved();
       await rewritePreparedTranscriptMessageAtAnchor(first.getAdmissionReceipt()!, (message) => {
@@ -344,7 +342,7 @@ describe("user turn transcript persistence", () => {
       );
       expect(first.getPersistedMessage?.()).toBe(previous);
       expect(first.getAdmissionReceipt()).toBe(admission);
-      expect(readModelPromptProjection((await readTranscriptMessages(target))[0])).toBeUndefined();
+      expect(readModelPromptProjection((await readMessages())[0])).toBeUndefined();
 
       const committed = await capturePreparedTranscriptModelPromptProjection(
         prepared.intent.anchor,
@@ -362,7 +360,7 @@ describe("user turn transcript persistence", () => {
       await expect(second.captureModelPromptProjection!("changed", () => {})).rejects.toThrow(
         "cannot be changed",
       );
-      await expect(readTranscriptMessages(target)).resolves.toEqual([captured]);
+      await expect(readMessages()).resolves.toEqual([captured]);
     });
 
     it("freezes capture, dispatch, and replay bytes after steering despite logging patterns", async () => {
@@ -400,8 +398,7 @@ describe("user turn transcript persistence", () => {
     });
 
     it("rechecks authority after pending persistence before capturing a projection", async () => {
-      const target = makeTarget();
-      const recorder = record({ text: "original" }, target);
+      const recorder = record({ text: "original" });
       await recorder.persistApproved();
       const pending = createDeferred();
       recorder.markRuntimePersistencePending(pending.promise);
@@ -416,16 +413,15 @@ describe("user turn transcript persistence", () => {
       pending.resolve();
       await rejection;
 
-      const [stored] = await readTranscriptMessages(target);
+      const [stored] = await readMessages();
       expect(stored).toMatchObject({ content: "original" });
       expect(readModelPromptProjection(stored)).toBeUndefined();
     });
 
     it("never attaches an uncaptured projection to a sent or replaced user turn", async () => {
-      const target = makeTarget();
-      const recorder = record({ text: "original" }, target);
+      const recorder = record({ text: "original" });
       await recorder.persistApproved();
-      await replaceTranscriptEvents(target, [
+      await replaceTranscriptEvents(getTarget(), [
         {
           type: "message",
           id: "replacement",
@@ -436,11 +432,11 @@ describe("user turn transcript persistence", () => {
       await expect(recorder.captureModelPromptProjection!("enriched", () => {})).rejects.toThrow(
         "session writer claim changed",
       );
-      const [replacement] = await readTranscriptMessages(target);
+      const [replacement] = await readMessages();
       expect(replacement).toMatchObject({ content: "new turn" });
       expect(readModelPromptProjection(replacement)).toBeUndefined();
 
-      const sent = record({ text: "already sent" }, target);
+      const sent = record({ text: "already sent" });
       await sent.persistApproved();
       sent.markSentToProvider?.();
       await expect(sent.captureModelPromptProjection!("too late", () => {})).rejects.toThrow(
@@ -450,9 +446,8 @@ describe("user turn transcript persistence", () => {
     });
 
     it("persists fallback user turns only once", async () => {
-      const target = makeTarget();
       const persistedMessages: unknown[] = [];
-      const recorder = record(userInput("hello from fallback", "chat-run-1:user"), target, {
+      const recorder = record(userInput("hello from fallback", "chat-run-1:user"), undefined, {
         updateMode: "none",
         onMessagePersisted: (message) => {
           persistedMessages.push(message);
@@ -469,7 +464,7 @@ describe("user turn transcript persistence", () => {
       expect(second?.messageId).toBe(first?.messageId);
       expect(recorder.getPersistedMessage?.()).toEqual(first?.message);
       expect(persistedMessages).toEqual([first?.message]);
-      await expectStored(target, {
+      await expectStored(getTarget(), {
         role: "user",
         content: "hello from fallback",
         idempotencyKey: "chat-run-1:user",
@@ -547,15 +542,8 @@ describe("user turn transcript persistence", () => {
     it.each(["sent", "blocked"] as const)(
       "retires the pending admission view when %s",
       async (state) => {
-        const dir = sessionDirs.make();
-        const target = makeTarget(undefined, dir);
-        const recorder = record(
-          {
-            text: "admit exactly once",
-            idempotencyKey: "receipt:user",
-          },
-          target,
-        );
+        const target = getTarget();
+        const recorder = record({ text: "admit exactly once", idempotencyKey: "receipt:user" });
 
         const persisted = await recorder.persistApproved();
 
@@ -623,20 +611,15 @@ describe("user turn transcript persistence", () => {
       expect(work.counts).toEqual({ fts: 0, size: 0 });
 
       expect(recorder.getAdmissionReceipt()?.generation).toBe(initialGeneration);
-      expect(recorder.getPersistedMessage?.()).toMatchObject({
+      const expected = {
         __openclaw: {
           senderId: "operator-1",
           senderName: "Operator",
           steerTargetRunId: "active-run",
         },
-      });
-      await expectStored(target, {
-        __openclaw: {
-          senderId: "operator-1",
-          senderName: "Operator",
-          steerTargetRunId: "active-run",
-        },
-      });
+      };
+      expect(recorder.getPersistedMessage?.()).toMatchObject(expected);
+      await expectStored(target, expected);
     });
 
     it("waits for a deferred projection rebuild before returning admission identity", async () => {
@@ -704,11 +687,10 @@ describe("user turn transcript persistence", () => {
     it.each(["lazy media", "pending runtime"] as const)(
       "fallback-persists when %s fails",
       async (source) => {
-        const target = makeTarget();
         const errors: unknown[] = [];
         const failure = new Error(`${source} failed`);
         const runtimePersistence = createDeferred();
-        const recorder = record(userInput("keep the prompt", "failed:user"), target, {
+        const recorder = record(userInput("keep the prompt", "failed:user"), undefined, {
           resolveInput:
             source === "lazy media"
               ? async () => {
@@ -734,20 +716,19 @@ describe("user turn transcript persistence", () => {
         expect(errors).toHaveLength(1);
         expect(persisted?.message).toMatchObject(expected);
         expect(persisted?.message).not.toHaveProperty("MediaPath");
-        await expectStored(target, expected);
+        await expectStored(getTarget(), expected);
       },
     );
 
     it("does not fallback-persist after before_agent_run blocks the turn", async () => {
-      const target = makeTarget();
-      const recorder = record(userInput("raw blocked prompt"), target, {
+      const recorder = record(userInput("raw blocked prompt"), undefined, {
         updateMode: "none",
       });
 
       recorder.markBlocked();
 
       await expect(recorder.persistFallback()).resolves.toBeUndefined();
-      await expect(readTranscriptMessages(target)).resolves.toEqual([]);
+      await expect(readMessages()).resolves.toEqual([]);
     });
 
     it("uses the runtime target supplied at approved persistence time", async () => {
@@ -799,9 +780,8 @@ describe("user turn transcript persistence", () => {
     });
 
     it("waits for runtime persistence before deciding fallback ownership", async () => {
-      const target = makeTarget();
       const runtimePersistenceStarted = createDeferred();
-      const recorder = record(userInput("pending runtime turn"), target, {
+      const recorder = record(userInput("pending runtime turn"), undefined, {
         updateMode: "none",
       });
       recorder.markRuntimePersistencePending(
@@ -822,7 +802,7 @@ describe("user turn transcript persistence", () => {
       runtimePersistenceStarted.resolve();
 
       await expect(fallback).resolves.toBeUndefined();
-      await expect(readTranscriptMessages(target)).resolves.toEqual([]);
+      await expect(readMessages()).resolves.toEqual([]);
     });
   });
 });

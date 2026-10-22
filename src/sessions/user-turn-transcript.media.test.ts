@@ -18,23 +18,20 @@ const workspaceMedia = {
   contentType: "image/png",
   workspaceDir: "/tmp/workspace",
 };
+type MediaFields = Partial<PersistedUserTurnMessage> & { MediaPath?: string; MediaType?: string };
 
 describe("buildPersistedUserTurnMediaInputsFromFields", () => {
   it("builds media inputs from canonical persisted facts", () => {
+    const media = [
+      { path: "/tmp/a.png", contentType: "image/png" },
+      { url: "https://example.test/b.jpg", contentType: "image/jpeg" },
+    ];
     expect(
       buildPersistedUserTurnMediaInputsFromFields({
         ...userMessage,
-        __openclaw: {
-          media: [
-            { path: "/tmp/a.png", contentType: "image/png" },
-            { url: "https://example.test/b.jpg", contentType: "image/jpeg" },
-          ],
-        },
+        __openclaw: { media: structuredClone(media) },
       }),
-    ).toEqual([
-      { path: "/tmp/a.png", contentType: "image/png", kind: "image" },
-      { url: "https://example.test/b.jpg", contentType: "image/jpeg", kind: "image" },
-    ]);
+    ).toEqual(media.map((fact) => Object.assign({}, fact, { kind: "image" })));
   });
 
   it("does not consult legacy top-level fields after the versioned cutover", () => {
@@ -43,14 +40,7 @@ describe("buildPersistedUserTurnMediaInputsFromFields", () => {
   });
 });
 
-it.each<
-  [
-    string,
-    Partial<PersistedUserTurnMessage> & { MediaPath?: string; MediaType?: string },
-    string | undefined,
-    number,
-  ]
->([
+it.each<[string, MediaFields, string | undefined, number]>([
   ["legacy-only", { MediaPath: "/media/legacy.png", MediaType: "image/png" }, undefined, 0],
   ["sparse", { __openclaw: { media: [{}, { path: sparsePath }] } }, sparsePath, 1],
 ])("reconstructs %s rows from canonical facts first", (_name, fields, expectedPath, index) => {
