@@ -6,7 +6,7 @@ import {
   completePanelRefresh,
   createPanelRefreshStatus,
   failPanelRefresh,
-} from "../../components/panel-refresh-status.ts";
+} from "../../components/panel-refresh-status-state.ts";
 import { t } from "../../i18n/index.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import {

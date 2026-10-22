@@ -1178,7 +1178,6 @@ src/agents/embedded-agent-subscribe.handlers.messages.stream.ts	1
 src/agents/embedded-agent-subscribe.handlers.messages.update.ts	2
 src/agents/embedded-agent-subscribe.handlers.tools.results.ts	1
 src/agents/embedded-agent-subscribe.handlers.tools.start.ts	2
-src/agents/embedded-agent-subscribe.tool-text-diagnostics.ts	6
 src/agents/embedded-agent-tool-media.ts	5
 src/agents/embedded-agent-tool-results.ts	6
 src/agents/embedded-agent-utils.ts	3
@@ -1890,7 +1889,7 @@ src/infra/approval-errors.ts	5
 src/infra/approval-gateway-resolver.ts	5
 src/infra/approval-handler-runtime.ts	9
 src/infra/approval-presentation.ts	3
-src/infra/backup-archive-publication.ts	5
+src/infra/backup-archive-publication.ts	4
 src/infra/backup-create-stream.ts	3
 src/infra/backup-create.ts	1
 src/infra/backup-tar-retry.ts	2
@@ -1977,7 +1976,7 @@ src/infra/sqlite-index-schema.ts	1
 src/infra/sqlite-integrity.ts	1
 src/infra/sqlite-readonly-location.ts	3
 src/infra/sqlite-schema-contract.ts	3
-src/infra/sqlite-snapshot.ts	2
+src/infra/sqlite-snapshot.ts	1
 src/infra/sqlite-strict.ts	6
 src/infra/sqlite-wal.ts	3
 src/infra/state-migrations.audit-backup.ts	1
@@ -2284,7 +2283,7 @@ src/shared/config-eval.ts	1
 src/shared/deferred.ts	1
 src/shared/frontmatter.ts	1
 src/shared/global-singleton.ts	4
-src/shared/json-schema-defaults.ts	16
+src/shared/json-schema-defaults.ts	11
 src/shared/node-list-parse.ts	3
 src/shared/node-presence.ts	1
 src/shared/node-resolve.ts	1

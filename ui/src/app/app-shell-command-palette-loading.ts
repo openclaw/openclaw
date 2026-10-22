@@ -17,7 +17,8 @@ import {
 } from "../lib/keyboard-shortcut-contract.ts";
 import { showToast } from "../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../lib/uploads.ts";
-import type { ApplicationContext, ApplicationNavigationOptions } from "./context.ts";
+import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
+import type { ApplicationContext } from "./context.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import {
   ensureCustomElementDefined,
@@ -32,8 +33,7 @@ type CommandPaletteShellHost = {
   readonly elements: { commandPalette?: CommandPaletteElement };
   readonly commandPaletteElement: OptionalCustomElement;
   readonly commandPaletteTarget?: CommandPaletteTargetDetail;
-  chatNavigationOptions(face: "chat"): ApplicationNavigationOptions | undefined;
-  navigate(routeId: "chat", options?: ApplicationNavigationOptions): void;
+  readonly shellNavigation: Pick<ShellNavigationCapability, "chatNavigationOptions" | "navigate">;
   readonly lazyCustomElements: LazyCustomElementRequests;
 };
 
@@ -126,10 +126,10 @@ export class ShellCommandPaletteOwner {
       return;
     }
     // Chat can update its existing draft; other routes hand it through navigation.
-    const navigation = host.chatNavigationOptions("chat");
+    const navigation = host.shellNavigation.chatNavigationOptions("chat");
     const search = new URLSearchParams(navigation?.search ?? "");
     search.set("draft", command.endsWith(" ") ? command : `${command} `);
-    host.navigate("chat", { ...navigation, search: `?${search.toString()}` });
+    host.shellNavigation.navigate("chat", { ...navigation, search: `?${search.toString()}` });
   }
 
   handlePendingShortcut(event: KeyboardEvent): boolean {

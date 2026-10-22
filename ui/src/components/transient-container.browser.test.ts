@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { copyToClipboard } from "../lib/clipboard.ts";
 import { item, mountMenu, openMenu, surface as menuSurface } from "../test-helpers/solid-menu.tsx";
 import "./modal-dialog.tsx";
-import { mountNativeLinkMenu } from "./native-link-menu.runtime.ts";
+import { mountNativeLinkMenu } from "./native-link-menu.runtime.tsx";
 import { controlsForHovercard } from "./portaled-hovercard-focus.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 import { installTitleTooltips } from "./tooltip-title.ts";

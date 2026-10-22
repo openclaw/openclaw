@@ -5,7 +5,7 @@ import type {
   ProviderLoginOption,
   SystemAgentSetupDetectResult,
 } from "../../api/types.ts";
-import { providerDisplayLabel } from "../../components/provider-icon.ts";
+import { providerDisplayLabel } from "../../components/provider-icon-data.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { resolveAgentConfig, resolveModelPrimary } from "../../lib/agents/display.ts";

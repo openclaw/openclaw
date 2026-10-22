@@ -28,6 +28,7 @@ import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
 import { retireSessionPaneHandoffs } from "../pages/chat/chat-pane-handoff-lifecycle.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
+import type { ShellNavigationCapability } from "./app-shell-navigation.ts";
 import type { ApplicationContext } from "./context.ts";
 import { hasOperatorWriteAccess } from "./operator-access.ts";
 import { profilePreferencesState } from "./server-prefs-profile.ts";
@@ -57,8 +58,10 @@ export interface ShellGatewayHost {
   desktopNavigationExpanded: boolean;
   lastLocalePrefSignature: string | null;
   readonly outboxStoreImport: { load: () => Promise<unknown> };
-  recoverDeletedActiveSession(): void;
-  selectChatSession(sessionKey: string, agentId?: string | null): void;
+  readonly shellNavigation: Pick<
+    ShellNavigationCapability,
+    "recoverDeletedActiveSession" | "selectChatSession"
+  >;
   invalidate(): void;
 }
 
@@ -115,7 +118,7 @@ export class ShellGatewayOwner {
         return;
       }
       this.observeDeletedSessions(sessions.state);
-      this.host.recoverDeletedActiveSession();
+      this.host.shellNavigation.recoverDeletedActiveSession();
       synchronizeTitle();
     };
     synchronize();
@@ -297,7 +300,7 @@ export class ShellGatewayOwner {
       );
     }
     if (event.event === "sessions.changed") {
-      this.host.recoverDeletedActiveSession();
+      this.host.shellNavigation.recoverDeletedActiveSession();
       return;
     }
     if (event.event === "agent.identity.changed") {
@@ -364,7 +367,7 @@ export class ShellGatewayOwner {
             commandParams.agentId !== undefined &&
             commandParams.agentId !== context.agentSelection.state.selectedId))
       ) {
-        this.host.selectChatSession(sessionKey, commandParams.agentId);
+        this.host.shellNavigation.selectChatSession(sessionKey, commandParams.agentId);
       }
       const panelEvent = new CustomEvent(
         {
@@ -415,7 +418,7 @@ export class ShellGatewayOwner {
       new CustomEvent(UI_COMMAND_EVENT, { detail: commandParams, cancelable: true }),
     );
     if (!handled && (command.kind === "navigate" || command.kind === "split")) {
-      this.host.selectChatSession(command.sessionKey, commandParams.agentId);
+      this.host.shellNavigation.selectChatSession(command.sessionKey, commandParams.agentId);
     }
   }
 
@@ -465,7 +468,7 @@ export class ShellGatewayOwner {
     this.previousGatewayPhase = snapshot.phase;
     this.updateGatewaySessionKey(snapshot);
     const context = this.host.context;
-    this.host.recoverDeletedActiveSession();
+    this.host.shellNavigation.recoverDeletedActiveSession();
     if (snapshot.phase === "connected" && context) {
       const connectionBootstrap = context.connectionBootstrap;
       void connectionBootstrap.run("runtime-config", () =>

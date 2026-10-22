@@ -18,7 +18,7 @@ import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
 import { openSlot } from "./sidebar-layout.ts";
-import "../../components/board/board-view.ts";
+import "../../components/board/board-view.tsx";
 
 type BoardTestPane = HTMLElement & {
   context: ApplicationContext;

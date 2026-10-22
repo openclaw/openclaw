@@ -30,7 +30,7 @@ import "../../styles/mcp-app-extensions.css";
 
 registerMcpAppEnglish();
 
-const McpAppView = lazy(() => import("../mcp-app-view-registration.ts"), {
+const McpAppView = lazy(() => import("../mcp-app-view.tsx"), {
   export: "McpAppView",
 });
 

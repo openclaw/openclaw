@@ -4,7 +4,7 @@ import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/the
 import { setCurrentThemeBranding } from "../app/theme-branding.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import * as mascotCanvas from "./mascot-canvas.ts";
-import "./openclaw-mascot.ts";
+import "./openclaw-mascot.tsx";
 
 afterEach(() => {
   document.body.replaceChildren();

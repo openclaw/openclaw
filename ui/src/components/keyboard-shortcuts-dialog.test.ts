@@ -75,7 +75,7 @@ it.each(
         context: context as unknown as ApplicationContext,
         onboardingMode: false,
         pendingNativeNewSession: false,
-        openNewSession,
+        shellNavigation: { openNewSession },
       }),
     );
     dialog.newSessionHost = sessionHost;

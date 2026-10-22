@@ -92,7 +92,6 @@ export type ChatDetailsMobileRootProps = {
   publicationEntry?: ChatDetailsMobileEntry;
   automations?: ChatDetailsMobileCollection<CronCompactJob["id"]>;
   outputs?: ChatDetailsMobileEntry;
-  outputsNotice?: JSX.Element;
   /** Supply even for one version; omission is not a greater-than-one policy. */
   versions?: ChatDetailsMobileEntry;
   onNavigate: (
@@ -319,20 +318,17 @@ export function ChatDetailsMobileRoot(props: ChatDetailsMobileRootProps) {
           </RootGroup>
         </Show>
       </Loading>
-      <Show when={props.outputs || props.outputsNotice}>
-        <RootGroup name="outputs" label={props.labels.generatedFiles}>
-          <Show when={props.outputs}>
-            {(entry) => (
-              <RootEntry
-                entry={entry()}
-                icon="fileText"
-                destination={{ kind: "outputs" }}
-                root={props}
-              />
-            )}
-          </Show>
-          {props.outputsNotice}
-        </RootGroup>
+      <Show when={props.outputs}>
+        {(entry) => (
+          <RootGroup name="outputs" label={props.labels.generatedFiles}>
+            <RootEntry
+              entry={entry()}
+              icon="fileText"
+              destination={{ kind: "outputs" }}
+              root={props}
+            />
+          </RootGroup>
+        )}
       </Show>
       <Show when={props.versions && props.versions.metadata !== 0 && props.versions}>
         {(entry) => (

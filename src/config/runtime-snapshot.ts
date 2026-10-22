@@ -25,7 +25,6 @@ import { runtimeSessionPublicationChangeScope } from "./runtime-session-changes.
 import {
   hashRuntimeConfigValue,
   hashModelConfig,
-  matchesRuntimeConfigPublicationFact,
   matchesRuntimeConfigValueFact,
   matchesRuntimeSourceConfigValueFact,
   prepareRuntimeConfigValueFact,
@@ -186,7 +185,13 @@ function publishRuntimeConfigSnapshot(
   const previousEditedInPlace =
     runtimeConfigSnapshot !== null &&
     runtimeConfigValueFact !== null &&
-    !matchesRuntimeConfigPublicationFact(runtimeConfigSnapshot, runtimeConfigValueFact);
+    !(
+      matchesRuntimeConfigValueFact(runtimeConfigSnapshot, runtimeConfigValueFact) &&
+      isDeepStrictEqual(
+        serializeConfigResolutionFacts(runtimeConfigSnapshot),
+        runtimeConfigValueFact.facts,
+      )
+    );
   const previousSourceEditedInPlace =
     runtimeConfigSourceSnapshot !== null &&
     runtimeSourceConfigValueFact !== null &&

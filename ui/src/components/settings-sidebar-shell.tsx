@@ -84,7 +84,7 @@ export function ShellSettingsSidebar(props: {
         nativeDeviceSettings: context.nativeDeviceSettings,
       },
       onRetryConnect: callbacks.retryGateway,
-      onNavigate: host.navigate,
+      onNavigate: host.shellNavigation.navigate,
       onPreload: callbacks.preloadRoute,
       onSearchQueryChange: (nextQuery: string) =>
         void host.handleSettingsSearchQueryChange(nextQuery),

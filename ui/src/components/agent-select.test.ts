@@ -7,7 +7,8 @@ import { i18n, t } from "../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
-import type { AgentSelectElement, AgentSelectOption } from "./agent-select.ts";
+import type { AgentSelectOption } from "./agent-select-types.ts";
+import type { AgentSelectElement } from "./agent-select.tsx";
 import "./agent-select-registration.ts";
 
 const AGENT_SELECT_TEST_TAG = "openclaw-agent-select";

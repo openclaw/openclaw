@@ -7176,7 +7176,6 @@
 ["ui/src/pages/chat/components/chat-async-question-draft.test.ts","../../../lib/chat/composer-draft-store.runtime.ts","bdb5184ccea448bd40641ddfe055e78c3b4f840e64e9f0a3b06828172d0460f6",1]
 ["ui/src/pages/chat/components/chat-async-question-draft.test.ts","../../../lib/toast.ts","a3734bb81a9e117e8afe4aedf7035a1d128cdd83baa6b69ae534ba524817f0d5",1]
 ["ui/src/pages/chat/components/chat-clawhub-card.test.ts","../../plugins/icon-loader.ts","b9959c09ca4233dc46706d32a405e93756e4f6636d929e8632e558ea3ab19c83",1]
-["ui/src/pages/chat/dashboard-presentation-defaults.test.ts","../../components/board/board-view.ts","4da10b1e01d13059f3c7cd96b67f364a88c4396fddb2ab15ec123dc69d2972ae",1]
 ["ui/src/pages/chat/dashboard-presentation-defaults.test.ts","../../lib/toast.ts","68c3a82839bf89ff12172a36802f02e76794e74bef5943b01ea140589a6cb2af",1]
 ["ui/src/pages/chat/talk/lifecycle.test.ts","./gateway-relay.ts","e5c5d615d04bf29649211069c0db5fae65859debd495fa829602fac7d4636346",1]
 ["ui/src/pages/chat/talk/lifecycle.test.ts","./google-live.ts","fe2270de1d282f6faa144ee51302371236c0b0b396573f15e5b3f62171628df4",1]

@@ -294,7 +294,7 @@ describe("resolveTurnRecap", () => {
   it("clears the previous recap when a new queued turn has no run identity yet", () => {
     watch();
     expect(resolve({ row: doneRow, usageByRun: usage(695) })).not.toBeNull();
-    expect(resolve({ indicator: {}, row: doneRow })).toBeNull();
+    expect(resolve({ indicator: {}, startingNewTurn: true, row: doneRow })).toBeNull();
     expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();
   });
 

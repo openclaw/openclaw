@@ -61,7 +61,16 @@ it("keeps mobile editing, field and caret while the native composer menu owns fo
   const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea")!;
   const input = view.container.querySelector<HTMLElement>(".agent-chat__input")!;
   const shell = view.container.querySelector<HTMLElement>(".agent-chat__composer-shell")!;
+  let focusedDuringPointerDown = false;
+  textarea.addEventListener(
+    "pointerdown",
+    () => {
+      focusedDuringPointerDown = document.activeElement === textarea;
+    },
+    { once: true },
+  );
   await page.elementLocator(textarea).click();
+  expect(focusedDuringPointerDown).toBe(true);
   await expect.element(page.elementLocator(shell)).toHaveAttribute("data-composer-editing", "true");
   await Promise.all(input.getAnimations().map((animation) => animation.finished));
   renderComposerInto(view.container, { ...props, mobileKeyboardVisible: true });
