@@ -6,15 +6,19 @@ import * as modelRuntime from "../auto-reply/reply/model-runtime-normalization.j
 import { persistReplySessionEntry } from "../auto-reply/reply/session-entry-persistence.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { loadSessionEntry, replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
+import {
+  resolveSqliteStoreScope,
+  runExclusiveSqliteSessionWrite,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
   setupPersistentSessionCreateTestHarness,
   chatSendOwner,
-  holdSessionCreateWriter,
 } from "./server.sessions.create.test-support.js";
 import { readSessionGroupCatalog } from "./session-group-catalog.js";
 import { embeddedRunMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
@@ -76,9 +80,7 @@ async function seedMain(
   options?: Parameters<typeof sessionStoreEntry>[1],
   key = "main",
 ) {
-  const entry = sessionStoreEntry(sessionId, options);
-  await writeSessionStore({ entries: { [key]: entry } });
-  return entry;
+  await writeSessionStore({ entries: { [key]: sessionStoreEntry(sessionId, options) } });
 }
 
 function readEntry(sessionKey = "agent:main:main") {
@@ -191,12 +193,23 @@ test("sessions.create registers a category only after the session commit succeed
   );
   expect(failed.ok).toBe(false);
   expect(readSessionGroupCatalog().groups.map((group) => group.name)).not.toContain(category);
-  expectOk(
-    await createSession({ category: `  ${category}  `, key: "agent:main:dashboard:created" }),
+  const broadcastToConnIds = vi.fn();
+  const created = await createSession(
+    { category: `  ${category}  `, key: "agent:main:dashboard:created" },
+    {
+      context: {
+        broadcastToConnIds,
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+      },
+    },
   );
+  expectOk(created);
   expect(readSessionGroupCatalog().groups.filter((group) => group.name === category)).toHaveLength(
     1,
   );
+  expect(
+    broadcastToConnIds.mock.calls.filter(([, payload]) => payload?.reason === "groups"),
+  ).toHaveLength(1);
 });
 
 test("concurrent sessions.create requests adopt one canonical keyed session", async () => {
@@ -211,14 +224,19 @@ test("concurrent sessions.create requests adopt one canonical keyed session", as
   }
   expect(created.every((result) => result.ok)).toBe(true);
   expect(new Set(created.map((result) => result.payload?.key))).toEqual(new Set([key]));
-  const sessionId = readEntry(key)?.sessionId;
-  expect(new Set(created.map((result) => result.payload?.sessionId))).toEqual(new Set([sessionId]));
+  const sessionIds = new Set(created.map((result) => result.payload?.sessionId));
+  expect(sessionIds.size).toBe(1);
+  const persistedSessionId = loadSessionEntry({ sessionKey: key, storePath })?.sessionId;
+  const canonicalSessionId = created[0]?.payload?.sessionId;
+  expect(persistedSessionId).toBe(canonicalSessionId);
 });
 
 test("createGatewaySession forwards its commit guard into main-session reset", async () => {
-  testState.sessionConfig = { dmScope: "main" };
   try {
-    const original = await seedMain("main-before-guard-close");
+    const key = "agent:main:main";
+    const original = sessionStoreEntry("main-before-guard-close");
+    testState.sessionConfig = { dmScope: "main" };
+    await writeSessionStore({ entries: { main: original } });
     const commitGuard = vi.fn(() => {
       if (commitGuard.mock.calls.length > 1) {
         throw new Error("session create authority closed");
@@ -226,7 +244,7 @@ test("createGatewaySession forwards its commit guard into main-session reset", a
     });
     await expect(resetMain({ commitGuard })).rejects.toThrow("session create authority closed");
     expect(commitGuard).toHaveBeenCalledTimes(2);
-    expect(readEntry()).toMatchObject(original);
+    expect(readEntry(key)).toMatchObject(original);
   } finally {
     testState.sessionConfig = undefined;
   }
@@ -236,6 +254,7 @@ test("sessions.create preserves keyed draft adoption idempotency", async () => {
   const key = "agent:main:dashboard:idempotent-draft";
   const first = await createSession({ key, visibility: "draft" });
   expectOk(first);
+  const retried = await createSession({ key, visibility: "draft" });
   const expected = {
     ok: true,
     payload: {
@@ -243,19 +262,21 @@ test("sessions.create preserves keyed draft adoption idempotency", async () => {
       entry: { visibility: "draft" },
     },
   };
-  expect(await createSession({ key, visibility: "draft" })).toMatchObject(expected);
+  expect(retried).toMatchObject(expected);
   testState.sessionConfig = { sharing: { drafts: false } };
-  expect(await createSession({ key, visibility: "draft" })).toMatchObject(expected);
-  expect(await createSession({ key, visibility: "shared" })).toMatchObject(
-    invalidCreate("visibility"),
-  );
+  const retriedAfterPolicyChange = await createSession({ key, visibility: "draft" });
+  expect(retriedAfterPolicyChange).toMatchObject(expected);
+  const mismatch = await createSession({ key, visibility: "shared" });
+  expect(mismatch).toMatchObject(invalidCreate("visibility"));
 });
 
 test("sessions.create persists explicit tool overrides before the first turn", async () => {
   const parentSessionKey = "agent:main:main";
   await seedMain(
     "tool-overrides-parent",
-    { toolOverrides: { skills: { inherited: false } } },
+    {
+      toolOverrides: { skills: { inherited: false } },
+    },
     parentSessionKey,
   );
   const sessionKey = "agent:main:dashboard:create-tool-overrides";
@@ -292,7 +313,9 @@ test("sessions.create persists explicit tool overrides before the first turn", a
       payload: { entry: { toolOverrides: normalized }, runStarted: true },
     });
     expect(observed).toEqual([normalized]);
-    expectOk(await createSession({ key: sessionKey, toolOverrides: requested }, client));
+    expect(readEntry(sessionKey)?.toolOverrides).toEqual(normalized);
+    const retried = await createSession({ key: sessionKey, toolOverrides: requested }, client);
+    expectOk(retried);
     const mismatch = await createSession(
       { key: sessionKey, toolOverrides: { skills: { release: true } } },
       client,
@@ -338,7 +361,8 @@ test("sessions.create reset-in-place applies Fast Mode only for admin callers", 
   } as const;
   await seedMain("sess-fast-reset", { fastMode: false, ...provenance });
   const params = { ...mainReset, fastMode: true };
-  expect(await createSession(params, writeClient())).toMatchObject(missingAdmin);
+  const denied = await createSession(params, writeClient());
+  expect(denied).toMatchObject(missingAdmin);
   expect(readEntry()).toMatchObject({ sessionId: "sess-fast-reset", fastMode: false });
   const changed = await createSession(params, adminClient());
   expect(changed.ok, JSON.stringify(changed.error)).toBe(true);
@@ -362,7 +386,12 @@ test("sessions.create rechecks Fast Mode before interrupting reset work", async 
     },
   });
   releaseAdmission = admission.release;
-  const commitGuard = vi.fn().mockImplementationOnce(() => {
+  let replaced = false;
+  const commitGuard = () => {
+    if (replaced) {
+      return;
+    }
+    replaced = true;
     const current = readEntry(key);
     if (!current) {
       throw new Error("expected current main session");
@@ -371,7 +400,7 @@ test("sessions.create rechecks Fast Mode before interrupting reset work", async 
       { agentId: "main", sessionKey: key, storePath },
       { ...current, fastMode: true },
     );
-  });
+  };
   try {
     const denied = await resetMain({
       fastMode: false,
@@ -391,7 +420,8 @@ test("sessions.create rechecks Fast Mode before interrupting reset work", async 
 });
 test("sessions.create rejects a Fast Mode change completed by draining work before reset cleanup", async () => {
   const key = "agent:main:main";
-  const initialEntry = await seedMain("sess-fast-drain", { fastMode: false });
+  const initialEntry = sessionStoreEntry("sess-fast-drain", { fastMode: false });
+  await writeSessionStore({ entries: { main: initialEntry } });
   const placements = createWorkerSessionPlacementStore({ database: openOpenClawStateDatabase() });
   const claim = await placements.claimTurn({
     agentId: "main",
@@ -408,7 +438,17 @@ test("sessions.create rejects a Fast Mode change completed by draining work befo
     assertAllowed: () => undefined,
     onInterrupt: () => interrupted.resolve(),
   });
-  const { releaseWriter, heldWriter } = await holdSessionCreateWriter(storePath);
+  const writerEntered = createDeferredCore();
+  const releaseWriter = createDeferredCore();
+  const heldWriter = runExclusiveSqliteSessionWrite(
+    resolveSqliteStoreScope(storePath, { agentId: "main" }),
+    async () => {
+      writerEntered.resolve();
+      await releaseWriter.promise;
+    },
+    "session.transcript.batch",
+  );
+  await writerEntered.promise;
   const persisted = persistReplySessionEntry({
     storePath,
     sessionKey: key,
@@ -466,7 +506,80 @@ test("sessions.reset preserves the recorded permission boundary", async () => {
 test("sessions.create does not apply create-time visibility to an in-place reset", async () => {
   testState.sessionConfig = { dmScope: "main" };
   await seedMain("sess-existing-main");
-  expect(await createSession({ ...mainReset, visibility: "draft" })).toMatchObject(
-    invalidCreate("visibility"),
-  );
+  const reset = await createSession({ ...mainReset, visibility: "draft" });
+  expect(reset).toMatchObject(invalidCreate("visibility"));
+});
+
+test("sessions.create replays an identical creation once and rejects conflicting intent", async () => {
+  const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
+  chatSend.mockImplementation(async ({ respond }) => {
+    respond(true, { runId: "create-once", status: "started" });
+  });
+  const context = { dedupe: new Map() };
+  const ownerId = ensureProfileForEmail("replay@owner.test").id;
+  const clientFor = (scopes = ["operator.write", "operator.admin"], profileId = ownerId) => ({
+    connect: {
+      role: "operator",
+      scopes,
+      device: { id: "control-ui-device" },
+    },
+    authenticatedUserProfile: { profileId },
+  });
+  const params = {
+    agentId: "main",
+    idempotencyKey: "create-once",
+    message: "start this task exactly once",
+    permissionMode: "full",
+  };
+  const request = (nextParams = params, nextClient = clientFor()) =>
+    directSessionReq<{ key: string }>("sessions.create", nextParams, {
+      client: nextClient as never,
+      context,
+    });
+  try {
+    const first = await request();
+    const replay = await request(
+      {
+        message: params.message,
+        permissionMode: params.permissionMode,
+        idempotencyKey: params.idempotencyKey,
+        agentId: params.agentId,
+      },
+      clientFor(["operator.admin", "operator.read", "operator.write"]),
+    );
+    expectOk(first);
+    expect(replay).toEqual(first);
+    expect(chatSend).toHaveBeenCalledOnce();
+    expect(chatSend.mock.calls[0]?.[0].params).toMatchObject({
+      idempotencyKey: expect.any(String),
+      message: "start this task exactly once",
+    });
+    const conflict = await request({ ...params, message: "start a different task" });
+    expect(conflict).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "session creation idempotency key was reused with different parameters",
+      },
+    });
+    expect(chatSend).toHaveBeenCalledOnce();
+    const downgraded = await request(params, clientFor(["operator.write"]));
+    expect(downgraded).toMatchObject({
+      ok: false,
+      error: { message: "missing scope: operator.admin" },
+    });
+    expect(chatSend).toHaveBeenCalledOnce();
+    const differentOwner = await request(
+      params,
+      clientFor(undefined, ensureProfileForEmail("other@owner.test").id),
+    );
+    expectOk(differentOwner);
+    expect(differentOwner.payload?.key).not.toBe(first.payload?.key);
+    expect(chatSend).toHaveBeenCalledTimes(2);
+    expect(chatSend.mock.calls[1]?.[0].params.idempotencyKey).not.toBe(
+      chatSend.mock.calls[0]?.[0].params.idempotencyKey,
+    );
+  } finally {
+    chatSend.mockRestore();
+  }
 });
