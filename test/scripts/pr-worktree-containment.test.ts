@@ -373,6 +373,9 @@ describePosix("scripts/pr worktree containment", () => {
 
   it.each([
     "clean",
+    "refreshed-template",
+    "edited-after-refresh",
+    "missing-seed",
     "edited",
     "untracked",
     "ignored",
@@ -385,9 +388,16 @@ describePosix("scripts/pr worktree containment", () => {
     const id = "26a40edd-06f1-43d2-ad5a-a95722f4bd2d";
     const template = join(fixture.root, ".worktrees", ".templates", id);
     git(fixture.root, "worktree", "add", "--detach", template, fixture.mainSha);
+    if (kind !== "missing-seed") {
+      git(fixture.root, "branch", "temp/pr-42", fixture.mainSha);
+    }
     const worktree = join(fixture.root, ".worktrees", "pr-42");
     cpSync(template, worktree, { recursive: true });
-    if (kind === "edited") {
+    const refreshed = kind === "refreshed-template" || kind === "edited-after-refresh";
+    if (refreshed) {
+      git(template, "checkout", "--detach", fixture.prASha);
+    }
+    if (kind === "edited" || kind === "edited-after-refresh") {
       writeFileSync(join(worktree, "overlap.txt"), "operator edit\n");
     } else if (kind === "untracked" || kind === "ignored") {
       if (kind === "ignored") {
@@ -409,14 +419,20 @@ describePosix("scripts/pr worktree containment", () => {
       git(fixture.root, "worktree", "remove", template);
     }
     const result = runShell(fixture, ['remove_worktree_if_present ".worktrees/pr-42" || exit $?']);
-    if (kind === "clean") {
+    const removed = kind === "clean" || kind === "refreshed-template";
+    if (removed) {
       expectSuccess(result);
     } else {
       expect(result.status, result.stdout + result.stderr).not.toBe(0);
     }
-    expect(existsSync(worktree)).toBe(kind !== "clean");
+    expect(existsSync(worktree)).toBe(!removed);
+    if (kind === "edited" || kind === "edited-after-refresh") {
+      expectFile(worktree, "overlap.txt", "operator edit\n");
+    } else if (kind === "untracked" || kind === "ignored") {
+      expectFile(worktree, "operator-note", "operator work\n");
+    }
     if (kind !== "missing-template" && kind !== "foreign-template") {
-      expect(git(template, "rev-parse", "HEAD")).toBe(fixture.mainSha);
+      expect(git(template, "rev-parse", "HEAD")).toBe(refreshed ? fixture.prASha : fixture.mainSha);
     }
     expectCanonicalCheckoutUnchanged(fixture);
   });
