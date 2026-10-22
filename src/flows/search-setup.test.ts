@@ -122,18 +122,6 @@ function latestPluginInstallRequest() {
   )[0];
 }
 
-function grokPluginsWithCredential(enabled?: boolean): OpenClawConfig["plugins"] {
-  return {
-    allow: ["xai"],
-    entries: {
-      xai: {
-        ...(enabled === undefined ? {} : { enabled }),
-        config: { webSearch: { apiKey: "xai-test-key" } },
-      },
-    },
-  };
-}
-
 function setup(
   config: OpenClawConfig,
   prompter = createWizardPrompter(),
@@ -168,23 +156,15 @@ it("keeps search config unchanged when plugin capability consent is declined", a
     reason,
   });
   const text = vi.fn(async () => "unused-key");
-  const note = vi.fn(async () => {});
+  const prompts = createWizardPrompter({ text }, { defaultSelect: "grok" });
   try {
-    const result = await setup(
-      config,
-      createWizardPrompter({
-        select: vi.fn(async () => "grok") as never,
-        text,
-        note,
-      }),
-    );
-    expect(result).toEqual({
+    expect(await setup(config, prompts)).toEqual({
       outcome: "install-failed",
       config,
       providerId: "grok",
       reason: "failed",
     });
-    expect(note).toHaveBeenCalledWith(reason, "Web search unavailable");
+    expect(prompts.note).toHaveBeenCalledWith(reason, "Web search unavailable");
     expect(text).not.toHaveBeenCalled();
     expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
   } finally {
@@ -289,7 +269,7 @@ it("uses existing xAI OAuth for Grok web search without prompting for an API key
   const { config: next } = await setup({ plugins: { allow: ["xai"] } }, prompter);
   expectSearch(next, "grok");
   expect(mockGrokProvider.getConfiguredCredentialValue(next)).toBeUndefined();
-  expect(text).not.toHaveBeenCalled();
+  expect(prompter.text).not.toHaveBeenCalled();
   expect(prompter.note).toHaveBeenCalledWith(
     expect.stringContaining("existing xAI OAuth sign-in"),
     "Web search",
@@ -324,7 +304,15 @@ it.each([true, false])(
   async (preserve) => {
     const { config: next } = await setup(
       {
-        plugins: grokPluginsWithCredential(preserve ? true : undefined),
+        plugins: {
+          allow: ["xai"],
+          entries: {
+            xai: {
+              ...(preserve ? { enabled: true } : {}),
+              config: { webSearch: { apiKey: "xai-test-key" } },
+            },
+          },
+        },
         tools: { web: { search: { provider: "grok", enabled: false } } },
       },
       grokPrompter(preserve ? ["grok", "yes", "grok-4.3"] : ["grok", "no"]),
@@ -338,28 +326,6 @@ it.each([true, false])(
     }
   },
 );
-
-it("offers and installs DeepSeek search before its plugin is installed", async () => {
-  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
-    webSearchProviderMocks.resolvePluginWebSearchProviders.mockReturnValue([]);
-    const prompts = grokPrompter(["deepseek"], "synthetic-deepseek-search-key");
-    const result = await setup({}, prompts);
-    expect(prompts.select).toHaveBeenCalledWith(
-      expect.objectContaining({
-        options: expect.arrayContaining([expect.objectContaining({ value: "deepseek" })]),
-      }),
-    );
-    expect(result.outcome).toBe("completed");
-    expectSearch(result.config, "deepseek");
-    expect(result.config.plugins?.entries?.deepseek?.config).toEqual({
-      webSearch: { apiKey: "synthetic-deepseek-search-key" },
-    });
-    expect(latestPluginInstallRequest().entry).toMatchObject({
-      pluginId: "deepseek",
-      install: { npmSpec: "@openclaw/deepseek-provider" },
-    });
-  });
-});
 
 it("returns an install-failed outcome without changing config", async () => {
   ensureOnboardingPluginInstalled.mockResolvedValueOnce({
@@ -379,33 +345,44 @@ it("returns an install-failed outcome without changing config", async () => {
   });
 });
 
-it("installs an external catalog search provider when web search stays disabled", async () => {
-  const beforePersistentEffect = vi.fn(async () => {});
-  const { config: next } = await setup(
-    { tools: { web: { search: { provider: "brave", enabled: false } } } },
-    grokPrompter(["brave"], "brave-disabled-key"),
-    { beforePersistentEffect },
-  );
-
-  expect(ensureOnboardingPluginInstalled).toHaveBeenCalledTimes(1);
-  const installRequest = latestPluginInstallRequest();
-  expect(installRequest.beforePersistentEffect).toBe(beforePersistentEffect);
-  expect(installRequest).toMatchObject({
-    entry: {
-      pluginId: "brave",
-      label: "Brave",
-      trustedSourceLinkedOfficialInstall: true,
-      install: { npmSpec: "@openclaw/brave-plugin" },
-    },
-    autoConfirmSingleSource: true,
-  });
-  expectSearch(next, "brave", false);
-  expect(next.plugins?.entries?.brave?.config).toMatchObject({
-    webSearch: { apiKey: "brave-disabled-key" },
-  });
-  expect(next.plugins?.entries?.brave?.enabled).toBeUndefined();
-  expect(next.plugins?.installs?.brave).toMatchObject({
-    source: "npm",
-    spec: "@openclaw/brave-plugin",
+it.each([
+  { id: "deepseek", spec: "@openclaw/deepseek-provider", enabled: true },
+  { id: "brave", spec: "@openclaw/brave-plugin", enabled: false },
+])("installs catalog provider $id, preserving enabled=$enabled", async ({ id, spec, enabled }) => {
+  await withEnvAsync({ DEEPSEEK_API_KEY: undefined }, async () => {
+    if (enabled) {
+      webSearchProviderMocks.resolvePluginWebSearchProviders.mockReturnValue([]);
+    }
+    const beforePersistentEffect = vi.fn(async () => {});
+    const prompts = grokPrompter([id], "catalog-key");
+    const result = await setup(
+      enabled ? {} : { tools: { web: { search: { provider: id, enabled } } } },
+      prompts,
+      { beforePersistentEffect },
+    );
+    expect(result.outcome).toBe("completed");
+    expectSearch(result.config, id, enabled);
+    expect(prompts.select).toHaveBeenCalledWith(
+      expect.objectContaining({
+        options: expect.arrayContaining([expect.objectContaining({ value: id })]),
+      }),
+    );
+    expect(result.config.plugins?.entries?.[id]?.config).toEqual({
+      webSearch: { apiKey: "catalog-key" },
+    });
+    expect(ensureOnboardingPluginInstalled).toHaveBeenCalledTimes(1);
+    expect(latestPluginInstallRequest()).toMatchObject({
+      beforePersistentEffect,
+      autoConfirmSingleSource: true,
+      entry: { pluginId: id, install: { npmSpec: spec } },
+    });
+    if (!enabled) {
+      expect(latestPluginInstallRequest().entry).toMatchObject({
+        label: "Brave",
+        trustedSourceLinkedOfficialInstall: true,
+      });
+      expect(result.config.plugins?.entries?.[id]?.enabled).toBeUndefined();
+      expect(result.config.plugins?.installs?.[id]).toMatchObject({ source: "npm", spec });
+    }
   });
 });

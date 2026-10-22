@@ -134,36 +134,28 @@ it.each<{ label: string; cfg: OpenClawConfig; workspaceDir?: string; expected: s
   ]);
 });
 
-it("sorts channels alphabetically by picker label", () => {
+it("sorts picker labels and sanitizes labels and hints before terminal rendering", () => {
   const options = selectionOptions(
-    (
-      [
-        ["zalo", "Zalo", "Zalo (Bot API)"],
-        ["discord", "Discord", "Discord (Bot API)"],
-        ["imessage", "iMessage", "iMessage (macOS app)"],
-      ] as const
-    ).map(([id, label, selectionLabel]) => ({ id, meta: makeMeta(id, label, { selectionLabel }) })),
-  );
-
-  expect(options.map((option) => option.label)).toEqual([
-    "Discord (Bot API)",
-    "iMessage (macOS app)",
-    "Zalo (Bot API)",
-  ]);
-});
-
-it("sanitizes picker labels and hints before terminal rendering", () => {
-  const options = selectionOptions(
-    [{ id: "zalo", meta: { id: "zalo", label: "Zalo\u001B[31m\nBot\u0007" } }],
+    [
+      { id: "zalo", meta: { id: "zalo", label: "Zalo\u001B[31m\nBot\u0007" } },
+      {
+        id: "imessage",
+        meta: makeMeta("imessage", "iMessage", { selectionLabel: "iMessage (macOS app)" }),
+      },
+      {
+        id: "discord",
+        meta: makeMeta("discord", "Discord", { selectionLabel: "Discord (Bot API)" }),
+      },
+    ],
     new Map([["zalo", { selectionHint: "configured\u001B[2K\nnow" }]]),
-    () => "disabled\u0007",
+    (id) => (id === "zalo" ? "disabled\u0007" : undefined),
   );
 
-  expect(options[0]).toEqual({
-    value: "zalo",
-    label: "Zalo\\nBot",
-    hint: "configured\\nnow · disabled",
-  });
+  expect(options).toEqual([
+    { value: "discord", label: "Discord (Bot API)" },
+    { value: "imessage", label: "iMessage (macOS app)" },
+    { value: "zalo", label: "Zalo\\nBot", hint: "configured\\nnow · disabled" },
+  ]);
 });
 
 it.each(["rejected status check", "adapter resolution"] as const)(

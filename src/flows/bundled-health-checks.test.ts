@@ -21,30 +21,18 @@ import {
 } from "./health-check-registry.js";
 
 const STATE_DEFERRED_CHECK_ID = "memory-core/managed-local-embedding-setup";
+const runtime = () => ({ log: vi.fn(), error: vi.fn(), exit: vi.fn() });
 
 const mocks = vi.hoisted(() => ({
   registerCodexManagedAppServerDoctorChecks: vi.fn(() => {
     throw new Error("Unable to resolve bundled plugin public surface codex/api.js");
   }),
   inspectEmbeddingProviderSetup: vi.fn(),
-  loadBundledPluginManifestRegistry: vi.fn((): PluginManifestRegistry => ({
-    plugins: [],
-    diagnostics: [],
-  })),
-  loadPluginManifestRegistryForPluginRegistry: vi.fn((): PluginManifestRegistry => ({
-    plugins: [],
-    diagnostics: [],
-  })),
+  loadBundledPluginManifestRegistry: vi.fn((): PluginManifestRegistry => manifests()),
+  loadPluginManifestRegistryForPluginRegistry: vi.fn((): PluginManifestRegistry => manifests()),
   registerCuaDriverDoctorChecks: vi.fn(),
   registerMemoryCoreDoctorChecks: vi.fn(),
   registerPolicyDoctorChecks: vi.fn(),
-  registerWorkerProviderDoctorChecks: vi.fn(),
-  loadBundledPluginPublicArtifactModuleFromCandidatesSync: vi.fn(
-    ({ dirName }: { dirName: string }) =>
-      dirName === "crabbox"
-        ? { registerWorkerProviderDoctorChecks: mocks.registerWorkerProviderDoctorChecks }
-        : null,
-  ),
   loadBundledPluginPublicArtifactModuleSync: vi.fn(({ dirName }: { dirName: string }) =>
     dirName === "memory-core"
       ? {
@@ -81,8 +69,6 @@ vi.mock("../plugins/provider-public-artifacts.js", () => ({
 }));
 vi.mock("../plugins/public-surface-loader.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../plugins/public-surface-loader.js")>()),
-  loadBundledPluginPublicArtifactModuleFromCandidatesSync:
-    mocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync,
   loadBundledPluginPublicArtifactModuleSync: mocks.loadBundledPluginPublicArtifactModuleSync,
 }));
 
@@ -152,10 +138,7 @@ it("returns no inspector when the selected provider exposes no policy surface", 
 
 it("scopes plugin state only while the selected provider setup is inspected", async () => {
   const sourceEnv = { ...process.env, OPENCLAW_STATE_DIR: "/operator/state" };
-  const pluginMetadataEnv = {
-    ...sourceEnv,
-    OPENCLAW_STATE_DIR: "/private/read-only-state",
-  };
+  const pluginMetadataEnv = { ...sourceEnv, OPENCLAW_STATE_DIR: "/private/read-only-state" };
   let snapshotRuns = 0;
   const runWithPluginStateSnapshot = async <T>(
     run: (env: NodeJS.ProcessEnv) => Promise<T>,
@@ -192,31 +175,6 @@ it("loads CUA Driver artifact health when the plugin is enabled", () => {
   });
   expect(mocks.registerCuaDriverDoctorChecks).toHaveBeenCalledExactlyOnceWith({
     registerHealthCheck: expect.any(Function),
-  });
-});
-
-it("loads configured worker-provider health through its bundled manifest owner", () => {
-  mocks.loadBundledPluginManifestRegistry.mockReturnValueOnce(
-    manifests(
-      createPluginManifestRecordFixture({
-        id: "crabbox",
-        rootDir: "/bundled/crabbox",
-        contracts: { workerProviders: ["crabbox"] },
-      }),
-    ),
-  );
-
-  register({ cloudWorkers: { profiles: { aws: { provider: "crabbox" } } } });
-
-  expect(mocks.loadBundledPluginPublicArtifactModuleFromCandidatesSync).toHaveBeenCalledWith({
-    dirName: "crabbox",
-    artifactCandidates: ["doctor-health-api.js"],
-  });
-  expect(mocks.registerWorkerProviderDoctorChecks).toHaveBeenCalledExactlyOnceWith({
-    getHealthCheck: expect.any(Function),
-    registerHealthCheck: expect.any(Function),
-    inspectSetupSecrets: expect.any(Function),
-    listPluginStateEntries: expect.any(Function),
   });
 });
 
@@ -283,7 +241,7 @@ it("retains owner identities and blocking findings across readiness registration
   const ctx = {
     cfg: {},
     mode: "lint" as const,
-    runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    runtime: runtime(),
   };
   await expect(runDoctorLintChecks(ctx)).resolves.toMatchObject({ checksRun: 0, findings: [] });
   await expect(
@@ -391,7 +349,7 @@ it("runs the selected bundled Codex health artifact with implicit routing", asyn
       cfg,
       env,
       mode: "lint",
-      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+      runtime: runtime(),
     }),
   ).resolves.toEqual([]);
   expect(mocks.loadPluginManifestRegistryForPluginRegistry).toHaveBeenCalledWith({
