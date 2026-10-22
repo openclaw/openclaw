@@ -2,7 +2,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectUnused,
-  relayConfig,
+  connectRelay,
+  loadConfiguredBackground as load,
   relayFrames,
   runtime,
   waitCalled,
@@ -13,26 +14,10 @@ import {
   REPLACEMENT_TEST_RELAY_KEY,
 } from "./background.test-harness.js";
 
-function load(
-  accessMode: string,
-  tabs: (number | { id: number; groupId: number })[] = [],
-  options: Parameters<typeof loadBackground>[0] = {},
-) {
-  return loadBackground({
-    storedConfig: relayConfig(accessMode),
-    initialTabs: tabs.map((tab) => ({
-      url: "https://example.com/",
-      groupId: -1,
-      ...(typeof tab === "number" ? { id: tab } : tab),
-    })),
-    ...options,
-  });
-}
 async function ready(...args: Parameters<typeof load>) {
   const harness = await load(...args);
-  const socket = harness.relaySockets[0];
+  const connection = await connectRelay(harness);
   if (
-    !socket ||
     !harness.debuggerEventListener ||
     !harness.debuggerDetachListener ||
     !harness.tabsRemovedListener ||
@@ -40,11 +25,9 @@ async function ready(...args: Parameters<typeof load>) {
   ) {
     throw new Error("expected relay and Chrome lifecycle listeners");
   }
-  await harness.authenticate(socket);
   return Object.assign(harness, {
-    socket,
-    frames: () => relayFrames(socket),
-    events: () => relayFrames(socket).filter((frame) => frame.type === "cdpEvent"),
+    ...connection,
+    events: () => connection.frames().filter((frame) => frame.type === "cdpEvent"),
     debuggerEventListener: harness.debuggerEventListener,
     debuggerDetachListener: harness.debuggerDetachListener,
     tabsRemovedListener: harness.tabsRemovedListener,
@@ -208,17 +191,16 @@ describe("relay command authorization", () => {
       socket.receive({ type: "attach", seq: 28, tabId: 201 });
       socket.receive({ type: "attach", seq: 29, tabId: 202 });
       await vi.waitFor(() => {
-        const frames = harness.frames();
-        expect(frames).toContainEqual({
-          type: "result",
-          seq: 28,
-          result: { targetId: "tab-201" },
-        });
-        expect(frames).toContainEqual({
-          type: "result",
-          seq: 29,
-          result: { targetId: "tab-202" },
-        });
+        for (const [seq, tabId] of [
+          [28, 201],
+          [29, 202],
+        ]) {
+          expect(harness.frames()).toContainEqual({
+            type: "result",
+            seq,
+            result: { targetId: `tab-${tabId}` },
+          });
+        }
       });
       socket.send.mockClear();
       let releaseMutation = () => {};

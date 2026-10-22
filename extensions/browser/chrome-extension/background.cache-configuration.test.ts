@@ -1,5 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { connectRelay, relayConfig } from "./background.lifecycle-test-helpers.js";
+import {
+  connectRelay,
+  expectResult,
+  expectType,
+  loadConfiguredBackground,
+} from "./background.lifecycle-test-helpers.js";
 import {
   cleanupBackgroundHarnesses,
   loadBackground,
@@ -19,12 +24,11 @@ async function dispatch(
   method = "Network.setCacheDisabled",
   params: Record<string, unknown> = { cacheDisabled: true },
 ) {
-  const harness = await loadBackground({
-    storedConfig: relayConfig(accessMode),
-    initialTabs: [{ id: 7, url: "https://example.com/source", groupId: 7, windowId: 1 }],
-  });
+  const harness = await loadConfiguredBackground(accessMode, [
+    { id: 7, url: "https://example.com/source", groupId: 7, windowId: 1 },
+  ]);
   const { request } = await connectRelay(harness);
-  expect(await request({ type: "attach", tabId: 7 })).toMatchObject({ type: "result" });
+  expectType(await request({ type: "attach", tabId: 7 }));
   const native = harness.debuggerSendCommand.getMockImplementation()!;
   harness.debuggerSendCommand.mockImplementation(async (source, command, args) => {
     if (command !== method) {
@@ -62,10 +66,7 @@ describe.each(["all", "selected"] as const)("network configuration in %s mode", 
   ])(
     "delivers $method after an allowed document commit during dispatch",
     async ({ method, params }) => {
-      expect(await dispatch(mode, commitDocument, method, params)).toMatchObject({
-        type: "result",
-        result: {},
-      });
+      expectResult(await dispatch(mode, commitDocument, method, params), {});
     },
   );
 

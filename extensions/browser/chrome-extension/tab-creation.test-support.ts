@@ -22,7 +22,6 @@ export async function assertRelayTabCreation(params: {
   extensionPage: Page;
   dispatcher: ReturnType<typeof createBrowserRouteDispatcher>;
   url: string;
-  accessMode: "all" | "selected";
 }) {
   const { context, extensionPage, dispatcher, url } = params;
   const existingPages = await Promise.all(

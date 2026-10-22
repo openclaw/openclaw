@@ -380,11 +380,9 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
             onClose: handlers.onClose,
           };
         };
-        const browserState = getBrowserControlState();
-        const extensionProfile = browserState?.resolved.profiles.e2e;
-        if (!browserState || !extensionProfile) {
-          throw new Error("Browser E2E state did not contain the extension profile");
-        }
+        const missingProfile = "Browser E2E state did not contain the extension profile";
+        const browserState = required(getBrowserControlState(), missingProfile);
+        const extensionProfile = required(browserState.resolved.profiles.e2e, missingProfile);
         const relayAuthorization = `Basic ${Buffer.from(
           `openclaw-internal:${relay.internalToken}`,
         ).toString("base64")}`;
@@ -691,7 +689,6 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
               extensionPage,
               dispatcher,
               url: proofUrl,
-              accessMode,
             });
           }
         } finally {

@@ -5,25 +5,23 @@ import {
   connectRelay,
   createTab,
   expectType,
+  expectResult,
   expectUnused,
-  relayConfig,
+  loadConfiguredBackground,
   runtime,
   waitCalled,
 } from "./background.lifecycle-test-helpers.js";
-import { cleanupBackgroundHarnesses, loadBackground } from "./background.test-harness.js";
+import { cleanupBackgroundHarnesses } from "./background.test-harness.js";
 
 const url = "https://example.com/destination";
 const accessMode = "selected";
 const navigation = { frameId: "main", loaderId: "destination" };
 const navigationEvent = { frame: { id: "main", loaderId: "destination", url } };
 async function setup(mode: "all" | "selected" = "all") {
-  const harness = await loadBackground({
-    storedConfig: relayConfig(mode),
-    initialTabs: [
-      { id: 100, url: "https://example.com/unrelated", groupId: 7 },
-      { id: 99, url: "about:blank", groupId: 7 },
-    ],
-  });
+  const harness = await loadConfiguredBackground(mode, [
+    { id: 100, url: "https://example.com/unrelated", groupId: 7 },
+    { id: 99, url: "about:blank", groupId: 7 },
+  ]);
   const { frames, request } = await connectRelay(harness);
   const group = harness.tabsGroup.getMockImplementation()!;
   harness.tabsGroup.mockImplementation(async (properties) => {
@@ -38,10 +36,7 @@ async function setup(mode: "all" | "selected" = "all") {
     harness.tabGroupUpdatedListener?.({ id: 7, title: "OpenClaw" });
   });
   const create = async () => {
-    expect(await request({ ...createTab(), background: true })).toMatchObject({
-      type: "result",
-      result: { tabId: 101 },
-    });
+    expectResult(await request({ ...createTab(), background: true }), { tabId: 101 });
   };
   return Object.assign(harness, { request, frames, create });
 }
@@ -119,10 +114,7 @@ describe("physical tab creation authority", () => {
         }
         return { ...navigation };
       });
-      expect(await h.request(cdp("Page.navigate", { url }))).toMatchObject({
-        type: "result",
-        result: navigation,
-      });
+      expectResult(await h.request(cdp("Page.navigate", { url })), navigation);
       expectUnused(h.debuggerDetach);
     },
   );

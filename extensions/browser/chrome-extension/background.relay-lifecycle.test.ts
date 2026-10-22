@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   expectType,
+  expectResult,
   expectUnused,
   deferredScope,
   holdNext,
-  relayConfig,
+  loadConfiguredBackground,
+  relayFrames,
+  relayReply,
   runtime,
   waitCalled,
 } from "./background.lifecycle-test-helpers.js";
@@ -15,8 +18,7 @@ const flush = () =>
   new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
-const frames = (socket: FakeWebSocket): Array<Record<string, unknown>> =>
-  socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
+const frames = (socket: FakeWebSocket): Array<Record<string, unknown>> => relayFrames(socket);
 const findFrame = (socket: FakeWebSocket, seq: number) =>
   frames(socket).find((entry) => entry.seq === seq);
 const expectRuntime = (socket: FakeWebSocket) =>
@@ -29,24 +31,15 @@ const attachedResult = { type: "result", seq: 1, result: { targetId: "target-7" 
 const waitAttached = (socket: FakeWebSocket) =>
   vi.waitFor(() => expect(frames(socket)).toContainEqual(attachedResult));
 
-async function reply(socket: FakeWebSocket, seq: number, message: Record<string, unknown>) {
-  const before = frames(socket).length;
-  socket.receive({ seq, ...message });
-  return await vi.waitFor(() => {
-    const result = frames(socket)
-      .slice(before)
-      .find((frame) => (message.type === "ping" ? frame.type === "pong" : frame.seq === seq));
-    expect(result).toBeDefined();
-    return result!;
-  });
-}
+const reply = (socket: FakeWebSocket, seq: number, message: Record<string, unknown>) =>
+  relayReply(socket, { seq, ...message });
 
 async function fixture(initiallyAttached = false) {
-  const h = await loadBackground({
-    deferSocketClose: true,
-    storedConfig: relayConfig("all"),
-    initialTabs: [{ id: tabId, url: "https://example.com/live", groupId: -1, incognito: false }],
-  });
+  const h = await loadConfiguredBackground(
+    "all",
+    [{ id: tabId, url: "https://example.com/live", incognito: false }],
+    { deferSocketClose: true },
+  );
   const attached = new Map<number, { runtimeEnabled: boolean }>();
   h.debuggerAttach.mockImplementation(async ({ tabId: id }) => {
     if (attached.has(id)) {
@@ -90,9 +83,8 @@ async function fixture(initiallyAttached = false) {
     return socket;
   }
   async function attach(socket: FakeWebSocket, seq = 1) {
-    expect(await reply(socket, seq, { type: "attach", tabId })).toMatchObject({
-      type: "result",
-      result: { targetId: `target-${tabId}` },
+    expectResult(await reply(socket, seq, { type: "attach", tabId }), {
+      targetId: `target-${tabId}`,
     });
   }
   if (initiallyAttached) {
