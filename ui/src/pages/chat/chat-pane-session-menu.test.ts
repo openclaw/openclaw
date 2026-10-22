@@ -191,7 +191,7 @@ describe("chat pane session menu boundary", () => {
     try {
       const pending = modal.track(pane.handleHeaderSessionAction({ kind: "toggle-archived" }, row));
       const actions = await waitForConfirmDialogActions();
-      expect(actions.textContent).toContain("Archive 2 sessions");
+      expect(actions.textContent).toContain("Archive all (2)");
       answerConfirmDialog(actions, "cancel");
       await pending;
       expect(patch).not.toHaveBeenCalled();

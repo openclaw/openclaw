@@ -65,7 +65,7 @@ function disableUploadsDuringAdmission(agentCommandMock: HttpMediaSuite["agentCo
       throw new Error("Expected the HTTP command input admission guard");
     }
     publishUploads(false);
-    await options.assertSourceCurrent();
+    options.assertSourceCurrent();
     return { payloads: [], meta: { durationMs: 0, terminalReply: { disposition: "empty" } } };
   });
 }

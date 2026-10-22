@@ -11,10 +11,25 @@ type WorkerChannelResponse = { input: unknown; consumed: () => void };
 type WorkerConversation = {
   taskId: number;
   responseId: number;
+  progressSignal?: Int32Array<SharedArrayBuffer>;
   pending?: PromiseWithResolvers<WorkerChannelResponse>;
   assertCurrent: () => void;
   cancelPending: (error: unknown) => void;
 };
+
+function postTaskMessage(
+  port: MessagePort,
+  value: unknown,
+  progressSignal: Int32Array<SharedArrayBuffer> | undefined,
+  transferList: Transferable[] = [],
+): void {
+  // A woken synchronous reader must already be able to receive the message.
+  port.postMessage(value, transferList);
+  if (progressSignal) {
+    Atomics.add(progressSignal, 0, 1);
+    Atomics.notify(progressSignal, 0);
+  }
+}
 
 /** A conversation never outlives the pool task or crosses worker generations. */
 export type WorkerTaskChannel = {
@@ -78,6 +93,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
       interactive?: boolean;
       responseId?: number;
       nativeSections: SharedArrayBuffer;
+      progressSignal?: Int32Array<SharedArrayBuffer>;
       taskContext: TaskContext;
       closeResource?: true;
       key?: string;
@@ -157,6 +173,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
         let consumed = false;
         const taskId = message.taskId;
         const id = message.responseId;
+        const progressSignal = active.progressSignal;
         pending.resolve({
           input: message.input,
           consumed: () => {
@@ -164,7 +181,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
               return;
             }
             consumed = true;
-            port.postMessage({ status: "consumed", taskId, id });
+            postTaskMessage(port, { status: "consumed", taskId, id }, progressSignal);
           },
         });
         return;
@@ -176,6 +193,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
       const task: WorkerConversation = {
         taskId: message.taskId,
         responseId: 0,
+        progressSignal: message.progressSignal,
         assertCurrent: () => control.throwIfCancelled(),
         cancelPending: (error) => {
           const pending = task.pending;
@@ -200,10 +218,18 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
         ? {
             notify: (value) => {
               control.throwIfCancelled();
-              port.postMessage({ status: "notification", taskId: task.taskId, value });
+              postTaskMessage(
+                port,
+                { status: "notification", taskId: task.taskId, value },
+                task.progressSignal,
+              );
             },
             consumeInput: () =>
-              port.postMessage({ status: "consumed", taskId: task.taskId, id: 0 }),
+              postTaskMessage(
+                port,
+                { status: "consumed", taskId: task.taskId, id: 0 },
+                task.progressSignal,
+              ),
             request: (value, transferList) => {
               control.throwIfCancelled();
               if (active !== task || task.pending) {
@@ -214,13 +240,15 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
               try {
                 const transfers = transferList ? [...transferList] : [];
                 control.throwIfCancelled();
-                port.postMessage(
+                postTaskMessage(
+                  port,
                   {
                     status: "request",
                     taskId: task.taskId,
                     id: ++task.responseId,
                     value,
                   },
+                  task.progressSignal,
                   transfers,
                 );
               } catch (error) {
@@ -249,7 +277,8 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
           }
         })
         .then((value) => {
-          port.postMessage(
+          postTaskMessage(
+            port,
             {
               status: "ok",
               value,
@@ -258,6 +287,7 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
                 ? { diagnostics: host.collectTaskDiagnostics() }
                 : {}),
             },
+            task.progressSignal,
             options.transferList?.(value) ?? [],
           );
         })
@@ -266,12 +296,18 @@ export function serveOwnedWorkerTasks<Output, TaskContext, Input = unknown>(
             retiring = true;
             return;
           }
-          port.postMessage({
-            status: "failed",
-            taskId: task.taskId,
-            error: error instanceof Error ? error.message : String(error),
-            ...(host.collectTaskDiagnostics ? { diagnostics: host.collectTaskDiagnostics() } : {}),
-          });
+          postTaskMessage(
+            port,
+            {
+              status: "failed",
+              taskId: task.taskId,
+              error: error instanceof Error ? error.message : String(error),
+              ...(host.collectTaskDiagnostics
+                ? { diagnostics: host.collectTaskDiagnostics() }
+                : {}),
+            },
+            task.progressSignal,
+          );
         })
         .finally(() => {
           if (!retiring) {

@@ -16,3 +16,8 @@ export type CronProps = Omit<CronViewProps, OptionalViewProp | "gateway"> &
   };
 
 export type CronPanelMode = "overview" | "create" | "job";
+
+export type CronJobActionProps = Pick<
+  CronProps,
+  "canManage" | "busy" | "connected" | "onRun" | "onToggle" | "onClone" | "onRemove"
+>;

@@ -55,10 +55,6 @@ export function resolveProjectChip(params: {
             : pathDisplayName(params.workspace) || t("newSession.folderPlaceholder"),
     recents: normalizedQuery ? [] : params.recents.filter((recent) => recent.kind !== "project"),
     showWorkspace:
-      !normalizedQuery ||
-      [pathDisplayName(params.workspace), params.workspace]
-        .join("\n")
-        .toLowerCase()
-        .includes(normalizedQuery),
+      !normalizedQuery || pathDisplayName(params.workspace).toLowerCase().includes(normalizedQuery),
   };
 }

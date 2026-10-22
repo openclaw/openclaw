@@ -25,7 +25,6 @@ import { ThemeModeToggle } from "./theme-mode-toggle.tsx";
 type SidebarIdentityMenuParams = {
   position: { x: number; bottom: number; width: number; placement?: "right-end" };
   anchor?: HTMLElement;
-  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   nativeGatewaySnapshot: NativeGatewaysSnapshot | null;
   canPairDevice: boolean;
   basePath: string;
@@ -303,7 +302,6 @@ export function renderSidebarIdentityMenu(params: SidebarIdentityMenuParams): JS
       class="sidebar-customize-menu sidebar-identity-menu"
       position={params.position}
       anchor={params.anchor}
-      tabFocusTarget={params.tabFocusTarget}
       label={t("profilePage.identity.menuLabel")}
       panelStyle={{ "--sidebar-identity-menu-min-width": `${params.triggerWidth}px` }}
       items={items()}

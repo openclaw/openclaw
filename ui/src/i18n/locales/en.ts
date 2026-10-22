@@ -2260,6 +2260,7 @@ export const en: TranslationMap & {
       source: "Show source",
       copySource: "Copy source",
       expand: "Expand diagram",
+      expandNamed: "Expand diagram: {title}",
       rendering: "Rendering diagram…",
       error: "This diagram could not be rendered. Check the source or simplify the diagram.",
       rendererError:

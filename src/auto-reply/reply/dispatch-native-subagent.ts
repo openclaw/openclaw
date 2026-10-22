@@ -2,6 +2,10 @@ import { readChannelContextAdmissionEvidence } from "../../channels/message-acce
 import { getGatewayLocalUserIngress } from "../../gateway/local-user-ingress.js";
 import { withNativeSubagentRequest } from "../../plugins/runtime/native-subagent-context.js";
 import { resolveCommandAuthorizationAsync } from "../command-auth.js";
+import {
+  type CommandUserTurn,
+  prepareChannelCommandUserTurn,
+} from "./channel-command-user-turn.js";
 import type { PrepareDispatchOperationReadyState } from "./dispatch-from-config.prepare-operation.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority-inbound.js";
 import { withRequesterNativeSubagents } from "./request-native-subagent.js";
@@ -24,7 +28,7 @@ type NativeSubagentDispatchState = Pick<
   >;
 };
 
-function requesterState(state: NativeSubagentDispatchState) {
+function requesterState(state: NativeSubagentDispatchState, turn?: CommandUserTurn) {
   const replyOptions = state.params.replyOptions;
   const entry = state.sessionStoreEntry.entry;
   const sessionKey = state.sessionStoreEntry.sessionKey ?? state.sessionKey;
@@ -33,7 +37,7 @@ function requesterState(state: NativeSubagentDispatchState) {
     sessionAgentId: state.sessionAgentId,
     sessionKey,
     entry,
-    runId: replyOptions?.runId,
+    runId: turn?.runId ?? replyOptions?.runId,
     operatorAuthority: replyOptions?.operatorAuthority,
     authorizeRequester: () =>
       resolveCommandAuthorizationAsync({
@@ -67,7 +71,7 @@ function requesterState(state: NativeSubagentDispatchState) {
       assertCurrent();
       await state.turnAdoption?.adopt();
       assertCurrent();
-      const recorder = replyOptions?.userTurnTranscriptRecorder;
+      const recorder = turn?.userTurnTranscriptRecorder ?? replyOptions?.userTurnTranscriptRecorder;
       if (!entry?.sessionId || !recorder || !(await recorder.resolveMessage())) {
         return false;
       }
@@ -116,6 +120,8 @@ export const runWithCommandNativeSubagents = async <T>(
     agentId: string;
     sessionKey: string;
     entry: import("../../config/sessions/types.js").SessionEntry;
+    storePath?: string;
+    commandBody?: string;
   },
   run: (
     create:
@@ -125,22 +131,42 @@ export const runWithCommandNativeSubagents = async <T>(
 ): Promise<T> => {
   // Internal/suggested text is not a fresh external command, even if it resembles one.
   const provenance = state.ctx.InputProvenance;
+  const replyOptions = state.params.replyOptions;
   if (
     (provenance && provenance.kind !== "external_user") ||
-    !state.params.replyOptions?.operatorAuthority ||
-    !state.params.replyOptions?.runId ||
-    !state.params.replyOptions?.userTurnTranscriptRecorder ||
+    !replyOptions?.operatorAuthority ||
     binding.agentId !== state.sessionAgentId ||
     binding.sessionKey !== state.sessionKey
   ) {
     return await run(undefined);
   }
-  const requester = requesterState({
-    ...state,
-    sessionAgentId: binding.agentId,
-    sessionKey: binding.sessionKey,
-    sessionStoreEntry: { sessionKey: binding.sessionKey, entry: binding.entry },
-  });
+  // Gateway chat supplies its run and recorder; channel ingress gets a host-minted pair
+  // bound to the same operator authority. Either way, the gate below is unchanged.
+  const turn: CommandUserTurn | undefined =
+    replyOptions.runId && replyOptions.userTurnTranscriptRecorder
+      ? {
+          runId: replyOptions.runId,
+          userTurnTranscriptRecorder: replyOptions.userTurnTranscriptRecorder,
+        }
+      : await prepareChannelCommandUserTurn({
+          dispatch: state,
+          cfg: state.cfg,
+          ctx: state.ctx,
+          replyOptions,
+          binding,
+        });
+  if (!turn) {
+    return await run(undefined);
+  }
+  const requester = requesterState(
+    {
+      ...state,
+      sessionAgentId: binding.agentId,
+      sessionKey: binding.sessionKey,
+      sessionStoreEntry: { sessionKey: binding.sessionKey, entry: binding.entry },
+    },
+    turn,
+  );
   return await withRequesterNativeSubagents(
     {
       ...requester,

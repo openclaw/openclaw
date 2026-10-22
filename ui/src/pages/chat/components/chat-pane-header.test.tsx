@@ -916,7 +916,6 @@ it("publishes the active header while retaining mobile chrome across desktop tra
     resize: vi.fn(),
     keyboardVisible: false,
     onComposerEditingChange: vi.fn(),
-    onViewportChange: vi.fn(),
   };
   const mounted = mountHeader({
     mergedChrome: false,

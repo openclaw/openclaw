@@ -345,6 +345,12 @@ select a registered project or enter the correct repository path. Select
 **Start in a new worktree** again to continue; no child session is started for
 an invalid source folder.
 
+## Mobile composer
+
+On phones, tapping the compact composer focuses the text field and opens the
+keyboard in the same gesture. The expanded editor keeps your draft and selection
+while you use its controls.
+
 ## Composer predictions
 
 Enable **Settings → Labs → Composer predictions** to try optional next-message
@@ -859,10 +865,29 @@ automatically:
 ````markdown
 ```mermaid
 flowchart LR
+  accTitle: Message delivery
+  accDescr {
+    The Gateway sends each accepted message to a Worker.
+    The Worker saves the result in State before delivering the reply.
+  }
   Gateway --> Worker
   Worker --> State
 ```
 ````
+
+When writing diagrams, including agent-authored replies, include a short `accTitle`
+and a plain-language `accDescr` explaining the relationships or outcome. Mermaid
+supports both `accDescr: A one-line description` and the multiline form above.
+The Control UI uses the title as image alternative text and associates the
+longer description with both the inline image and expanded image through an
+invisible text alternative. No caption is added below the diagram. Metadata is
+treated as text, not HTML.
+
+Describe the meaning, not just the shapes. Source code is not a substitute for a
+text equivalent. Without `accDescr`, the image keeps its title without an added
+notice. For diagram types that do not support Mermaid
+accessibility metadata, include the equivalent explanation in the surrounding
+message as well.
 
 Click or tap the diagram to open the image viewer with zoom. With keyboard
 focus on the diagram, press **Enter** or **Space**. The **Diagram options** menu
@@ -990,7 +1015,9 @@ accounts with session-only access do not request that inventory.
 Running and scheduled states update from automation events. If an inventory
 refresh is already running, later changes share one follow-up refresh.
 Compact activity controls can open related details without duplicating the full
-lists above the composer.
+lists above the composer. The mobile **Publish PR** control appears only for an
+undismissed branch with publishable work or a retained publication result or
+recovery state. An empty workspace or account discovery alone does not show it.
 
 The progress header shows the current step, not a completed-step total. On desktop,
 its options menu stays available when the card is expanded or collapsed and contains

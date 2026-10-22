@@ -1,5 +1,5 @@
 /** Requester-bound schedules use the native scheduler; destinations and authority are host-owned. */
-export type PluginCommandScheduleRequest = {
+type PluginCommandScheduleRequest = {
   /** Invocation-local idempotency key. Reusing it with different input is refused. */
   requestId: string;
   /** Canonical command name, without slash, owned by this same plugin. */

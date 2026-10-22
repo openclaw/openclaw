@@ -216,7 +216,6 @@ export async function createGatewayWorkerEnvironmentRuntime(params: {
     signal?.throwIfAborted();
     const producer = (workerBundleProducer ??= workerRuntime.createWorkerBundleProducer({
       protocolFeatures: WORKER_PROTOCOL_FEATURES,
-      cacheOwnership: "exclusive",
       onCacheCleanupError: (error) => {
         workerEnvironmentLog.warn(`Worker bundle cache cleanup failed: ${String(error)}`);
       },

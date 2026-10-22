@@ -10,7 +10,7 @@ import {
   type GatewayBrowserClient,
 } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
-import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
+import { registerNewSessionRuntimeEnglish } from "../../i18n/locales/en-new-session-runtime.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isAwaitingGatewayFailure } from "../../lib/gateway-availability.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -27,7 +27,7 @@ import type {
   SessionPlacementTarget,
 } from "./session-placement-recovery.ts";
 
-registerNewSessionSetupEnglish();
+registerNewSessionRuntimeEnglish();
 
 type SessionPlacementRequests = {
   client: Pick<GatewayBrowserClient, "request"> | null;

@@ -111,9 +111,18 @@ requester under `auto-reply.plugin-command`. Children inherit that requester’s
 lineage and effective tool ceiling. No new hook is registered, so Goal
 start/resume and restart-safe chat admission keep their existing rules.
 
-Channel messages without explicit provenance use the channel’s ordinary sender
-authorization; an authorized non-owner can spend child-model budget only under
-that requester’s tool ceiling. A native slash surface targeting a different
+Gateway chat and channel text commands are both eligible. Messages without explicit
+provenance use the ingress's ordinary sender authorization. On Gateway chat, an
+authorized operator who is not an owner can spend child-model budget only under
+that requester's tool ceiling. A channel message carries operator authority only
+when its verified sender has a
+[channel identity link](/concepts/user-model#channel-identity-links) to a
+person whose current role grants `operator.admin`. That sender must also pass the
+channel's command authorization. Unlinked, unverified, or demoted senders see
+`undefined`, even when the channel lets them run the command, and every native
+call rechecks the link and role. The host records the channel command text once,
+as that message's input: a reply adds only the response, and a continuing agent
+turn reuses the same input. A native slash surface targeting a different
 `CommandTargetSessionKey` than the current dispatch session gets no capability.
 The deprecated direct command registrar cannot grant runtime capabilities; use
 the managed `api.registerCommand` path with its reviewed manifest declaration.

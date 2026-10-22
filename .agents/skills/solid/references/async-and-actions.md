@@ -461,6 +461,11 @@ leaves preparation failures unobserved by a void event caller. Keep those awaits
 inside the existing outcome owner's error path, and retain its current-scope checks
 after they settle; generic confirmation behavior does not need to change.
 
+Independent work needs separate completion slots when its retry lifetimes differ.
+Provider review's modal preload must not replace a pending or failed continuation
+or status-check completion. Reopening retries preparation; only an explicit command
+retry retires that command's feedback.
+
 ## Key a projection over an owner snapshot
 
 Use `projectSource`/`projectOwner` for the synchronous owner adapter, then

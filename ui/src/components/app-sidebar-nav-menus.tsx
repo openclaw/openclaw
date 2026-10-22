@@ -58,7 +58,6 @@ export type SidebarDropdownProps = {
   anchor?: HTMLElement;
   items: readonly MenuEntry[];
   onSelect: (id: string) => void;
-  tabFocusTarget?: (backward: boolean) => HTMLElement | undefined;
   onClose: (restoreFocus: boolean) => void;
   onAfterShow?: (event: Event) => void;
   onOpenChange?: (open: boolean) => void;
@@ -123,7 +122,6 @@ export function SidebarDropdown(params: SidebarDropdownProps): JSX.Element {
         ];
         overlay.request(true, params.focusOnOpen === false ? "none" : "first");
       }}
-      tabFocusTarget={params.tabFocusTarget}
       onSelect={(item) => params.onSelect(item.id)}
       onAfterShow={params.onAfterShow}
       onOpenChange={(open) => {

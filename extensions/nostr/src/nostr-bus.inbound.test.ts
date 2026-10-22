@@ -5,6 +5,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import * as guardPolicy from "openclaw/plugin-sdk/direct-dm-guard-policy";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,6 +16,7 @@ import { buildResolvedNostrAccount, TEST_HEX_PRIVATE_KEY } from "./test-fixtures
 
 const BOT_PUBKEY = "b".repeat(64);
 const defaultOnMessage = vi.fn(async () => {});
+const createGuardPolicy = guardPolicy.createDirectDmPreCryptoGuardPolicy;
 const onRejected = vi.fn<NonNullable<Parameters<typeof startNostrBus>[0]["onRejected"]>>();
 
 function rateLimit(maxGlobalPerWindow: number, maxPerSenderPerWindow: number) {
@@ -136,15 +138,24 @@ function expectDispatchCounts(verify: number, decrypt: number, delivered: number
   ]).toEqual([verify, decrypt, delivered]);
 }
 
-async function startTestNostrBus(options: Partial<Parameters<typeof startNostrBus>[0]> = {}) {
-  activeBus = await startNostrBus({
-    privateKey: TEST_HEX_PRIVATE_KEY,
-    onMessage: defaultOnMessage,
-    onRejected,
-    ...options,
-    trackIngressTask: (task) => ingressTasks.push(task),
-  });
-  return activeBus;
+async function startTestNostrBus(
+  options: Partial<Parameters<typeof startNostrBus>[0]> = {},
+  overrides?: Parameters<typeof createGuardPolicy>[0],
+) {
+  const policy = overrides && vi.spyOn(guardPolicy, "createDirectDmPreCryptoGuardPolicy");
+  policy?.mockReturnValue(createGuardPolicy(overrides));
+  try {
+    activeBus = await startNostrBus({
+      privateKey: TEST_HEX_PRIVATE_KEY,
+      onMessage: defaultOnMessage,
+      onRejected,
+      ...options,
+      trackIngressTask: (task) => ingressTasks.push(task),
+    });
+    return activeBus;
+  } finally {
+    policy?.mockRestore();
+  }
 }
 
 describe("startNostrBus inbound guards", () => {
@@ -328,10 +339,7 @@ describe("startNostrBus inbound guards", () => {
   it("rate limits repeated invalid signatures before authorization work fans out", async () => {
     mockState.verifyEvent.mockReturnValue(false);
     const authorizeSender = vi.fn(async () => "allow" as const);
-    await startTestNostrBus({
-      authorizeSender,
-      guardPolicy: { rateLimit: rateLimit(1, 10) },
-    });
+    await startTestNostrBus({ authorizeSender }, { rateLimit: rateLimit(1, 10) });
     await emitEvent({ id: "invalid-1" });
     await emitEvent({ id: "invalid-2" });
     expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
@@ -379,11 +387,10 @@ describe("startNostrBus inbound guards", () => {
         return await blocked.promise;
       })
       .mockResolvedValueOnce("allow");
-    const bus = await startTestNostrBus({
-      onMessage,
-      authorizeSender,
-      guardPolicy: { rateLimit: rateLimit(2, 1) },
-    });
+    const bus = await startTestNostrBus(
+      { onMessage, authorizeSender },
+      { rateLimit: rateLimit(2, 1) },
+    );
     try {
       dispatchEvent(createEvent({ id: "blocked-pending", pubkey: `blocked${"a".repeat(57)}` }));
       await withinTest(authorizing.promise, signal);
@@ -412,11 +419,10 @@ describe("startNostrBus inbound guards", () => {
       recentEventIds: [],
     });
     mockState.computeSinceTimestamp.mockReturnValue(1_000);
-    const bus = await startTestNostrBus({
-      ...buildResolvedNostrAccount(),
-      relays: ["wss://relay.example"],
-      guardPolicy: { maxCiphertextBytes: 4, rateLimit: rateLimit(1, 10) },
-    });
+    const bus = await startTestNostrBus(
+      { ...buildResolvedNostrAccount(), relays: ["wss://relay.example"] },
+      { maxCiphertextBytes: 4, rateLimit: rateLimit(1, 10) },
+    );
     expect(mockState.writeNostrBusState).toHaveBeenCalledWith(
       expect.objectContaining({ lastProcessedAt: 1_000, gatewayStartedAt: 900 }),
     );
@@ -441,9 +447,7 @@ describe("startNostrBus inbound guards", () => {
   });
 
   it("does not spend per-sender buckets on oversized ciphertext before verification", async () => {
-    await startTestNostrBus({
-      guardPolicy: { maxCiphertextBytes: 4, rateLimit: rateLimit(10, 1) },
-    });
+    await startTestNostrBus({}, { maxCiphertextBytes: 4, rateLimit: rateLimit(10, 1) });
     await emitEvent({ id: "oversized-sender-1", content: "ciphertext-too-large" });
     await emitEvent({ id: "oversized-sender-2", content: "ciphertext-too-large" });
     await emitEvent({ id: "allowed-after-oversized", content: "ok" });

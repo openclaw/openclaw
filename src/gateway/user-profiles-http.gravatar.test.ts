@@ -74,7 +74,7 @@ describe("Gravatar HTTP waiter lifetimes", () => {
     authorizeControlUiReadRequestOrReply
       .mockReset()
       .mockImplementation(({ res }: { res: ServerResponse }) =>
-        bindHttpResponseAuthority({}, res, () => true),
+        bindHttpResponseAuthority({ operatorScopes: ["operator.read"] }, res, () => true),
       );
   });
 
@@ -238,7 +238,13 @@ describe("Gravatar HTTP waiter lifetimes", () => {
       const closed = once(first.response, "close");
       disconnected.client.destroy();
       await closed;
-      authorized.resolve(bindHttpResponseAuthority({}, first.response, () => true));
+      authorized.resolve(
+        bindHttpResponseAuthority(
+          { operatorScopes: ["operator.read"] },
+          first.response,
+          () => true,
+        ),
+      );
       await expect(first.promise).rejects.toThrow("HTTP request authority expired");
 
       expect(fetchImpl).not.toHaveBeenCalled();
