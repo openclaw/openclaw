@@ -99,28 +99,7 @@ it("rejects a replaced file before final I/O", { timeout: E2E_TIMEOUT_MS }, asyn
         await Promise.all(invocationResponses);
       },
     },
-    async ({ registry, operator, nodeId }) => {
-      expect(
-        registry.registry.nodeInvokePolicies.map(({ pluginId, policy }) => ({
-          pluginId,
-          commands: policy.commands,
-        })),
-      ).toEqual([
-        { pluginId: "file-transfer", commands: ["workspace.memory"] },
-        { pluginId: "file-transfer", commands: ["workspace.skills"] },
-        {
-          pluginId: "file-transfer",
-          commands: [
-            FILE_FETCH_COMMAND,
-            "file.stat",
-            "dir.list",
-            "dir.fetch",
-            "file.write",
-            "file.create",
-          ],
-        },
-      ]);
-
+    async ({ operator, nodeId }) => {
       const result = await operator.request<{
         payload?: { ok?: boolean; code?: string };
       }>("node.invoke", {

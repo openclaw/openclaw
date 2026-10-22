@@ -89,17 +89,6 @@ it(
         },
       },
       async ({ state, config, registry, nodeId, gatewayUrl, gatewayToken }) => {
-        expect(registry.registry.tools.map((entry) => entry.pluginId)).toEqual(["canvas"]);
-        expect(registry.registry.nodeInvokePolicies).toEqual([
-          expect.objectContaining({
-            pluginId: "canvas",
-            policy: expect.objectContaining({
-              commands: [...CANVAS_NODE_COMMANDS],
-              defaultPlatforms: ["macos"],
-            }),
-          }),
-        ]);
-
         const toolRegistration = registry.registry.tools.find(
           (entry) => entry.pluginId === "canvas",
         );

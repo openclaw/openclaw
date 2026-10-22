@@ -318,6 +318,11 @@ function expectedFile(bytes: Buffer, name: string) {
 const fileBlock = { type: "file", file: "attachment://report.pdf" };
 const accent = { accentColor: 0x123456 };
 const textBlock = (content: string) => ({ type: 10, content });
+const sectionBlock = (...contents: string[]) => ({
+  type: 9,
+  components: contents.map(textBlock),
+  accessory: { label: "Read" },
+});
 const linkButton = (url: string) => ({
   type: "button",
   button: { label: " Read ", style: "link", url: `https://example.com/${url}` },
@@ -596,16 +601,8 @@ describe("Discord show_widget contextual presenter process proof", () => {
           components: [
             textBlock("    top-level body  "),
             textBlock("    text-block body  "),
-            {
-              type: 9,
-              components: [textBlock("    section body  ")],
-              accessory: { label: "Read" },
-            },
-            {
-              type: 9,
-              components: [textBlock("    first body  "), textBlock("    second body  ")],
-              accessory: { label: "Read" },
-            },
+            sectionBlock("    section body  "),
+            sectionBlock("    first body  ", "    second body  "),
           ],
         },
       ]);

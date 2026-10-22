@@ -106,21 +106,18 @@ it("joins registry cleanup when its startup is cancelled", async () => {
 });
 
 it.each([
-  { name: "loaded", check: assertInspectLoaded, plugin: { enabled: true, status: "loaded" } },
-  {
-    name: "disabled",
-    check: assertInspectDisabled,
-    plugin: { enabled: false, status: "disabled" },
-  },
-  {
-    name: "disabled but loaded",
-    check: assertInspectDisabled,
-    plugin: { enabled: false, status: "loaded" },
-    error: "expected lifecycle-claw inspect status disabled, got loaded",
-  },
-  { name: "missing", check: assertInspectLoaded, plugin: undefined, error: "missing" },
-])("validates $name inspect JSON", ({ check, plugin, error }) => {
-  const file = inspectFile(plugin);
+  ["loaded", true, "loaded"],
+  ["disabled", false, "disabled"],
+  [
+    "disabled but loaded",
+    false,
+    "loaded",
+    "expected lifecycle-claw inspect status disabled, got loaded",
+  ],
+  ["missing", true, undefined, "missing"],
+] as const)("validates %s inspect JSON", (_name, enabled, status, error) => {
+  const check = enabled ? assertInspectLoaded : assertInspectDisabled;
+  const file = inspectFile(status === undefined ? undefined : { enabled, status });
   const result = expect(() => check("lifecycle-claw", file));
   if (error) {
     result.toThrow(error === "missing" ? `failed to read JSON from ${file}` : error);
