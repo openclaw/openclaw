@@ -2930,7 +2930,6 @@
 ["src/cli/channel-options.test.ts","./startup-metadata.js","8d45ca3221be030282189b38c6220168ad2dbf085e6fdb59970a4988e5c14032",1]
 ["src/cli/channels-cli.test.ts","../channels/plugins/catalog.js","b5f9d477efa58970d824a7f542d09c82054a291909280256908b49853db73b26",1]
 ["src/cli/channels-cli.test.ts","../commands/channels/dead-letters.js","e94da8c4faf65ae81f11695c7cae59a01b1f1f1ab68000455ada7846408c0562",1]
-["src/cli/channels-cli.test.ts","../plugins/bundled-package-channel-metadata.js","5f6c79ca6ec77bb3191e7b284d2134aae8613d28efc8833a6affc9621503345e",1]
 ["src/cli/channels-cli.test.ts","../runtime.js","ebb5ff4d413c42f9eb03313b244edb186d1e4a4d262002f0b5a5444f34c6e28c",1]
 ["src/cli/channels-cli.test.ts","./channel-auth.js","05cda5b1e207b0f0b5d4e1dbd87bdf0b85f5ac77948ea76d19eb020f69ae0d3e",1]
 ["src/cli/channels-list-catalog-row-discovery.test.ts","../agents/agent-scope.js","ee8c47a2a92ce4058e5e142e3f8f813593951efcc420026182fcb25f8cae0000",1]
