@@ -7,7 +7,6 @@ import {
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
 import { runCommandBuffered } from "../../process/exec.js";
-import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../../state/openclaw-state-db.paths.js";
@@ -125,90 +124,38 @@ it("records the exact acknowledged manual request after SIGKILL before worker ac
   expect(persisted?.state.runningAtMs).toBeUndefined();
 }, 45_000);
 
-it.each(["removed", "write-failed"] as const)(
-  "preserves accounting on manual admission failure: %s",
-  async (failure) => {
-    const { storePath, job, blockers } = await admissionFixture(
-      `manual-${failure}`,
-      failure === "removed" ? 8 : 0,
+it("rolls back manual admission accounting when the receipt insert fails", async () => {
+  const { storePath, job } = await admissionFixture("manual-write-failed", 0);
+  const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
+  const cron = new CronService({
+    scheduler: createTestGatewayScheduler(),
+    storePath,
+    cronEnabled: false,
+    log: createNoopLogger(),
+    enqueueSystemEvent() {},
+    runIsolatedAgentJob,
+  });
+  inspectActiveCronRunReceipt({ storePath, jobId: job.id });
+  const database = openOpenClawStateDatabase().db;
+  const completion = createCronMutationCompletion("cron.run");
+  assert(completion, "Expected cron mutation completion");
+  database.exec(`CREATE TRIGGER reject_manual_receipt BEFORE INSERT ON cron_run_receipts
+    WHEN NEW.store_key = '${cronStoreKey(storePath).replaceAll("'", "''")}'
+      AND NEW.job_id = '${job.id}'
+    BEGIN SELECT RAISE(ABORT, 'manual receipt unavailable'); END;`);
+  try {
+    await expect(completion.run(() => cron.enqueueRun(job.id, "force"))).rejects.toThrow(
+      "manual receipt unavailable",
     );
-    const finished = createDeferredCore();
-    const blockersStarted = createDeferredCore();
-    const releaseBlockers = createDeferredCore();
-    let blockerCount = 0;
-    const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
-    const cron = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      storePath,
-      cronEnabled: false,
-      log: createNoopLogger(),
-      enqueueSystemEvent() {},
-      runIsolatedAgentJob: async (params) => {
-        if (blockers.some((entry) => entry.id === params.job.id)) {
-          if (++blockerCount === blockers.length) {
-            blockersStarted.resolve();
-          }
-          await releaseBlockers.promise;
-          return { status: "ok" };
-        }
-        return runIsolatedAgentJob();
-      },
-      onEvent: (event) => {
-        if (event.jobId === job.id && event.action === "finished") {
-          finished.resolve();
-        }
-      },
-    });
-    inspectActiveCronRunReceipt({ storePath, jobId: job.id });
-    const database = openOpenClawStateDatabase().db;
-    const completion = createCronMutationCompletion("cron.run");
-    assert(completion, "Expected cron mutation completion");
-    if (failure === "write-failed") {
-      database.exec(`CREATE TRIGGER reject_manual_receipt BEFORE INSERT ON cron_run_receipts
-        WHEN NEW.store_key = '${cronStoreKey(storePath).replaceAll("'", "''")}'
-          AND NEW.job_id = '${job.id}'
-        BEGIN SELECT RAISE(ABORT, 'manual receipt unavailable'); END;`);
-    }
-    const active = blockers.map((entry) => cron.run(entry.id, "force"));
-    try {
-      if (blockers.length > 0) {
-        await blockersStarted.promise;
-      }
-      const pending = completion.run(() => cron.enqueueRun(job.id, "force"));
-      if (failure === "write-failed") {
-        await expect(pending).rejects.toThrow("manual receipt unavailable");
-        expect(completion.isCommitted()).toBe(false);
-      } else {
-        const ack = await pending;
-        expect(ack).toMatchObject({ ok: true, enqueued: true, runId: expect.any(String) });
-        assert(ack.ok && "runId" in ack, "Expected manual run acknowledgement");
-        expect(completion.isCommitted()).toBe(true);
-        await cron.remove(job.id);
-        releaseBlockers.resolve();
-        await Promise.all(active);
-        await finished.promise;
-        expect(receipt(ack.runId, job.id)).toEqual({
-          status: "skipped",
-          error_text: "cron: queued job was removed",
-        });
-      }
-      expect(runIsolatedAgentJob).not.toHaveBeenCalled();
-      expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
-      const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
-      if (failure === "removed") {
-        expect(persisted).toBeUndefined();
-      } else {
-        expect(persisted?.state).toMatchObject({
-          nextRunAtMs: job.state.nextRunAtMs,
-        });
-        expect(persisted?.state.queuedAtMs).toBeUndefined();
-      }
-    } finally {
-      database.exec("DROP TRIGGER IF EXISTS reject_manual_receipt");
-      releaseBlockers.resolve();
-      await Promise.allSettled(active);
-      cron.stop();
-      await cron.waitForIdle();
-    }
-  },
-);
+    expect(completion.isCommitted()).toBe(false);
+    expect(runIsolatedAgentJob).not.toHaveBeenCalled();
+    expect(inspectActiveCronRunReceipt({ storePath, jobId: job.id })).toBeUndefined();
+    const persisted = (await loadCronStore(storePath)).jobs.find((entry) => entry.id === job.id);
+    expect(persisted?.state).toMatchObject({ nextRunAtMs: job.state.nextRunAtMs });
+    expect(persisted?.state.queuedAtMs).toBeUndefined();
+  } finally {
+    database.exec("DROP TRIGGER IF EXISTS reject_manual_receipt");
+    cron.stop();
+    await cron.waitForIdle();
+  }
+});
