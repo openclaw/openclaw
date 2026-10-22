@@ -203,10 +203,12 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
         if (update.type === "invalidated" || update.type === "loading") {
           binding.sessionRefreshPending =
             update.type === "invalidated" && update.scope === "session";
-          binding.version += 1;
-          if (binding.sessionFactsRequest) {
-            binding.sessionFactsInvalidated = true;
-            binding.sessionFactsRetryPending = true;
+          if (update.type === "loading" || update.refreshSessionFacts) {
+            binding.version += 1;
+            if (binding.sessionFactsRequest) {
+              binding.sessionFactsInvalidated = true;
+              binding.sessionFactsRetryPending = true;
+            }
           }
         }
         if (update.type === "invalidated") {
