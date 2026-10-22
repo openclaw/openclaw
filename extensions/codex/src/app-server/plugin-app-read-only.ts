@@ -43,14 +43,11 @@ export function buildCodexAppReadOnlyTools(
         resourceName?.toLowerCase(),
       ]),
     ].filter((key): key is string => Boolean(key));
-    const allowed =
-      isExplicitlyTrue(tool.isReadOnly) &&
-      isExplicitlyTrue(tool.isEnabled) &&
-      keys.every((key) => asOptionalRecord(nativeTools[key])?.enabled !== false);
+    const allowed = isExplicitlyTrue(tool.isReadOnly) && isExplicitlyTrue(tool.isEnabled);
     for (const key of keys) {
       // Ambiguous aliases must not let a read grant enable a different write tool.
       // A synthesized name entry shadows the whole native title entry. Carry
-      // its explicit approval along; leave app/link defaults to native policy.
+      // its enablement and approval along; leave app/link defaults to native policy.
       const title =
         key === resourceName || key === resourceName?.toLowerCase()
           ? resourceName
@@ -63,7 +60,7 @@ export function buildCodexAppReadOnlyTools(
         approvalMode = "prompt";
       }
       current.set(key, {
-        enabled: (previous?.enabled ?? true) && allowed,
+        enabled: (previous?.enabled ?? true) && allowed && native?.enabled !== false,
         ...(approvalMode ? { approval_mode: approvalMode } : {}),
       });
     }

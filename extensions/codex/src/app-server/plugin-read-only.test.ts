@@ -124,13 +124,21 @@ function fixture(
 
 describe("plugin read_only policy", () => {
   it.each([
-    [{ Browse: { approval_mode: "prompt" } }, "prompt"],
-    [{ Browse: { approval_mode: "writes" } }, "writes"],
-    [{ Browse: { approval_mode: "prompt" }, browse: { approval_mode: "approve" } }, "approve"],
-    [{ Browse: { approval_mode: "prompt" }, browse: { enabled: true } }, "auto"],
+    [{ Browse: { approval_mode: "prompt" } }, "prompt", true],
+    [{ Browse: { approval_mode: "writes" } }, "writes", true],
+    [
+      { Browse: { approval_mode: "prompt" }, browse: { approval_mode: "approve" } },
+      "approve",
+      true,
+    ],
+    [{ Browse: { approval_mode: "prompt" }, browse: { enabled: true } }, "auto", true],
+    [{ Browse: { enabled: false }, browse: { enabled: true } }, "auto", true],
+    [{ Browse: { enabled: true }, browse: { enabled: false } }, "auto", false],
+    [{ Browse: { enabled: false }, browse: { approval_mode: "approve" } }, "approve", true],
+    [{ Browse: { enabled: false } }, "auto", false],
   ] as const)(
-    "preserves native whole-entry approval precedence across binding replay (%j)",
-    async (native, expected) => {
+    "preserves native whole-entry tool policy across binding replay (%j)",
+    async (native, expected, enabled) => {
       const f = fixture(true, "auto");
       f.setTools([tool("browse", true, { title: "Browse" })]);
       f.setNativeTools(native);
@@ -147,7 +155,7 @@ describe("plugin read_only policy", () => {
         expect(effective).toBeDefined();
         expect(
           readCurrentToolPolicy(effective!, "sample-app", "browse", { title: "Browse" }),
-        ).toEqual({ enabled: true, approvalMode: expected });
+        ).toEqual({ enabled, approvalMode: expected });
       }
     },
   );
