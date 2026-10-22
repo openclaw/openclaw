@@ -19,8 +19,8 @@ import {
 import { resetPreparedModelRuntimeSnapshotsForTest } from "../prepared-model-runtime.test-support.js";
 import * as runtimePlugins from "../runtime-plugins.js";
 import { SessionManager } from "../sessions/session-manager.js";
-import { runEmbeddedAgent } from "./run.js";
 import { withTestAdmission } from "./run-orchestrator.test-support.js";
+import { runEmbeddedAgent } from "./run.js";
 
 type SessionRuntimeInput = Parameters<
   typeof import("./run/attempt-session-runtime-prepare.js").prepareEmbeddedAttemptSessionRuntime
