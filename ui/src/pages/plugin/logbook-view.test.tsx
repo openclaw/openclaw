@@ -151,7 +151,7 @@ function pendingRefresh(title?: string) {
   });
   return {
     request,
-    resolve(settledTitle: string) {
+    resolve: (settledTitle: string) => {
       status.resolve(statusFor("2026-07-04"));
       timeline.resolve(timelineFor("2026-07-04", settledTitle));
     },

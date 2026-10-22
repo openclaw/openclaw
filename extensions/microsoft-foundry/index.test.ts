@@ -1060,5 +1060,3 @@ describe("selectFoundryDeployment", () => {
     expect(note.mock.calls.some(([, title]) => title === "Unsupported Deployments")).toBe(false);
   });
 });
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
