@@ -128,13 +128,13 @@ const snapshotChanges: Record<string, Partial<ControlUiSettingsSnapshot>> = {
   engine: { engine: { kind: "pinned", id: "custom-memory", availability: "unknown" } },
   route: { routeIntent: "overview?agent=writer" },
 };
-it.each(["agent", "engine", "route"])(
+it.each(Object.entries(snapshotChanges))(
   "rejects a retained callback after %s changes",
-  async (kind) => {
+  async (_kind, change) => {
     const f = fixture();
     await waitForSolid(() => expect(f.contexts).toHaveLength(1));
     const old = f.contexts[0]!;
-    f.change(snapshotChanges[kind]!);
+    f.change(change);
     await expect(old.request("doctor.memory.status")).rejects.toThrow();
     expect(() => old.navigate("settings")).toThrow();
     expect(f.viewDisposers[0]).toHaveBeenCalledTimes(1);
@@ -162,18 +162,16 @@ const gatewayChanges: Record<string, (gateway: ReturnType<typeof fixture>["gatew
     gateway.snapshot.hello = null;
   },
 };
-it.each([
-  "client replacement",
-  "recovery-scope change",
-  "retired offline recovery",
-  "connect rejection",
-])("disposes the mounted view after %s", async (cause) => {
-  const f = fixture();
-  await waitForSolid(() => expect(f.contexts).toHaveLength(1));
-  const old = f.contexts[0]!;
-  f.change({}, () => gatewayChanges[cause]!(f.gateway));
-  expect(old.signal.aborted).toBe(true);
-  expect(f.viewDisposers[0]).toHaveBeenCalledTimes(1);
-  await expect(old.request("memory.search")).rejects.toThrow();
-  await waitForSolid(() => expect(f.contexts).toHaveLength(2));
-});
+it.each(Object.entries(gatewayChanges))(
+  "disposes the mounted view after %s",
+  async (_cause, change) => {
+    const f = fixture();
+    await waitForSolid(() => expect(f.contexts).toHaveLength(1));
+    const old = f.contexts[0]!;
+    f.change({}, () => change(f.gateway));
+    expect(old.signal.aborted).toBe(true);
+    expect(f.viewDisposers[0]).toHaveBeenCalledTimes(1);
+    await expect(old.request("memory.search")).rejects.toThrow();
+    await waitForSolid(() => expect(f.contexts).toHaveLength(2));
+  },
+);

@@ -122,11 +122,11 @@ describe("native UI built-in delegation", () => {
   it.each(["native", "solid"])(
     "coalesces %s property updates for the mounted plugin",
     async (mode) => {
-      const updates: ControlUiViewContext<ControlUiSurfaceProps["workspace"]>[] = [];
-      const batched = replacement("workspace", (container) => {
-        container.textContent = "Synthetic workspace";
-        return { update: (context) => updates.push(context) };
-      });
+      const { contexts: updates, view: batched } = recordReplacement(
+        "workspace",
+        "Synthetic workspace",
+        true,
+      );
       let view: HTMLElementTagNameMap["openclaw-plugin-view"];
       let refresh: () => void;
       let cleanup: () => void;
@@ -468,36 +468,23 @@ describe("native UI built-in delegation", () => {
   });
 
   it("aborts an invalidated view that fails during update and remounts it on retry", async () => {
-    const roots: HTMLElement[] = [];
-    const signals: AbortSignal[] = [];
-    const dispose = vi.fn();
     const failure = new Error("Deferred page unavailable");
     let failUpdate = false;
-    let invalidate = () => {};
-    const { host, reportError, listeners } = mountSurface(
-      replacement("workspace", (container, context) => {
-        roots.push(container);
-        signals.push(context.signal);
-        invalidate = context.host.ui.invalidate;
-        container.textContent = "Page content";
-        return {
-          update() {
-            if (failUpdate) {
-              throw failure;
-            }
-          },
-          dispose,
-        };
-      }),
-    );
+    const record = recordReplacement("workspace", "Page content", () => {
+      if (failUpdate) {
+        throw failure;
+      }
+    });
+    const { roots, contexts, dispose } = record;
+    const { host, reportError, listeners } = mountSurface(record.view);
     flush();
     const view = pluginView(host);
     await view.updateComplete;
     failUpdate = true;
-    invalidate();
+    contexts[0]!.host.ui.invalidate();
     await view.updateComplete;
     await view.updateComplete;
-    expect(signals[0]?.aborted).toBe(true);
+    expect(contexts[0]?.signal.aborted).toBe(true);
     expect(dispose).toHaveBeenCalledOnce();
     expect(reportError).toHaveBeenCalledExactlyOnceWith("review", failure);
     expect(view.querySelector("[role=alert]")?.textContent).toContain(failure.message);
@@ -512,7 +499,7 @@ describe("native UI built-in delegation", () => {
     await view.updateComplete;
     expect(roots).toHaveLength(2);
     expect(roots[1]).not.toBe(roots[0]);
-    expect(signals[1]?.aborted).toBe(false);
+    expect(contexts.at(-1)?.signal.aborted).toBe(false);
     expect(view.textContent).toBe("Page content");
   });
 

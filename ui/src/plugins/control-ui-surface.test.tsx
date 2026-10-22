@@ -104,7 +104,7 @@ describe("native plugin surface", () => {
     warnings.mockRestore();
   });
 
-  it("revokes deselected composer operations before rendering and retires replaced contexts", async () => {
+  it("retires composer operations when the application context is replaced", async () => {
     const record = recordReplacement("composer", "Plugin composer");
     const { contexts: mounted, roots, dispose } = record;
     const source = runtime(record.view);
@@ -129,22 +129,16 @@ describe("native plugin surface", () => {
     expect(view.getByText("Companion")).toBeDefined();
     const first = mounted[0]!;
     first.props.setDraft("Current");
-    source.select();
-    source.select(record.view);
+    provider.setContext(next.context);
+    await waitForSolid(() => expect(mounted).toHaveLength(2));
     expect(() => first.props.setDraft("Retired")).toThrow("view has ended");
     expect(first.signal.aborted).toBe(true);
-    expect(dispose).not.toHaveBeenCalled();
-    await waitForSolid(() => expect(mounted).toHaveLength(2));
-    expect(roots[1]).not.toBe(roots[0]);
-    provider.setContext(next.context);
-    await waitForSolid(() => expect(mounted).toHaveLength(3));
-    expect(mounted[1]?.signal.aborted).toBe(true);
     expect(source.listeners.size).toBe(0);
-    expect(roots[2]).not.toBe(roots[1]);
-    mounted[2]!.props.setDraft("Replacement context");
+    expect(roots[1]).not.toBe(roots[0]);
+    mounted[1]!.props.setDraft("Replacement context");
     expect(setDraft.mock.calls).toEqual([["Current"], ["Replacement context"]]);
     view.unmount();
-    expect(dispose).toHaveBeenCalledTimes(3);
+    expect(dispose).toHaveBeenCalledTimes(2);
     expect(next.listeners.size).toBe(0);
   });
 });

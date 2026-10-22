@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { PluginControlUiDiagnostic } from "../../../packages/gateway-protocol/src/schema/plugins.js";
 import type { ControlUiAction } from "../../../src/plugin-sdk/control-ui.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
@@ -25,6 +26,21 @@ import "./control-ui-contributions.solid.tsx";
 type ContributionsElement = HTMLElementTagNameMap["openclaw-plugin-contributions"];
 const sessionKey = "agent:main:main";
 const cleanups: (() => void)[] = [];
+const actionButton = (element: Element) => element.querySelector<HTMLButtonElement>("button")!;
+const expectActionError = (element: Element, message: string | null) =>
+  vi.waitFor(() => {
+    const alert = element.querySelector('[role="alert"]');
+    if (message === null) {
+      expect(alert).toBeNull();
+    } else {
+      expect(alert?.textContent).toBe(message);
+    }
+  });
+function deferredAction() {
+  const pending = createDeferred();
+  onTestFinished(() => pending.resolve());
+  return pending;
+}
 
 it("renders customization inline and recovers reload controls after failure or success", async () => {
   const listeners = new Set<() => void>();
@@ -270,57 +286,39 @@ async function mountActions(
 describe("native plugin session actions", () => {
   it("shows a concurrent action failure after a later invocation succeeds", async () => {
     const { element, run } = await mountActions();
-    const failed = createDeferred();
-    const succeeded = createDeferred();
-    const button = element.querySelector<HTMLButtonElement>("button")!;
-    try {
-      run.mockReturnValueOnce(failed.promise).mockReturnValueOnce(succeeded.promise);
-      button.click();
-      button.click();
-      succeeded.resolve();
-      await succeeded.promise;
-      failed.reject(new Error("Synthetic concurrent action failure"));
-      await vi.waitFor(() =>
-        expect(element.querySelector('[role="alert"]')?.textContent).toBe(
-          "Synthetic concurrent action failure",
-        ),
-      );
-      expect(element.querySelector("button")).toBe(button);
-    } finally {
-      failed.resolve();
-      succeeded.resolve();
-    }
+    const failed = deferredAction();
+    const succeeded = deferredAction();
+    const button = actionButton(element);
+    run.mockReturnValueOnce(failed.promise).mockReturnValueOnce(succeeded.promise);
+    button.click();
+    button.click();
+    succeeded.resolve();
+    await succeeded.promise;
+    failed.reject(new Error("Synthetic concurrent action failure"));
+    await expectActionError(element, "Synthetic concurrent action failure");
+    expect(actionButton(element)).toBe(button);
   });
 
   it("clears action failures on retry without replacing its controls", async () => {
     const { element, run } = await mountActions();
-    const failed = createDeferred();
-    const retry = createDeferred();
-    const button = element.querySelector<HTMLButtonElement>("button")!;
-    try {
-      run.mockReturnValueOnce(failed.promise);
-      button.click();
-      failed.reject(new Error("Synthetic action failure"));
-      await vi.waitFor(() =>
-        expect(element.querySelector('[role="alert"]')?.textContent).toBe(
-          "Synthetic action failure",
-        ),
-      );
-      expect(element.querySelector("button")).toBe(button);
+    const failed = deferredAction();
+    const retry = deferredAction();
+    const button = actionButton(element);
+    run.mockReturnValueOnce(failed.promise);
+    button.click();
+    failed.reject(new Error("Synthetic action failure"));
+    await expectActionError(element, "Synthetic action failure");
+    expect(actionButton(element)).toBe(button);
 
-      run.mockReturnValueOnce(retry.promise);
-      button.click();
-      await vi.waitFor(() => expect(element.querySelector('[role="alert"]')).toBeNull());
-      expect(element.querySelector("button")).toBe(button);
-      retry.resolve();
-      await retry.promise;
-      await element.updateComplete;
-      expect(element.querySelector('[role="alert"]')).toBeNull();
-      expect(element.querySelector("button")).toBe(button);
-    } finally {
-      failed.resolve();
-      retry.resolve();
-    }
+    run.mockReturnValueOnce(retry.promise);
+    button.click();
+    await expectActionError(element, null);
+    expect(actionButton(element)).toBe(button);
+    retry.resolve();
+    await retry.promise;
+    await element.updateComplete;
+    expect(element.querySelector('[role="alert"]')).toBeNull();
+    expect(actionButton(element)).toBe(button);
   });
 
   it("replaces placement subscriptions and resumes current session presentation", async () => {
@@ -346,7 +344,7 @@ describe("native plugin session actions", () => {
       agentId: "writer",
       session: { key: "global", kind: "global", agentId: "main", updatedAt: 1, label: "Main" },
     });
-    const button = () => element.querySelector<HTMLButtonElement>("button");
+    const button = () => actionButton(element);
     expect(button()?.textContent?.trim()).toBe("Review unavailable");
     button()?.click();
     expect(run).toHaveBeenCalledOnce();
@@ -382,11 +380,8 @@ describe("native plugin session actions", () => {
       agentId: "main",
       session: { key: "global", kind: "global", agentId: "main", updatedAt: 1, label: "Main" },
     });
-    element.querySelector<HTMLButtonElement>("button")?.click();
-    const invocation = run.mock.calls[0]?.[0];
-    if (!invocation) {
-      throw new Error("Expected the pane's plugin action to run");
-    }
+    actionButton(element).click();
+    const invocation = expectDefined(run.mock.calls[0]?.[0], "pane action");
     expect(invocation.session).toMatchObject({ key: "global", agentId: "main" });
     await invocation.host.request("fixture.current-owner");
 
@@ -407,12 +402,9 @@ describe("native plugin session actions", () => {
       await release.promise;
       host.sessions.open(destination);
     });
-    const retained = element.querySelector<HTMLButtonElement>("button")!;
+    const retained = actionButton(element);
     retained.click();
-    const invocation = run.mock.calls[0]?.[0];
-    if (!invocation) {
-      throw new Error("Expected the visible plugin action to run");
-    }
+    const invocation = expectDefined(run.mock.calls[0]?.[0], "visible action");
     const pending = Promise.resolve(run.mock.results[0]?.value);
 
     // Neither a retained button nor an immediate reshow revives the old action.
@@ -447,7 +439,7 @@ describe("native plugin session actions", () => {
 
   it("revokes a removed action before its pending render", async () => {
     const { element, run, unregister } = await mountActions();
-    const retained = element.querySelector<HTMLButtonElement>("button")!;
+    const retained = actionButton(element);
     unregister();
     retained.click();
     expect(run.mock.calls.length).toBe(0);
@@ -462,7 +454,7 @@ describe("native plugin session actions", () => {
       return {};
     });
 
-    element.querySelector<HTMLButtonElement>("button")!.click();
+    actionButton(element).click();
 
     expect(run.mock.calls.length).toBe(0);
     await element.updateComplete;
@@ -473,7 +465,7 @@ describe("native plugin session actions", () => {
     const { element, sessions, run, navigate, setSessionKey } = await mountActions({
       placement: "composer",
     });
-    const button = () => element.querySelector<HTMLButtonElement>("button");
+    const button = () => actionButton(element);
     expect(button()?.textContent?.trim()).toBe("Review Ready");
     expect(button()?.disabled).toBe(false);
     const pending = createDeferred();
@@ -482,10 +474,7 @@ describe("native plugin session actions", () => {
       host.sessions.open({ sessionKey: "agent:writer:resumed", agentId: "writer" });
     });
     button()?.click();
-    const invocation = run.mock.calls[0]?.[0];
-    if (!invocation) {
-      throw new Error("Expected the visible action to run");
-    }
+    const invocation = expectDefined(run.mock.calls[0]?.[0], "visible action");
     const completion = Promise.resolve(run.mock.results[0]?.value).then(
       () => undefined,
       (error: unknown) => error,
@@ -530,9 +519,9 @@ describe("native plugin session actions", () => {
 
   it("rechecks eligibility and passes the current session before a pending render", async () => {
     const { element, sessions, run, request } = await mountActions();
-    const button = () => element.querySelector<HTMLButtonElement>("button")!;
+    const button = () => actionButton(element);
 
-    // Click in the same turn as publication, before Lit can update the old button.
+    // Click in the same turn as publication, before the old button updates.
     sessions.patchRowLocal(sessionKey, { hasActiveRun: true });
     button().click();
     expect(run.mock.calls.length).toBe(0);
