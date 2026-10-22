@@ -16,6 +16,7 @@ export type WizardViewProps = {
   onDialogRef?: (element: import("../../components/modal-dialog.ts").OpenClawModalDialog) => void;
   mode: "auth" | "prepare" | "activate";
   state: ModelSetupWizardState;
+  busy?: boolean;
   refreshWarning: string | null;
   doneMessage?: string;
   doneDescription?: string;
@@ -161,7 +162,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                       step={state().step}
                       externalAuthInput={state().externalAuthInput}
                       value={props.value}
-                      busy={state().busy}
+                      busy={props.busy || state().busy}
                       inputId="model-setup-wizard-text-input"
                       validationErrorId={
                         state().validationError ? "model-setup-wizard-validation-error" : undefined
@@ -182,7 +183,7 @@ export function ModelSetupWizard(props: WizardViewProps): JSX.Element {
                     />
                     <Show
                       when={
-                        state().busy &&
+                        (props.busy || state().busy) &&
                         state().step.type !== "progress" &&
                         !state().step.externalUrl &&
                         !state().step.deviceCode

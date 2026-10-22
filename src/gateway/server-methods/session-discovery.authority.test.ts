@@ -45,6 +45,12 @@ afterEach(() => vi.restoreAllMocks());
 
 const sessionKey = "agent:main:discovery";
 const scope = { agentId: "main", sessionKey };
+const sessionEntry = {
+  sessionId: "discovery",
+  updatedAt: 1,
+  visibility: "read-only",
+  createdActor: { type: "human", source: "profile", id: "owner" },
+} as const;
 const handlers = {
   "commands.list": commandsHandlers["commands.list"]!,
   "skills.status": handleSkillsStatus,
@@ -125,12 +131,7 @@ async function withDiscoveryState(
 }
 
 async function seed() {
-  await upsertSessionEntryCore(scope, {
-    sessionId: "discovery",
-    updatedAt: 1,
-    visibility: "read-only",
-    createdActor: { type: "human", source: "profile", id: "owner" },
-  });
+  await upsertSessionEntryCore(scope, sessionEntry);
   addSessionMember(scope, { identityId: "alice", addedBy: "owner" });
 }
 
@@ -142,9 +143,6 @@ it.each(["commands.list", "skills.status"] as const)(
       const exec = vi.spyOn(DatabaseSync.prototype, "exec");
       try {
         expect((await call(method))[0]).toBe(true);
-        console.log(
-          `${method}: caller SQL prepare=${prepare.mock.calls.length} exec=${exec.mock.calls.length}`,
-        );
         expect.soft(prepare).not.toHaveBeenCalled();
         expect.soft(exec).not.toHaveBeenCalled();
       } finally {
@@ -259,10 +257,9 @@ it.each(["commands.list", "skills.status"] as const)(
           }
           if (change === "session") {
             replaceSessionEntrySync(scope, {
+              ...sessionEntry,
               sessionId: "replacement",
               updatedAt: 2,
-              visibility: "read-only",
-              createdActor: { type: "human", source: "profile", id: "owner" },
             });
           }
         } finally {

@@ -1,4 +1,4 @@
-import { createMemo, For, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
@@ -296,8 +296,10 @@ export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
   "openclaw-viewer-facepile",
   (props, host) => {
     host.style.display = "contents";
-    mountedFacepiles.set(host, host);
-    onCleanup(() => mountedFacepiles.delete(host));
+    onSettled(() => {
+      mountedFacepiles.set(host, host);
+      return () => mountedFacepiles.delete(host);
+    });
     return <ViewerFacepileContent {...props} />;
   },
   {

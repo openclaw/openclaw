@@ -46,7 +46,10 @@ use its authenticated control socket first. The app closes the physical database
 between operations so existing maintenance custody can capture and restore it.
 A dispatched operation with a lost reply is never replayed offline. When no app
 received the request, clients acquire bounded exclusive custody and release it
-at completion, including when another CLI briefly owns the file.
+at completion, including when another CLI briefly owns the file. An app released
+before this route refuses it as an unknown operation before dispatch; clients
+treat that app as absent and use the same offline custody, so a newer CLI or
+Gateway still starts while an older app is running.
 iOS app and extension operations use the same Swift owner for a bounded
 operation and close before suspension. No owner selects an identity or token
 by comparing timestamps with another store. The existing maintenance lock blocks

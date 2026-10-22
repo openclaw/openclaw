@@ -58,6 +58,10 @@ the retired acquisition does not stop the Gateway; genuine replacement failures
 still propagate.
 
 Transcript projection repair runs after readiness in yielding worker-backed work.
+Pending GitHub publication recovery runs in the background and does not delay
+readiness or agent dispatch while Git or GitHub responds. Placement authority
+recovery still completes before dispatch opens; shutdown joins publication work
+already in progress, and failures retain their recorded effects for retry.
 An agent deferred by database inspection becomes usable after its session,
 credentials, and model preparation finish; rebuilding its transcript projections
 does not hold agent admission or another agent's preparation. Shutdown still joins

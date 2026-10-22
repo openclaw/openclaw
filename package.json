@@ -140,7 +140,6 @@
     "!dist/plugin-sdk/gateway-config-runtime.d.ts",
     "!dist/plugin-sdk/global-singleton.d.ts",
     "!dist/plugin-sdk/group-activation.d.ts",
-    "!dist/plugin-sdk/heartbeat-runtime.d.ts",
     "!dist/plugin-sdk/host-runtime.d.ts",
     "!dist/plugin-sdk/html-entity-runtime.d.ts",
     "!dist/plugin-sdk/image-generation.d.ts",
@@ -742,9 +741,6 @@
     },
     "./plugin-sdk/node-selection-runtime": {
       "default": "./dist/plugin-sdk/node-selection-runtime.js"
-    },
-    "./plugin-sdk/heartbeat-runtime": {
-      "default": "./dist/plugin-sdk/heartbeat-runtime.js"
     },
     "./plugin-sdk/http-response-runtime": {
       "default": "./dist/plugin-sdk/http-response-runtime.js"

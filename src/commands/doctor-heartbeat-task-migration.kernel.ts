@@ -4,7 +4,6 @@ import { isDeepStrictEqual } from "node:util";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import { tryResolveCronJobEffectiveAgentId } from "../cron/agent-id.js";
-import { heartbeatTaskDeclarationKey, isHeartbeatTaskCronJob } from "../cron/heartbeat-task.js";
 import {
   readDefaultProactiveJobReceiptInDatabase,
   recordConvertedProactiveJobInDatabase,
@@ -26,6 +25,10 @@ import { getCronStoreKysely } from "../cron/store/schema.js";
 import type { CronStoredJob as CronJob } from "../cron/types.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
+import {
+  heartbeatTaskDeclarationKey,
+  isHeartbeatTaskCronJob,
+} from "./doctor-heartbeat-task-identity.js";
 import { analyzeLegacyHeartbeatTasks, type LegacyHeartbeatTask } from "./heartbeat-task-legacy.js";
 
 type ValidatedHeartbeatTask = {

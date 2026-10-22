@@ -351,14 +351,17 @@ describe("auditGatewayServiceConfig systemd", () => {
   const auditUnit = (timeoutMs?: number) => audit({}, { env: env(), timeoutMs });
   const network = ["After=network-online.target", "Wants=network-online.target", "RestartSec=5"];
   async function writeUnit(lines: string[]) {
+    // systemd reads dependencies only from [Unit]; everything else here is a service directive.
+    const isUnitKey = (line: string) => /^(?:After|Wants)=/.test(line);
     await fs.mkdir(path.dirname(unitPath), { recursive: true });
     await fs.writeFile(
       unitPath,
       [
         "[Unit]",
         "Description=OpenClaw Gateway",
+        ...lines.filter(isUnitKey),
         "[Service]",
-        ...lines,
+        ...lines.filter((line) => !isUnitKey(line)),
         "ExecStart=/usr/bin/node gateway",
         "",
         "[Install]",

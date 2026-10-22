@@ -38,7 +38,6 @@ it("keeps the pending terminal receipt within 64 rows until reconciliation relea
       cronEnabled,
       log: logger,
       enqueueSystemEvent() {},
-      requestHeartbeat() {},
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       runCommandJob,
     });

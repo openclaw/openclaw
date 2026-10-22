@@ -1,8 +1,10 @@
 import childProcess from "node:child_process";
+import { createHash } from "node:crypto";
 import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { create as createTar } from "tar";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import { collectPackageDistImportErrors } from "../../scripts/lib/package-dist-imports.mjs";
@@ -1625,6 +1627,40 @@ describe("previous release update compatibility", () => {
     return output;
   }
 
+  function serveTarball(archive: string): { child: childProcess.ChildProcess; url: string } {
+    const root = createTempDir("update-compat-registry-");
+    const portFile = path.join(root, "port");
+    const server = path.join(root, "server.cjs");
+    fsSync.writeFileSync(
+      server,
+      [
+        'const fs = require("node:fs");',
+        'const http = require("node:http");',
+        "const [archive, portFile] = process.argv.slice(2);",
+        "const instance = http.createServer((_request, response) => {",
+        '  response.writeHead(200, { "content-type": "application/octet-stream" });',
+        "  fs.createReadStream(archive).pipe(response);",
+        "});",
+        'instance.listen(0, "127.0.0.1", () => {',
+        "  fs.writeFileSync(portFile, String(instance.address().port));",
+        "});",
+      ].join("\n"),
+    );
+    const child = childProcess.spawn(testNodeExecPath, [server, archive, portFile], {
+      stdio: "ignore",
+    });
+    const deadline = Date.now() + 5_000;
+    while (!fsSync.existsSync(portFile) && Date.now() < deadline) {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 10);
+    }
+    if (!fsSync.existsSync(portFile)) {
+      child.kill();
+      throw new Error("fixture registry server did not start");
+    }
+    const port = fsSync.readFileSync(portFile, "utf8");
+    return { child, url: `http://127.0.0.1:${port}/openclaw.tgz` };
+  }
+
   function runInventoryCli(
     args: string[],
     replies: Array<{ args: string[]; value: unknown }> = [],
@@ -1721,6 +1757,59 @@ describe("previous release update compatibility", () => {
     expect(checked.calls).toEqual([]);
   });
 
+  it("downloads, verifies, and records an exact registry release", async () => {
+    const root = createTempDir("update-compat-registry-release-");
+    const version = "2026.9.4";
+    write(
+      root,
+      "package/package.json",
+      JSON.stringify({
+        name: "openclaw",
+        version,
+        openclaw: { schemaVersions: { state: 1, agent: 1 } },
+      }),
+    );
+    write(
+      root,
+      "package/dist/build-info.json",
+      JSON.stringify({ version, buildId: version, commit: "0".repeat(40) }),
+    );
+    write(root, "package/dist/entry.js", "export {};\n");
+    const archive = path.join(root, "openclaw.tgz");
+    await createTar({ cwd: root, file: archive, gzip: true }, ["package"]);
+    const registryIntegrity = `sha512-${createHash("sha512").update(fsSync.readFileSync(archive)).digest("base64")}`;
+    const fixture = serveTarball(archive);
+    try {
+      const output = path.join(root, "inventory.json");
+      const integrityArgs = ["view", `openclaw@${version}`, "dist.integrity", "--json"];
+      const tarballArgs = ["view", `openclaw@${version}`, "dist.tarball", "--json"];
+      const { result, calls } = runInventoryCli(
+        ["--registry-release", version, "--output", output],
+        [
+          { args: integrityArgs, value: registryIntegrity },
+          { args: tarballArgs, value: fixture.url },
+        ],
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(calls).toEqual([integrityArgs, tarballArgs]);
+      expect(readUpdateCompatibilityInventory(output).releases).toMatchObject([
+        { version, integrity: registryIntegrity, chunks: [] },
+      ]);
+      const rejected = runInventoryCli(
+        ["--registry-release", version, "--output", path.join(root, "rejected.json")],
+        [
+          { args: integrityArgs, value: `sha512-${Buffer.alloc(64, 1).toString("base64")}` },
+          { args: tarballArgs, value: fixture.url },
+        ],
+      );
+      expect(rejected.result.status).toBe(1);
+      expect(rejected.result.stderr).toContain("Registry tarball integrity mismatch");
+      expect(fsSync.existsSync(path.join(root, "rejected.json"))).toBe(false);
+    } finally {
+      fixture.child.kill();
+    }
+  });
+
   it.each(["npm 11", "npm 12"])(
     "checks %s latest and beta coverage without refetching recorded integrity",
     (npmVersion) => {
@@ -1744,7 +1833,6 @@ describe("previous release update compatibility", () => {
     "prints a complete refresh command when $missing leaves the window",
     ({ latest, beta, extendedStable, missing }) => {
       const output = writeWindowInventory(createTempDir("update-compat-tag-refresh-"));
-      const newIntegrity = `sha512-${Buffer.alloc(64, 1).toString("base64")}`;
       const tags = {
         latest,
         beta,
@@ -1753,7 +1841,6 @@ describe("previous release update compatibility", () => {
       const expectedCalls = [
         ["view", "openclaw", "dist-tags", "--json"],
         ["view", `openclaw@${missing}`, "openclaw.schemaVersions", "--json"],
-        ["view", `openclaw@${missing}`, "dist.integrity", "--json"],
       ];
       const { result, calls } = runInventoryCli(
         ["--check", "--output", output],
@@ -1763,19 +1850,16 @@ describe("previous release update compatibility", () => {
             args: expectedCalls[1]!,
             value: latest === beta ? [{ state: 1, agent: 1 }] : { state: 1, agent: 1 },
           },
-          { args: expectedCalls[2]!, value: latest === beta ? [newIntegrity] : newIntegrity },
         ],
       );
       expect(result.status).toBe(1);
       expect(result.stderr).toContain("pnpm update:compat:gen --output");
       expect(result.stderr).toContain(output);
       expect(result.stderr).toContain(
-        [
-          ...["2026.9.1", "2026.9.2", "2026.9.3"].map(
-            (version) => `--release .artifacts/update-compat/${version}/package=${integrity}`,
-          ),
-          `--release .artifacts/update-compat/${missing}/package=${newIntegrity}`,
-        ].join(" "),
+        ["2026.9.1", "2026.9.2", "2026.9.3", missing]
+          .toSorted((left, right) => left.localeCompare(right, undefined, { numeric: true }))
+          .map((version) => `--registry-release ${version}`)
+          .join(" "),
       );
       expect(calls).toEqual(expectedCalls);
     },

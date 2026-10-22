@@ -3,7 +3,6 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { listAgentIds } from "../agents/agent-scope-config.js";
 import { inheritLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isHeartbeatTaskCronJob } from "../cron/heartbeat-task.js";
 import {
   readDefaultProactiveJobReceiptInDatabase,
   recordDefaultProactiveJobInDatabase,
@@ -30,6 +29,7 @@ import {
   collectHeartbeatScratchMigrationFindings,
   maybeMigrateHeartbeatFilesToScratch,
 } from "./doctor-heartbeat-scratch-migration.js";
+import { isHeartbeatTaskCronJob } from "./doctor-heartbeat-task-identity.js";
 import {
   maybeMigrateHeartbeatTasksToCron,
   migrateStoredHeartbeatTaskJobs,
