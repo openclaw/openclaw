@@ -2,7 +2,6 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir as makeTempRepoRoot } from "../../test/helpers/temp-dir.js";
 import { writeJsonFile } from "../../test/helpers/temp-repo.js";
-import type { PluginChannelCatalogEntry } from "../plugins/channel-catalog-registry.js";
 import type { PluginPackageChannel } from "../plugins/manifest.js";
 import { captureEnv } from "../test-utils/env.js";
 
@@ -12,20 +11,14 @@ vi.mock("../plugins/bundled-dir.js", () => ({
   resolveSourceCheckoutDependencyDiagnostic: vi.fn(() => null),
 }));
 
-const listChannelCatalogEntriesMock = vi.hoisted(() =>
-  vi.fn<() => PluginChannelCatalogEntry[]>(() => {
+vi.mock("../plugins/channel-catalog-registry.js", () => ({
+  listChannelCatalogEntries: vi.fn(() => {
     throw new Error("bundled channel catalog read must not run full plugin discovery");
   }),
-);
-
-vi.mock("../plugins/channel-catalog-registry.js", () => ({
-  listChannelCatalogEntries: listChannelCatalogEntriesMock,
 }));
 
-const bundledOfficialExternalCatalogEntriesMock = vi.hoisted((): unknown[] => []);
-
 vi.mock("../plugins/official-external-plugin-bundled-catalogs.js", () => ({
-  BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES: bundledOfficialExternalCatalogEntriesMock,
+  BUNDLED_OFFICIAL_EXTERNAL_PLUGIN_CATALOG_ENTRIES: [],
 }));
 
 // Isolate package-root discovery to the temporary cwd, not this source checkout.
@@ -52,10 +45,8 @@ const originalEnv = captureEnv([
 afterEach(() => {
   originalEnv.restore();
   cleanupTempDirs(tempDirs);
-  bundledOfficialExternalCatalogEntriesMock.length = 0;
   vi.restoreAllMocks();
   vi.mocked(resolveBundledPluginsDir).mockReset();
-  listChannelCatalogEntriesMock.mockClear();
 });
 
 function useBundledPluginsDir(extensionsRoot: string | undefined): void {
