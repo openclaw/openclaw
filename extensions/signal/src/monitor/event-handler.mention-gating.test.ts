@@ -21,6 +21,7 @@ vi.mock("openclaw/plugin-sdk/hook-runtime", async (importOriginal) => {
 let capturedCtx: MsgContext | undefined;
 const getCapturedCtx = () => expectDefined(capturedCtx, "Signal MsgContext");
 
+// mock-isolation: Shared helper preserves real exports while isolating worker-backed dispatch.
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const { signalInboundTestModule } =
     await import("./event-handler.inbound-context.test-support.js");

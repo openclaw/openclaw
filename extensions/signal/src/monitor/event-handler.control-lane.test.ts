@@ -25,6 +25,7 @@ vi.mock("../send.js", () => ({
   sendReadReceiptSignal: receiptMock,
 }));
 
+// mock-isolation: Shared helper preserves real exports while isolating worker-backed dispatch.
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
   const { signalInboundTestModule } =

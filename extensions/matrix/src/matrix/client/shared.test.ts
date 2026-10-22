@@ -754,11 +754,11 @@ describe("shared Matrix client runtime ownership", () => {
     }
     const disposals = owners.splice(0).map((dispose) => dispose());
     const acquired = await Promise.allSettled(acquisitions.splice(0));
-    await Promise.allSettled(
-      acquired.flatMap((result) =>
-        result.status === "fulfilled" ? [result.value.release({ mode: "discard" })] : [],
-      ),
-    );
+    for (const result of acquired) {
+      if (result.status === "fulfilled") {
+        result.value.release({ mode: "discard" });
+      }
+    }
     await Promise.allSettled(disposals);
     if (previousRuntime) {
       setMatrixRuntime(previousRuntime);

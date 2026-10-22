@@ -81,18 +81,25 @@ describe("resolveSignalAccessState", () => {
     expect(senderAccess.effectiveGroupAllowFrom).toContain(SIGNAL_SENDER.e164);
   });
 
-  it.each([
-    [SIGNAL_SENDER, SIGNAL_SENDER.e164],
-    [aliasedSender, `uuid:${SIGNAL_UUID}`],
-  ] as const)("allows paired sender %j", async (sender, pairedId) => {
+  it("allows paired direct senders from the pairing store", async () => {
     const { senderAccess } = await resolveAccess({
       dmPolicy: "pairing",
-      sender,
-      readStoreAllowFrom: async () => [pairedId],
+      readStoreAllowFrom: async () => [SIGNAL_SENDER.e164],
     });
 
     expect(senderAccess.decision).toBe("allow");
-    expect(senderAccess.effectiveAllowFrom).toEqual([pairedId]);
+    expect(senderAccess.effectiveAllowFrom).toEqual([SIGNAL_SENDER.e164]);
+  });
+
+  it("keeps a UUID-paired sender allowed after signal-cli learns its phone alias", async () => {
+    const { senderAccess } = await resolveAccess({
+      dmPolicy: "pairing",
+      sender: aliasedSender,
+      readStoreAllowFrom: async () => [`uuid:${SIGNAL_UUID}`],
+    });
+
+    expect(senderAccess.decision).toBe("allow");
+    expect(senderAccess.effectiveAllowFrom).toContain(`uuid:${SIGNAL_UUID}`);
   });
 
   it.each<[string, "open" | "allowlist", string[], boolean, boolean]>([
