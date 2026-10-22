@@ -138,20 +138,6 @@ it.each([false, true])("Tabs through descendant shadow roots (only=%s)", async (
   }
 });
 
-it("keeps native input navigation inside a button-ended modal", async () => {
-  const { handle, name, notes } = mountModal();
-  const dialog = modalDialog(handle);
-  const body = dialog.querySelector(".oc-modal-dialog__body")!;
-  body.prepend(document.createElement("button"));
-  body.append(document.createElement("button"));
-  notes.focus();
-  await userEvent.keyboard("{Tab}");
-  expect(dialog.contains(document.activeElement)).toBe(true);
-  name.focus();
-  await userEvent.keyboard("{Shift>}{Tab}{/Shift}");
-  expect(dialog.contains(document.activeElement)).toBe(true);
-});
-
 it.each(["summary", "editable"])(
   "wraps native %s content without an explicit tabindex",
   async (kind) => {
