@@ -4336,7 +4336,6 @@ const PR_EXEMPT_RUNTIME_TEST_FILES = [
   "extensions/msteams/src/reply-stream-controller.sdk.test.ts",
   "extensions/msteams/src/token.test.ts",
   "extensions/nostr/src/nostr-bus.inbound.test.ts",
-  "extensions/nostr/src/nostr-ingress.test.ts",
   "extensions/ollama/src/embedding-provider.test.ts",
   "extensions/ollama/src/stream.test.ts",
   "extensions/onepassword/src/secret-ref-resolver.test.ts",

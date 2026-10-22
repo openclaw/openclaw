@@ -18,9 +18,7 @@ function createHarness() {
         { once: true },
       );
       return {
-        close: vi.fn(async (reason?: string) => {
-          close(reason ?? "closed by caller");
-        }),
+        close: vi.fn(async (reason = "closed by caller") => close(reason)),
       };
     },
   );
@@ -78,18 +76,14 @@ describe("Nostr relay subscriptions", () => {
     expect(onBackfillComplete).not.toHaveBeenCalled();
   });
 
-  it("does not report locally requested closes as relay failures", async () => {
-    const { abortController, group, onClose } = setup();
-    abortController.abort("closed by caller");
-    await group.close("closed by caller");
-
-    expect(onClose).not.toHaveBeenCalled();
-  });
-
-  it("still reports closes initiated by the relay", async () => {
-    const { handlers, onClose } = setup();
-    handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay unavailable" }]);
-
-    expect(onClose).toHaveBeenCalledWith("wss://one.example", ["relay unavailable"]);
+  it.each([true, false])("reports closure only for remote initiators (local=%s)", async (local) => {
+    const { abortController, group, handlers, onClose } = setup();
+    if (local) {
+      abortController.abort("closed by caller");
+      await group.close("closed by caller");
+    } else {
+      handlers[0]?.onclose?.([{ url: "wss://one.example", reason: "relay unavailable" }]);
+    }
+    expect(onClose.mock.calls).toEqual(local ? [] : [["wss://one.example", ["relay unavailable"]]]);
   });
 });

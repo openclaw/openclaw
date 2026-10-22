@@ -182,8 +182,7 @@ describe("nostr inbound", () => {
     await expect(
       h.options.authorizeSender?.({ senderPubkey: TEST_HEX_PUBLIC_KEY, reply }),
     ).resolves.toBe("pairing");
-    expect(reply).toHaveBeenCalledOnce();
-    expect(reply).toHaveBeenCalledWith(expect.stringContaining("Pairing code:"));
+    expect(reply).toHaveBeenCalledExactlyOnceWith(expect.stringContaining("Pairing code:"));
     expect(mocks.dispatchInboundDirectDm).not.toHaveBeenCalled();
   });
 
@@ -238,16 +237,8 @@ describe("nostr inbound", () => {
         channelRuntime: runtime.channel,
       }),
     );
-    if (visible) {
-      expect(convertMarkdownTables).toHaveBeenCalledWith(visible, "off");
-    } else {
-      expect(convertMarkdownTables).not.toHaveBeenCalled();
-    }
-    if (expected) {
-      expect(reply).toHaveBeenCalledWith(expected);
-    } else {
-      expect(reply).not.toHaveBeenCalled();
-    }
+    expect(convertMarkdownTables.mock.calls).toEqual(visible ? [[visible, "off"]] : []);
+    expect(reply.mock.calls).toEqual(expected ? [[expected]] : []);
   });
 });
 

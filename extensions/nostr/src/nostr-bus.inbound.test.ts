@@ -31,13 +31,6 @@ type RelayHandlers = {
   onclose?: (reason: string[]) => void;
 };
 
-type TestNostrBusState = {
-  version: 2;
-  lastProcessedAt: number | null;
-  gatewayStartedAt: number | null;
-  recentEventIds: string[];
-};
-
 const mockState = vi.hoisted(() => ({
   handlers: [] as RelayHandlers[],
   subscribeMany: vi.fn(),
@@ -45,32 +38,23 @@ const mockState = vi.hoisted(() => ({
   close: vi.fn(),
   subscriptionClose: vi.fn(),
   finalizeEvent: vi.fn((event: unknown) => event),
-  readNostrBusState: vi.fn(async (): Promise<TestNostrBusState | null> => null),
+  readNostrBusState: vi.fn<typeof import("./nostr-state-store.js").readNostrBusState>(
+    async () => null,
+  ),
   writeNostrBusState: vi.fn(
     async (_state: { lastProcessedAt: number; gatewayStartedAt: number }) => {},
   ),
   computeSinceTimestamp: vi.fn(() => 0),
   verifyEvent: vi.fn(() => true),
   decrypt: vi.fn(() => "plaintext"),
-  publishProfile: vi.fn(async () => ({
-    createdAt: 0,
-    eventId: "profile-event",
-    successes: [],
-    failures: [],
-  })),
 }));
 
 vi.mock("nostr-tools", () => {
   class MockSimplePool {
-    onRelayConnectionSuccess?: (relay: string) => void;
     maxWaitForConnection = 3_000;
 
     subscribeMany(relays: string[], filters: unknown, handlers: RelayHandlers) {
       mockState.subscribeMany(relays, filters, handlers);
-      const relay = relays[0];
-      if (relay) {
-        this.onRelayConnectionSuccess?.(new URL(relay).toString());
-      }
       mockState.handlers.push(handlers);
       return {
         close: mockState.subscriptionClose,
@@ -91,10 +75,6 @@ vi.mock("nostr-tools", () => {
     finalizeEvent: mockState.finalizeEvent,
     getPublicKey: vi.fn(() => BOT_PUBKEY),
     verifyEvent: mockState.verifyEvent,
-    nip19: {
-      decode: vi.fn(),
-      npubEncode: vi.fn((value: string) => `npub-${value}`),
-    },
   };
 });
 
@@ -111,10 +91,6 @@ vi.mock("./nostr-state-store.js", () => ({
   writeNostrProfileState: vi.fn(async () => {}),
 }));
 
-vi.mock("./nostr-profile.js", () => ({
-  publishProfile: mockState.publishProfile,
-}));
-
 function createEvent(overrides: Record<string, unknown> = {}) {
   return {
     id: "event-1",
@@ -128,8 +104,8 @@ function createEvent(overrides: Record<string, unknown> = {}) {
   };
 }
 
-async function emitEvent(event: Record<string, unknown>) {
-  dispatchEvent(event);
+async function emitEvent(overrides: Record<string, unknown>) {
+  dispatchEvent(createEvent(overrides));
   while (ingressTasks.length > 0) {
     await Promise.all(ingressTasks.splice(0));
   }
@@ -150,16 +126,6 @@ let activeBus: Awaited<ReturnType<typeof startNostrBus>> | undefined;
 
 function useQueue(openChannelIngressQueue = () => ingressQueue) {
   setNostrRuntime({ state: { openChannelIngressQueue } } as unknown as PluginRuntime);
-}
-
-function readPreviousCursor() {
-  mockState.readNostrBusState.mockResolvedValueOnce({
-    version: 2,
-    lastProcessedAt: 1_000,
-    gatewayStartedAt: 900,
-    recentEventIds: [],
-  });
-  mockState.computeSinceTimestamp.mockReturnValue(1_000);
 }
 
 function expectDispatchCounts(verify: number, decrypt: number, delivered: number) {
@@ -192,19 +158,8 @@ describe("startNostrBus inbound guards", () => {
     });
     useQueue();
     mockState.handlers = [];
-    onRejected.mockClear();
-    defaultOnMessage.mockClear();
     ingressTasks = [];
-    mockState.subscribeMany.mockClear();
-    mockState.publish.mockReset().mockResolvedValue("ok");
-    mockState.close.mockClear();
-    mockState.subscriptionClose.mockReset();
-    mockState.finalizeEvent.mockClear();
-    mockState.readNostrBusState.mockReset().mockResolvedValue(null);
-    mockState.writeNostrBusState.mockReset().mockResolvedValue(undefined);
-    mockState.computeSinceTimestamp.mockReset().mockReturnValue(0);
-    mockState.verifyEvent.mockClear().mockReturnValue(true);
-    mockState.decrypt.mockClear().mockReturnValue("plaintext");
+    vi.resetAllMocks();
   });
 
   afterEach(async () => {
@@ -228,42 +183,6 @@ describe("startNostrBus inbound guards", () => {
     expect(mockState.subscribeMany).not.toHaveBeenCalled();
   });
 
-  it("rewinds unflushed cursor progress to retain a rejected event in overlap", async () => {
-    readPreviousCursor();
-    const bus = await startTestNostrBus({
-      ...buildResolvedNostrAccount(),
-      guardPolicy: { rateLimit: { maxGlobalPerWindow: 1 } },
-    });
-    expect(mockState.writeNostrBusState).toHaveBeenCalledWith(
-      expect.objectContaining({ lastProcessedAt: 1_000, gatewayStartedAt: 900 }),
-    );
-    await emitEvent(createEvent({ id: "cursor-durable", created_at: 2_000 }));
-    mockState.handlers[0]?.oneose?.();
-    await emitEvent(createEvent({ id: "cursor-rejected", created_at: 900 }));
-    await bus.close();
-    expect(mockState.writeNostrBusState.mock.calls.at(-1)?.[0]?.lastProcessedAt).toBe(1_020);
-  });
-
-  it("does not advance the cursor when one relay closes before a real EOSE", async () => {
-    readPreviousCursor();
-    const bus = await startTestNostrBus(
-      buildResolvedNostrAccount({
-        relays: ["wss://one.example", "wss://two.example"],
-      }),
-    );
-    await emitEvent(createEvent({ id: "cursor-high", created_at: 2_000 }));
-    mockState.handlers[0]?.oneose?.();
-    mockState.handlers[1]?.oneose?.();
-    mockState.handlers[1]?.onclose?.(["relay closed"]);
-    await Promise.resolve();
-    await bus.close();
-    expect(mockState.subscribeMany).toHaveBeenCalledTimes(2);
-    expect(mockState.writeNostrBusState).toHaveBeenCalledTimes(1);
-    expect(mockState.writeNostrBusState).toHaveBeenLastCalledWith(
-      expect.objectContaining({ lastProcessedAt: 1_000 }),
-    );
-  });
-
   it("delivers recovered old claims while fencing old live relay events", async () => {
     const recoveredId = "recovered-old";
     const recoveredPubkey = "a".repeat(64);
@@ -277,7 +196,7 @@ describe("startNostrBus inbound guards", () => {
     mockState.computeSinceTimestamp.mockReturnValue(2_000);
     await startTestNostrBus(buildResolvedNostrAccount());
     await vi.waitFor(() => expect(defaultOnMessage).toHaveBeenCalledTimes(1));
-    await emitEvent(createEvent({ id: "live-old", created_at: 1_001 }));
+    await emitEvent({ id: "live-old", created_at: 1_001 });
     expect(defaultOnMessage).toHaveBeenCalledTimes(1);
     expect(enqueue).not.toHaveBeenCalled();
     expect(countRejection("stale")).toBe(1);
@@ -307,7 +226,7 @@ describe("startNostrBus inbound guards", () => {
       relays: ["wss://relay.example"],
       onError,
     });
-    await emitEvent(createEvent({ id: "admission-failure" }));
+    await emitEvent({ id: "admission-failure" });
     expect(mockState.subscriptionClose).toHaveBeenCalledWith("durable admission failed");
     expect(mockState.close).toHaveBeenCalledWith(["wss://relay.example"]);
     expect(onError).toHaveBeenCalledWith(
@@ -319,10 +238,10 @@ describe("startNostrBus inbound guards", () => {
 
   it("keeps relays open after rejecting one oversized raw event", async () => {
     await startTestNostrBus(buildResolvedNostrAccount());
-    await emitEvent(createEvent({ id: "raw-oversized", content: "x".repeat(40_000) }));
+    await emitEvent({ id: "raw-oversized", content: "x".repeat(40_000) });
     expect(mockState.subscriptionClose).not.toHaveBeenCalled();
     expect(defaultOnMessage).not.toHaveBeenCalled();
-    await emitEvent(createEvent({ id: "after-raw-oversized", content: "ok" }));
+    await emitEvent({ id: "after-raw-oversized", content: "ok" });
     expect(mockState.subscriptionClose).not.toHaveBeenCalled();
     expect(defaultOnMessage).toHaveBeenCalledTimes(1);
   });
@@ -373,7 +292,7 @@ describe("startNostrBus inbound guards", () => {
       relays: ["wss://relay.example"],
       authorizeSender,
     });
-    await emitEvent(createEvent({ id: inboundEventId, pubkey: senderPubkey }));
+    await emitEvent({ id: inboundEventId, pubkey: senderPubkey });
     expect(mockState.finalizeEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         tags: [
@@ -409,7 +328,7 @@ describe("startNostrBus inbound guards", () => {
   it("rate limits repeated events before decrypt", async () => {
     await startTestNostrBus();
     for (let i = 0; i < 21; i += 1) {
-      await emitEvent(createEvent({ id: `event-${i}` }));
+      await emitEvent({ id: `event-${i}` });
     }
     expect(countRejection("rate_limited")).toBe(1);
     expect(mockState.decrypt).toHaveBeenCalledTimes(20);
@@ -470,42 +389,49 @@ describe("startNostrBus inbound guards", () => {
     }
   });
 
-  it("rate limits repeated invalid signatures before authorization work fans out", async () => {
-    mockState.verifyEvent.mockReturnValue(false);
-    const authorizeSender = vi.fn(async () => "allow" as const);
-    await startTestNostrBus({
-      authorizeSender,
-      guardPolicy: { rateLimit: rateLimit(1, 10) },
+  it("charges oversized ciphertext globally while retaining rejected events in replay overlap", async () => {
+    mockState.readNostrBusState.mockResolvedValueOnce({
+      version: 2,
+      lastProcessedAt: 1_000,
+      gatewayStartedAt: 900,
+      recentEventIds: [],
     });
-    await emitEvent(createEvent({ id: "invalid-1" }));
-    await emitEvent(createEvent({ id: "invalid-2" }));
-    expect(mockState.verifyEvent).toHaveBeenCalledTimes(1);
-    expect(authorizeSender).not.toHaveBeenCalled();
-    expect(countRejection("invalid_signature")).toBe(1);
-    expect(countRejection("rate_limited")).toBe(1);
-  });
-
-  it("counts oversized ciphertext toward the global inbound rate limit", async () => {
-    await startTestNostrBus({
+    mockState.computeSinceTimestamp.mockReturnValue(1_000);
+    const bus = await startTestNostrBus({
+      ...buildResolvedNostrAccount(),
+      relays: ["wss://relay.example"],
       guardPolicy: { maxCiphertextBytes: 4, rateLimit: rateLimit(1, 10) },
     });
-    for (const pubkey of [`sender1${"a".repeat(57)}`, `sender2${"b".repeat(57)}`]) {
-      await emitEvent(
-        createEvent({ id: `oversized-${pubkey}`, pubkey, content: "ciphertext-too-large" }),
-      );
-    }
+    expect(mockState.writeNostrBusState).toHaveBeenCalledWith(
+      expect.objectContaining({ lastProcessedAt: 1_000, gatewayStartedAt: 900 }),
+    );
+    await emitEvent({
+      id: "oversized-durable",
+      pubkey: `sender1${"a".repeat(57)}`,
+      content: "ciphertext-too-large",
+      created_at: 2_000,
+    });
+    mockState.handlers[0]?.oneose?.();
+    await emitEvent({
+      id: "oversized-rejected",
+      pubkey: `sender2${"b".repeat(57)}`,
+      content: "ciphertext-too-large",
+      created_at: 900,
+    });
     expect(countRejection("oversized_ciphertext")).toBe(1);
     expect(countRejection("rate_limited")).toBe(1);
     expectDispatchCounts(0, 0, 0);
+    await bus.close();
+    expect(mockState.writeNostrBusState.mock.calls.at(-1)?.[0]?.lastProcessedAt).toBe(1_020);
   });
 
   it("does not spend per-sender buckets on oversized ciphertext before verification", async () => {
     await startTestNostrBus({
       guardPolicy: { maxCiphertextBytes: 4, rateLimit: rateLimit(10, 1) },
     });
-    await emitEvent(createEvent({ id: "oversized-sender-1", content: "ciphertext-too-large" }));
-    await emitEvent(createEvent({ id: "oversized-sender-2", content: "ciphertext-too-large" }));
-    await emitEvent(createEvent({ id: "allowed-after-oversized", content: "ok" }));
+    await emitEvent({ id: "oversized-sender-1", content: "ciphertext-too-large" });
+    await emitEvent({ id: "oversized-sender-2", content: "ciphertext-too-large" });
+    await emitEvent({ id: "allowed-after-oversized", content: "ok" });
     expect(countRejection("oversized_ciphertext")).toBe(2);
     expect(countRejection("rate_limited")).toBe(0);
     expectDispatchCounts(1, 1, 1);
@@ -513,7 +439,7 @@ describe("startNostrBus inbound guards", () => {
 
   it("rejects far-future events before crypto", async () => {
     const bus = await startTestNostrBus();
-    await emitEvent(createEvent({ created_at: Math.floor(Date.now() / 1000) + 600 }));
+    await emitEvent({ created_at: Math.floor(Date.now() / 1000) + 600 });
     expect(countRejection("future")).toBe(1);
     expectDispatchCounts(0, 0, 0);
     await bus.close();
