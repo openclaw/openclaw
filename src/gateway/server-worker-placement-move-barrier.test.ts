@@ -23,6 +23,7 @@ vi.mock("../auto-reply/thinking.js", async () => {
   return { normalizeThinkLevel };
 });
 
+// mock-isolation: Worker handoff observes pending queue state without starting a real drain.
 vi.mock("../auto-reply/reply/queue/drain.js", () => {
   const unexpectedDrain = () => {
     throw new Error("worker barrier queue fixtures must remain pending");
