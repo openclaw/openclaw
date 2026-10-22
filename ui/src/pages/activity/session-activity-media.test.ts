@@ -361,6 +361,7 @@ it.each([
       }
       expect(action!.disabled).toBe(true);
       expect(action!.textContent?.trim()).toBe("Loading…");
+      expect(olderAction(row)).toBe(action);
       older.resolve(images("older", revalidate ? 1 : 4));
       await settleTimers();
       if (revalidate) {
