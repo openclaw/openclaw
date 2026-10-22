@@ -1456,7 +1456,8 @@ try {
         );
         const preflight = runNative(["-File", preflightPath], preflightRoot);
         const prerequisite = `${engine} requires usable Node/SQLite: ${preflight.stdout}\n${preflight.stderr}`;
-        expect(preflight, prerequisite).toMatchObject({ error: undefined, status: 0 });
+        expect(preflight.error, prerequisite).toBeUndefined();
+        expect(preflight.status, prerequisite).toBe(0);
         for (const usableCommand of [false, true]) {
           for (const mode of ["file", "scriptblock"]) {
             const root = harness.createTempDir("openclaw-native-upgrade-é-");
