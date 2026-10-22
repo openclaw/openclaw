@@ -56,6 +56,7 @@ async function createCache(
       remote: { apiKey: "fixture-secret", ...(headers ? { baseUrl, headers } : {}) },
     },
   });
+  expect(client.headers).toMatchObject({ Authorization: "Bearer fixture-secret", ...headers });
   mocks.createOpenAiEmbeddingProvider.mockResolvedValueOnce({
     provider,
     client: { ...client, model: modelId },
@@ -65,9 +66,7 @@ async function createCache(
 }
 
 describe("OpenAI memory embedding adapter", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
-  });
+  afterEach(() => vi.unstubAllEnvs());
 
   beforeEach(() => {
     mocks.createOpenAiEmbeddingProvider.mockReset();
@@ -90,7 +89,6 @@ describe("OpenAI memory embedding adapter", () => {
       vi.stubEnv("OPENCLAW_VERSION", version);
       const result = await createCache("openai", "https://api.openai.com/v1");
       expect(result.headers).toMatchObject({
-        Authorization: "Bearer fixture-secret",
         version,
         "User-Agent": `openclaw/${version}`,
       });
@@ -125,22 +123,13 @@ describe("OpenAI memory embedding adapter", () => {
   ])(
     "keeps rotated %s credentials out of tenant-specific embedding cache identity",
     async (_name, providerId, baseUrl, headerName, rotatedHeaderName) => {
-      const createForTenant = async (
-        tenant: string,
-        proxyApiKey: string,
-        proxyHeaderName = headerName,
-      ) => {
-        const result = await createCache(providerId, baseUrl, "text-embedding-v3", {
-          [proxyHeaderName]: proxyApiKey,
-          ...tenantHeaders(tenant),
-        });
-        expect(result.headers).toMatchObject({
-          Authorization: "Bearer fixture-secret",
-          [proxyHeaderName]: proxyApiKey,
-          "X-Deployment": tenant,
-        });
-        return result.cache;
-      };
+      const createForTenant = async (tenant: string, key: string, header = headerName) =>
+        (
+          await createCache(providerId, baseUrl, "text-embedding-v3", {
+            [header]: key,
+            ...tenantHeaders(tenant),
+          })
+        ).cache;
 
       const first = await createForTenant("tenant-a", "proxy-key-before-rotation");
       const rotated = await createForTenant(

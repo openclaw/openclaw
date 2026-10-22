@@ -1,6 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
 import { fetchOpenAIUsage, resolveOpenAIUsageAuth } from "./usage.js";
 
+function resolveAuth(overrides: Partial<Parameters<typeof resolveOpenAIUsageAuth>[0]> = {}) {
+  return resolveOpenAIUsageAuth({
+    config: {},
+    env: {},
+    provider: "openai",
+    resolveApiKeyFromConfigAndStore: () => undefined,
+    resolveOAuthToken: async () => null,
+    ...overrides,
+  });
+}
+
 function requestUrl(input: string | URL | Request): URL {
   return new URL(input instanceof Request ? input.url : input);
 }
@@ -17,12 +28,8 @@ async function fetchAdminUsage(
   projectId?: string,
   apiKey = "sk-admin-test",
 ) {
-  const auth = await resolveOpenAIUsageAuth({
-    config: {},
+  const auth = await resolveAuth({
     env: { OPENAI_ADMIN_KEY: apiKey },
-    provider: "openai",
-    resolveApiKeyFromConfigAndStore: () => undefined,
-    resolveOAuthToken: async () => null,
   });
   if (!("token" in auth) || !auth.token) {
     throw new Error("expected encoded OpenAI admin token");
@@ -40,10 +47,7 @@ async function fetchAdminUsage(
 describe("OpenAI provider usage", () => {
   it("does not offer token-sharing credentials to Codex usage or API-key fallback", async () => {
     const resolveApiKeyFromConfigAndStore = vi.fn();
-    const result = await resolveOpenAIUsageAuth({
-      config: {},
-      env: {},
-      provider: "openai",
+    const result = await resolveAuth({
       resolveApiKeyFromConfigAndStore,
       resolveOAuthToken: async () => ({
         token: "test-chatpass-token",
@@ -86,13 +90,7 @@ describe("OpenAI provider usage", () => {
       windows: [],
       plan: "Admin API · proj_test",
       billing: [
-        {
-          type: "spend",
-          label: "30-day API spend",
-          amount: 12.34,
-          unit: "USD",
-          period: "30d",
-        },
+        { type: "spend", label: "30-day API spend", amount: 12.34, unit: "USD", period: "30d" },
       ],
       costHistory: {
         unit: "USD",
@@ -136,14 +134,7 @@ describe("OpenAI provider usage", () => {
         input_cached_image_tokens: 50,
         output_image_tokens: 50,
       },
-      expected: {
-        inputTokens: 500,
-        cacheReadTokens: 400,
-        cacheWriteTokens: 100,
-        outputTokens: 500,
-        totalTokens: 1_500,
-      },
-      summary: "5 requests · 1,500 tokens",
+      expected: [500, 400, 100, 500, 1_500] as const,
     },
     {
       name: "audio totals without optional text or cache breakdowns",
@@ -153,27 +144,27 @@ describe("OpenAI provider usage", () => {
         output_tokens: 300,
         output_audio_tokens: 300,
       },
-      expected: {
-        inputTokens: 200,
-        cacheReadTokens: 0,
-        cacheWriteTokens: 0,
-        outputTokens: 300,
-        totalTokens: 500,
-      },
-      summary: "5 requests · 500 tokens",
+      expected: [200, 0, 0, 300, 500] as const,
     },
-  ])("counts each token once for $name", async ({ usage, expected, summary }) => {
+  ])("counts each token once for $name", async ({ usage, expected }) => {
     const result = await fetchAdminUsage(async (input) =>
       requestUrl(input).pathname.endsWith("/organization/costs")
         ? Response.json({ data: [], has_more: false })
         : usagePage([{ ...usage, num_model_requests: 5, model: "test-model" }]),
     );
 
-    expect(result.costHistory?.daily).toEqual([
-      { date: "2026-07-06", amount: 0, requests: 5, ...expected },
-    ]);
-    expect(result.costHistory?.models).toEqual([{ name: "test-model", requests: 5, ...expected }]);
-    expect(result.summary).toBe(summary);
+    const [inputTokens, cacheReadTokens, cacheWriteTokens, outputTokens, totalTokens] = expected;
+    const tokens = {
+      requests: 5,
+      inputTokens,
+      cacheReadTokens,
+      cacheWriteTokens,
+      outputTokens,
+      totalTokens,
+    };
+    expect(result.costHistory?.daily).toEqual([{ date: "2026-07-06", amount: 0, ...tokens }]);
+    expect(result.costHistory?.models).toEqual([{ name: "test-model", ...tokens }]);
+    expect(result.summary).toBe(`5 requests · ${totalTokens.toLocaleString("en-US")} tokens`);
   });
 
   it("reports when organization usage rejects a non-admin key", async () => {
@@ -186,7 +177,7 @@ describe("OpenAI provider usage", () => {
   });
 
   it("prefers an explicit admin key over ChatGPT OAuth", async () => {
-    const result = await resolveOpenAIUsageAuth({
+    const result = await resolveAuth({
       config: {
         models: {
           providers: {
@@ -198,7 +189,6 @@ describe("OpenAI provider usage", () => {
         },
       },
       env: { OPENAI_ADMIN_KEY: "sk-admin-explicit" },
-      provider: "openai",
       resolveApiKeyFromConfigAndStore: () => "sk-proj-fallback",
       resolveOAuthToken: async () => ({ token: "oauth-token" }),
     });
@@ -232,10 +222,7 @@ describe("OpenAI provider usage", () => {
 
   it("does not repurpose inference credentials for organization usage", async () => {
     const resolveCandidates = vi.fn(async () => ["sk-admin-secretref"]);
-    const result = await resolveOpenAIUsageAuth({
-      config: {},
-      env: {},
-      provider: "openai",
+    const result = await resolveAuth({
       resolveApiKeyFromConfigAndStore: () => "sk-proj-inference",
       resolveApiKeyCandidatesFromConfigAndStore: resolveCandidates,
       resolveOAuthToken: async () => null,
