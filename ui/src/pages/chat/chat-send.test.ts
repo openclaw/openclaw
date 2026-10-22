@@ -3964,11 +3964,11 @@ describe("handleSendChat", () => {
     expect(afterCommit).not.toHaveBeenCalled();
   });
 
-  it("shows a visible pending item for /steer on the active run", async () => {
+  it("does not add a run-lifetime queue item for an accepted /steer", async () => {
     const host = makeChatHost({
       client: clientWithRequest(
         makeRequestMock({
-          "chat.send": { status: "started", runId: "run-1", messageSeq: 2 },
+          "chat.send": { status: "started", runId: "steer-input", messageSeq: 2 },
         }),
       ),
       chatRunId: "run-1",
@@ -3986,9 +3986,8 @@ describe("handleSendChat", () => {
 
     await handleSendChat(host);
 
-    expect(host.chatQueue).toHaveLength(1);
-    expect(host.chatQueue[0]?.text).toBe("/steer tighten the plan");
-    expect(host.chatQueue[0]?.pendingRunId).toBe("run-1");
+    expect(host.chatQueue).toHaveLength(0);
+    expect(host.chatRunId).toBe("run-1");
   });
 
   it("sends a queued row through the generic outbox with only its durable steer mode", async () => {

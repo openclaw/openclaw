@@ -18,6 +18,8 @@ const key = "fake-canonical-key";
 const stale = "fake-stale-key";
 const unchanged = {
   changes: [],
+  findings: [],
+  aliasFindings: [],
   migratedProfileIds: new Set<string>(),
   blockedProfileIds: new Set<string>(),
   warnings: [],

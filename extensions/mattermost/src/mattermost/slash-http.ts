@@ -6,7 +6,10 @@ import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { getSessionEntryAsync, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { recordDeliveredCommandExchange } from "openclaw/plugin-sdk/session-transcript-runtime";
-import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
+import {
+  resolveMattermostReplyToMode,
+  type ResolvedMattermostAccount,
+} from "../mattermost/accounts.js";
 import { getMattermostRuntime } from "../runtime.js";
 import {
   createMattermostClient,
@@ -26,6 +29,7 @@ import {
   authorizeMattermostCommandInvocation,
   normalizeMattermostAllowList,
 } from "./monitor-auth.js";
+import { resolveMattermostThreadSessionContext } from "./monitor-context.js";
 import { deliverMattermostReplyPayload } from "./reply-delivery.js";
 import {
   buildPreparedModelsProviderData,
@@ -58,7 +62,6 @@ type SlashHttpHandlerParams = {
   /** Map from trigger to original command name (for skill commands that start with oc_). */
   triggerMap?: ReadonlyMap<string, string>;
   log?: (msg: string) => void;
-  bodyTimeoutMs?: number;
 };
 
 const MAX_BODY_BYTES = 64 * 1024;
@@ -91,12 +94,11 @@ export function sendSlashCommandResponse(res: ServerResponse, status: number, te
 export async function readSlashCommandBody(
   req: IncomingMessage,
   res: ServerResponse,
-  timeoutMs = BODY_READ_TIMEOUT_MS,
 ): Promise<string | undefined> {
   try {
     return await readRequestBodyWithLimit(req, {
       maxBytes: MAX_BODY_BYTES,
-      timeoutMs,
+      timeoutMs: BODY_READ_TIMEOUT_MS,
       // Let rejection reach Mattermost before closing the connection.
       destroyOnLimit: false,
     });
@@ -279,7 +281,7 @@ type SlashInvocationAuth =
   | { ok: false; denyText: string };
 
 export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
-  const { account, cfg, runtime, registeredCommands, triggerMap, log, bodyTimeoutMs } = params;
+  const { account, cfg, runtime, registeredCommands, triggerMap, log } = params;
 
   return async (
     req: IncomingMessage,
@@ -294,7 +296,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
       return;
     }
 
-    const body = bufferedBody ?? (await readSlashCommandBody(req, res, bodyTimeoutMs));
+    const body = bufferedBody ?? (await readSlashCommandBody(req, res));
     if (body === undefined) {
       return;
     }
@@ -485,13 +487,15 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
     // Acknowledge immediately — we'll send the actual reply asynchronously
     sendSlashCommandResponse(res, 200, "Processing...");
 
+    let replyRootId: string | undefined;
+
     try {
       const { kind, chatType, channelDisplay, roomLabel, commandAuthorized } = auth;
       const teamId = payload.team_id;
       const triggerId = payload.trigger_id;
       const core = getMattermostRuntime();
 
-      const route = core.channel.routing.resolveAgentRoute({
+      const channelRoute = core.channel.routing.resolveAgentRoute({
         cfg,
         channel: "mattermost",
         accountId: account.accountId,
@@ -501,6 +505,14 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
           id: kind === "direct" ? senderId : channelId,
         },
       });
+      const thread = resolveMattermostThreadSessionContext({
+        baseSessionKey: channelRoute.sessionKey,
+        kind,
+        replyToMode: resolveMattermostReplyToMode(account, kind),
+        threadRootId: payload.root_id,
+      });
+      const route = { ...channelRoute, sessionKey: thread.sessionKey };
+      replyRootId = thread.effectiveReplyToId;
 
       const fromLabel =
         kind === "direct"
@@ -523,7 +535,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
           const delivered = await sendMessageMattermost(
             `channel:${channelId}`,
             [data.refreshWarning, "No models available."].filter(Boolean).join("\n\n"),
-            { cfg, accountId },
+            { cfg, accountId, replyToId: replyRootId },
           );
           await recordDeliveredCommandExchange({
             config: cfg,
@@ -558,7 +570,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         const delivered = await sendMessageMattermost(
           `channel:${channelId}`,
           [data.refreshWarning, view.text].filter(Boolean).join("\n\n"),
-          { cfg, accountId, buttons: view.buttons },
+          { cfg, accountId, buttons: view.buttons, replyToId: replyRootId },
         );
         await recordDeliveredCommandExchange({
           config: cfg,
@@ -590,6 +602,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
               : `mattermost:channel:${channelId}`,
         To: to,
         SessionKey: route.sessionKey,
+        ParentSessionKey: thread.parentSessionKey,
         AccountId: route.accountId,
         ChatType: chatType,
         ConversationRouteContextObserved: true,
@@ -609,6 +622,8 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         CommandSource: "native" as const,
         OriginatingChannel: "mattermost" as const,
         OriginatingTo: to,
+        ReplyToId: replyRootId,
+        MessageThreadId: replyRootId,
       });
 
       const textLimit = core.channel.text.resolveTextChunkLimit(
@@ -645,6 +660,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
               channelId,
               accountId: account.accountId,
               agentId: route.agentId,
+              replyToId: replyRootId,
               textLimit,
               tableMode,
               sendMessage: sendMessageMattermost,
@@ -662,7 +678,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         },
         replyPipeline: {
           typing: {
-            start: () => sendMattermostTyping(client, { channelId }),
+            start: () => sendMattermostTyping(client, { channelId, parentId: replyRootId }),
             onStartError: (err) => {
               logTypingFailure({
                 log: (message) => log?.(message),
@@ -688,6 +704,7 @@ export function createSlashCommandHttpHandler(params: SlashHttpHandlerParams) {
         await sendMessageMattermost(to, "Sorry, something went wrong processing that command.", {
           cfg,
           accountId: account.accountId,
+          replyToId: replyRootId,
         });
       } catch {
         // best-effort error reply

@@ -45,15 +45,6 @@ describe("imessage targets", () => {
     ).toBe(false);
   });
 
-  it("checks allowFrom against handle", () => {
-    expect(
-      isAllowedIMessageSender({
-        allowFrom: ["user@example.com"],
-        sender: "User@Example.com",
-      }),
-    ).toBe(true);
-  });
-
   it("checks reply context allowFrom against conversation targets", () => {
     for (const [entry, context] of [
       ["chat_id:9", { chatId: 9 }],
@@ -66,8 +57,11 @@ describe("imessage targets", () => {
     }
   });
 
-  it("denies when allowFrom is empty", () => {
-    expect(isAllowedIMessageSender({ allowFrom: [], sender: "+1555" })).toBe(false);
+  it.each([
+    [["user@example.com"], "User@Example.com", true],
+    [[], "+1555", false],
+  ] as const)("checks sender %s / %s", (allowFrom, sender, allowed) => {
+    expect(isAllowedIMessageSender({ allowFrom: [...allowFrom], sender })).toBe(allowed);
   });
 
   it("formats chat targets", () => {

@@ -97,6 +97,8 @@ function CompanionPanel(props: Props) {
       prop:presented={presented()}
       prop:focusRequest={props.companionFocusRequest}
       prop:sessionKey={props.state.sessionKey}
+      prop:agentId={props.agentId}
+      prop:assistantName={props.state.assistantName}
       prop:digest={props.digest}
       prop:running={Boolean(props.activeRunId)}
       prop:activeRunId={props.activeRunId}
@@ -110,6 +112,7 @@ function CompanionPanel(props: Props) {
       prop:onSubmit={props.onCompanionSubmit}
       prop:onDraftChange={props.onCompanionDraftChange}
       prop:onAttachmentsChange={props.onCompanionAttachmentsChange}
+      prop:onOpenImage={props.state.handleOpenImage}
       prop:uploadConfig={props.state.uploadConfig}
       prop:attachmentLimits={resolveChatAttachmentLimits(props.state.hello?.policy)}
     />
@@ -452,6 +455,8 @@ declare module "@solidjs/web" {
       "openclaw-chat-session-rail": HTMLAttributes<HTMLElement> & {
         "prop:presentation"?: SidebarPanelDefinitionParams["presentation"];
         "prop:sessionKey"?: SidebarPanelDefinitionParams["state"]["sessionKey"];
+        "prop:agentId"?: SidebarPanelDefinitionParams["agentId"];
+        "prop:assistantName"?: SidebarPanelDefinitionParams["state"]["assistantName"];
         "prop:digest"?: SidebarPanelDefinitionParams["digest"];
         "prop:running"?: boolean;
         "prop:activeRunId"?: SidebarPanelDefinitionParams["activeRunId"];
@@ -465,6 +470,7 @@ declare module "@solidjs/web" {
         "prop:onSubmit"?: SidebarPanelDefinitionParams["onCompanionSubmit"];
         "prop:onDraftChange"?: SidebarPanelDefinitionParams["onCompanionDraftChange"];
         "prop:onAttachmentsChange"?: SidebarPanelDefinitionParams["onCompanionAttachmentsChange"];
+        "prop:onOpenImage"?: SidebarPanelDefinitionParams["state"]["handleOpenImage"];
         "prop:uploadConfig"?: SidebarPanelDefinitionParams["state"]["uploadConfig"];
         "prop:attachmentLimits"?: ReturnType<typeof resolveChatAttachmentLimits>;
         "prop:presented"?: boolean;

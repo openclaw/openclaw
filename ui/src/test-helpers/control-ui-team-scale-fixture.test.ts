@@ -197,6 +197,19 @@ describe("Team-scale Gateway fixture", () => {
     expect(secondPage).toMatchObject({ offset: 200, nextOffset: null, hasMore: false });
   });
 
+  it("keeps an off-roster deep-link target outside both boot windows and pins", () => {
+    const fixture = createControlUiTeamScaleFixture({ now, offRosterSession: true });
+    const owner = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
+    for (const query of [{ ownerFirst: true }, { involvingMe: true }]) {
+      const result = owner.list({ rowMode: "sidebar", limit: 200, ...query }).result;
+      expect(result.sessions.some((row) => row.key === fixture.selectedSessionKey)).toBe(false);
+    }
+    expect(fixture.pinnedKeys).not.toContain(fixture.selectedSessionKey);
+    expect(fixture.scenario.sessions?.some((row) => row.key === fixture.selectedSessionKey)).toBe(
+      true,
+    );
+  });
+
   it("projects real row modes and bounds transcript enrichment without changing row identity on reread", () => {
     const fixture = createControlUiTeamScaleFixture({ now });
     const owner = createTeamScaleSidebarListOwner(fixture.sidebarListInput);

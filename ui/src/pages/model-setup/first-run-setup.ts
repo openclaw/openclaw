@@ -183,12 +183,12 @@ export class FirstRunSetup {
     this.readyConnection = connection;
   }
 
-  routeChanged(): void {
+  routeChanged(firstRun: boolean): void {
     const receipt = this.pending?.receipt ?? null;
     this.reset();
     this.readyConnection = null;
     this.pending = null;
-    if (this.host.routeData()?.firstRun === false) {
+    if (!firstRun) {
       clearFirstRunActivationReceipt(receipt);
     }
   }

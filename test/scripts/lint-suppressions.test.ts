@@ -154,6 +154,12 @@ describe("production lint suppressions", () => {
         "scripts/lib/sqlite-reliability-process.ts|typescript/prefer-promise-reject-errors|1",
         // The load probe forwards native WebSocket.send with its original socket receiver.
         "scripts/perf/catalog-polling-measure.ts|typescript/unbound-method|1",
+        // The diagnostics probe restores Session.post and invokes it with its live receiver.
+        "scripts/perf/diagnostic-profile-measure.ts|typescript/unbound-method|1",
+        // The provider probe forwards native methods with their original receivers.
+        "scripts/perf/provider-request-prepare-measure.ts|typescript/unbound-method|3",
+        // The subscription probe forwards track with the original AsyncWorkScope receiver.
+        "scripts/perf/session-pr-subscriptions-measure.ts|typescript/unbound-method|1",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
         "src/agents/auth-profiles/oauth-refresh-fence.ts|preserve-caught-error|1",
@@ -179,7 +185,8 @@ describe("production lint suppressions", () => {
         // Canonical entries must honor toJSON and omit non-JSON values exactly as persistence does.
         "src/config/sessions/transcript-json.ts|unicorn/prefer-structured-clone|1",
         "src/config/zod-schema.channel-messaging-common.ts|typescript/no-generated-empty-object-type|1",
-        "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
+        // Pinned Bun HTTP sockets omit Writable._writev; this probe selects native or one-copy batching.
+        "src/gateway/server/ws-transport.ts|no-underscore-dangle|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-row-mapping.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/json-file.ts|typescript-eslint/no-unnecessary-type-parameters|1",

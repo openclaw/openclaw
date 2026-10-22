@@ -11,6 +11,7 @@ import {
   resolveProviderTransportSsrFPolicy,
   sanitizeConfiguredModelProviderRequest,
 } from "openclaw/plugin-sdk/provider-http";
+import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { parseRetryAfterHeaderSeconds } from "openclaw/plugin-sdk/retry-runtime";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
@@ -56,45 +57,6 @@ function httpError(response: Response): EvaluationError {
     return new EvaluationError("TypeSafe rejected the supplied input.", "unsupported-input");
   }
   return new EvaluationError("TypeSafe service rejected the evaluation request.", "transport");
-}
-
-async function readBody(response: Response, abortSignal?: AbortSignal): Promise<Buffer> {
-  const reader = response.body?.getReader();
-  if (!reader) {
-    abortSignal?.throwIfAborted();
-    return Buffer.alloc(0);
-  }
-  // Keep the request owned until cancellation settles, even when a stream ignores its signal.
-  let cancellation: Promise<void> | undefined;
-  const cancel = () => {
-    cancellation ??= reader.cancel().catch(() => {});
-  };
-  abortSignal?.addEventListener("abort", cancel, { once: true });
-  const chunks: Uint8Array[] = [];
-  let length = 0;
-  try {
-    while (true) {
-      abortSignal?.throwIfAborted();
-      const chunk = await reader.read();
-      abortSignal?.throwIfAborted();
-      if (chunk.done) {
-        break;
-      }
-      length += chunk.value.byteLength;
-      if (length > MAX_JSON_BYTES) {
-        throw new EvaluationError("TypeSafe response exceeds its limit.", "invalid-response");
-      }
-      chunks.push(chunk.value);
-    }
-    return Buffer.concat(chunks, length);
-  } catch (error) {
-    cancel();
-    throw error;
-  } finally {
-    abortSignal?.removeEventListener("abort", cancel);
-    await cancellation;
-    reader.releaseLock();
-  }
 }
 
 /** Evaluate explicit state without ambient credentials, retries, or vendor diagnostics. */
@@ -252,7 +214,11 @@ export async function evaluate(
           await response.body?.cancel();
           throw httpError(response);
         }
-        const bytes = await readBody(response, signal);
+        const bytes = await readResponseWithLimit(response, MAX_JSON_BYTES, {
+          signal,
+          onOverflow: () =>
+            new EvaluationError("TypeSafe response exceeds its limit.", "invalid-response"),
+        });
         let text: string;
         try {
           text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);

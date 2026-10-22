@@ -142,7 +142,7 @@ it("keeps admitted ownership current through local writes, rollback, and authori
   trackSqliteSchema(database, {
     DatabaseSync,
     StatementSync,
-    iteratorBehavior: probeSqliteIteratorBehavior(database.prepare("SELECT 1")),
+    iteratorBehavior: probeSqliteIteratorBehavior(database.prepare("SELECT 1")).iteratorBehavior,
   });
   admitSqliteSchema(database);
   const read = () => readOperation(database, () => readAgentMeta(database));

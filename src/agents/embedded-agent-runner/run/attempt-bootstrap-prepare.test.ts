@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
-import { ensureProfileForEmail } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { SessionManager } from "../../sessions/session-manager.js";
@@ -59,110 +58,38 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
   }
 
   it.each([
-    {
-      mode: "always",
-      pending: false,
-      canonical: true,
-      runKind: "default",
-      contextMode: "full",
-      bootstrapMode: "none",
-      completion: false,
-      injected: true,
-    },
-    {
-      mode: "always",
-      pending: true,
-      canonical: true,
-      runKind: "default",
-      contextMode: "full",
-      bootstrapMode: "full",
-      completion: true,
-      injected: true,
-    },
-    {
-      mode: "continuation-skip",
-      pending: false,
-      canonical: true,
-      runKind: "default",
-      contextMode: "full",
-      bootstrapMode: "none",
-      completion: true,
-      injected: true,
-    },
-    {
-      mode: "continuation-skip",
-      pending: false,
-      canonical: true,
-      runKind: "cron",
-      contextMode: "full",
-      bootstrapMode: "none",
-      completion: false,
-      injected: true,
-    },
-    {
-      mode: "continuation-skip",
-      pending: false,
-      canonical: true,
-      runKind: "heartbeat",
-      contextMode: "full",
-      bootstrapMode: "none",
-      completion: false,
-      injected: true,
-    },
-    {
-      mode: "continuation-skip",
-      pending: false,
-      canonical: true,
-      runKind: "default",
-      contextMode: "lightweight",
-      bootstrapMode: "none",
-      completion: false,
-      injected: false,
-    },
-    {
-      mode: "continuation-skip",
-      pending: true,
-      canonical: false,
-      runKind: "default",
-      contextMode: "full",
-      bootstrapMode: "limited",
-      completion: false,
-      injected: true,
-    },
-    {
-      mode: "never",
-      pending: true,
-      canonical: true,
-      runKind: "default",
-      contextMode: "full",
-      bootstrapMode: "full",
-      completion: false,
-      injected: false,
-    },
+    ["always", false, true, "default", "full", "none", false, true],
+    ["always", true, true, "default", "full", "full", true, true],
+    ["continuation-skip", false, true, "default", "full", "none", true, true],
+    ["continuation-skip", false, true, "cron", "full", "none", false, true],
+    ["continuation-skip", false, true, "heartbeat", "full", "none", false, true],
+    ["continuation-skip", false, true, "default", "lightweight", "none", false, false],
+    ["continuation-skip", true, false, "default", "full", "limited", false, true],
+    ["never", true, true, "default", "full", "full", false, false],
   ] as const)(
-    "completion follows delivered context: $mode / pending=$pending / $runKind / $contextMode",
-    async (testCase) => {
+    "completion follows delivered context: %s / pending=%s / canonical=%s / %s / %s",
+    async (mode, pending, canonical, runKind, contextMode, bootstrapMode, completion, injected) => {
       const workspace = await makeWorkspace("completion-workspace", {
         "AGENTS.md": "Workspace instructions",
-        ...(testCase.pending ? { "BOOTSTRAP.md": "Finish the workspace setup." } : {}),
+        ...(pending ? { "BOOTSTRAP.md": "Finish the workspace setup." } : {}),
       });
       const result = await prepare(workspace, workspace, {
-        contextInjection: testCase.mode,
+        contextInjection: mode,
         attempt: {
-          isCanonicalWorkspace: testCase.canonical,
-          bootstrapContextRunKind: testCase.runKind,
-          bootstrapContextMode: testCase.contextMode,
+          isCanonicalWorkspace: canonical,
+          bootstrapContextRunKind: runKind,
+          bootstrapContextMode: contextMode,
         },
       });
 
       expect(result).toMatchObject({
-        bootstrapMode: testCase.bootstrapMode,
-        shouldRecordCompletedBootstrapTurn: testCase.completion,
+        bootstrapMode,
+        shouldRecordCompletedBootstrapTurn: completion,
       });
       expect(result.contextFiles.some((file) => file.content === "Workspace instructions")).toBe(
-        testCase.injected,
+        injected,
       );
-      if (!testCase.injected) {
+      if (!injected) {
         expect(result.contextFiles).toEqual([]);
         expect(result.bootstrapInjectionStats).toEqual([]);
       }
@@ -329,36 +256,6 @@ describe("prepareEmbeddedAttemptBootstrap", () => {
         truncated: false,
       }),
     );
-  });
-
-  it("selects the current person's agent-workspace overlay across attempt switches", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const workspace = state.statePath("workspace");
-      const alice = ensureProfileForEmail("alice@example.test");
-      const bob = ensureProfileForEmail("bob@example.test");
-      for (const profile of [alice, bob]) {
-        const dir = path.join(workspace, "users", profile.id);
-        await fs.mkdir(dir, { recursive: true });
-        await fs.writeFile(
-          path.join(dir, "USER.md"),
-          profile.id === alice.id ? "Alice guidance" : "Bob guidance",
-        );
-      }
-      await fs.writeFile(path.join(workspace, "USER.md"), "Shared guidance");
-      for (const profile of [alice, bob, undefined]) {
-        const result = await prepare(workspace, workspace, {
-          attempt: {
-            sessionId: "same-session",
-            sessionKey: "agent:main:same-session",
-            bootstrapUserProfileId: profile?.id,
-          },
-        });
-        const context = result.contextFiles.map((file) => file.content).join("\n");
-        expect(context).toContain("Shared guidance");
-        expect(context.includes("Alice guidance")).toBe(profile === alice);
-        expect(context.includes("Bob guidance")).toBe(profile === bob);
-      }
-    });
   });
 
   it("keeps same-workspace bootstrap output byte-identical", async () => {

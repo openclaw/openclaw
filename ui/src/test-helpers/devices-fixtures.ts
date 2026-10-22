@@ -45,6 +45,11 @@ export function createDevicesViewProps(overrides: Partial<DevicesProps> = {}): D
   return {
     connected: true,
     loading: false,
+    configRead: { scope: () => undefined, value: () => undefined },
+    execApprovalsRead: { scope: () => undefined, value: () => undefined },
+    inventoryRead: () => undefined,
+    inventoryScope: {},
+    onReloadInventory: () => undefined,
     nodes: [],
     presence: [],
     gatewayVersion: null,

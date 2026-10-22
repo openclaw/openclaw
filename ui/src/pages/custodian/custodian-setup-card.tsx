@@ -6,7 +6,7 @@ import { formatUiExternalText } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import type { CustodianAutoSetup } from "./custodian-auto-setup.ts";
+import type { CustodianAutoSetup, SetupAutoCandidate } from "./custodian-auto-setup.ts";
 import type { CustodianSessionStore } from "./custodian-session-store.ts";
 import "../../styles/custodian-setup-card.css";
 
@@ -73,7 +73,11 @@ function SignInWizard(props: { setup: () => CustodianAutoSetup }) {
   );
 }
 
-export function CustodianSetupCard(props: { store: CustodianSessionStore }) {
+export function CustodianSetupCard(props: {
+  store: CustodianSessionStore;
+  activating: boolean;
+  onActivate: (candidate: SetupAutoCandidate) => void;
+}) {
   const context = useApplication();
   const source = createMemo(() => props.store);
   const projection = createMemo(() => projectOwner(source(), (store) => store.autoSetup));
@@ -85,6 +89,7 @@ export function CustodianSetupCard(props: { store: CustodianSessionStore }) {
   const busy = () => {
     const current = setup();
     return (
+      props.activating ||
       current.pending ||
       current.wizard.state.phase === "starting" ||
       current.wizard.state.phase === "step"
@@ -199,7 +204,7 @@ export function CustodianSetupCard(props: { store: CustodianSessionStore }) {
                       type="button"
                       title={candidate.detail}
                       disabled={busy()}
-                      onClick={() => void setup().activate(candidate)}
+                      onClick={() => props.onActivate(candidate)}
                     >
                       {candidate.label}
                     </button>

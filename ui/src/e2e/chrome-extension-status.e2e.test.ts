@@ -10,8 +10,8 @@ const suite = createControlUiE2eSuite({ name: "Chrome extension installation sta
 suite.define(() => {
   it.each(["current", "v2026.9.5"])(
     "checks Chrome only after an explicit action with the %s Mac bridge",
-    async (appVersion) => {
-      await suite.withPage(
+    async (appVersion) =>
+      suite.withPage(
         { viewport: { width: 1440, height: 1000 }, colorScheme: "light" },
         async ({ page }) => {
           await installNativeWebChrome(page);
@@ -108,7 +108,6 @@ suite.define(() => {
             expect(await setup.count()).toBe(1);
           }
         },
-      );
-    },
+      ),
   );
 });

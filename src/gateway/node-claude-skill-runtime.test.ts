@@ -33,7 +33,6 @@ import { listSkillLibrary, readSkillLibrary, saveSkillLibrary } from "../skills/
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
-import { invokeNodeClaudeCliRun } from "./node-agent-cli-runtime.js";
 import { NodeRegistry, type NodeRegistryOptions } from "./node-registry.js";
 import {
   libraryAuthority,
@@ -300,13 +299,6 @@ async function fixture(
             output += text;
           },
           consumeStderr: () => {},
-          deps: {
-            invokeNodeClaudeCliRun,
-            registerExecApprovalRequestForHostOrThrow:
-              execApprovalRequests.registerExecApprovalRequestForHostOrThrow,
-            resolveRegisteredExecApprovalDecision:
-              execApprovalRequests.resolveRegisteredExecApprovalDecision,
-          },
         }),
     );
   return {

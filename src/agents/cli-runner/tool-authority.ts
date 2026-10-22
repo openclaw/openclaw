@@ -1,6 +1,7 @@
 import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { narrowSessionEventSettings } from "../../auto-reply/reply/session-event-policy.js";
 import { intersectSessionEventToolsAllow } from "../../auto-reply/reply/session-event-target.js";
+import { captureReplyExecutionSelection } from "../../sessions/session-controller.execution-selection.js";
 import { readSessionControllerOperationState } from "../../sessions/session-controller.state.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import {
@@ -20,6 +21,10 @@ function prepareCliReplyToolAuthority(
   workspace: { agentId: string; workspaceDir: string; cwd: string },
 ) {
   return prepareReplyToolAuthority({
+    executionSelection: captureReplyExecutionSelection({
+      run: { ...params, ...workspace },
+      sessionEntry: params.sessionEntry,
+    }),
     originatingChannel: normalizeMessageChannel(params.messageChannel),
     toolsAllow: params.toolsAllow,
     disableTools: params.disableTools,

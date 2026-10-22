@@ -66,16 +66,6 @@ function buildScanHint(result: ModelScanResult): string {
   return [...capabilities, ctxLabel, paramLabel].filter(Boolean).join(" | ");
 }
 
-function printScanSummary(results: ModelScanResult[], runtime: RuntimeEnv) {
-  const toolOk = results.filter((r) => r.tool.ok);
-  const imageOk = results.filter((r) => r.image.ok);
-  const toolImageOk = results.filter((r) => r.tool.ok && r.image.ok);
-  const imageOnly = imageOk.filter((r) => !r.tool.ok);
-  runtime.log(
-    `Scan results: tested ${results.length}, tool ok ${toolOk.length}, image ok ${imageOk.length}, tool+image ok ${toolImageOk.length}, image only ${imageOnly.length}`,
-  );
-}
-
 function printScanTable(results: ModelScanResult[], runtime: RuntimeEnv) {
   const header = [
     padTerminalCell("Model", MODEL_PAD),
@@ -257,7 +247,9 @@ export async function modelsScanCommand(
     .map((entry) => entry.modelRef);
 
   if (!opts.json) {
-    printScanSummary(results, runtime);
+    runtime.log(
+      `Scan results: tested ${results.length}, tool ok ${toolOk.length}, image ok ${imageOk.length}, tool+image ok ${imagePreferred.length}, image only ${imageOk.length - imagePreferred.length}`,
+    );
     printScanTable(sorted, runtime);
   }
 

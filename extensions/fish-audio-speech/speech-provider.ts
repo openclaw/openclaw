@@ -1,7 +1,6 @@
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import type {
   SpeechProviderConfig,
-  SpeechProviderOverrides,
   SpeechProviderPlugin,
   SpeechSynthesisRequest,
   SpeechSynthesisTarget,
@@ -110,37 +109,6 @@ async function fishAudioTts(params: FishAudioTtsRequest): Promise<Buffer> {
   }
 }
 
-async function fishAudioTtsStream(params: FishAudioTtsRequest): Promise<{
-  audioStream: ReadableStream<Uint8Array>;
-  release: () => Promise<void>;
-}> {
-  const { createBoundedProviderBinaryStream } =
-    await import("openclaw/plugin-sdk/provider-binary-stream");
-  const { assertOkOrThrowProviderError, assertProviderBinaryResponseContent } =
-    await import("openclaw/plugin-sdk/provider-http");
-  const { response, release } = await requestFishAudioTts(params);
-  try {
-    await assertOkOrThrowProviderError(response, "Fish Audio TTS API error", {
-      requestHeaders: { Authorization: `Bearer ${params.apiKey}` },
-    });
-    assertProviderBinaryResponseContent(response, "Fish Audio TTS API error", "audio");
-    if (!response.body) {
-      throw new Error("Fish Audio TTS API response missing audio stream");
-    }
-    const bounded = createBoundedProviderBinaryStream(response.body, {
-      maxBytes: params.maxBytes,
-      createOverflowError: ({ maxBytes }) =>
-        new Error(`Fish Audio TTS API error: audio response exceeds ${maxBytes} bytes`),
-      createReleaseError: () => new Error("Fish Audio TTS stream released"),
-      cleanup: release,
-    });
-    return { audioStream: bounded.stream, release: bounded.release };
-  } catch (error) {
-    await release();
-    throw error;
-  }
-}
-
 type FishAudioVoicePayload = {
   total?: number;
   items?: unknown[];
@@ -167,10 +135,6 @@ function parseVoiceItem(value: unknown): SpeechVoiceOption | undefined {
 const DEFAULT_MODEL: FishAudioModel = "s2.1-pro";
 const DEFAULT_LATENCY: FishAudioLatency = "balanced";
 const DEFAULT_TIMEOUT_MS = 240_000;
-
-type FishAudioOverrides = Partial<
-  Omit<ReturnType<typeof normalizeProviderConfig>, "apiKey" | "baseUrl">
->;
 
 function normalizeModel(value: unknown): FishAudioModel {
   const model = trimToUndefined(value);
@@ -222,21 +186,6 @@ function readProviderConfig(config: SpeechProviderConfig) {
   return normalizeProviderConfig({
     providers: { "fish-audio": { ...config, apiKey: trimToUndefined(config.apiKey) } },
   });
-}
-
-function readOverrides(overrides: SpeechProviderOverrides | undefined): FishAudioOverrides {
-  const raw = overrides ?? {};
-  return {
-    model: trimToUndefined(raw.model ?? raw.modelId)
-      ? normalizeModel(raw.model ?? raw.modelId)
-      : undefined,
-    referenceId: resolveReferenceId(raw),
-    latency: trimToUndefined(raw.latency) ? normalizeLatency(raw.latency) : undefined,
-    speed: asFiniteNumberInRange(raw.speed, { min: 0.5, max: 2 }),
-    temperature: asFiniteNumberInRange(raw.temperature, { min: 0, max: 1 }),
-    topP: asFiniteNumberInRange(raw.topP ?? raw.top_p, { min: 0, max: 1 }),
-    normalize: asBoolean(raw.normalize),
-  };
 }
 
 function resolveApiKey(configValue?: string): string | undefined {
@@ -336,7 +285,18 @@ async function resolveSynthesisRequest(
   req: SpeechSynthesisRequest,
 ): Promise<FishAudioTtsRequest & { fileExtension: string; voiceCompatible: boolean }> {
   const config = readProviderConfig(req.providerConfig);
-  const overrides = readOverrides(req.providerOverrides);
+  const raw = req.providerOverrides ?? {};
+  const overrides = {
+    model: trimToUndefined(raw.model ?? raw.modelId)
+      ? normalizeModel(raw.model ?? raw.modelId)
+      : undefined,
+    referenceId: resolveReferenceId(raw),
+    latency: trimToUndefined(raw.latency) ? normalizeLatency(raw.latency) : undefined,
+    speed: asFiniteNumberInRange(raw.speed, { min: 0.5, max: 2 }),
+    temperature: asFiniteNumberInRange(raw.temperature, { min: 0, max: 1 }),
+    topP: asFiniteNumberInRange(raw.topP ?? raw.top_p, { min: 0, max: 1 }),
+    normalize: asBoolean(raw.normalize),
+  };
   const apiKey = resolveApiKey(config.apiKey);
   if (!apiKey) {
     throw new Error("Fish Audio API key missing");
@@ -505,17 +465,41 @@ export function buildFishAudioSpeechProvider(): SpeechProviderPlugin {
     },
     streamSynthesize: async (req) => {
       const params = await resolveSynthesisRequest(req);
-      const stream = await fishAudioTtsStream({
+      const streamParams = {
         ...params,
         maxBytes: Math.min(params.maxBytes, MAX_AUDIO_BYTES),
-      });
-      return {
-        audioStream: stream.audioStream,
-        outputFormat: params.format,
-        fileExtension: params.fileExtension,
-        voiceCompatible: params.voiceCompatible,
-        release: stream.release,
       };
+      const { createBoundedProviderBinaryStream } =
+        await import("openclaw/plugin-sdk/provider-binary-stream");
+      const { assertOkOrThrowProviderError, assertProviderBinaryResponseContent } =
+        await import("openclaw/plugin-sdk/provider-http");
+      const { response, release } = await requestFishAudioTts(streamParams);
+      try {
+        await assertOkOrThrowProviderError(response, "Fish Audio TTS API error", {
+          requestHeaders: { Authorization: `Bearer ${streamParams.apiKey}` },
+        });
+        assertProviderBinaryResponseContent(response, "Fish Audio TTS API error", "audio");
+        if (!response.body) {
+          throw new Error("Fish Audio TTS API response missing audio stream");
+        }
+        const bounded = createBoundedProviderBinaryStream(response.body, {
+          maxBytes: streamParams.maxBytes,
+          createOverflowError: ({ maxBytes }) =>
+            new Error(`Fish Audio TTS API error: audio response exceeds ${maxBytes} bytes`),
+          createReleaseError: () => new Error("Fish Audio TTS stream released"),
+          cleanup: release,
+        });
+        return {
+          audioStream: bounded.stream,
+          outputFormat: params.format,
+          fileExtension: params.fileExtension,
+          voiceCompatible: params.voiceCompatible,
+          release: bounded.release,
+        };
+      } catch (error) {
+        await release();
+        throw error;
+      }
     },
     synthesizeTelephony: async (req) => {
       const params = await resolveSynthesisRequest({ ...req, target: "telephony" });

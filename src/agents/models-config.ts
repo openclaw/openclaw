@@ -30,7 +30,7 @@ import {
 } from "./agent-scope.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
-import { MODELS_JSON_STATE, type ModelsJsonReadyResult } from "./models-config-state.js";
+import { MODELS_JSON_STATE } from "./models-config-state.js";
 import { planOpenClawModelsJson, type PreparedModelsConfigContext } from "./models-config.plan.js";
 import {
   capturePluginModelCatalogAuth,
@@ -244,11 +244,7 @@ export async function ensureOpenClawModelsJson(
   config?: OpenClawConfig,
   agentDirOverride?: string,
   options: EnsureOpenClawModelsJsonOptions = {},
-): Promise<
-  ModelsJsonReadyResult & {
-    publishedSource?: Omit<PlannedOpenClawModelsJsonSource, "agentDir">;
-  }
-> {
+): Promise<{ publishedSource?: Omit<PlannedOpenClawModelsJsonSource, "agentDir"> }> {
   const context = await prepareModelsConfigContext(config, agentDirOverride, options);
   const { agentDir } = context;
   const targetPath = path.join(agentDir, "models.json");
@@ -256,12 +252,12 @@ export async function ensureOpenClawModelsJson(
   const cacheKey = modelsJsonReadyCacheKey(targetPath, fingerprint);
   const cached = MODELS_JSON_STATE.readyCache.get(cacheKey);
   if (cached && !context.onProviderCatalogOutcome) {
-    const settled = await cached;
+    await cached;
     await ensureModelsFileModeForModelsJson(targetPath);
-    return { ...settled };
+    return {};
   }
 
-  // Keep publication payloads local; ready-cache promises retain only the small result.
+  // Keep publication payloads local; ready-cache promises retain only completion.
   let publishedSource: Omit<PlannedOpenClawModelsJsonSource, "agentDir"> | undefined;
   const pending = MODELS_JSON_STATE.writeQueue.enqueue(targetPath, async () => {
     const existingModelsFile = await readExistingModelsFile(targetPath);
@@ -275,11 +271,9 @@ export async function ensureOpenClawModelsJson(
       }),
     );
 
-    let wroteRoot = false;
     if (plan.action === "write") {
       await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
-      wroteRoot = existingModelsFile.raw !== plan.contents;
-      if (wroteRoot) {
+      if (existingModelsFile.raw !== plan.contents) {
         await privateFileStore(path.dirname(targetPath)).writeText("models.json", plan.contents);
         MODELS_JSON_STATE.costCache.delete(agentDir);
       }
@@ -303,11 +297,10 @@ export async function ensureOpenClawModelsJson(
     if (plan.action === "noop") {
       await ensureModelsFileModeForModelsJson(targetPath);
     }
-    return { agentDir, wrote: wroteRoot || (publication?.changed ?? false) };
   });
   MODELS_JSON_STATE.readyCache.set(cacheKey, pending);
   try {
-    const settled = await pending;
+    await pending;
     const refreshedFingerprint = await buildModelsJsonFingerprint(
       context,
       publishedSource?.pluginCatalogs,
@@ -315,9 +308,9 @@ export async function ensureOpenClawModelsJson(
     const refreshedCacheKey = modelsJsonReadyCacheKey(targetPath, refreshedFingerprint);
     if (refreshedCacheKey !== cacheKey) {
       MODELS_JSON_STATE.readyCache.delete(cacheKey);
-      MODELS_JSON_STATE.readyCache.set(refreshedCacheKey, Promise.resolve(settled));
+      MODELS_JSON_STATE.readyCache.set(refreshedCacheKey, Promise.resolve());
     }
-    return { ...settled, ...(publishedSource ? { publishedSource } : {}) };
+    return publishedSource ? { publishedSource } : {};
   } catch (error) {
     if (MODELS_JSON_STATE.readyCache.get(cacheKey) === pending) {
       MODELS_JSON_STATE.readyCache.delete(cacheKey);

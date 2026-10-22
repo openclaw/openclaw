@@ -216,10 +216,14 @@ export class CustodianAutoSetup {
       await this.wizard.requestCancellation();
     } catch (error) {
       if (epoch === this.epoch) {
-        this.error = formatUiError(error, t("custodian.autoSetup.failed"));
-        this.changed();
+        this.reportError(error);
       }
     }
+  }
+
+  reportError(error: unknown): void {
+    this.error = formatUiError(error, t("custodian.autoSetup.failed"));
+    this.changed();
   }
 
   setWizardValue(value: unknown): void {

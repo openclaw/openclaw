@@ -5,6 +5,7 @@ import { fileKindForPath } from "../../../components/file-kind.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import { PanelEmptyState } from "../../../components/solid/panel-empty-state.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { formatByteSize } from "../../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -60,8 +61,6 @@ export type SessionWorkspaceMobileProps = {
   onOpenFileInsideFiles: SessionWorkspaceProps["onOpenFile"];
   onOpenArtifactInsideFiles: SessionWorkspaceProps["onOpenArtifact"];
   onToggleGroup: (kind: SessionWorkspaceMobileGroup["kind"]) => void;
-  /** The mobile host expands on editable focus; blur does not minimize it. */
-  onSearchFocus: () => void;
   /** Host owns route scroll restoration and retention, including while hidden. */
   onScrollElement: (element: HTMLDivElement | null) => void;
   onScroll: (scrollTop: number) => void;
@@ -108,7 +107,13 @@ function MobileFileName(props: { name: string; directory?: boolean }) {
   });
   return (
     <span class="chat-workspace-mobile__name">
-      <span class="chat-workspace-mobile__stem">{split()[0]}</span>
+      <span
+        ref={createTextOverflow(() => split()[0])}
+        class="chat-workspace-mobile__stem"
+        title={props.name}
+      >
+        {split()[0]}
+      </span>
       <span class="chat-workspace-mobile__extension">{split()[1]}</span>
     </span>
   );
@@ -136,7 +141,13 @@ function MobileFileRow(props: {
         <span class="chat-workspace-mobile__identity">
           <MobileFileName name={props.name} directory={props.directory} />
           <Show when={props.parent}>
-            <span class="chat-workspace-mobile__directory">{props.parent}</span>
+            <span
+              ref={createTextOverflow(() => props.parent)}
+              class="chat-workspace-mobile__directory"
+              title={props.parent}
+            >
+              {props.parent}
+            </span>
           </Show>
         </span>
         <Show when={props.missing}>
@@ -329,7 +340,6 @@ export function SessionWorkspaceMobile(props: SessionWorkspaceMobileProps) {
             }
             ref={liveValue(() => props.search)}
             onInput={(event) => props.onSearch(event.currentTarget.value)}
-            onFocus={() => props.onSearchFocus()}
           />
         </label>
       </div>

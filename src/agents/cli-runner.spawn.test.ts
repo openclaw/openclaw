@@ -12,7 +12,8 @@ import {
   markMcpLoopbackToolCallStarted,
   recordMcpLoopbackToolCallResult,
 } from "../gateway/mcp-http.loopback-runtime.js";
-import { invokeNodeClaudeCliRun } from "../gateway/node-agent-cli-runtime.js";
+import type { invokeNodeClaudeCliRun } from "../gateway/node-agent-cli-runtime.js";
+import * as nodeRuntime from "../gateway/node-agent-cli-runtime.js";
 import { onAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import {
   setDiagnosticsEnabledForProcess,
@@ -39,7 +40,6 @@ import {
   requireRegexMatch,
 } from "./cli-runner.test-helpers.js";
 import { createCliLiveSessionCapability } from "./cli-runner/cli-live-session-registry.js";
-import { executeDeps } from "./cli-runner/execute-deps.js";
 import { executePreparedCliRun as executePreparedCliRunImpl } from "./cli-runner/execute.js";
 import {
   createManagedRun,
@@ -162,8 +162,8 @@ describe("runCliAgent spawn path", () => {
       params.onProgress(jsonl.slice(40));
       return nodeExit();
     });
-    vi.spyOn(executeDeps, "writeCliSystemPromptFile").mockImplementation(writeSystemPrompt);
-    vi.spyOn(executeDeps, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
+    vi.spyOn(cliHelpers, "writeCliSystemPromptFile").mockImplementation(writeSystemPrompt);
+    vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
     const baseArgs = [
       "-p",
       "--output-format",
@@ -276,7 +276,7 @@ describe("runCliAgent spawn path", () => {
       params.onProgress('{"type":"assistant","message":{"content":[{"type":"te');
       return nodeExit(true);
     });
-    vi.spyOn(executeDeps, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
+    vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
     const context = buildNodeContext({
       prompt: "current turn",
       backend: {
@@ -311,7 +311,7 @@ describe("runCliAgent spawn path", () => {
           );
         }),
     );
-    vi.spyOn(executeDeps, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
+    vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
     const context = buildNodeContext({
       runId: "run-node-abort",
     });
@@ -372,7 +372,7 @@ describe("runCliAgent spawn path", () => {
       });
       return "allow-once";
     });
-    vi.spyOn(executeDeps, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
+    vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
     vi.spyOn(execApprovalRequests, "registerExecApprovalRequestForHostOrThrow").mockImplementation(
       registerApproval,
     );
@@ -430,7 +430,7 @@ describe("runCliAgent spawn path", () => {
         }),
       }));
       const resolveApproval = vi.fn(async () => await new Promise<string | null>(() => {}));
-      vi.spyOn(executeDeps, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
+      vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
       vi.spyOn(
         execApprovalRequests,
         "registerExecApprovalRequestForHostOrThrow",
@@ -458,7 +458,7 @@ describe("runCliAgent spawn path", () => {
 
   it("rejects images before invoking a node-placed Claude session", async () => {
     const invokeNode = vi.fn();
-    vi.spyOn(executeDeps, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
+    vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
     const context = buildNodeContext();
     context.params.images = [{ type: "image", data: "aGVsbG8=", mimeType: "image/png" }];
 
@@ -480,7 +480,7 @@ describe("runCliAgent spawn path", () => {
 
   it("rejects prepared offloaded images before invoking a node-placed Claude session", async () => {
     const invokeNode = vi.fn();
-    vi.spyOn(executeDeps, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
+    vi.spyOn(nodeRuntime, "invokeNodeClaudeCliRun").mockImplementation(invokeNode);
     const context = buildNodeContext({
       provider: "claude-cli",
       runId: "run-node-offloaded-media-facts",
@@ -748,7 +748,7 @@ describe("runCliAgent spawn path", () => {
       filePath: "/tmp/openclaw-soft-resume-system-prompt.md",
       cleanup: async () => {},
     }));
-    vi.spyOn(executeDeps, "writeCliSystemPromptFile").mockImplementation(
+    vi.spyOn(cliHelpers, "writeCliSystemPromptFile").mockImplementation(
       writeSoftResumeSystemPromptFile,
     );
     supervisorSpawnMock.mockImplementationOnce(async (...args: unknown[]) => {
@@ -1352,7 +1352,7 @@ describe("runCliAgent spawn path", () => {
   it("preserves completed output when system prompt cleanup fails after delivery", async () => {
     const cleanupError = new Error("system prompt cleanup failed");
     const logWarnSpy = vi.spyOn(cliBackendLog, "warn").mockImplementation(() => undefined);
-    vi.spyOn(executeDeps, "writeCliSystemPromptFile").mockImplementation(async () => ({
+    vi.spyOn(cliHelpers, "writeCliSystemPromptFile").mockImplementation(async () => ({
       filePath: "/tmp/system-prompt.md",
       cleanup: async () => {
         throw cleanupError;
@@ -1398,7 +1398,7 @@ describe("runCliAgent spawn path", () => {
     const runId = "run-claude-cleanup-failure";
     const diagnostics = captureModelCallDiagnostics(runId);
     const cleanupError = new Error("system prompt cleanup failed");
-    vi.spyOn(executeDeps, "writeCliSystemPromptFile").mockImplementation(async () => ({
+    vi.spyOn(cliHelpers, "writeCliSystemPromptFile").mockImplementation(async () => ({
       filePath: "/tmp/system-prompt.md",
       cleanup: async () => {
         throw cleanupError;

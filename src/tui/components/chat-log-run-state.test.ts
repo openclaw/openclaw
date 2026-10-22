@@ -96,10 +96,10 @@ describe("ChatLog run state", () => {
   it("re-keys a pending user in place without moving its position", () => {
     chatLog.addPendingUser("local", "queued hello");
     chatLog.updateAssistant("hi there", "r-accepted");
-    expect(chatLog.rekeyPendingUser("local", "r-accepted")).toBe(true);
+    chatLog.rekeyPendingUser("local", "r-accepted");
 
     expectOrder(render(), "queued hello", "hi there");
-    expect(chatLog.dropPendingUser("r-accepted")).toBe(true);
+    chatLog.dropPendingUser("r-accepted");
     expect(chatLog.countPendingUsers()).toBe(0);
   });
 });

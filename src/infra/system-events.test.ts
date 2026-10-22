@@ -533,7 +533,7 @@ describe("system events (session routing)", () => {
   it.each([
     "Exec finished (gateway id=abc12345, code 0)",
     "Exec failed (abc12345, signal SIGTERM) :: browser auth timed out",
-  ])("drains generic events without consuming %s", async (completion) => {
+  ])("drains generic events and %s once", async (completion) => {
     enqueueSystemEvent("Model switched to gpt-5.5", { sessionKey: key });
     enqueueSystemEvent(completion, { sessionKey: key });
     enqueueSystemEvent("Node connected", { sessionKey: key });
@@ -541,9 +541,10 @@ describe("system events (session routing)", () => {
     const result = await drainFormattedEvents(key);
     expect(result).toContain("Model switched to gpt-5.5");
     expect(result).toContain("Node connected");
-    expect(peekSystemEvents(key)).toEqual([completion]);
+    expect(result).toContain(completion);
+    expect(peekSystemEvents(key)).toEqual([]);
     expect(await drainFormattedEvents(key)).toBeUndefined();
-    expect(peekSystemEvents(key)).toEqual([completion]);
+    expect(peekSystemEvents(key)).toEqual([]);
   });
 
   it.each([

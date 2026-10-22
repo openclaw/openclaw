@@ -103,18 +103,9 @@ process.exitCode = ${exitCode};
 
 function writeShim(modules: string, tool: string): void {
   const directory = path.join(modules, ".bin");
-  const entry = toolEntries[tool]!;
-  write(
-    directory,
-    tool,
-    `#!/bin/sh\nexec node "$(dirname "$0")/../${tool}/${entry}" "$@"\n`,
-    0o755,
-  );
-  write(
-    directory,
-    `${tool}.cmd`,
-    `@echo off\r\nnode "%~dp0..\\${tool}\\${entry.replaceAll("/", "\\")}" %*\r\n`,
-  );
+  // Poison both shim formats: package-bin resolution must never execute either.
+  write(directory, tool, "#!/bin/sh\nexit 91\n", 0o755);
+  write(directory, `${tool}.cmd`, "@exit /b 91\r\n");
 }
 
 it.each(

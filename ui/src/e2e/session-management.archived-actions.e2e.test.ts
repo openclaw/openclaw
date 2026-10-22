@@ -142,8 +142,9 @@ suite.define(() => {
           },
         },
       });
+      const publicationLabel = viewport.label === "mobile" ? "Publish PR" : "Create PR";
       const publication = await openChatPublication(activePane);
-      await ui.button(publication, "Publish PR", false).waitFor();
+      await ui.button(publication, publicationLabel, false).waitFor();
       await closeChatDetails(activePane);
 
       await userBubble.click({ button: "right" });
@@ -183,7 +184,7 @@ suite.define(() => {
         .toBe(true);
       await expectVersionAuthority(activePane, viewport.label === "mobile", true);
       const archivedPublication = await openChatPublication(activePane);
-      await ui.expectCount(ui.button(archivedPublication, "Publish PR", false), 0);
+      await ui.expectCount(ui.button(archivedPublication, publicationLabel, false), 0);
       await closeChatDetails(activePane);
 
       await userBubble.evaluate((element) => {

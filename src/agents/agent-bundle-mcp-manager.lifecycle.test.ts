@@ -20,7 +20,10 @@ import {
   acquireRequesterScopedMcpRuntime,
   acquireSessionMcpRuntime,
 } from "./agent-bundle-mcp-manager-api.js";
-import { createSessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
+import {
+  createSessionMcpRuntimeManager,
+  makeManagerRuntime,
+} from "./agent-bundle-mcp-manager.test-support.js";
 import type { SessionMcpRuntimeManager } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import {
@@ -65,20 +68,7 @@ function bindManager(manager: SessionMcpRuntimeManager) {
 }
 
 function createRuntimeFixture(input: Parameters<CreateSessionMcpRuntime>[0]): SessionMcpRuntime {
-  const runtime = makeRuntime({ sessionId: input.sessionId, requesterSenderId: "unused" });
-  return Object.assign(runtime, {
-    sessionKey: input.sessionKey,
-    workspaceDir: input.workspaceDir,
-    agentDir: input.agentDir,
-    requesterScope: input.requesterScope,
-    configFingerprint: input.configFingerprint ?? "fixture",
-    createdAt: runtime.lastUsedAt,
-    getCatalog: async () => ({ version: 1, generatedAt: 0, servers: {}, tools: [] }),
-    peekCatalog: () => null,
-    callTool: async () => ({ content: [] }),
-    joinCleanup: async () => {},
-    dispose: vi.fn(async () => {}),
-  });
+  return makeManagerRuntime(input, undefined, { callTool: async () => ({ content: [] }) });
 }
 
 function createManager(

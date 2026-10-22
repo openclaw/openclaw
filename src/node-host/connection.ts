@@ -109,10 +109,8 @@ export function startNodeHostConnection({
     gatewayHelloReceived = false;
     connectedGatewayProtocol = 0;
     gatewayCapabilities = new Set();
-    if (hostStatsTimer) {
-      clearInterval(hostStatsTimer);
-      hostStatsTimer = undefined;
-    }
+    clearInterval(hostStatsTimer);
+    hostStatsTimer = undefined;
     for (const state of optionalPublicationStates.values()) {
       if (state.retryTimer) {
         clearTimeout(state.retryTimer);

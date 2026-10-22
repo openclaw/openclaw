@@ -127,6 +127,7 @@ describe("web search provider execution", () => {
   it("gives cancellation precedence over a saved failure and later cleanup error", async () => {
     const controller = new AbortController();
     const reason = new Error("caller cancelled");
+    const fallback = vi.fn(async () => ({ results: [] }));
     await expect(
       search(
         [
@@ -137,12 +138,12 @@ describe("web search provider execution", () => {
             controller.abort(reason);
             throw new Error("second provider cleanup failure");
           }),
+          candidate("fallback", fallback),
         ],
-        {
-          signal: controller.signal,
-        },
+        { signal: controller.signal },
       ),
     ).rejects.toBe(reason);
+    expect(fallback).not.toHaveBeenCalled();
   });
 
   it.each(["result", "failure", "cancelled"] as const)(
@@ -201,9 +202,7 @@ describe("web search provider execution", () => {
             createTool,
           }),
         ],
-        {
-          signal: controller.signal,
-        },
+        { signal: controller.signal },
       ),
     ).rejects.toBe(reason);
     expect(createTool).not.toHaveBeenCalled();

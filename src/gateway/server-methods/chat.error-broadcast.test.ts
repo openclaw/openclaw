@@ -36,25 +36,31 @@ function createMockContext() {
   };
 }
 
+function sendExternal(
+  ctx: ReturnType<typeof createMockContext>,
+  params: Parameters<typeof handleDirectExternalChatSend>[0]["params"],
+) {
+  const respond = vi.fn();
+  return handleDirectExternalChatSend({
+    params,
+    respond: respond as never,
+    context: ctx as unknown as GatewayRequestContext,
+    req: {} as never,
+    client: null as never,
+    isWebchatConnect: () => false,
+  }).then(() => respond);
+}
+
 describe("chat.send error broadcast", () => {
   it("rejects a claimed leaf for a session that has not materialized", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await loadOrCreateProcessDeviceIdentityAsync();
       const ctx = createMockContext();
-      const respond = vi.fn();
-
-      await handleDirectExternalChatSend({
-        params: {
-          sessionKey: "main",
-          message: "hello",
-          expectedLeafEntryId: "stale-leaf",
-          idempotencyKey: "test-fresh-stale-leaf",
-        },
-        respond: respond as never,
-        context: ctx as unknown as GatewayRequestContext,
-        req: {} as never,
-        client: null as never,
-        isWebchatConnect: () => false,
+      const respond = await sendExternal(ctx, {
+        sessionKey: "main",
+        message: "hello",
+        expectedLeafEntryId: "stale-leaf",
+        idempotencyKey: "test-fresh-stale-leaf",
       });
 
       expect(respond).toHaveBeenCalledWith(
@@ -164,20 +170,11 @@ describe("chat.send error broadcast", () => {
 
   it("rejects a stale routing contract before a stop side effect", async () => {
     const ctx = createMockContext();
-    const respond = vi.fn();
-
-    await handleDirectExternalChatSend({
-      params: {
-        sessionKey: "main",
-        message: "/stop",
-        expectedSessionRoutingContract: "global|main|main",
-        idempotencyKey: "test-stale-stop-routing",
-      },
-      respond: respond as never,
-      context: ctx as unknown as GatewayRequestContext,
-      req: {} as never,
-      client: null as never,
-      isWebchatConnect: () => false,
+    const respond = await sendExternal(ctx, {
+      sessionKey: "main",
+      message: "/stop",
+      expectedSessionRoutingContract: "global|main|main",
+      idempotencyKey: "test-stale-stop-routing",
     });
 
     expect(respond).toHaveBeenCalledWith(
@@ -192,24 +189,15 @@ describe("chat.send error broadcast", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       await loadOrCreateProcessDeviceIdentityAsync();
       const ctx = createMockContext();
-      const respond = vi.fn();
-
       ctx.addChatRun.mockImplementation(() => {
         throw Object.assign(new Error("LLM timeout"), { code: "TIMEOUT" });
       });
 
-      await handleDirectExternalChatSend({
-        params: {
-          sessionKey: "global",
-          agentId: "main",
-          message: "hello",
-          idempotencyKey: "test-run-global",
-        },
-        respond: respond as never,
-        context: ctx as unknown as GatewayRequestContext,
-        req: {} as never,
-        client: null as never,
-        isWebchatConnect: () => false,
+      const respond = await sendExternal(ctx, {
+        sessionKey: "global",
+        agentId: "main",
+        message: "hello",
+        idempotencyKey: "test-run-global",
       });
 
       expect(respond).toHaveBeenCalledWith(

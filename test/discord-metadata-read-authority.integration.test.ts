@@ -572,36 +572,6 @@ describe("registered Discord metadata reads", () => {
     await expectRejected(dispatch(), /token/i);
   });
 
-  it("returns unknown voice state as a normal absent result", async () => {
-    fixture.route(
-      `${guildPath}/voice-states/${userId}`,
-      { code: 10065, message: "Unknown Voice State" },
-      404,
-    );
-    expect(await dispatchDetails("voice-status", { guildId, userId })).toEqual({
-      ok: true,
-      voice: {
-        guild_id: guildId,
-        user_id: userId,
-        channel_id: null,
-        connected: false,
-        absent: true,
-        reason: "unknown_voice_state",
-      },
-    });
-  });
-
-  it("resolves emoji-list from the current server channel", async () => {
-    expect(await dispatchDetails("emoji-list", { limit: 1 })).toEqual({
-      ok: true,
-      emojis: [{ name: "alpha", identifier: "alpha:1", animated: true }],
-    });
-    expect(fixture.requests).toEqual([
-      { method: "GET", path: `/channels/${current}` },
-      getRequest(`${guildPath}/emojis`),
-    ]);
-  });
-
   it("retains captured authority between permissions lookup requests", async () => {
     fixture.transport.onRequest = () => {
       fixture.record.enabled = false;

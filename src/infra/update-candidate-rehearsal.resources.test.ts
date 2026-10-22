@@ -12,6 +12,7 @@ import { validateConfigObject } from "../config/validation.js";
 import { exitCodeFromFindings, runDoctorLintChecks } from "../flows/doctor-lint-flow.js";
 import type { HealthCheck } from "../flows/health-checks.js";
 import * as exec from "../process/exec.js";
+import { OPENCLAW_AGENT_SCHEMA_V25_SQL } from "../state/openclaw-agent-schema-v25.test-support.js";
 import { loadBundledPluginFacade } from "../test-utils/bundled-plugin-public-surface.js";
 import * as diskSpace from "./disk-space.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
@@ -541,18 +542,43 @@ const { registerPolicyDoctorChecks } = await loadBundledPluginFacade<{
 }>({ pluginId: "policy", artifactBasename: "api.ts" });
 
 it.each(["token", "password"] as const)(
-  "preserves policy rate limits while isolating %s authentication",
+  "preserves 2026.10.5 config, state and policy for %s authentication",
   async (mode) => {
     const root = tempDirs.make("candidate-policy-");
     await materializeUpdateCandidateStateWorker(root);
     const policyPath = path.join(root, "policy.jsonc");
     await fs.writeFile(
       policyPath,
-      JSON.stringify({ gateway: { auth: { requireAuth: true, requireExplicitRateLimit: true } } }),
+      JSON.stringify({
+        gateway: { auth: { requireAuth: true, requireExplicitRateLimit: true } },
+        dataHandling: { sensitiveLogging: { requireRedaction: true } },
+        secrets: { allowInsecureProviders: true },
+      }),
     );
     const user = "operator@example.invalid";
     const config: OpenClawConfig = {
-      plugins: { entries: { policy: { enabled: true, config: { path: policyPath } } } },
+      plugins: {
+        entries: {
+          policy: {
+            enabled: true,
+            config: {
+              path: policyPath,
+              expectedAttestationHash:
+                mode === "token"
+                  ? "sha256:4fdc3e88ded7ecdfcdec09f8b30be01337df919cf9e51211e92a7a4d664ae545"
+                  : "sha256:ede6e4f088dd6d2177dc3e8bbafcc80388a051381fc75301f01d42fef9d42218",
+            },
+          },
+        },
+      },
+      diagnostics: {
+        enabled: true,
+        otel: {
+          enabled: true,
+          captureContent: true,
+          headers: { Authorization: "synthetic-otel-secret", "X-Reference": "${OTEL_SECRET}" },
+        },
+      },
       gateway: {
         bind: "lan",
         port: 18789,
@@ -569,6 +595,19 @@ it.each(["token", "password"] as const)(
       },
     };
     const original = structuredClone(config);
+    const source = path.join(root, "source");
+    const database = path.join(source, "agents/main/agent/openclaw-agent.sqlite");
+    await fs.mkdir(path.dirname(database), { recursive: true });
+    {
+      using db = openNodeSqliteDatabase(database);
+      db.exec(OPENCLAW_AGENT_SCHEMA_V25_SQL);
+      db.exec(`PRAGMA user_version = 25;
+        INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at)
+        VALUES ('primary', 'agent', 25, 'main', '2026.10.5', 1, 1);
+        INSERT INTO cache_entries (scope, key, value_json, updated_at)
+        VALUES ('fixture', 'retained', '{"keep":true}', 1);`);
+    }
+    const sourceBytes = await fs.readFile(database);
     const checks: HealthCheck[] = [];
     registerPolicyDoctorChecks({ registerHealthCheck: (check) => checks.push(check) });
     const lint = (cfg: OpenClawConfig, configPath: string) =>
@@ -580,7 +619,7 @@ it.each(["token", "password"] as const)(
 
     const rehearsal = await prepareUpdateCandidateRehearsal({
       config,
-      stateDir: path.join(root, "source"),
+      stateDir: source,
       candidateRoot: root,
       env: {
         ...process.env,
@@ -593,21 +632,30 @@ it.each(["token", "password"] as const)(
       const result = await lint(copied, rehearsal.configPath);
       expect(result.findings).toEqual([]);
       expect(exitCodeFromFindings(result.findings)).toBe(0);
-      expect(copied.gateway).toMatchObject({
-        bind: "loopback",
-        port: rehearsal.port,
-        trustedProxies: config.gateway?.trustedProxies,
-        auth: {
-          mode: "token",
-          rateLimit: config.gateway?.auth?.rateLimit,
-          identityScopes: config.gateway?.auth?.identityScopes,
-          trustedProxy: config.gateway?.auth?.trustedProxy,
-          allowTailscale: false,
-          token: expect.any(String),
-        },
+      expect(copied.gateway).toEqual({
+        ...config.gateway,
+        auth: { ...config.gateway?.auth, token: expect.any(String) },
       });
       expect(copied.gateway?.auth?.token).not.toBe(config.gateway?.auth?.token);
-      expect(copied.gateway?.auth?.password).toBeUndefined();
+      expect(copied.diagnostics).toEqual({
+        ...config.diagnostics,
+        otel: {
+          ...config.diagnostics?.otel,
+          headers: { Authorization: expect.any(String), "X-Reference": "${OTEL_SECRET}" },
+        },
+      });
+      expect(copied.diagnostics?.otel?.headers?.Authorization).not.toBe("synthetic-otel-secret");
+      using db = openNodeSqliteDatabase(
+        path.join(rehearsal.stateDir, path.relative(source, database)),
+        { readOnly: true },
+      );
+      expect(db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 25 });
+      expect(
+        db.prepare("SELECT value_json FROM cache_entries WHERE key = 'retained'").get(),
+      ).toEqual({
+        value_json: '{"keep":true}',
+      });
+      expect(await fs.readFile(database)).toEqual(sourceBytes);
       expect(rehearsal.env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
       expect(rehearsal.env.OPENCLAW_GATEWAY_PASSWORD).toBeUndefined();
       expect(config).toEqual(original);

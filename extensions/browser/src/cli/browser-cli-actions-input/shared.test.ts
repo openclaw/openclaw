@@ -65,6 +65,37 @@ const tooLarge = {
   code: "too-large",
   message: expect.stringContaining("Split the batch plan into smaller files"),
 };
+it.each(["at limit", "overflow", "malformed UTF-8"] as const)(
+  "validates stdin bytes: %s",
+  async (kind) => {
+    const bytes =
+      kind === "malformed UTF-8"
+        ? Buffer.from([0xff])
+        : Buffer.alloc(maxBytes + (kind === "overflow" ? 1 : 0), 0x20);
+    const iterator = vi.spyOn(process.stdin, Symbol.asyncIterator);
+    iterator.mockImplementationOnce(async function* () {
+      yield bytes;
+      return undefined;
+    });
+    // The iterator fixture must not destroy the runner's actual stdin on overflow.
+    const destroy = vi.spyOn(process.stdin, "destroy").mockReturnValue(process.stdin);
+    try {
+      const result = readActionsPayload({ actionsFile: "-" });
+      if (kind === "at limit") {
+        expect(await result).toBe(bytes.toString("utf8"));
+      } else {
+        await expect(result).rejects.toMatchObject(
+          kind === "overflow"
+            ? tooLarge
+            : { message: "--actions-file - stdin must be valid UTF-8." },
+        );
+      }
+    } finally {
+      iterator.mockRestore();
+      destroy.mockRestore();
+    }
+  },
+);
 it("bounds action files with the same byte limit as stdin", async () => {
   await expect(readActionFile(maxBytes + 1)).rejects.toMatchObject(tooLarge);
   expect(Buffer.byteLength(await readActionFile(maxBytes))).toBe(maxBytes);

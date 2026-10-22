@@ -41,7 +41,9 @@ import { createChatRunState } from "./server-chat-state.js";
 import {
   controlUiClient,
   initializeRepository,
+  removeOwnedSessionWorktree,
   settleWorkspaceRuns,
+  successfulSessionRequest as request,
 } from "./server.sessions.create.projects.test-support.js";
 import { dispatchInboundMessageMock, testState } from "./test-helpers.js";
 import {
@@ -92,12 +94,6 @@ afterEach(async () => {
 // Register after the resets so stacked teardown drains fixture stores first.
 const { createSessionStoreDir, withSessionTestState } = setupGatewaySessionsHandlerTestHarness();
 
-async function request<T = unknown>(...args: Parameters<typeof directSessionReq<T>>) {
-  const result = await directSessionReq<T>(...args);
-  expect(result.ok, JSON.stringify(result.error)).toBe(true);
-  return result.payload!;
-}
-
 const readReadme = (dir: string) => fs.readFile(path.join(dir, "README.md"), "utf8");
 const readEntry = (storePath: string, sessionKey: string) =>
   loadSessionEntry({ agentId: "main", sessionKey, storePath });
@@ -115,6 +111,21 @@ function expectChatEvent(broadcast: ReturnType<typeof vi.fn>, fields: Record<str
     expect.objectContaining(fields),
     expect.anything(),
   );
+}
+function expectPreparedProject(
+  entry: SessionEntry | null | undefined,
+  sessionId: string,
+  project: Awaited<ReturnType<typeof registerProjectRegistry>>,
+  projectRoot: string,
+  worktree: boolean,
+) {
+  expect(entry).toMatchObject({
+    sessionId,
+    projectId: project.id,
+    ...(worktree
+      ? { worktree: { canonicalWorkspaceDir: projectRoot } }
+      : { spawnedCwd: projectRoot, sessionRoot: projectRoot }),
+  });
 }
 async function remoteProjectFixture<T = Awaited<ReturnType<typeof registerProjectRegistry>>>(
   prefix: string,
@@ -324,16 +335,7 @@ test.each([
           );
         }
         const prepared = readEntry(storePath, key);
-        expect(prepared).toMatchObject({
-          sessionId,
-          projectId: project.id,
-          ...(worktree
-            ? { worktree: { canonicalWorkspaceDir: projectRoot } }
-            : {
-                spawnedCwd: projectRoot,
-                sessionRoot: projectRoot,
-              }),
-        });
+        expectPreparedProject(prepared, sessionId, project, projectRoot, worktree);
         if (worktree) {
           expect((await managedWorktrees.findLiveByOwner("session", key))?.baseRef).toBe("main");
           expect(prepared?.spawnedCwd).not.toBe(projectRoot);
@@ -436,18 +438,12 @@ test.each([
           await vi.waitFor(() => expect(projectCloneMocks.materialize).toHaveBeenCalledTimes(2));
           expect(readEntry(storePath, key)?.lastRunError).toBe(undefined);
           expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
-          expect(entryAfterCreation).toMatchObject({
-            sessionId,
-            pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-          });
-          expect(entryAfterFailure).toMatchObject({
-            sessionId,
-            pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-          });
-          expect(readEntry(storePath, key)).toMatchObject({
-            sessionId,
-            pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
-          });
+          for (const entry of [entryAfterCreation, entryAfterFailure, readEntry(storePath, key)]) {
+            expect(entry).toMatchObject({
+              sessionId,
+              pendingProjectGitUrl: "https://github.com/openclaw/openclaw.git",
+            });
+          }
 
           retriedMaterialization.resolve(project);
           await settleWorkspaceRuns(restartedContext, storePath, key);
@@ -460,13 +456,7 @@ test.each([
           expect(error?.[1]).toBeUndefined();
           expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
           const preparedEntry = readEntry(storePath, key);
-          expect(preparedEntry).toMatchObject({
-            sessionId,
-            projectId: project.id,
-            ...(worktree
-              ? { worktree: { canonicalWorkspaceDir: projectRoot } }
-              : { spawnedCwd: projectRoot, sessionRoot: projectRoot }),
-          });
+          expectPreparedProject(preparedEntry, sessionId, project, projectRoot, worktree);
           expect(preparedEntry).not.toHaveProperty("pendingProjectGitUrl");
           expect(preparedEntry).not.toHaveProperty("pendingWorktree");
           if (preparedEntry?.worktree) {
@@ -588,10 +578,7 @@ sendReceipt(process.argv[2], "started");
     } finally {
       await fs.writeFile(release, "release setup\n");
       await settleWorkspaceRuns(context, storePath, key, true);
-      const owned = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
-      if (owned) {
-        await removeWorktree(owned.id);
-      }
+      await removeOwnedSessionWorktree(key);
     }
   },
 );

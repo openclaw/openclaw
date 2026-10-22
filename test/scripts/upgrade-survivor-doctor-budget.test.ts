@@ -38,6 +38,8 @@ function seedState(sessions: number, events: number, cronJobs: number, pluginRoo
   const plugins = Array.from({ length: pluginRoots }, (_, index) => ({
     rootDir: path.join(root, "plugins", String(index)),
     enabled: true,
+    // Real catalogues can exceed the reader cap without large required fields.
+    description: "x".repeat(160_000),
   }));
   writePluginInstallIndexForE2E(
     {

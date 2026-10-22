@@ -6,7 +6,52 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { GatewayClient } from "../client.js";
 import { startGatewayWithClient } from "../test-helpers.e2e.js";
-import { createModelsTestState, listenModelsEndpoint } from "./models-integration.test-support.js";
+import {
+  createModelsTestState,
+  listenModelsEndpoint,
+  modelsTestConfig,
+  startModelsGateway,
+} from "./models-integration.test-support.js";
+
+export async function startCatalogProvider(
+  state: OpenClawTestState,
+  options: {
+    provider: string;
+    token: string;
+    body: string;
+    manifest?: Record<string, unknown>;
+    config?: OpenClawConfig;
+    allowModels?: boolean;
+  },
+) {
+  const { provider, token, body, manifest, config = {} } = options;
+  const pluginPath = await writeCatalogPlugin(
+    state,
+    provider,
+    `module.exports = {
+    id: ${JSON.stringify(provider)}, register(api) { api.registerProvider({
+      id: ${JSON.stringify(provider)}, ${body}
+    }); },
+  };`,
+    manifest,
+  );
+  const cfg = modelsTestConfig(state, token, {
+    ...config,
+    agents:
+      options.allowModels === false
+        ? config.agents
+        : {
+            ...config.agents,
+            defaults: {
+              modelPolicy: { allow: [provider + "/*"] },
+              ...config.agents?.defaults,
+            },
+          },
+    plugins: { allow: [provider], load: { paths: [pluginPath] }, slots: { memory: "none" } },
+  });
+  await state.writeConfig(cfg);
+  return Object.assign(await startModelsGateway(state, cfg, token), { cfg });
+}
 
 export function createCatalogState(label: string, env: Record<string, string | undefined> = {}) {
   return createModelsTestState(label, {
@@ -75,6 +120,31 @@ export function catalogModelDefaults() {
 
 export function createCatalogModel(id: string, name = id) {
   return { id, name, ...catalogModelDefaults() };
+}
+
+export function catalogDiscoverySource(
+  provider: string,
+  baseUrl: string,
+  options: { wrappedRows?: boolean; model?: Record<string, unknown>; error: string },
+) {
+  return `catalog: {
+    order: "profile",
+    async run(ctx) {
+      const auth = ctx.resolveProviderAuth(${JSON.stringify(provider)});
+      if (!auth.discoveryApiKey) return null;
+      const response = await fetch(${JSON.stringify(`${baseUrl}/models`)}, {
+        headers: { Authorization: "Bearer " + auth.discoveryApiKey },
+      });
+      if (!response.ok) throw new Error(${JSON.stringify(options.error)});
+      const payload = await response.json();
+      return { provider: {
+        baseUrl: ${JSON.stringify(baseUrl)}, api: "openai-completions",
+        models: ${options.wrappedRows ? "payload.data" : "payload"}.map((row) => ({
+          ...row, ...${JSON.stringify({ ...catalogModelDefaults(), ...options.model })},
+        })),
+      } };
+    },
+  }`;
 }
 
 export function catalogReply(id: string, model: string, text: string) {

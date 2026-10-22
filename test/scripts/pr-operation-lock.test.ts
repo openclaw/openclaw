@@ -117,6 +117,10 @@ function fixtureEventBeforeSettlement(record: string, operation: PromiseLike<unk
   return Promise.race([receipts.waitFor(record, "ready"), settled]);
 }
 
+function waitForFixtureEvent(record: string, child: ChildProcess, signal: AbortSignal) {
+  return withinTest(fixtureEventBeforeSettlement(record, childCompletion(child)), signal);
+}
+
 // Foreign groups have no ChildProcess owner after the launcher exits. Keep this
 // one observation loop under the test signal, never a competing wall-clock budget.
 async function waitForProcessGroupExit(pgid: number, signal: AbortSignal) {
@@ -1569,10 +1573,7 @@ exec ${shellQuote(mktemp)} "$@"
     let waiter: ChildProcess | undefined;
     let holderPgid: number | undefined;
     try {
-      await withinTest(
-        fixtureEventBeforeSettlement(holderReady, childCompletion(controller)),
-        signal,
-      );
+      await waitForFixtureEvent(holderReady, controller, signal);
       const operationPgid = requireProcessId(operationPgidFile);
       await waitForProcessGroupExit(operationPgid, signal);
       holderPgid = requireProcessId(holderPidFile);
@@ -1709,10 +1710,7 @@ exec ${shellQuote(mktemp)} "$@"
       }),
     );
     try {
-      await withinTest(
-        fixtureEventBeforeSettlement(ghStarted, childCompletion(controller)),
-        signal,
-      );
+      await waitForFixtureEvent(ghStarted, controller, signal);
       expect(existsSync(ghStarted) && refExists(repoDir)).toBe(true);
       const probe = probeOperationLock(repoDir);
       expect(probe.status, `${probe.stdout}\n${probe.stderr}`).toBe(0);
@@ -1747,7 +1745,7 @@ exec ${shellQuote(mktemp)} "$@"
     );
     let pgid: number | undefined;
     try {
-      await withinTest(fixtureEventBeforeSettlement(held, childCompletion(controller)), signal);
+      await waitForFixtureEvent(held, controller, signal);
       expect(existsSync(pidFile) && existsSync(held)).toBe(true);
       pgid = requireProcessId(pidFile);
       const ownerOid = refOid(repoDir);
@@ -1825,10 +1823,7 @@ exec ${shellQuote(mktemp)} "$@"
     });
     let pgid: number | undefined;
     try {
-      await withinTest(
-        fixtureEventBeforeSettlement(childReady, childCompletion(controller)),
-        signal,
-      );
+      await waitForFixtureEvent(childReady, controller, signal);
       expect(existsSync(pidFile) && existsSync(childReady)).toBe(true);
       pgid = requireProcessId(pidFile);
       const ownerOid = refOid(repoDir);
@@ -1892,19 +1887,13 @@ exec ${shellQuote(mktemp)} "$@"
       );
       let nestedPgid: number | undefined;
       try {
-        await withinTest(
-          fixtureEventBeforeSettlement(nestedPidFile, childCompletion(controller)),
-          signal,
-        );
+        await waitForFixtureEvent(nestedPidFile, controller, signal);
         expect(existsSync(nestedPidFile) && refExists(repoDir)).toBe(true);
         nestedPgid = requireProcessId(nestedPidFile);
         const ownerOid = refOid(repoDir);
         expect(processGroupExists(nestedPgid!)).toBe(true);
         controller.kill("SIGTERM");
-        await withinTest(
-          fixtureEventBeforeSettlement(signalRelayedFile, childCompletion(controller)),
-          signal,
-        );
+        await waitForFixtureEvent(signalRelayedFile, controller, signal);
         expect(existsSync(signalRelayedFile)).toBe(true);
         controller.kill("SIGTERM");
         await withinTest(childCompletion(controller), signal);

@@ -36,21 +36,18 @@ afterEach(async () => {
   );
 });
 
-async function requestStatus(
-  url: string,
-  options: { method: string; headers: Record<string, string>; body: string },
-): Promise<number | undefined> {
+async function requestStatus(url: string, body: string): Promise<number | undefined> {
   return await new Promise((resolve, reject) => {
     const request = http.request(
       url,
-      { method: options.method, headers: options.headers },
+      { method: "POST", headers: { "content-type": "application/json" } },
       (response) => {
         resolve(response.statusCode);
         response.resume();
       },
     );
     request.on("error", reject);
-    request.end(options.body);
+    request.end(body);
   });
 }
 
@@ -283,11 +280,7 @@ describe("Beam receiver", () => {
     expect(await post("{}", "text/plain")).toBe(415);
     expect(await post("{")).toBe(400);
     expect(
-      await requestStatus(endpoint, {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ padding: "x".repeat(BEAM_MAX_BODY_BYTES) }),
-      }),
+      await requestStatus(endpoint, JSON.stringify({ padding: "x".repeat(BEAM_MAX_BODY_BYTES) })),
     ).toBe(413);
     expect(store.values.size).toBe(0);
   });

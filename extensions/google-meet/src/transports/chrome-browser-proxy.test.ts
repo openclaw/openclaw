@@ -2,7 +2,8 @@ import { runInNewContext } from "node:vm";
 // Google Meet tests cover chrome browser proxy plugin behavior.
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { describe, expect, it, vi } from "vitest";
-import { callBrowserProxyOnNode } from "./chrome-browser-proxy.js";
+import { resolveGoogleMeetConfig } from "../config.js";
+import { leaveChromeMeet } from "./chrome.js";
 import { meetLeaveScript } from "./google-meet-page-scripts.js";
 import {
   forceMeetEnglishUi,
@@ -60,7 +61,7 @@ describe("meetLeaveScript", () => {
 });
 
 describe("Google Meet Chrome browser proxy", () => {
-  it("reports malformed node proxy payloadJSON with an owned error", async () => {
+  it("reports malformed node proxy payloadJSON through the leave route", async () => {
     const invoke = vi.fn(async () => ({
       ok: true,
       payloadJSON: "{not json",
@@ -72,14 +73,19 @@ describe("Google Meet Chrome browser proxy", () => {
     } as unknown as PluginRuntime;
 
     await expect(
-      callBrowserProxyOnNode({
+      leaveChromeMeet({
         runtime,
+        config: resolveGoogleMeetConfig({ chrome: { joinTimeoutMs: 1_000 } }),
+        transport: "chrome-node",
         nodeId: "node-1",
-        method: "GET",
-        path: "/tabs",
-        timeoutMs: 100,
+        meetingSessionId: "malformed-proxy",
+        meetingUrl: "https://meet.google.com/abc-defg-hij",
+        tab: { targetId: "meet-tab", openedByPlugin: false },
       }),
-    ).rejects.toThrow("Google Meet browser proxy returned malformed payloadJSON.");
+    ).resolves.toStrictEqual({
+      left: false,
+      note: "Browser control could not leave the Meet tab: Google Meet browser proxy returned malformed payloadJSON.",
+    });
 
     expect(invoke).toHaveBeenCalledWith({
       nodeId: "node-1",
@@ -88,9 +94,9 @@ describe("Google Meet Chrome browser proxy", () => {
         method: "GET",
         path: "/tabs",
         body: undefined,
-        timeoutMs: 100,
+        timeoutMs: 1_000,
       },
-      timeoutMs: 5_100,
+      timeoutMs: 6_000,
       scopes: ["operator.admin"],
     });
   });

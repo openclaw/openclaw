@@ -21,8 +21,7 @@ import {
   createZalouserRuntimeEnv,
 } from "./test-helpers.js";
 
-type ZaloJsModule = typeof import("./zalo-js.js");
-type ListenerParams = Parameters<ZaloJsModule["startZaloListener"]>[0];
+type ListenerParams = Parameters<typeof import("./zalo-js.js").startZaloListener>[0];
 
 type MonitorOptions = Parameters<typeof monitorZalouserProvider>[0];
 async function withMonitor(
@@ -52,12 +51,7 @@ describe("zalouser monitor pairing account scoping", () => {
   it("scopes DM pairing-store reads and pairing requests to accountId", async () => {
     const readAllowFromStore = vi.fn(
       async (
-        channelOrParams:
-          | string
-          | {
-              channel?: string;
-              accountId?: string;
-            },
+        channelOrParams: string | { accountId?: string },
         _env?: NodeJS.ProcessEnv,
         accountId?: string,
       ) => {
@@ -117,16 +111,13 @@ describe("zalouser monitor pairing account scoping", () => {
       msgId: "msg-1",
     });
 
-    let resolveListener: ((params: ListenerParams) => void) | undefined;
-    const listenerReady = new Promise<ListenerParams>((resolve) => {
-      resolveListener = resolve;
-    });
+    const listener = Promise.withResolvers<ListenerParams>();
     startZaloListenerMock.mockImplementationOnce(async (listenerParams) => {
-      resolveListener?.(listenerParams);
+      listener.resolve(listenerParams);
       return { stop: vi.fn() };
     });
     await withMonitor({ account, config }, async (ingressQueue) => {
-      const listenerParams = await listenerReady;
+      const listenerParams = await listener.promise;
       const terminal = observeZalouserIngressVerdict(ingressQueue, "msg-1", "completed");
       await listenerParams.onMessage(createRawZalouserMessageFromNormalized(message));
       await terminal;
@@ -137,14 +128,8 @@ describe("zalouser monitor pairing account scoping", () => {
       channel: "zalouser",
       accountId: "beta",
     });
-
-    expect(upsertPairingRequest).toHaveBeenCalledOnce();
-    expect(upsertPairingRequest).toHaveBeenCalledWith(
-      expect.objectContaining({
-        channel: "zalouser",
-        id: "attacker",
-        accountId: "beta",
-      }),
+    expect(upsertPairingRequest).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ channel: "zalouser", id: "attacker", accountId: "beta" }),
     );
     expect(sendMessageZalouserMock).toHaveBeenCalled();
   });

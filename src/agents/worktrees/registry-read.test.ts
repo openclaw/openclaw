@@ -1,18 +1,16 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { Worker } from "node:worker_threads";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   awaitGateBeforeSettlement,
   createDeferred,
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseAsync,
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
@@ -38,7 +36,8 @@ import {
 import { getRegistryWorktree, listRegistryWorktrees } from "./registry.test-support.js";
 import { resolveWorktreeForPath } from "./run-lease.js";
 import { ManagedWorktreeService } from "./service.js";
-import { useManagedWorktreeTestRepository } from "./service.test-support.js";
+import { makeWorktreeRecord, useManagedWorktreeTestRepository } from "./service.test-support.js";
+import { useWorktreeStateRoots } from "./state-fixture.test-support.js";
 import type { ManagedWorktreeRecord } from "./types.js";
 import { interceptWorktreeWorkerOperation } from "./worker-operation.test-support.js";
 
@@ -87,26 +86,23 @@ vi.mock("../../infra/worker-cpu.js", async (importOriginal) => {
   };
 });
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useWorktreeStateRoots(() => {
+  writerGate.buffer = undefined;
+});
 const initializeRepository = useManagedWorktreeTestRepository();
 function recordFixture(
   root: string,
   id: string,
   overrides: Partial<ManagedWorktreeRecord> = {},
 ): ManagedWorktreeRecord {
-  return {
-    repoFingerprint: "0123456789abcdef",
-    repoRoot: path.join(root, "repo"),
+  return makeWorktreeRecord(path.join(root, "repo"), id, {
     branch: `openclaw/${id}`,
-    baseRef: "HEAD",
     ownerKind: "manual",
-    createdAt: 1,
-    lastActiveAt: 1,
     ...overrides,
     id,
     name: id,
     path: path.join(root, id),
-  };
+  });
 }
 function expectRecent(value: number | undefined, since: number) {
   expect(value).toBeGreaterThanOrEqual(since);
@@ -183,13 +179,6 @@ async function withPublication(
     }
   }
 }
-
-afterEach(async () => {
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  writerGate.buffer = undefined;
-  vi.restoreAllMocks();
-});
 
 it("serves committed worktree rows while a background write is blocked", async ({ signal }) => {
   const root = tempDirs.make("worktree-reader-writer-isolation-");

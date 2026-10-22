@@ -14,7 +14,7 @@ import {
 } from "semver";
 import { resolveRuntimeScriptEnv } from "../../cli-invocation.mjs";
 import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
-import { resolveUserPath } from "../utils.js";
+import { resolveUserPath, tryParseJson } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
 import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
@@ -324,14 +324,7 @@ function parseNpmPackJsonOutput(
   }
 
   for (const candidate of candidates) {
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(candidate);
-    } catch {
-      continue;
-    }
-
-    const entries = resolveNpmJsonEntries(parsed);
+    const entries = resolveNpmJsonEntries(tryParseJson(candidate));
     let fallback: { filename?: string; metadata: NpmSpecResolution } | null = null;
     for (let i = entries.length - 1; i >= 0; i -= 1) {
       const normalized = normalizeNpmPackEntry(entries[i]);

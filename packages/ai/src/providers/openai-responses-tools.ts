@@ -16,7 +16,7 @@ import { withPreparedToolSchemaNormalization } from "./tool-schema-normalization
 interface ConvertResponsesToolsOptions {
   strict?: boolean | null;
   model?: Model;
-  supportsStrictMode?: boolean;
+  mutableParameters?: boolean;
 }
 
 type OpenAIToolSchemaCompat = Parameters<typeof normalizeOpenAIStrictToolParameters>[2];
@@ -31,6 +31,7 @@ export function convertResponsesToolPayload(
     prepared,
     resolveResponsesStrictToolSetting(options),
     options?.model,
+    options?.mutableParameters,
   );
 }
 
@@ -39,11 +40,12 @@ export function prepareResponsesTools(
   tools: Tool[],
   strictSetting: boolean | null | undefined,
   model?: Model,
+  mutableParameters?: boolean,
 ) {
   const prepared = prepareOpenAITools(tools);
   return {
     projection: prepared.projection,
-    tools: convertPreparedResponsesTools(prepared, strictSetting, model),
+    tools: convertPreparedResponsesTools(prepared, strictSetting, model, mutableParameters),
   };
 }
 
@@ -51,6 +53,7 @@ function convertPreparedResponsesTools(
   prepared: ReturnType<typeof prepareOpenAITools>,
   strictSetting: boolean | null | undefined,
   model?: Model,
+  mutableParameters?: boolean,
 ): FunctionTool[] {
   const { projection, schemas } = prepared;
   return withPreparedToolSchemaNormalization(schemas, () => {
@@ -71,6 +74,7 @@ function convertPreparedResponsesTools(
           model?.compat as OpenAIToolSchemaCompat,
         ),
         strict,
+        mutableParameters,
       ).responses;
       // Compatible endpoints can require strict to be absent; the SDK declares it required.
       return result as FunctionTool;
@@ -87,9 +91,7 @@ function resolveResponsesStrictToolSetting(
   if (options?.model) {
     return getAiTransportHost().resolveOpenAIStrictToolSetting(options.model, {
       transport: "stream",
-      supportsStrictMode:
-        options.supportsStrictMode ??
-        resolveOpenAICompletionsCompat(options.model).supportsStrictMode,
+      supportsStrictMode: resolveOpenAICompletionsCompat(options.model).supportsStrictMode,
     });
   }
   return false;

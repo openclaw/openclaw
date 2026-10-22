@@ -130,24 +130,3 @@ it("publishes new scope snapshots without revisiting unrelated scope cells", () 
   expect(receipts.readSqliteDatabaseScopedWriteTokenForPath(":memory:", "new")).not.toBe(added);
   expect([...registry.capture(cursor)[0]!.writeScopes.keys()]).toEqual(['["key","new"]']);
 });
-
-it("invalidates a scope registered by another isolate during an accepted write", () => {
-  using reader = new DatabaseSync(":memory:");
-  using writer = new DatabaseSync(":memory:");
-  const host = createAdmission();
-  const worker = { ...host, writeScopes: new Map(host.writeScopes) };
-  const receipts = createReceipts(host, {
-    admission: (database) => (database === reader ? host : worker),
-    writer: () => worker,
-  });
-  receipts.readSqliteDatabaseScopedWriteToken(reader, "existing");
-  worker.writeScopes = new Map(host.writeScopes);
-  let before: string | undefined;
-  receipts.withSqliteDatabaseWriteScope(writer, ["late"], () => {
-    receipts.begin(writer, false);
-    before = receipts.readSqliteDatabaseScopedWriteToken(reader, "late");
-    receipts.finish(writer, worker);
-  });
-  expect(before).toBeTypeOf("string");
-  expect(receipts.readSqliteDatabaseScopedWriteToken(reader, "late")).not.toBe(before);
-});

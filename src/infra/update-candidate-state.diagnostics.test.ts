@@ -1,10 +1,17 @@
+import { writeSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   createUpdateStateInspectionDiagnostics,
+  createUpdateStateInspectionReporter,
   formatUpdateStateInspectionError,
   UPDATE_STATE_INSPECTION_PROGRESS_PREFIX,
 } from "./update-candidate-state.diagnostics.js";
 import { createUpdateErrorFact, normalizeUpdateFailureFacts } from "./update-failure-facts.js";
+
+vi.mock("node:fs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("node:fs")>()),
+  writeSync: vi.fn(),
+}));
 
 const privateRoot = "/synthetic/private operator";
 const stateDir = `${privateRoot}/.openclaw`;
@@ -36,8 +43,57 @@ function progressChunk(value: object) {
 }
 
 afterEach(() => {
+  vi.mocked(writeSync).mockReset();
   vi.useRealTimers();
   vi.restoreAllMocks();
+});
+
+it.each(["EAGAIN", "EWOULDBLOCK"])(
+  "resumes legacy progress after repeated %s without spending its output budget",
+  (code) => {
+    const report = createUpdateStateInspectionReporter(true);
+    const progress = { phase: "agent schema inspection", path: "/synthetic/agent.sqlite" };
+    vi.mocked(writeSync).mockImplementation(() => {
+      throw Object.assign(new Error("pipe full"), { code });
+    });
+    for (let index = 0; index < 1000; index++) {
+      report(progress);
+    }
+    const output: string[] = [];
+    vi.mocked(writeSync).mockImplementation((_fd, line) => {
+      output.push(line);
+      return Buffer.byteLength(line);
+    });
+    report(progress);
+    expect(output).toEqual([
+      `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify(progress)}\n`,
+    ]);
+  },
+);
+
+it("delivers the legacy omission notice once after its pipe becomes writable", () => {
+  const report = createUpdateStateInspectionReporter(true);
+  const output: string[] = [];
+  const omitted = `${UPDATE_STATE_INSPECTION_PROGRESS_PREFIX}${JSON.stringify({ phase: "schema inspection; detailed progress omitted" })}\n`;
+  let blocked = true;
+  vi.mocked(writeSync).mockImplementation((_fd, line) => {
+    if (line === omitted && blocked) {
+      throw Object.assign(new Error("pipe full"), { code: "EAGAIN" });
+    }
+    output.push(line);
+    return Buffer.byteLength(line);
+  });
+  const progress = { phase: "agent schema inspection", path: "/synthetic/agent.sqlite" };
+  for (let index = 0; index < 1000; index++) {
+    report(progress);
+  }
+  expect(output.join("").length).toBeLessThanOrEqual(12_000);
+  expect(output).not.toContain(omitted);
+  blocked = false;
+  report(progress);
+  report(progress);
+  expect(output.filter((line) => line === omitted)).toHaveLength(1);
+  expect(output.at(-1)).toBe(omitted);
 });
 
 it("reports the active worker step for SIGILL without blaming storage", () => {

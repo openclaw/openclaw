@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it } from "vitest";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
+import { writeFixtureFiles } from "./z0632-fixtures.test-support.js";
 
 const fixtures = createFixtureLifetime();
 afterEach(() => fixtures.cleanup());
@@ -35,14 +36,11 @@ function createCheckerFixture(files: Record<string, string>, config: object = {}
     paths: { "@fixture/*": ["./src/*"] },
     ...config,
   };
-  for (const [file, text] of Object.entries({
+  writeFixtureFiles(root, {
     "package.json": JSON.stringify({ type: "module" }),
     "tsconfig.json": JSON.stringify({ compilerOptions }),
     ...files,
-  })) {
-    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
-    fs.writeFileSync(path.join(root, file), text);
-  }
+  });
   return root;
 }
 

@@ -25,7 +25,7 @@ import {
   OTEL_EXPORTER_OTLP_PROTOCOL_ENV,
 } from "./service-constants.js";
 import { hasPreloadedOtelSdk } from "./service-content-normalization.js";
-import { createDiagnosticsEventHandler } from "./service-events.js";
+import { createDiagnosticsEventHandler, type DiagnosticHandlers } from "./service-events.js";
 import {
   createExporterHealthEventEmitter,
   createPublicExporterHealthEventEmitter,
@@ -536,19 +536,21 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
         captureContent,
         tracesEnabled: tracesActive,
       };
+      const recordLogEvent = diagnosticsLogs.recordLogEvent;
       const recorders = {
         ...createUsageRecorders(recorderRuntime),
         ...createOperationsRecorders(recorderRuntime),
         ...createHarnessRecorders(recorderRuntime),
         ...createModelRecorders(recorderRuntime),
         ...createToolAndSystemRecorders(recorderRuntime),
-      };
+        "log.record": (evt, metadata) => recordLogEvent?.(evt, metadata),
+        "security.event": (evt, metadata) => recordLogEvent?.(evt, metadata),
+      } satisfies DiagnosticHandlers;
 
       active.unsubscribe = subscribe(
         createDiagnosticsEventHandler({
           logger: ctx.logger,
           recorders,
-          recordLogEvent: diagnosticsLogs.recordLogEvent,
         }),
         metricsActive
           ? tracesActive
@@ -579,9 +581,9 @@ export function createDiagnosticsOtelService(): OpenClawPluginService {
             },
             prepareEvent(event, metadata) {
               if (event.type === "model.call.started") {
-                recorders.recordModelCallStarted(event, metadata);
+                recorders["model.call.started"](event, metadata);
               } else if (event.type === "tool.execution.started") {
-                recorders.recordToolExecutionStarted(event, metadata);
+                recorders["tool.execution.started"](event, metadata);
               }
             },
             resolveTraceContext(traceContext) {

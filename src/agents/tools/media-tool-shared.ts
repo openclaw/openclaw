@@ -39,6 +39,7 @@ import { normalizeWorkspaceDir } from "../workspace-dir.js";
 import type { AgentWorkspaceReadiness } from "../workspace-readiness.js";
 import {
   ToolInputError,
+  readFiniteNumberParam,
   readNumberParam,
   readPositiveIntegerParam,
   readStringArrayParam,
@@ -645,16 +646,22 @@ export function resolveMediaToolInboundRoots(options?: {
   );
 }
 
-export function resolvePromptAndModelOverride(
+export function resolveMediaAnalysisParams(
   args: Record<string, unknown>,
   defaultPrompt: string,
 ): {
   prompt: string;
   modelOverride?: string;
+  maxBytesMb?: number;
 } {
   const prompt = normalizeOptionalString(args.prompt) ?? defaultPrompt;
   const modelOverride = normalizeOptionalString(args.model);
-  return { prompt, modelOverride };
+  const maxBytesMb = readFiniteNumberParam(args, "maxBytesMb", {
+    min: 0,
+    minExclusive: true,
+    message: "maxBytesMb must be greater than 0",
+  });
+  return { prompt, modelOverride, maxBytesMb };
 }
 
 export function buildTextToolResult(

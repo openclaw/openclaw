@@ -13,13 +13,13 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
-import { detectLegacyDeviceAuth, migrateLegacyDeviceAuth } from "./state-migrations.device-auth.js";
+import {
+  detectLegacyDeviceAuth,
+  migrateLegacyDeviceAuth,
+  prepareLegacyDeviceAuth,
+} from "./state-migrations.device-auth.js";
 
-const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
-    cleanup();
-  });
-});
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let stateDir: string;
 let env: NodeJS.ProcessEnv;
 let sourcePath: string;
@@ -134,6 +134,37 @@ describe("legacy device-auth Doctor migration", () => {
       expect(fs.readFileSync(sourcePath, "utf8")).toBe('{"version":2}');
     },
   );
+
+  it("preserves malformed UTF-8 without consuming the source, then imports repaired Unicode", async () => {
+    const original = fs.readFileSync(sourcePath);
+    const malformed = Buffer.from(original);
+    malformed[malformed.indexOf("legacy-token")] = 0xff;
+    fs.writeFileSync(sourcePath, malformed);
+
+    await expect(prepareLegacyDeviceAuth({ stateDir, legacyImports: {} })).rejects.toThrow(
+      `Legacy device-auth store ${sourcePath} must be valid UTF-8.`,
+    );
+    const refused = await migrate();
+    expect(refused.changes).toEqual([]);
+    expect(refused.warnings).toEqual([
+      expect.stringContaining(`${sourcePath} must be valid UTF-8`),
+    ]);
+    expect(
+      withClientCredentialStore(env, false, (db) =>
+        executeSqliteQueryTakeFirstSync(
+          db,
+          getNodeSqliteKysely<ClientCredentialDatabase>(db)
+            .selectFrom("device_auth_tokens")
+            .select("token"),
+        ),
+      ),
+    ).toBeUndefined();
+    expect(fs.readFileSync(sourcePath)).toEqual(malformed);
+
+    fs.writeFileSync(sourcePath, original.toString("utf8").replace("legacy-token", "répaired-�"));
+    expect((await migrate()).warnings).toEqual([]);
+    expect(readToken()?.token).toBe("répaired-�");
+  });
 
   it.each([".doctor-importing", ".native-importing"])(
     "imports matching retained %s claims once",

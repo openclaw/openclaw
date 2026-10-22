@@ -431,7 +431,6 @@ src/auto-reply/commands-registry.data.ts
 src/auto-reply/commands-registry.shared.ts
 src/auto-reply/group-activation.ts
 src/auto-reply/heartbeat-filter.ts
-src/auto-reply/heartbeat-tool-response.ts
 src/auto-reply/heartbeat.ts
 src/auto-reply/reply/commands-slash-parse.ts
 src/auto-reply/reply/delivery-hints.ts
@@ -646,7 +645,6 @@ src/config/patch-replace-paths.ts
 src/config/paths.ts
 src/config/plugin-auto-enable.channels.ts
 src/config/plugin-auto-enable.materialize.ts
-src/config/plugin-auto-enable.prefer-over.ts
 src/config/plugin-install-record-map.ts
 src/config/plugins-allowlist.ts
 src/config/provider-policy.ts
@@ -962,8 +960,6 @@ src/infra/exec-allowlist-pattern.ts
 src/infra/exec-approval-action.types.ts
 src/infra/exec-approvals-core.ts
 src/infra/exec-command-resolution.ts
-src/infra/exec-safe-bin-policy-profiles.ts
-src/infra/exec-safe-bin-policy-validator.ts
 src/infra/exec-safe-bin-policy.ts
 src/infra/exec-safe-bin-semantics.ts
 src/infra/exec-safe-bin-trust.ts
@@ -1715,7 +1711,6 @@ src/proxy-capture/child-transport.ts
 src/proxy-capture/cli-contract.ts
 src/proxy-capture/env.ts
 src/proxy-capture/header-redaction.ts
-src/proxy-capture/paths.ts
 src/proxy-capture/runtime-cleanup.ts
 src/proxy-capture/runtime-deferral.ts
 src/proxy-capture/runtime-fetch-patch.ts
@@ -1801,6 +1796,7 @@ src/shared/listeners.ts
 src/shared/model-context-message.ts
 src/shared/model-key.ts
 src/shared/node-list-parse.ts
+src/shared/oauth-refresh-outcome.ts
 src/shared/path-array-index.ts
 src/shared/permit-pool.ts
 src/shared/pid-alive.ts
@@ -1985,6 +1981,7 @@ src/state/openclaw-state-db-schema-runtime.ts
 src/state/openclaw-state-db-schema-v12-foldin.ts
 src/state/openclaw-state-db-schema-v13-widerow.ts
 src/state/openclaw-state-db-schema-v21-columns.ts
+src/state/openclaw-state-db-schema-v31-workspace-manifests.ts
 src/state/openclaw-state-db-schema-v22-columns.ts
 src/state/openclaw-state-db-schema-v24-indexes.ts
 src/state/openclaw-state-db-schema-v26-layout.ts
@@ -2440,6 +2437,7 @@ src/config/sessions/session-actor-memory-entry-guards.ts
 src/config/sessions/session-actor-memory-entry-install.ts
 src/config/sessions/session-actor-memory-entry.ts
 src/config/sessions/session-actor-memory-events.ts
+src/config/sessions/session-prior-workspace-boundary.ts
 src/config/sessions/session-actor-memory-fork.ts
 src/config/sessions/session-actor-memory-goals.ts
 src/config/sessions/session-actor-memory-history-anchors.ts

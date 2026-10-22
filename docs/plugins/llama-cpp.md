@@ -536,6 +536,15 @@ model.
   tool-capable Jinja chat template.
 - Managed Linux builds require glibc 2.34 on x64 or 2.38 on arm64. Windows
   builds require the Microsoft Visual C++ 2015-2022 Redistributable.
+- If a Linux upgrade removes a shared library, setup and embedding diagnostics
+  name the missing library and its runtime package. For `libssl.so.3` or
+  `libcrypto.so.3`, install OpenSSL 3 (`libssl3t64` or `libssl3` on Debian/Ubuntu);
+  for `libgomp.so.1`, install OpenMP (`libgomp1` on Debian/Ubuntu). OpenSSL 4 does
+  not replace OpenSSL 3 for the pinned build. Restore the missing runtime, rerun
+  llama.cpp setup, then verify with `openclaw memory status --deep` and retry
+  `openclaw memory index --force`. Re-downloading the same build does not supply
+  system libraries; existing memory indexes are preserved while embeddings are
+  unavailable.
 - A model that replies to a simple prompt but fails the setup tool check is
   not selected as the default. Retry after reviewing its tool support or choose
   another model.

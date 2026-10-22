@@ -3,7 +3,6 @@ import { resolveSystemEventQueueKey } from "../../infra/system-event-ownership.j
 import { isCronWithinActiveHours } from "../active-hours.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
 import { resolveCronJobEffectiveAgentId, tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
-import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import { readDefaultProactiveJobReceiptsAsync } from "../proactive-job-receipt.js";
 import { isProactiveJobMigrationPending } from "../proactive-job-receipt.kernel.js";
 import { resolveCronRunAdmissionSource } from "../run-authority.js";
@@ -27,11 +26,16 @@ import type {
 } from "../types.js";
 import { abortErrorMessage, cronAbortErrorClassification } from "./execution-errors.js";
 import { waitForCronExecutionIdle } from "./execution-idle.js";
-import type { CronServiceState, CronSessionRunPreparation } from "./state.js";
+import {
+  describeCronHostExecutionRestriction,
+  type CronServiceState,
+  type CronSessionRunPreparation,
+} from "./state.js";
 import {
   type ExecuteJobCoreOptions,
   resolveMainSessionCronDeliveryContext,
 } from "./timer-execution-timeout.js";
+import { preparesCronSessionEvents, runsCronMainSessionRoute } from "./timer-session-route.js";
 import { wake } from "./wake.js";
 
 /** Executes a cron job without mutating persisted job state. */
@@ -49,6 +53,13 @@ export async function executeJobCore(
   });
   if (abortSignal?.aborted) {
     return resolveAbortError();
+  }
+  const executionBlockReason = describeCronHostExecutionRestriction(
+    job,
+    state.deps.hostExecutionDisabled,
+  );
+  if (executionBlockReason) {
+    return { status: "skipped", error: executionBlockReason };
   }
   const assertCurrent = () => {
     abortSignal?.throwIfAborted();
@@ -160,10 +171,7 @@ export async function executeJobCore(
   }
   let sessionPreparation: CronSessionRunPreparation | undefined;
   try {
-    if (
-      (job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent") &&
-      (job.sessionTarget === "main" || job.sessionTarget.startsWith("session:"))
-    ) {
+    if (preparesCronSessionEvents(job)) {
       const target = state.deps.resolveSessionEventTarget?.({
         agentId: job.agentId,
         sessionKey: resolveCronSessionTargetSessionKey(job.sessionTarget),
@@ -318,61 +326,7 @@ export async function executeJobCore(
         payload: appendCronPayloadText(effectiveJob.payload, options.streamBatch),
       };
     }
-    const heartbeatTask = isHeartbeatTaskCronJob(effectiveJob) ? effectiveJob : undefined;
-    if (effectiveJob.payload.kind === "heartbeat" || heartbeatTask) {
-      options?.onPayloadExecutionStarted?.();
-      // Monitors and migrated tasks share the wake bus, keeping coalescing,
-      // quiet hours, cooldown, flood, and busy guards in the heartbeat runner.
-      const heartbeatAgentId = resolveCronJobEffectiveAgentId(
-        effectiveJob,
-        state.deps.resolveDefaultAgentId?.() ?? state.deps.defaultAgentId,
-      );
-      const heartbeatWake = heartbeatTask
-        ? {
-            source: "interval" as const,
-            intent: "task" as const,
-            reason: `heartbeat-task:${heartbeatTask.id}`,
-            agentId: heartbeatAgentId,
-            tasks: [
-              {
-                jobId: heartbeatTask.id,
-                name: heartbeatTask.name,
-                prompt: heartbeatTask.payload.text,
-              },
-            ],
-          }
-        : {
-            source: "interval" as const,
-            intent: "scheduled" as const,
-            reason: "interval",
-            agentId: heartbeatAgentId,
-            scheduledEveryMs:
-              effectiveJob.schedule.kind === "every" ? effectiveJob.schedule.everyMs : undefined,
-          };
-      const heartbeatWaitLifecycle = options?.onHeartbeatExecutionStarted?.(heartbeatWake);
-      const heartbeatResult = await (state.deps.requestHeartbeatAndWait?.(heartbeatWake, {
-        ...(abortSignal ? { abortSignal } : {}),
-        ...heartbeatWaitLifecycle,
-      }) ?? { status: "failed" as const, reason: "heartbeat wake settlement unavailable" });
-      if (abortSignal?.aborted) {
-        return resolveAbortError();
-      }
-      const result =
-        heartbeatResult.status === "ran"
-          ? {
-              status: "ok" as const,
-              summary: heartbeatTask ? "heartbeat task completed" : "heartbeat completed",
-            }
-          : heartbeatResult.status === "failed"
-            ? { status: "error" as const, error: `heartbeat failed: ${heartbeatResult.reason}` }
-            : { status: "skipped" as const, error: `heartbeat skipped: ${heartbeatResult.reason}` };
-      return triggerEval ? { ...result, triggerEval } : result;
-    }
-    if (
-      effectiveJob.sessionTarget === "main" ||
-      (effectiveJob.sessionTarget.startsWith("session:") &&
-        effectiveJob.payload.kind === "agentTurn")
-    ) {
+    if (runsCronMainSessionRoute(effectiveJob, job)) {
       const result = await executeMainSessionCronJob(
         state,
         effectiveJob,

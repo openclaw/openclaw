@@ -367,7 +367,8 @@ describe("inherited auth-profile usage persistence", () => {
       [PRIMARY_ID]: {
         lastUsed,
         errorCount: 12,
-        failureCounts: { rate_limit: 12 },
+        failureCounts: { timeout: 12 },
+        lastRateLimitAt: lastUsed,
         cooldownUntil: Date.now() + 60_000,
         cooldownReason: "rate_limit",
         cooldownClassification: "wham_token_expired",
@@ -385,7 +386,12 @@ describe("inherited auth-profile usage persistence", () => {
       lastUsed,
       errorCount: 0,
     });
-    for (const field of ["failureCounts", "cooldownUntil", "cooldownClassification"]) {
+    for (const field of [
+      "failureCounts",
+      "lastRateLimitAt",
+      "cooldownUntil",
+      "cooldownClassification",
+    ]) {
       expect(persistedMain?.usageStats?.[PRIMARY_ID]).not.toHaveProperty(field);
     }
     expect(childStore.usageStats?.[LOCAL_ID]?.cooldownUntil).toBe(localCooldownUntil);

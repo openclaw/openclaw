@@ -25,6 +25,37 @@ interface ResolvedCopilotAuth {
   agentId: string;
 }
 
+type CopilotSessionAuth = Pick<
+  ResolvedCopilotAuth,
+  "authMode" | "authProfileId" | "authProfileVersion"
+>;
+
+export function sessionAuthFields(auth: CopilotSessionAuth): CopilotSessionAuth {
+  return auth.authMode === "gitHubToken" || auth.authMode === "byok"
+    ? {
+        authMode: auth.authMode,
+        authProfileId: auth.authProfileId,
+        authProfileVersion: auth.authProfileVersion,
+      }
+    : { authMode: "useLoggedInUser" };
+}
+
+export function sessionAuthMatches(
+  stored: CopilotSessionAuth,
+  current: CopilotSessionAuth,
+): boolean {
+  if (stored.authMode !== current.authMode) {
+    return false;
+  }
+  if (stored.authMode === "useLoggedInUser") {
+    return true;
+  }
+  return (
+    stored.authProfileId === current.authProfileId &&
+    stored.authProfileVersion === current.authProfileVersion
+  );
+}
+
 export function createCopilotByokAuth(
   input: Pick<ResolveCopilotAuthInput, "agentId" | "agentDir" | "copilotHome" | "authProfileId"> & {
     authProfileVersion?: string;
@@ -150,20 +181,8 @@ function resolveCopilotHome(args: {
   }
 
   const openClawHome = readNonEmptyString(process.env.OPENCLAW_HOME);
-  const rootHome = openClawHome ? resolve(openClawHome) : safeHomeDir();
+  const rootHome = openClawHome ? resolve(openClawHome) : osHomedir();
   return resolve(join(rootHome, ".openclaw", "agents", args.agentId, "copilot"));
-}
-
-function safeHomeDir(): string {
-  try {
-    const value = osHomedir();
-    if (value.length > 0) {
-      return value;
-    }
-  } catch {
-    // fall through
-  }
-  return process.cwd();
 }
 
 function readEnvTokenFallback():

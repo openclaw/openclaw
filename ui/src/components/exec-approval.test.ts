@@ -1,11 +1,12 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { ExecApprovalRequest } from "../app/exec-approval.ts";
 import { i18n } from "../i18n/index.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../test-helpers/solid-render.tsx";
-import { flush } from "../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
   ExecApproval,
   type ExecApprovalElement,
@@ -93,6 +94,23 @@ describe("openclaw-exec-approval", () => {
     vi.restoreAllMocks();
   });
 
+  it("uses one pending presentation for keyboard and button decisions", async () => {
+    const pending = createDeferred();
+    const onDecision = vi.fn<ExecApprovalProps["onDecision"]>(() => pending.promise);
+    const { dialog } = await renderOpenedApproval(createExecRequest(), { onDecision });
+    dialog.dispatchEvent(chord("Enter"));
+    await waitForSolid(() => {
+      expect(onDecision).toHaveBeenCalledOnce();
+      expect(query(".exec-approval-actions button")?.hasAttribute("disabled")).toBe(true);
+    });
+    dialog.dispatchEvent(chord("Enter"));
+    expect(onDecision).toHaveBeenCalledOnce();
+    pending.resolve();
+    await waitForSolid(() =>
+      expect(query(".exec-approval-actions button")?.hasAttribute("disabled")).toBe(false),
+    );
+  });
+
   it("does not show exec unavailable copy for restricted plugin approvals", async () => {
     await renderOpenedApproval(
       createExecRequest({
@@ -109,7 +127,7 @@ describe("openclaw-exec-approval", () => {
       Array.from(container.querySelectorAll(".exec-approval-actions button > span")).map((label) =>
         label.textContent?.trim(),
       ),
-    ).toEqual(["Allow once", "Deny"]);
+    ).toEqual(["Deny", "Allow once"]);
     expect(container.querySelector(".exec-approval-warning")).toBeNull();
   });
 
@@ -167,7 +185,7 @@ describe("openclaw-exec-approval", () => {
 
     expect(activeId()).toBe("approval-newer");
     expect(queue.map((entry) => entry.id)).toEqual(["approval-oldest", "approval-newer"]);
-    container.querySelector<HTMLButtonElement>(".exec-approval-actions button")!.click();
+    container.querySelector<HTMLButtonElement>(".exec-approval-actions button:last-child")!.click();
     expect(onDecision).toHaveBeenCalledWith("approval-newer", "allow-once");
   });
 

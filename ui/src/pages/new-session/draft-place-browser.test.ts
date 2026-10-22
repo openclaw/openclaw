@@ -256,6 +256,7 @@ describe("DraftPlaceBrowser", () => {
     "typed directory fails",
     "reopen",
     "retry",
+    "connection loss",
   ])("selects a registered project only while its browser remains current (%s)", async (change) => {
     const registered = project("registered-workspace", "Workspace", "/workspace");
     const registration = createDeferred<typeof registered>();
@@ -280,7 +281,12 @@ describe("DraftPlaceBrowser", () => {
       },
       () => ({ projects: [registered] }),
     );
-    const { browser, onSelectProject } = createBrowser(request, undefined, true, true);
+    const { browser, onSelectProject, gateway, context } = createBrowser(
+      request,
+      undefined,
+      true,
+      true,
+    );
     browser.selectGatewayBrowser("/workspace");
     await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
     if (change === "retry") {
@@ -292,6 +298,7 @@ describe("DraftPlaceBrowser", () => {
       });
     }
     const pending = browser.registerBrowserProject("/workspace");
+    expect(browser.browser.readCompletion).toBeNull();
     const initiallyBusy = browser.browserRegistering;
     const failedDirectory = change === "typed directory fails";
     if (failedDirectory) {
@@ -324,6 +331,10 @@ describe("DraftPlaceBrowser", () => {
         browser.close();
         browser.selectGatewayBrowser("/workspace");
         await waitForFast(() => expect(browser.browserProjectPath).toBe("/workspace"));
+      } else if (change === "connection loss") {
+        context.gateway.snapshot.phase = "reconnecting";
+        // The write must not publish even before the browser observes this disconnect.
+        gateway.synchronize(context.gateway);
       }
       const stillBusy = browser.browserRegistering;
       const duplicate =

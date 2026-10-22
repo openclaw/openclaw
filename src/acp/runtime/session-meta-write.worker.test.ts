@@ -44,7 +44,7 @@ import { createAcpMeta, interceptAcpCommit } from "./session-meta-lifecycle.test
 import { readAcpSessionEntryAsync } from "./session-meta-read.js";
 import { readAcpSessionMetaForEntries } from "./session-meta-readonly.js";
 import { upsertAcpSessionMeta } from "./session-meta-write.js";
-import { readAcpSessionEntry } from "./session-meta.js";
+import { listAcpSessionEntries, readAcpSessionEntry } from "./session-meta.js";
 
 const META = createAcpMeta({ agent: "fixture-agent" });
 
@@ -231,23 +231,41 @@ it.each(["incognito", "file"] as const)(
         }
       });
       const maintenance = vi.spyOn(historyMaintenance, "kickSessionHistoryDiskBudgetMaintenance");
-      const initialize = vi.fn(() => META);
-      const updatedMeta = { ...META, state: "running" as const, lastActivityAt: 200 };
+      const initialMeta = { ...META, cwd: "/repo" };
+      const initialize = vi.fn(() => initialMeta);
+      const updatedMeta = { ...initialMeta, state: "running" as const, lastActivityAt: 200 };
       const update = vi.fn((current: SessionAcpMeta | undefined) => {
-        expect(current).toEqual(META);
+        expect(current).toEqual(initialMeta);
         return updatedMeta;
       });
       try {
-        const created = await upsertAcpSessionMeta({ ...scope, mutate: initialize });
-        expect(created?.acp).toEqual(META);
+        const created = await upsertAcpSessionMeta({
+          ...scope,
+          now: () => 200,
+          mutate: initialize,
+        });
+        expect(created?.acp).toEqual(initialMeta);
         expect(observedAcp.at(-1)).toMatchObject({
           kind: "acp",
           sessionId: created?.sessionId,
           lifecycleRevision: created?.lifecycleRevision ?? null,
-          acp: META,
+          acp: initialMeta,
         });
         assert(created, "Expected the initialized ACP session");
-        await expectMetadata(created, META);
+        await expectMetadata(created, initialMeta);
+        if (!incognito) {
+          const stored = (await readAcpSessionEntryAsync(scope))?.entry;
+          expect(stored).toMatchObject({
+            sessionId: expect.any(String),
+            lifecycleRevision: expect.any(String),
+            updatedAt: expect.any(Number),
+          });
+          expect(created.sessionId).toEqual(expect.any(String));
+          expect(stored?.sessionStartedAt).toBeGreaterThan(200);
+          expect(stored?.acp).toBeUndefined();
+          expect(fs.existsSync(paths.at(-1)!)).toBe(false);
+          expect(await listAcpSessionEntries(scope)).toHaveLength(1);
+        }
         const retainedMembership: boolean[] = [];
         using releases = new DisposableStack();
         const retainPublication = entryPublication.retainSessionEntryWorkerPublication;

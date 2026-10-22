@@ -177,9 +177,6 @@ function stage(legacy = false) {
   };
 }
 type Fixture = ReturnType<typeof stage>;
-function receiptDigest(fixture: Fixture) {
-  return digest(fixture.read());
-}
 function digest(bytes: string) {
   return createHash("sha256").update(bytes).digest("hex");
 }
@@ -214,7 +211,7 @@ function confirmationArgs(fixture: Fixture) {
     fixture.id,
     "--confirm-same-host-prior-boot",
     "--receipt-sha256",
-    receiptDigest(fixture),
+    digest(fixture.read()),
   ];
 }
 async function command(fixture: Fixture, args: string[]) {
@@ -301,7 +298,7 @@ posixIt("previews read-only; persists receipt-bound confirmation before removal"
     eligible: true,
     inspectionOnly: true,
     confirmationRequired: true,
-    receiptSha256: receiptDigest(fixture),
+    receiptSha256: digest(fixture.read()),
   });
   expect(fixture.read()).toBe(before);
   expect(fixture.stat().mtimeNs).toBe(beforeStat.mtimeNs);
@@ -456,7 +453,7 @@ posixIt.each(["inspect", "recover"])(
     const fixture = stage(true);
     const bootTimeNs = preBoot(fixture);
     const before = fixture.read();
-    const originalDigest = receiptDigest(fixture);
+    const originalDigest = digest(fixture.read());
     const args = inspectionArgs(fixture, operation);
     injected.onUsers = async () => {
       await Promise.resolve();
@@ -465,7 +462,7 @@ posixIt.each(["inspect", "recover"])(
     await refused(fixture, args, "staging receipt changed during live-user inspection", {
       eligible: false,
     });
-    expect(receiptDigest(fixture)).toBe(originalDigest);
+    expect(digest(fixture.read())).toBe(originalDigest);
     expect(fixture.stat().mtimeNs).toBeGreaterThan(bootTimeNs);
     expectRetained(fixture, before, 0);
   },

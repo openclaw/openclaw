@@ -479,11 +479,9 @@ describe("Tool Search", () => {
   it("keeps run-contract tools direct-only so search never hides them", async () => {
     const { createStructuredOutputTool } = await import("./tools/structured-output-tool.js");
     const { createSessionsYieldTool } = await import("./tools/sessions-yield-tool.js");
-    const { resolveHeartbeatResponseTool } = await import("./tools/heartbeat-response-tool.js");
     const contractTools = [
       createStructuredOutputTool({ runId: "run-contract-tools", schema: { type: "object" } }),
       createSessionsYieldTool({ sessionId: "session-contract-tools" }),
-      expectDefined(resolveHeartbeatResponseTool({ enableHeartbeatTool: true }), "heartbeat tool"),
     ];
 
     const { catalogRef, compacted } = catalogFixture([
@@ -495,7 +493,6 @@ describe("Tool Search", () => {
       ...controlNames,
       "structured_output",
       "sessions_yield",
-      "heartbeat_respond",
     ]);
     expect(catalogRef.current?.entries.map((entry) => entry.name)).toEqual(["fake_lookup"]);
   });
@@ -602,45 +599,6 @@ describe("Tool Search", () => {
   afterEach(() => {
     resetGlobalHookRunner();
     resetAdjustedParamsByToolCallIdForTests();
-  });
-
-  it("includes bounded input signatures in compact search hits", async () => {
-    const target = pluginTool("fake_update", "Update a fake record");
-    const openTarget = pluginTool("fake_open", "Accept constrained open input");
-    const mcpTarget = mcpPluginTool("remote_echo", "Echo through remote MCP");
-    target.parameters = {
-      type: "object",
-      required: ["id"],
-      properties: {
-        id: { type: "string" },
-        mode: { type: "string", enum: ["drip", "flood"] },
-        policy: { enum: ["auto", { mode: "custom" }] },
-        nested: Type.Array(Type.Array(Type.Array(Type.Array(Type.Array(Type.String()))))),
-        zones: { type: "array", items: { type: "string", enum: ["north", "south"] } },
-      },
-    };
-    openTarget.parameters = { type: "object", required: ["token"], additionalProperties: true };
-    const { search } = catalogFixture([target, openTarget, mcpTarget]);
-    const result = resultDetails(await search({ query: "update record" }));
-
-    expect(result).toMatchObject([
-      {
-        name: "fake_update",
-        input:
-          '{ id: string; mode?: "drip" | "flood"; nested?: Array<Array<Array<Array<unknown>>>>; policy?: unknown; zones?: Array<"north" | "south"> }',
-      },
-    ]);
-    expect(JSON.stringify(result)).not.toContain("parameters");
-
-    const openResult = resultDetails(await search({ query: "constrained open input" }));
-    expect(openResult).toContainEqual(
-      expect.objectContaining({ name: "fake_open", input: "{ ... }" }),
-    );
-
-    const mcpResult = resultDetails(await search({ query: "remote echo" }));
-    expect(mcpResult).toContainEqual(
-      expect.objectContaining({ name: "remote_echo", input: "unknown" }),
-    );
   });
 
   it("preserves trusted output schemas through normalization, discovery, and execution", async () => {

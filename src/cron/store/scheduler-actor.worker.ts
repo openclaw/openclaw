@@ -6,7 +6,6 @@ import type { OpenClawStateDatabase } from "../../state/openclaw-state-db-contra
 import { runOpenClawStateWriteTransaction } from "../../state/openclaw-state-db.js";
 import { tryResolveCronJobEffectiveAgentId } from "../agent-id.js";
 import { resolveCronJobConfigRevision } from "../config-revision.js";
-import { isHeartbeatTaskCronJob } from "../heartbeat-task.js";
 import {
   DEFAULT_ERROR_BACKOFF_SCHEDULE_MS,
   hasActiveCronRun,
@@ -252,12 +251,7 @@ function armActor(
 }
 
 function isAgentWork(job: CronJob): boolean {
-  return (
-    job.payload.kind === "agentTurn" ||
-    job.payload.kind === "heartbeat" ||
-    isHeartbeatTaskCronJob(job) ||
-    job.payload.kind === "systemEvent"
-  );
+  return job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent";
 }
 
 function boundedCatchup(
@@ -550,6 +544,7 @@ export function runCronSchedulerInWorker(
           maxConcurrentRuns: DEFAULT_CRON_MAX_CONCURRENT_RUNS,
           schedulingPaused: input.paused,
           preparingAgentIds: snapshot.config.preparingAgentIds,
+          hostProcessId: snapshot.config.hostProcessId,
         },
         jobs,
       );

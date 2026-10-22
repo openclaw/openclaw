@@ -7,12 +7,11 @@ import {
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   externalContentStamp,
-  DEFAULT_CACHE_TTL_MINUTES,
   normalizeCacheKey,
   postTrustedWebToolsJson,
   readCache,
   readCachedSearchPayload,
-  resolveCacheTtlMs,
+  resolveSearchCacheTtlMs,
   writeCache,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -171,10 +170,7 @@ export async function runTavilySearch(
       excludeDomains: params.excludeDomains,
     }),
   );
-  const cacheTtlMs = resolveCacheTtlMs(
-    params.cfg?.tools?.web?.search?.cacheTtlMinutes,
-    DEFAULT_CACHE_TTL_MINUTES,
-  );
+  const cacheTtlMs = resolveSearchCacheTtlMs(params.cfg?.tools?.web?.search);
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
@@ -382,11 +378,6 @@ export async function runTavilyExtract(
     ...(truncated ? { truncated: true } : {}),
   };
 
-  writeCache(
-    EXTRACT_CACHE,
-    cacheKey,
-    result,
-    resolveCacheTtlMs(undefined, DEFAULT_CACHE_TTL_MINUTES),
-  );
+  writeCache(EXTRACT_CACHE, cacheKey, result, resolveSearchCacheTtlMs());
   return result;
 }

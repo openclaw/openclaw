@@ -39,7 +39,7 @@ function fillMissing(target: object, defaults: object) {
   }
 }
 
-function completeContext(context: ApplicationContext) {
+export function completeContext(context: ApplicationContext) {
   const subscribe = () => () => {};
   const defaultAgents = agentsCapability(async () => ({
     agentId: "main",
@@ -130,6 +130,7 @@ export function createAgentsPage(context: ApplicationContext, routeData?: Agents
   };
   pages.add(dispose);
   return {
+    identitySavePending: state.identitySavePending,
     read: () => state.read(),
     setRouteData(next?: AgentsRouteData) {
       state.setRouteData(next);
@@ -262,7 +263,8 @@ export function agentsCapability(ensureFiles: () => Promise<AgentsFilesListResul
       agentsError: null,
       agentsList,
     },
-    files: () => ({ list: null, loading: false, error: null }),
+    listRead: null,
+    files: () => ({ list: null, loading: false, error: null, read: null }),
     ensureList: vi.fn(async () => agentsList),
     refreshList: vi.fn(async () => agentsList),
     ensureFiles,

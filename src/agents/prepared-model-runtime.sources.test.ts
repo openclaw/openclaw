@@ -279,7 +279,7 @@ describe("prepared catalog source composition", () => {
       };
       await expect(
         ensureOpenClawModelsJson(facts.input.config, facts.input.agentDir, options),
-      ).resolves.toEqual({ agentDir: facts.input.agentDir, wrote: false });
+      ).resolves.toEqual({});
       expect(planner).toHaveBeenLastCalledWith(
         expect.objectContaining({ pluginCatalogs: catalogs }),
       );

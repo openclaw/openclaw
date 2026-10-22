@@ -1,3 +1,4 @@
+import path from "node:path";
 import type {
   OpenClawPluginApi,
   PluginRuntimeLifecycleRegistration,
@@ -12,10 +13,7 @@ import {
 } from "openclaw/plugin-sdk/sandbox";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  resolveBinary: vi.fn(() => "mxc-test-binary"),
-  probe: vi.fn(),
-}));
+const mocks = vi.hoisted(() => ({ resolveBinary: vi.fn(() => "mxc-test-binary"), probe: vi.fn() }));
 // mock-isolation: Registration probes a synthetic binary, never the host installation.
 vi.mock("../src/binary-resolver.js", () => ({ resolveMxcBinaryPath: mocks.resolveBinary }));
 vi.mock("node:child_process", async (importOriginal) => ({
@@ -24,10 +22,32 @@ vi.mock("node:child_process", async (importOriginal) => ({
 }));
 
 import { registerMxcPlugin } from "../src/plugin.js";
+import { assertMxcReadiness, warnMxcHostPrepIfNeeded } from "../src/readiness.js";
 
 // One synthetic response satisfies both the readiness probe and the host ACL advisory.
 const readyHost = JSON.stringify({ tier: "base-container", warnings: [], acl: "S-1-15-2-1" });
 const originalPlatform = process.platform;
+const icacls = path.win32.join(
+  process.env.SystemRoot || process.env.WINDIR || "C:\\Windows",
+  "System32",
+  "icacls.exe",
+);
+const unpreparedAcl = "C:\\ BUILTIN\\Administrators:(OI)(CI)(F)\n";
+
+function mockHost(
+  probe: string | Record<string, unknown>,
+  systemDriveAcl = `${unpreparedAcl}    S-1-15-2-1:(R)\n`,
+) {
+  mocks.probe.mockImplementation((command: string, args: string[] = []) => {
+    if (command === "mxc-test-binary" && args[0] === "--probe") {
+      return typeof probe === "string" ? probe : JSON.stringify(probe);
+    }
+    if (command === icacls) {
+      return systemDriveAcl;
+    }
+    throw new Error(`spawn ${command} ENOENT`);
+  });
+}
 
 function readBackend() {
   return {
@@ -111,6 +131,53 @@ describe("registerMxcPlugin", () => {
     }
     warnSpy.mockRestore();
     setProcessPlatformForTest(originalPlatform);
+  });
+
+  const assertReady = () => assertMxcReadiness({ executablePath: "mxc-test-binary" });
+  const expectWarning = (message: RegExp) =>
+    expect(vi.mocked(console.warn).mock.calls).toEqual([[expect.stringMatching(message)]]);
+
+  test.each([
+    ["readiness", assertReady],
+    ["host preparation", warnMxcHostPrepIfNeeded],
+  ] as const)("%s is a no-op on non-Windows platforms", (_name, check) => {
+    setProcessPlatformForTest("linux");
+    expect(check).not.toThrow();
+    expect(mocks.probe).not.toHaveBeenCalled();
+    expect(console.warn).not.toHaveBeenCalled();
+  });
+
+  test("reports tier degradation without requiring system-drive preparation", () => {
+    mockHost(
+      { tier: "appcontainer-dacl", warnings: ["BaseContainer API is not present on this host"] },
+      unpreparedAcl,
+    );
+    expect(assertReady).not.toThrow();
+    expectWarning(/appcontainer-dacl isolation tier: BaseContainer API is not present/u);
+  });
+
+  test.each([
+    [
+      { error: "DACL fallback required but fallback.allowDaclMutation is false" },
+      /cannot select an isolation tier on this host \(DACL fallback required.*--probe for host details/u,
+    ],
+    [
+      { tier: "none", error: "isolation unavailable" },
+      /host check returned an unexpected result.*--probe for host details/u,
+    ],
+    [
+      "wxc-exec: unknown option --probe",
+      /host check did not return JSON.*older executor.*unset plugins\.entries\.mxc\.config\.mxcBinaryPath/u,
+    ],
+  ] as const)("rejects probe %j", (probe, error) => {
+    mockHost(probe);
+    expect(assertReady).toThrow(error);
+  });
+
+  test("warns when the system drive lacks AppContainer ACEs", () => {
+    mockHost({ tier: "base-container" }, unpreparedAcl);
+    warnMxcHostPrepIfNeeded();
+    expectWarning(/prepare-system-drive/u);
   });
 
   test.each([
@@ -225,9 +292,7 @@ describe("registerMxcPlugin", () => {
     } finally {
       await expect(
         registryApi.disposePluginRegistryInstances(registry.registry),
-      ).resolves.toMatchObject({
-        failures: [],
-      });
+      ).resolves.toMatchObject({ failures: [] });
       if (originalRegistry) {
         registryApi.setActivePluginRegistry(originalRegistry);
       } else {

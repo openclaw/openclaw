@@ -136,7 +136,7 @@ declare module "@solidjs/web" {
       "openclaw-custodian-surface": AssistantElementAttributes<"openclaw-custodian-surface"> & {
         "prop:store"?: HTMLElementTagNameMap["openclaw-custodian-surface"]["store"];
         "prop:historyContent"?: HTMLElementTagNameMap["openclaw-custodian-surface"]["historyContent"];
-        "prop:onRetryChannelOnboarding"?: HTMLElementTagNameMap["openclaw-custodian-surface"]["onRetryChannelOnboarding"];
+        "prop:channelOnboardingContent"?: HTMLElementTagNameMap["openclaw-custodian-surface"]["channelOnboardingContent"];
       };
     }
   }

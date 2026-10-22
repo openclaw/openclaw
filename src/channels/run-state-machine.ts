@@ -35,10 +35,7 @@ export function createRunStateMachine(params: RunStateMachineParams) {
   };
 
   const clearHeartbeat = () => {
-    if (!runActivityHeartbeat) {
-      return;
-    }
-    clearInterval(runActivityHeartbeat);
+    clearInterval(runActivityHeartbeat ?? undefined);
     runActivityHeartbeat = null;
   };
 

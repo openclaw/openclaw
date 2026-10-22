@@ -19,11 +19,7 @@ type GatewayRunTestApi = {
     port: number;
     healthHost: string;
     log: GatewayRunTestLogger;
-    now?: () => number;
-    sleep?: (ms: number) => Promise<void>;
     probeHealth?: (params: { host: string; port: number }) => Promise<boolean>;
-    retryMs?: number;
-    timeoutMs?: number;
   }): Promise<void>;
 };
 

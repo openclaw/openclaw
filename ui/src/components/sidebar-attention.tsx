@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onSettled, Show } from "solid-js";
+import { createMemo, createSignal, lazy, Loading, onSettled, Show } from "solid-js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
@@ -13,6 +13,7 @@ import { listen } from "../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../lib/reactive/scroll-state.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import "../styles/sidebar-attention-floating.css";
+import { createApprovalDecisionPresentation } from "./approval-decision-presentation.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { sidebarInboxTabCounts, type SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import type { SidebarAttentionFocus } from "./sidebar-attention-focus.ts";
@@ -23,7 +24,6 @@ import { Icon } from "./solid/icon.tsx";
 
 registerEnglishCatalog(registerSidebarAttentionEnglish);
 
-type PanelRenderer = typeof import("./sidebar-attention-panel.runtime.tsx").SidebarAttentionPanel;
 export type SidebarAttentionProps = {
   activeRouteId?: NavigationRouteId;
   onNavigate?: ApplicationContext["navigate"];
@@ -40,6 +40,7 @@ const panelDismissals = new WeakMap<HTMLElement, () => boolean>();
 
 function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLElement) {
   const context = useApplication();
+  const approvalDecision = createApprovalDecisionPresentation();
   const gateway = projectGateway(context.gateway);
   const attention = projectSidebarAttention(context.sidebarAttention);
   context.sidebarAttention.activate(SidebarAttentionStoreOwner);
@@ -58,8 +59,10 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   const [selectedTab, setSelectedTab] = createSignal<IssueTab>("all");
   const [overflowAbove, setOverflowAbove] = createSignal(false);
   const [overflowBelow, setOverflowBelow] = createSignal(false);
-  const [panelRenderer, setPanelRenderer] = createSignal<PanelRenderer | null>(null);
-  const panelLoad = createIdleImport(() => import("./sidebar-attention-panel.runtime.tsx"));
+  const Panel = lazy(() => import("./sidebar-attention-panel.runtime.tsx"), {
+    export: "SidebarAttentionPanel",
+  });
+  const panelLoad = createIdleImport(Panel.preload);
   let panelTrigger: { element: HTMLElement; scope: ReturnType<typeof routeScope> } | null = null;
   let list: HTMLDivElement | null = null;
   let panelFocus: SidebarAttentionFocus | null = null;
@@ -73,6 +76,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   );
 
   function closePanel(restoreFocus: boolean) {
+    approvalDecision.retire();
     const generation = ++panelGeneration;
     const scope = routeScope();
     const trigger = restoreFocus && panelOpen() ? panelTrigger?.element : null;
@@ -115,7 +119,6 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
       ? rail.getBoundingClientRect().right + 8
       : rect.left + rect.width / 2 - width / 2;
     const left = Math.max(8, Math.min(preferredLeft, globalThis.innerWidth - width - 8));
-    setPanelRenderer(() => runtime.SidebarAttentionPanel);
     setPanelPosition(
       rect.top < globalThis.innerHeight / 2
         ? { left, anchor: "top", top: Math.max(8, rail ? rect.top : rect.bottom + 8) }
@@ -221,7 +224,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     const row = target.closest<HTMLElement>("[data-approval-id]");
     const rowIndex = focusOrder.findIndex((element) => row?.contains(element));
     const generation = panelGeneration;
-    await context.overlays.decideApproval(decision, approvalId);
+    await approvalDecision.run(context.overlays.decideApproval(decision, approvalId));
     onSettled(() => {
       if (disposed || generation !== panelGeneration || target.isConnected) {
         return;
@@ -240,7 +243,14 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     const stopPointer = listen(document, "pointerdown", handleOutsideInteraction, true);
     const stopKeydown = listen(document, "keydown", handleOutsideInteraction, true);
     const stopBlur = listen(window, "blur", handleWindowBlur);
+    const stopApprovals = context.overlays.subscribe((snapshot) => {
+      if (!snapshot.approvalBusy) {
+        approvalDecision.retire();
+      }
+    });
     return () => {
+      approvalDecision.retire();
+      stopApprovals();
       stopPointer();
       stopKeydown();
       stopBlur();
@@ -283,10 +293,11 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
           </span>
         </Show>
       </button>
-      <Show when={panelOpen() && panelRenderer()} keyed>
-        {(Panel) => (
+      <Show when={panelOpen()}>
+        <Loading>
           <Panel
             entries={attention.read()}
+            approvalPending={approvalDecision.deciding()}
             onApprovalDecision={(event, id, decision) => void decideApproval(event, id, decision)}
             onClose={() => closePanel(true)}
             onDismiss={(dismissal) => context.sidebarAttention.dismiss(dismissal)}
@@ -310,7 +321,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
             selectedTab={selectedTab()}
             watchUpdateProgress={props.watchUpdateProgress}
           />
-        )}
+        </Loading>
       </Show>
     </Show>
   );
@@ -327,6 +338,11 @@ export const SidebarAttention = defineSolidBridge<SidebarAttentionProps, Sidebar
       watchUpdateProgress: { default: undefined, attribute: false },
     },
     methods: { dismissPanel: (host) => panelDismissals.get(host)?.() ?? false },
+    propertyChanged: (host, key) => {
+      if (key === "activeRouteId") {
+        panelDismissals.get(host)?.();
+      }
+    },
     disconnected: (host) => {
       queueMicrotask(() => {
         // A same-turn sidebar move retains intent; a detached Inbox retires it.

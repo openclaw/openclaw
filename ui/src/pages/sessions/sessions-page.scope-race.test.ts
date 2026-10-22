@@ -4,7 +4,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import {
@@ -26,6 +25,7 @@ import {
   createGateway,
   createRenderedPage,
   createSessions,
+  withNotifyingAgentSelection,
 } from "./sessions-page.test-support.ts";
 
 vi.mock("../../components/confirm-dialog.ts", () => ({ showConfirmDialog: vi.fn() }));
@@ -35,27 +35,6 @@ afterEach(() => {
   vi.mocked(showConfirmDialog).mockReset();
   vi.restoreAllMocks();
 });
-
-function withNotifyingAgentSelection(context: ApplicationContext, initialScopeId: string | null) {
-  const listeners = new Set<() => void>();
-  const state = context.agentSelection.state;
-  state.scopeId = initialScopeId;
-  const changeScope = (scopeId: string | null) => {
-    if (state.scopeId === scopeId) {
-      return;
-    }
-    state.scopeId = scopeId;
-    listeners.forEach((listener) => listener());
-  };
-  Object.assign(context.agentSelection, {
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    setScope: changeScope,
-  });
-  return { context, changeScope };
-}
 
 async function setupArchivedPageWithSelection(
   scopeId: string | null,
@@ -215,8 +194,9 @@ describe("sessions page agent-scope retirement", () => {
         await vi.waitFor(() => expect(page.loading).toBe(false));
         page.error = "New foreground error.";
       }
+      const failure = new Error("Old placement failed.");
       if (fails) {
-        pending.reject(new Error("Old placement failed."));
+        pending.reject(failure);
       } else {
         pending.resolve({ ok: true });
       }
@@ -224,9 +204,10 @@ describe("sessions page agent-scope retirement", () => {
       await page.updateComplete;
       if (retired) {
         expect(reconcileMutation).not.toHaveBeenCalled();
-        expect(page.error).toBe("New foreground error.");
+        expect(page.textContent).toContain("New foreground error.");
+        expect(page.textContent).not.toContain("Old placement failed.");
       } else {
-        await vi.waitFor(() => expect(page.error).toBe("Old placement failed."));
+        await vi.waitFor(() => expect(page.error).toBe(failure));
         expect(reconcileMutation).toHaveBeenCalledWith("writer");
       }
     },
@@ -281,7 +262,7 @@ describe("sessions page agent-scope retirement", () => {
     expect(query).toMatchObject({ search: key, agentId: "writer" });
     vi.mocked(showConfirmDialog).mockResolvedValue(true);
     const oldRequest = page.deleteSessionFromMenu(archivedRow(key));
-    let newRequest: Promise<void> | undefined;
+    let newRequest: ReturnType<typeof page.deleteSessionFromMenu> | undefined;
     try {
       await vi.waitFor(() => expect(deleteMany).toHaveBeenCalledTimes(1));
       changeScope("main");

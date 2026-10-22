@@ -59,9 +59,10 @@ vi.mock("../agents/lazy-exec-tool.js", () => ({
 
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
 
-async function resolveTools(
-  overrides: Partial<Parameters<typeof resolveGatewayScopedTools>[0]> = {},
-) {
+type ToolOverrides = Partial<Parameters<typeof resolveGatewayScopedTools>[0]>;
+const toolNames = (result: { tools: { name: string }[] }) => result.tools.map(({ name }) => name);
+
+async function resolveTools(overrides: ToolOverrides = {}) {
   return await resolveGatewayScopedTools({
     cfg: {},
     sessionKey: "agent:main:direct:test",
@@ -91,15 +92,18 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     return args;
   }
 
-  async function resolveNodeExecTools(
-    overrides: Partial<Parameters<typeof resolveGatewayScopedTools>[0]> = {},
-  ) {
+  async function resolveNodeExecTools(overrides: ToolOverrides = {}) {
     return await resolveTools({
       senderIsOwner: true,
       includeNodeExecTool: true,
       nodeExecAvailable: () => true,
       ...overrides,
     });
+  }
+
+  async function expectNoNodeExec(overrides: ToolOverrides) {
+    expect(toolNames(await resolveNodeExecTools(overrides))).not.toContain("exec");
+    expect(createExec).not.toHaveBeenCalled();
   }
 
   it("passes immutable source-reply authority into message-tool construction", async () => {
@@ -138,9 +142,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
         accountId: "delivery",
         scheduledToolPolicy,
       });
-    expect(
-      (await resolveForAccounts(["creator", "delivery"])).tools.map((tool) => tool.name),
-    ).toEqual(["read"]);
+    expect(toolNames(await resolveForAccounts(["creator", "delivery"]))).toEqual(["read"]);
     createTools.mockClear();
     await expect(resolveForAccounts(["delivery"])).rejects.toThrow(
       'Scheduled account "creator" is unavailable',
@@ -164,7 +166,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       excludeToolNames: ["read", "edit", "apply_patch", "exec", "process"],
     });
 
-    expect(result.tools.map((tool) => tool.name)).toEqual(["automations"]);
+    expect(toolNames(result)).toEqual(["automations"]);
   });
 
   it("keeps owner-only core tools visible only for owner loopback callers", async () => {
@@ -173,8 +175,8 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     const cfg = { gateway: { tools: { allow: ["gateway", "plugins"] } } };
     const ownerResult = await resolveTools({ cfg, senderIsOwner: true });
     const nonOwnerResult = await resolveTools({ cfg, senderIsOwner: false });
-    expect(ownerResult.tools.map((tool) => tool.name)).toEqual(names);
-    expect(nonOwnerResult.tools.map((tool) => tool.name)).toEqual(["read", "sessions_spawn"]);
+    expect(toolNames(ownerResult)).toEqual(names);
+    expect(toolNames(nonOwnerResult)).toEqual(["read", "sessions_spawn"]);
     const args = readCreateToolsArgs(1);
     const denied = [
       "automations",
@@ -193,8 +195,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       "intent",
       "sessions",
     ];
-    expect(args.pluginToolDenylist).toEqual(denied);
-    expect(args.inheritedToolDenylist).toEqual(denied);
+    expect([args.pluginToolDenylist, args.inheritedToolDenylist]).toEqual([denied, denied]);
   });
 
   it.each([
@@ -245,20 +246,56 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     },
   );
 
+  it.each([
+    ["event", "internal_system", "cron", true],
+    // The agent RPC can assert provenance but never the host-derived trigger.
+    ["user", "internal_system", "cron", false],
+    ["event", "internal_system", "exec", false],
+    ["event", "inter_session", "cron", false],
+    [undefined, undefined, undefined, false],
+  ] as const)(
+    "serves CLI automation reads on a trigger=%s %s/%s non-owner turn: %s",
+    async (trigger, kind, sourceTool, readsServed) => {
+      const admission = prepareSystemAgentRunAdmission({}, "system-notice", "main", "test");
+      try {
+        const automations = makeTool("automations");
+        const gateway = makeTool("gateway");
+        createTools.mockReturnValueOnce([automations, gateway]);
+        const result = await resolveTools({
+          cfg: { gateway: { tools: { allow: ["automations", "gateway"] } } },
+          sessionKey: "agent:main:telegram:group:chat123",
+          senderIsOwner: false,
+          admittedRunContext: await admission.admit("gateway"),
+          ...(trigger ? { trigger } : {}),
+          ...(kind ? { inputProvenance: { kind, sourceTool } } : {}),
+        });
+        const run = (name: string, args: object) =>
+          result.tools.find((tool) => tool.name === name)?.execute(`call-${name}`, args);
+
+        await run("automations", { action: "runs", jobId: "job-1" });
+        expect(automations.execute).toHaveBeenCalledTimes(readsServed ? 1 : 0);
+        await expect(
+          run("automations", { action: "update", jobId: "job-1" }),
+        ).resolves.toMatchObject({ details: { gated: true } });
+        await expect(run("gateway", { action: "config.get" })).resolves.toMatchObject({
+          details: { gated: true },
+        });
+        expect(automations.execute).toHaveBeenCalledTimes(readsServed ? 1 : 0);
+        expect(gateway.execute).not.toHaveBeenCalled();
+      } finally {
+        admission.close();
+      }
+    },
+  );
+
   it("keeps real gateway deny policy inheritable while excluding native dedup tools", async () => {
     const result = await resolveNodeExecTools({
       cfg: { gateway: { tools: { deny: ["exec"] } } },
       excludeToolNames: ["read", "apply_patch"],
     });
-    expect(result.tools.map((tool) => tool.name)).toEqual([
-      "sessions_spawn",
-      "automations",
-      "gateway",
-      "nodes",
-    ]);
+    expect(toolNames(result)).toEqual(["sessions_spawn", "automations", "gateway", "nodes"]);
     const args = readCreateToolsArgs();
-    expect(args.pluginToolDenylist).toEqual(["exec"]);
-    expect(args.inheritedToolDenylist).toEqual(["exec"]);
+    expect([args.pluginToolDenylist, args.inheritedToolDenylist]).toEqual([["exec"], ["exec"]]);
   });
 
   it.each([false, true])(
@@ -294,9 +331,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     } as const;
     const result = await resolveNodeExecTools({ bashElevated: elevated });
 
-    expect(result.tools.map((tool) => tool.name).filter((name) => name === "exec")).toEqual([
-      "exec",
-    ]);
+    expect(toolNames(result).filter((name) => name === "exec")).toEqual(["exec"]);
     expect(createExec).toHaveBeenCalledOnce();
     expect(createExec.mock.calls[0]?.[0]).toMatchObject({
       host: "node",
@@ -308,29 +343,18 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
     expect(presentation?.parameters).toHaveProperty("properties.host.enum", ["node"]);
   });
 
-  it("omits all exec variants when host policy forbids node execution", async () => {
+  it.each<ToolOverrides>([
+    { execSession: { execHost: "gateway" } },
+    { execSession: { execHost: "node" }, execOverrides: { host: "gateway" } },
+    { cfg: { agents: { defaults: { sandbox: { mode: "all" } } } } },
+    { surface: "http" },
+  ])("omits exec when host or surface policy forbids it: %j", async (overrides) => {
     mockTools("read", "exec", "nodes");
-    const gatewayOnly = await resolveNodeExecTools({
-      execSession: { execHost: "gateway" },
-    });
-    mockTools("read", "exec", "nodes");
-    const turnOverrideGateway = await resolveNodeExecTools({
-      execSession: { execHost: "node" },
-      execOverrides: { host: "gateway" },
-    });
-    mockTools("read", "exec", "nodes");
-    const sandboxAuto = await resolveNodeExecTools({
-      cfg: { agents: { defaults: { sandbox: { mode: "all" } } } },
-    });
-
-    expect(gatewayOnly.tools.map((tool) => tool.name)).not.toContain("exec");
-    expect(turnOverrideGateway.tools.map((tool) => tool.name)).not.toContain("exec");
-    expect(sandboxAuto.tools.map((tool) => tool.name)).not.toContain("exec");
-    expect(createExec).not.toHaveBeenCalled();
+    await expectNoNodeExec(overrides);
   });
 
   it("uses the runtime policy key for non-main sandbox classification", async () => {
-    const result = await resolveNodeExecTools({
+    await expectNoNodeExec({
       cfg: {
         agents: { defaults: { sandbox: { mode: "non-main" } } },
       },
@@ -338,19 +362,6 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       runtimePolicySessionKey: "agent:main:discord:default:direct:peer-42",
       agentId: "main",
     });
-
-    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
-    expect(createExec).not.toHaveBeenCalled();
-  });
-
-  it("does not honor the internal node-exec flag on HTTP surfaces", async () => {
-    mockTools("read", "exec", "nodes");
-    const result = await resolveNodeExecTools({
-      surface: "http",
-    });
-
-    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
-    expect(createExec).not.toHaveBeenCalled();
   });
 
   it("filters node exec through immutable sender-scoped policy", async () => {
@@ -368,7 +379,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       channelContext: { sender: { id: "blocked-sender" } },
     });
 
-    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(toolNames(result)).not.toContain("exec");
     expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
   });
 
@@ -400,62 +411,46 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
         groupSpace: "guild-blocked",
       }),
     );
-    expect(result.tools.map((tool) => tool.name)).not.toContain("exec");
+    expect(toolNames(result)).not.toContain("exec");
     expect(readCreateToolsArgs().pluginToolDenylist).toContain("exec");
   });
 
   const wildcardExecDeny = { tools: { toolsBySender: { "*": { deny: ["exec"] } } } };
 
-  it.each<{
-    name: string;
-    params: Partial<Parameters<typeof resolveGatewayScopedTools>[0]>;
-    available: boolean;
-  }>([
-    {
-      name: "external-channel owner",
-      params: { sessionKey: "agent:main:discord:channel:dev", messageProvider: "discord" },
-      available: false,
-    },
-    {
-      name: "WebChat owner",
-      params: { messageProvider: "webchat" },
-      available: true,
-    },
-    {
-      name: "preserved provider-less internal owner",
-      params: { requesterOrigin: { sessionKey: "agent:main:main", operatorProfileId: "owner" } },
-      available: true,
-    },
-    {
-      name: "preserved internal owner with an external destination route",
-      params: {
-        requesterOrigin: { sessionKey: "agent:main:main", operatorProfileId: "owner" },
-        messageProvider: "discord",
-      },
-      available: true,
-    },
-    {
-      name: "preserved external owner with an internal destination route",
-      params: {
-        requesterOrigin: {
-          sessionKey: "agent:main:discord:channel:dev",
-          operatorProfileId: "owner",
-          messageProvider: "discord",
-        },
-        messageProvider: "webchat",
-      },
-      available: false,
-    },
-    ...[false, undefined].map((senderIsOwner) => ({
-      name: `preserved provider-less requester with current owner=${senderIsOwner}`,
-      params: {
-        requesterOrigin: { sessionKey: "agent:main:main", operatorProfileId: "requester" },
+  const internalOrigin = { sessionKey: "agent:main:main", operatorProfileId: "owner" };
+  const externalOrigin = {
+    sessionKey: "agent:main:discord:channel:dev",
+    operatorProfileId: "owner",
+    messageProvider: "discord",
+  };
+  it.each<[string, ToolOverrides, boolean]>([
+    [
+      "external-channel owner",
+      { sessionKey: externalOrigin.sessionKey, messageProvider: "discord" },
+      false,
+    ],
+    ["WebChat owner", { messageProvider: "webchat" }, true],
+    ["preserved internal owner", { requesterOrigin: internalOrigin }, true],
+    [
+      "internal owner to external route",
+      { requesterOrigin: internalOrigin, messageProvider: "discord" },
+      true,
+    ],
+    [
+      "external owner to internal route",
+      { requesterOrigin: externalOrigin, messageProvider: "webchat" },
+      false,
+    ],
+    ...[false, undefined].map((senderIsOwner): [string, ToolOverrides, boolean] => [
+      `internal requester with current owner=${senderIsOwner}`,
+      {
+        requesterOrigin: { ...internalOrigin, operatorProfileId: "requester" },
         messageProvider: "webchat",
         senderIsOwner,
       },
-      available: false,
-    })),
-  ])("applies wildcard sender policy for $name", async ({ params, available }) => {
+      false,
+    ]),
+  ])("applies wildcard sender policy for %s", async (_name, params, available) => {
     const result = await resolveNodeExecTools({
       cfg: wildcardExecDeny,
       sessionKey: "agent:main:main",
@@ -475,7 +470,7 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
       cfg: { tools: { allow: ["exec", "sessions_spawn", "automations"] } },
     });
 
-    expect(result.tools.map((tool) => tool.name)).toContain("exec");
+    expect(toolNames(result)).toContain("exec");
     expect(readCreateToolsArgs().inheritedToolAllowlist).not.toContain("exec");
     expect(readCreateToolsArgs().cronCreatorToolAllowlist).not.toContainEqual(
       expect.objectContaining({ name: "exec" }),
@@ -483,17 +478,14 @@ describe("resolveGatewayScopedTools excludeToolNames", () => {
   });
 
   it("captures report-only authority after removing delegation launchers", async () => {
-    createTools.mockReturnValueOnce(
-      ["read", "sessions_spawn", "sessions_send", "cron", "gateway", "nodes"].map(makeTool),
-    );
+    const names = ["read", "sessions_spawn", "sessions_send", "cron", "gateway", "nodes"];
+    createTools.mockReturnValueOnce(names.map(makeTool));
     const result = await resolveTools({
-      cfg: {
-        tools: { allow: ["read", "sessions_spawn", "sessions_send", "cron", "gateway", "nodes"] },
-      },
+      cfg: { tools: { allow: names } },
       senderIsOwner: true,
       delegationCapability: "report_only",
     });
-    expect(result.tools.map((tool) => tool.name)).toEqual(["read", "cron", "gateway", "nodes"]);
+    expect(toolNames(result)).toEqual(["read", "cron", "gateway", "nodes"]);
     expect(readCreateToolsArgs().inheritedToolAllowlist).toEqual([
       "read",
       "automations",

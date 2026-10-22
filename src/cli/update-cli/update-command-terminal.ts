@@ -233,12 +233,7 @@ export async function prepareUnexpectedUpdateCommandFailure(
   };
   const publish: Publisher = async (settlementFailure, onTerminalRecord) => {
     const settled = await resolveSettledUpdateCommandResult(params, result, settlementFailure);
-    return publishUpdateCommandTerminalResult(
-      params,
-      settled.result,
-      { rolledBack: false },
-      onTerminalRecord,
-    );
+    return publishUpdateCommandTerminalResult(params, settled.result, onTerminalRecord);
   };
   const published =
     deferUpdateCommandTerminalPreparation(opts.run, prepare, () => result) ||
@@ -382,7 +377,7 @@ async function settleUpdateCommandTerminalResult<T>(
         },
         failure,
       );
-      return publishUpdateCommandTerminalResult(params, result, { rolledBack: false });
+      return publishUpdateCommandTerminalResult(params, result);
     };
   }
   if (
@@ -600,7 +595,7 @@ export async function resolveSettledUpdateCommandResult(
 
 /** Share verified retirement and unverified recovery retention across finalizers. */
 export async function recordUpdatePackageCompletion(
-  params: Pick<FinishUpdateParams, "packageTransaction" | "root" | "opts">,
+  params: Pick<FinishUpdateParams, "packageTransaction" | "databaseBackup" | "root" | "opts">,
   result: UpdateRunResult,
   assertCurrent: () => void,
 ): Promise<UpdateCommandFailure | void> {
@@ -632,6 +627,11 @@ export async function recordUpdatePackageCompletion(
   // retention outcome as a step, so this line must not leak into machine output.
   if (!params.opts.json) {
     defaultRuntime.log("Finishing update: checking package backup retention and cleanup.");
+  }
+  // Doctor can revoke restoration after capture. Both local and migrated
+  // finalization retire the retained parent's transaction through this boundary.
+  if (params.databaseBackup?.restoreRefusal) {
+    transaction.databaseBackupRoot = undefined;
   }
   const retained: UpdateStepResult | void = await transaction
     .complete({ activationVerified: result.status === "ok" }, assertCurrent)
@@ -685,14 +685,9 @@ export async function recordUpdatePackageCompletion(
 async function publishUpdateCommandTerminalResult(
   params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
   input: UpdateRunResult,
-  outcome: {
-    rolledBack: boolean;
-    downtimeMs?: number;
-    captured?: UpdateCommandTerminalRecord;
-  },
   onTerminalRecord?: PublishedRecord,
 ): Promise<UpdateRunResult> {
-  const prepared = await prepareUpdateCommandTerminalResult(params, input, outcome);
+  const prepared = await prepareUpdateCommandTerminalResult(params, input, { rolledBack: false });
   return prepared(onTerminalRecord);
 }
 

@@ -30,6 +30,8 @@ export type TranscriptAppendOptions = {
   onProjectionReconcileNeeded?: () => void;
   scheduleProjectionReconcile?: boolean;
   touchMutation?: boolean;
+  /** Keep logical actor snapshots while a later required append persists the watermark. */
+  persistActorMutation?: boolean;
 };
 
 export type TranscriptAppendCursor = {

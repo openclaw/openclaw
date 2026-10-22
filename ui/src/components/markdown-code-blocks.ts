@@ -112,8 +112,20 @@ function handleCodeBlockDisclosure(target: Element): void {
   }
   const expandButton = target.closest<HTMLButtonElement>(".code-block-expand");
   if (expandButton) {
+    const transferFocus = expandButton.matches(":focus-visible");
     wrapper.classList.add("is-expanded");
     expandButton.setAttribute("aria-expanded", "true");
+    // Revealing hides this one-way control. Keep keyboard readers on the code
+    // without moving pointer focus or scrolling the transcript to the block's start.
+    if (transferFocus) {
+      const viewport = expandButton.ownerDocument.getElementById(
+        expandButton.getAttribute("aria-controls") ?? "",
+      );
+      if (viewport) {
+        viewport.tabIndex = -1;
+        viewport.focus({ preventScroll: true });
+      }
+    }
   }
   const jsonMode = target.closest<HTMLButtonElement>(".code-block-json-mode");
   if (jsonMode) {

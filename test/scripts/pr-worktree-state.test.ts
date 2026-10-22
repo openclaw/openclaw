@@ -17,13 +17,13 @@ import { afterEach, describe, expect, it } from "vitest";
 import { restoreDoctorMigrationBackup } from "../../src/commands/doctor-migration-backup-restore.js";
 import { CLIENT_CREDENTIAL_LEGACY_TABLES_SQL } from "../../src/infra/client-credential-schema.js";
 import { generateStoredDeviceIdentity } from "../../src/infra/device-identity-material.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../src/state/openclaw-state-db-contract.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../../src/state/openclaw-state-schema.js";
 import { requireNodeTool } from "../helpers/node-toolchain.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import {
   createProvisionOwnerFixture,
-  expectProvisionLeaseReleased,
-  expectProvisionSeed,
+  expectProvisionComplete,
 } from "./pr-worktree-owner.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -63,15 +63,16 @@ describePosix("repository-owned PR provisioning state", () => {
     }
     const result = f.run();
     expect(result.status, result.stderr).toBe(0);
-    expectProvisionSeed(f);
-    expectProvisionLeaseReleased(f);
+    expectProvisionComplete(f);
     const backups = readdirSync(join(stateDir, "state")).filter((name) =>
       name.endsWith(".scoped.bak"),
     );
     expect(backups).toHaveLength(version === 28 ? 1 : 0);
     {
       using database = new DatabaseSync(databasePath, { readOnly: true });
-      expect(database.prepare("PRAGMA user_version").get()).toEqual({ user_version: 30 });
+      expect(database.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+      });
       expect(
         database
           .prepare(
@@ -114,10 +115,7 @@ describePosix("repository-owned PR provisioning state", () => {
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(result.stdout).toMatch(/successfully reaped: [1-9]/u);
       f.isolation.assertProvisioner();
-      expectProvisionSeed(f);
-      expectProvisionLeaseReleased(f);
-      expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
-      expect(existsSync(join(f.home, ".openclaw"))).toBe(false);
+      expectProvisionComplete(f);
     },
   );
   it.each([
@@ -148,13 +146,10 @@ describePosix("repository-owned PR provisioning state", () => {
       const result = f.run();
       expect(result.status, result.stderr).toBe(0);
       f.isolation.assertProvisioner();
-      expectProvisionSeed(f);
-      expect(existsSync(join(f.home, ".openclaw"))).toBe(false);
+      expectProvisionComplete(f);
       expect(existsSync(join(f.canonical, ".local", "pr-state", "state", "openclaw.sqlite"))).toBe(
         true,
       );
-      expectProvisionLeaseReleased(f);
-      expect(f.git(f.canonical, "for-each-ref", "refs/openclaw/pr-operation-locks")).toBe("");
       if (override) {
         expect(readdirSync(operator)).toEqual(["operator-evidence"]);
         expect(readFileSync(join(operator, "operator-evidence"), "utf8")).toBe("leave untouched");

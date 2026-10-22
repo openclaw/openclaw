@@ -109,6 +109,7 @@ export function renderSidebarMentionItem(params: {
 
 export function renderSidebarApprovalItem(params: {
   approval: ExecApprovalRequest;
+  pending?: boolean;
   context: ApplicationContext;
   onNavigate: ApplicationContext["navigate"];
   onDecision: (event: Event, approvalId: string, decision: ExecApprovalDecision) => void;
@@ -132,7 +133,7 @@ export function renderSidebarApprovalItem(params: {
   return (
     <SidebarApprovalRow
       approval={params.approval}
-      busy={snapshot().approvalBusy}
+      busy={params.pending || snapshot().approvalBusy}
       connected={params.context.gateway.snapshot.phase === "connected"}
       canGrant={snapshot().approvalCanGrant}
       error={snapshot().approvalErrors.get(params.approval.id) ?? null}

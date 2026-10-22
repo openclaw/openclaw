@@ -285,7 +285,7 @@ suite.define(() => {
     });
   });
 
-  it("opens installed help once, preserves the draft, redacts setting values, and clears departed context", async () => {
+  it("opens installed help on request, preserves the draft, redacts setting values, and clears departed context", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods,
@@ -307,6 +307,10 @@ suite.define(() => {
           })
           .toBe(true);
       };
+      await page
+        .locator(".plugin-catalog-detail__actions")
+        .getByRole("button", { name: "Ask OpenClaw", exact: true })
+        .click();
       await panel.getByText("Existing conversation.", { exact: true }).waitFor();
       await expect.poll(() => composer.isEnabled()).toBe(true);
       const userRequests = async () =>
@@ -322,6 +326,50 @@ suite.define(() => {
         }
       };
       page.on("pageerror", capturePageError);
+      const navigationTrace = await page.evaluateHandle(() => {
+        const selector = '.plugin-catalog-detail__actions a[aria-label="Settings"]';
+        const original = document.querySelector(selector);
+        const events: Array<Record<string, string | number | boolean>> = [];
+        const observe = (event: MouseEvent, capture: boolean) => {
+          if (events.length >= 24) {
+            return;
+          }
+          const current = document.querySelector(selector);
+          const eventPath = event.composedPath();
+          const hit = document.elementFromPoint(event.clientX, event.clientY);
+          events.push({
+            type: event.type,
+            at: performance.now(),
+            capture,
+            trusted: event.isTrusted,
+            defaultPrevented: event.defaultPrevented,
+            x: event.clientX,
+            y: event.clientY,
+            originalConnected: Boolean(original?.isConnected),
+            currentIsOriginal: Boolean(original && current === original),
+            targetOriginal: Boolean(original && eventPath.includes(original)),
+            targetCurrent: Boolean(current && eventPath.includes(current)),
+            hitCurrent: Boolean(current && hit && current.contains(hit)),
+            settingsView: new URLSearchParams(location.search).get("view") === "settings",
+          });
+        };
+        const capture = (event: MouseEvent) => observe(event, true);
+        const bubble = (event: MouseEvent) => observe(event, false);
+        const types = ["pointerdown", "pointerup", "click"] as const;
+        for (const type of types) {
+          document.addEventListener(type, capture, true);
+          document.addEventListener(type, bubble);
+        }
+        return {
+          events,
+          dispose() {
+            for (const type of types) {
+              document.removeEventListener(type, capture, true);
+              document.removeEventListener(type, bubble);
+            }
+          },
+        };
+      });
       try {
         await panel.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
         await page
@@ -351,10 +399,18 @@ suite.define(() => {
           .catch((snapshotError: unknown) => ({
             snapshotError: String(snapshotError).slice(0, 500),
           }));
-        console.warn("plugin-help-settings-navigation", JSON.stringify({ snapshot, pageErrors }));
+        const interactions = await navigationTrace
+          .evaluate((trace) => trace.events)
+          .catch((traceError: unknown) => ({ traceError: String(traceError).slice(0, 500) }));
+        console.warn(
+          "plugin-help-settings-navigation",
+          JSON.stringify({ snapshot, pageErrors, interactions }),
+        );
         throw error;
       } finally {
         page.off("pageerror", capturePageError);
+        await navigationTrace.evaluate((trace) => trace.dispose()).catch(() => {});
+        await navigationTrace.dispose();
       }
       expect(await panel.isVisible()).toBe(false);
       await page
@@ -452,6 +508,7 @@ suite.define(() => {
 
   it.each([
     { width: 900, catalog: false },
+    { width: 1440, catalog: false },
     { width: 1440, catalog: true },
   ])(
     "opens help only explicitly for $width pixels and catalog=$catalog",

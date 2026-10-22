@@ -96,10 +96,7 @@ const mocks = await vi.hoisted(async () => {
     discoverAuthStorage: vi.fn((_agentDir?: string, _options?: unknown) => authStorage),
     discoverModels: vi.fn(() => modelRegistry),
     ensureOpenClawModelsJson: vi.fn(
-      async (_config: unknown, _agentDir: unknown, _options?: unknown) => ({
-        agentDir: "/tmp/agent",
-        wrote: false,
-      }),
+      async (_config: unknown, _agentDir: unknown, _options?: unknown) => ({}),
     ),
     planOpenClawModelsJsonSource: vi.fn(
       async (_config: unknown, agentDir: unknown, _options?: unknown) => ({

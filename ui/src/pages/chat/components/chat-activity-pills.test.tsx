@@ -6,7 +6,8 @@ import type { SessionGoal } from "../../../api/types.ts";
 import { i18n } from "../../../i18n/index.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { ChatActivityPills, type ChatActivityPillsProps } from "./chat-activity-pills.tsx";
+import type { ChatActivityPillsProps } from "./chat-activity-pills-types.ts";
+import { ChatActivityPills } from "./chat-activity-pills.tsx";
 
 const goal: SessionGoal = {
   schemaVersion: 1,

@@ -76,10 +76,8 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
   const executionStartTimeout = createDeferredCore<RestartRecoveryDispatchStartOutcome>();
   let executionStartTimer: ReturnType<typeof setTimeout> | undefined;
   const clearExecutionStartTimer = () => {
-    if (executionStartTimer) {
-      clearTimeout(executionStartTimer);
-      executionStartTimer = undefined;
-    }
+    clearTimeout(executionStartTimer);
+    executionStartTimer = undefined;
   };
   const onExecutionStarted = () => {
     if (executionStartTimedOut || startOwner?.observe()?.executionStarted !== true) {

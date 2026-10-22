@@ -126,9 +126,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     runtime.cancelPendingGatewayConnection();
     setPendingGatewayUrl(null);
   };
-  const [focusDashboardRoute, setFocusDashboardRoute] = createSignal<FocusDashboardRouteState>({
-    kind: "loading",
-  });
+  const focusDashboardRoute = Promise.withResolvers<FocusDashboardRouteState>();
   let active = true;
   const focusDashboardAbort = new AbortController();
   const closeDocument = () => {
@@ -209,7 +207,6 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
     loginPassword();
     loginShowGatewaySecret();
     pendingGatewayUrl();
-    focusDashboardRoute();
     config.revision();
     theme.preferences.revision();
     theme.appliedPalette.revision();
@@ -273,7 +270,7 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
           }
           const result = await loadFocusDashboard(context, focusTarget, focusDashboardAbort.signal);
           if (!focusDashboardAbort.signal.aborted) {
-            setFocusDashboardRoute(result);
+            focusDashboardRoute.resolve(result);
           }
         }
       })
@@ -564,7 +561,8 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
             >
               <Loading fallback={<Splash />}>
                 <FocusDashboard
-                  route={focusDashboardRoute()}
+                  route={focusDashboardRoute.promise}
+                  onReady={() => readiness?.invalidate()}
                   snapshot={snapshot()}
                   sessions={context.sessions}
                   onClose={closeDocument}

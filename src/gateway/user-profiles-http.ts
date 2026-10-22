@@ -1,10 +1,10 @@
 import { createHash } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { consumeResponseBytes } from "@openclaw/normalization-core";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { getRuntimeConfig } from "../config/io.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { resolveHostAccountAvatar } from "../infra/host-account-avatar.js";
+import { readResponseWithLimit } from "../infra/http-response-body.js";
 import { LruCache } from "../infra/lru-cache.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
@@ -69,36 +69,6 @@ function cacheGravatar(
   gravatarCache.set(hash, { ...result, expiresAtMs: nowMs + ttlMs });
 }
 
-async function readBoundedGravatarBody(
-  body: ReadableStream<Uint8Array> | null,
-): Promise<Uint8Array | undefined> {
-  if (!body) {
-    return undefined;
-  }
-  const reader = body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    const { size, truncated } = await consumeResponseBytes({
-      maxBytes: MAX_GRAVATAR_BYTES,
-      read: () => reader.read(),
-      onChunk: (chunk) => chunks.push(chunk),
-      onLimit: () => reader.cancel(),
-    });
-    if (truncated) {
-      return undefined;
-    }
-    totalBytes = size;
-  } finally {
-    reader.releaseLock();
-  }
-  if (totalBytes === 0) {
-    return undefined;
-  }
-  const bytes = Buffer.concat(chunks, totalBytes);
-  return new Uint8Array(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-}
-
 async function cancelGravatarBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
   try {
     await body?.cancel();
@@ -130,10 +100,11 @@ async function fetchGravatar(hash: string): Promise<GravatarResult> {
       await cancelGravatarBody(response.body);
       return { kind: "error" };
     }
-    const bytes = await readBoundedGravatarBody(response.body);
-    if (!bytes) {
+    const buffer = await readResponseWithLimit(response, MAX_GRAVATAR_BYTES);
+    if (buffer.byteLength === 0) {
       return { kind: "error" };
     }
+    const bytes = new Uint8Array(buffer.buffer, buffer.byteOffset, buffer.byteLength);
     const etag = `"gravatar-${createHash("sha256").update(bytes).digest("hex")}"`;
     return { kind: "hit", bytes, mime, etag };
   } catch {

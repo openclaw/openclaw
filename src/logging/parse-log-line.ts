@@ -1,3 +1,4 @@
+import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 
@@ -29,19 +30,15 @@ function extractMessage(value: Record<string, unknown>): string {
 }
 
 function parseMetaName(raw?: unknown): LogContext {
-  if (typeof raw !== "string" || !raw.trimStart().startsWith("{")) {
+  const parsed = typeof raw === "string" ? safeParseJsonRecord(raw) : undefined;
+  if (!parsed) {
     return {};
   }
-  try {
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return {
-      subsystem: typeof parsed.subsystem === "string" ? parsed.subsystem : undefined,
-      module: typeof parsed.module === "string" ? parsed.module : undefined,
-      plugin: typeof parsed.plugin === "string" ? parsed.plugin : undefined,
-    };
-  } catch {
-    return {};
-  }
+  return {
+    subsystem: typeof parsed.subsystem === "string" ? parsed.subsystem : undefined,
+    module: typeof parsed.module === "string" ? parsed.module : undefined,
+    plugin: typeof parsed.plugin === "string" ? parsed.plugin : undefined,
+  };
 }
 
 function resolveContext(

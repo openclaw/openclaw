@@ -1,5 +1,5 @@
 import "../../styles/connection.css";
-import { createSignal, onCleanup } from "solid-js";
+import { createDeferred, createMemo, createSignal, onSettled } from "solid-js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { LearnMoreLink, SettingsPageHeader } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -28,11 +28,26 @@ export function ConnectionPage() {
     },
     onPageActivation: () => draft.syncDiagnosticsPolling(),
   });
-  onCleanup(() => draft.dispose());
+  onSettled(() => () => draft.dispose());
   const viewProps = () => {
     revision();
     return draft.viewProps();
   };
+  const systemInfoReceipt = createMemo(
+    () => {
+      revision();
+      return { completion: draft.systemInfoRead, failed: draft.statusFailed };
+    },
+    {
+      equals: (previous, next) =>
+        previous.completion === next.completion && previous.failed === next.failed,
+    },
+  );
+  // Revalidation retains host data without holding live connection/draft changes.
+  const systemInfoReady = createDeferred(() => {
+    const receipt = systemInfoReceipt();
+    return receipt.completion ?? receipt.failed;
+  });
   return (
     <openclaw-connection-page>
       <SettingsPageHeader
@@ -44,7 +59,7 @@ export function ConnectionPage() {
         }
       />
       <SettingsWorkspace>
-        <ConnectionView {...viewProps()} />
+        <ConnectionView {...viewProps()} systemInfoReady={systemInfoReady} />
       </SettingsWorkspace>
     </openclaw-connection-page>
   );

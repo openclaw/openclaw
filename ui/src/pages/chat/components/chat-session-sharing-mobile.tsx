@@ -1,5 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { createSignal, createUniqueId, For, onSettled, Show } from "solid-js";
+import {
+  createSignal,
+  createUniqueId,
+  For,
+  isPending,
+  latest,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import { SESSION_VISIBILITY_VALUES } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing-constants.js";
 import type { SessionSharingIdentity } from "../../../../../packages/gateway-protocol/src/schema/sessions-sharing.js";
 import type { SessionVisibility } from "../../../api/types.ts";
@@ -26,7 +35,7 @@ export type ChatSessionSharingMobileLabels = {
   sessionAccess: string;
   linkSharing: string;
   anyoneWithLink: string;
-  messagePermissions: string;
+  sessionMembers: string;
   showSearch: string;
   hideSearch: string;
 };
@@ -38,7 +47,7 @@ export type ChatSessionSharingModePresentation = Record<
 
 type ChatSessionSharingPermissionRow = {
   identity: SessionSharingIdentity;
-  permissionLabel: string;
+  membershipLabel: string;
   selected: boolean;
   /** Fixed creator/admin rows remain visible, subdued and non-editable. */
   fixed?: boolean;
@@ -66,6 +75,8 @@ export type ChatSessionSharingMobileProps = {
   permissions?: {
     rows: readonly ChatSessionSharingPermissionRow[];
     loading: boolean;
+    read: () => void;
+    scope: () => unknown;
     personActivity?: PersonActivityRouting;
     onMemberChange: (identityId: string, member: boolean) => void;
   };
@@ -199,6 +210,10 @@ function SharingPermissions(props: {
       ),
     );
   };
+  const readPermissions = () => {
+    latest(props.data.read);
+    return null;
+  };
   const closeSearch = () => {
     setSearching(false);
     setQuery("");
@@ -207,7 +222,7 @@ function SharingPermissions(props: {
   return (
     <section>
       <div class="chat-sharing-mobile__permissions-heading">
-        <h3 class="chat-sharing-mobile__heading">{props.labels.messagePermissions}</h3>
+        <h3 class="chat-sharing-mobile__heading">{props.labels.sessionMembers}</h3>
         <button
           ref={(element) => {
             trigger = element;
@@ -255,12 +270,14 @@ function SharingPermissions(props: {
           />
         </div>
       </SharingDisclosure>
-      <div class="chat-sharing-mobile__group" aria-busy={props.data.loading ? "true" : "false"}>
-        <Show
-          when={!props.data.loading || props.data.rows.length > 0}
-          fallback={
-            <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
-          }
+      <Loading
+        on={props.data.scope()}
+        fallback={<PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />}
+      >
+        {readPermissions()}
+        <div
+          class="chat-sharing-mobile__group"
+          aria-busy={isPending(props.data.read) || props.data.loading ? "true" : "false"}
         >
           <For each={matches()} keyed={(row) => row.identity.id}>
             {(row) => <SharingPermissionRow row={row()} data={props.data} />}
@@ -270,8 +287,8 @@ function SharingPermissions(props: {
               {t(query().trim() ? "sessionsView.noPeopleMatch" : "chat.sessionSharing.noPeople")}
             </p>
           </Show>
-        </Show>
-      </div>
+        </div>
+      </Loading>
     </section>
   );
 }
@@ -307,7 +324,7 @@ function SharingPermissionRow(props: {
         class="chat-sharing-mobile__permission"
         role="checkbox"
         aria-checked={props.row.selected ? "true" : "false"}
-        aria-label={`${name()}, ${props.row.permissionLabel}`}
+        aria-label={`${name()}, ${props.row.membershipLabel}`}
         aria-disabled={unavailable() ? "true" : undefined}
         aria-description={
           props.row.disabledReason ?? (props.data.loading ? t("common.loading") : undefined)
@@ -320,7 +337,7 @@ function SharingPermissionRow(props: {
           }
         }}
       >
-        <span>{props.row.permissionLabel}</span>
+        <span>{props.row.membershipLabel}</span>
         <span class="chat-sharing-mobile__check" aria-hidden="true">
           <Show when={props.row.selected}>
             <Icon name="check" />

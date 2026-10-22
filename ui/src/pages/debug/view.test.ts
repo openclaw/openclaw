@@ -1,3 +1,4 @@
+import { getQueriesForElement } from "@solidjs/testing-library";
 import hljs from "highlight.js/lib/core";
 import { createComponent, flush } from "solid-js";
 import { afterEach, assert, expect, it, vi } from "vitest";
@@ -152,6 +153,11 @@ useDebugTestEnvironment();
 afterEach(() => {
   vi.restoreAllMocks();
   vi.useRealTimers();
+});
+
+it("names the page with a level-one heading", async () => {
+  const page = await mountDebugPage(diagnosticRequest({}));
+  expect(getQueriesForElement(page).getByRole("heading", { level: 1 }).textContent).toBe("Debug");
 });
 
 it("only highlights changed diagnostics and tolerates out-of-range event timestamps", async () => {
@@ -414,6 +420,52 @@ it("polls live lanes and heartbeat while full snapshots change only on Refresh",
     }
   } finally {
     pendingRefresh.resolve();
+    page.unmount();
+  }
+});
+
+it("keeps a held live poll quiet and recovers its error without replacing snapshots or drafts", async () => {
+  vi.useFakeTimers();
+  const held = deferred();
+  let pollState: "initial" | "held" | "recovered" = "initial";
+  const request = vi.fn(async (method: string) => {
+    if (method === "last-heartbeat" || method === "diagnostics.lanes") {
+      if (pollState === "held") {
+        await held.promise;
+        throw new Error("live diagnostics unavailable");
+      }
+      return diagnosticResponse(method, pollState);
+    }
+    return diagnosticResponse(method);
+  });
+  const page = await mountDebugPage(request);
+  try {
+    const params = page.querySelector<HTMLTextAreaElement>("textarea")!;
+    params.value = '{"draft":true}';
+    params.dispatchEvent(new Event("input", { bubbles: true }));
+    params.focus();
+    flush();
+    const status = page.querySelector('pre[aria-label="Status"]');
+    pollState = "held";
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(refreshButton(page).disabled).toBe(false);
+    expect(normalizedText(refreshButton(page))).toBe("Refresh");
+    expectSnapshots(page, "initial");
+    held.resolve();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(snapshotAlert(page)?.textContent).toContain("live diagnostics unavailable");
+    expectSnapshots(page, "initial");
+    pollState = "recovered";
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(snapshotAlert(page)).toBeNull();
+    expectSnapshots(page, "initial", "recovered");
+    expect(page.querySelector('pre[aria-label="Status"]')).toBe(status);
+    expect(page.querySelector("textarea")).toBe(params);
+    expect(params.value).toBe('{"draft":true}');
+    expect(document.activeElement).toBe(params);
+    expect(request.mock.calls.filter(([method]) => method === "status")).toHaveLength(1);
+  } finally {
+    held.resolve();
     page.unmount();
   }
 });
