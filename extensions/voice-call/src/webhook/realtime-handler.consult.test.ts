@@ -11,6 +11,7 @@ import {
   createBridge,
   createCarrierLifecycleHarness,
   makeRealtimeProvider,
+  sendCarrierStart,
 } from "./realtime-handler.lifecycle.test-helpers.js";
 
 type ToolHandler = Parameters<RealtimeCallHandler["registerToolHandler"]>[1];
@@ -48,12 +49,7 @@ async function createConsultFixture(delegation = false) {
   const consult = vi.fn<ToolHandler>();
   handler.registerToolHandler("openclaw_agent_consult", consult);
   const { ws } = await connectCarrierStream(handler);
-  ws.send(
-    JSON.stringify({
-      event: "start",
-      start: { streamSid: "MZ-consult-0", callSid: call.providerCallId },
-    }),
-  );
+  sendCarrierStart(ws, "MZ-consult-0", call.providerCallId);
   const request = await connected.promise;
   return {
     consult,
@@ -75,6 +71,11 @@ async function createConsultFixture(delegation = false) {
   };
 }
 
+const speechA = "Read the latest report for Dataset A.";
+const speechB = "Now check the independent report for Dataset B.";
+const responseA = { text: "Answer A." };
+const responseB = { text: "Answer B." };
+
 afterEach(() => vi.useRealTimers());
 
 describe("native realtime consult request identity", () => {
@@ -88,9 +89,7 @@ describe("native realtime consult request identity", () => {
     const { consult, provider } = await createConsultFixture();
     vi.useFakeTimers();
     const first = createDeferred<unknown>();
-    consult
-      .mockImplementationOnce(() => first.promise)
-      .mockResolvedValue({ text: "Answer for the retried request." });
+    consult.mockImplementationOnce(() => first.promise).mockResolvedValue(responseB);
     provider.invoke("first", { question: "Check Dataset A.", context: "2025" });
     await vi.advanceTimersByTimeAsync(0);
     expect(consult).toHaveBeenCalledOnce();
@@ -99,11 +98,9 @@ describe("native realtime consult request identity", () => {
     const overlappingSubmissions = provider.submit.mock.calls.filter(([id]) => id === "different");
     expect(consult).toHaveBeenCalledOnce();
 
-    first.resolve({ text: "Answer only for Dataset A in 2025." });
+    first.resolve(responseA);
     await vi.advanceTimersByTimeAsync(0);
-    expect(provider.finalResults("first")).toEqual([
-      ["first", { text: "Answer only for Dataset A in 2025." }, undefined],
-    ]);
+    expect(provider.finalResults("first")).toEqual([["first", { text: "Answer A." }, undefined]]);
     const busy = {
       status: "busy",
       started: false,
@@ -117,9 +114,7 @@ describe("native realtime consult request identity", () => {
     await vi.advanceTimersByTimeAsync(0);
     expect(consult).toHaveBeenCalledTimes(2);
     expect(consult.mock.calls[1]?.[0]).toEqual(args);
-    expect(provider.finalResults("retry")).toEqual([
-      ["retry", { text: "Answer for the retried request." }, undefined],
-    ]);
+    expect(provider.finalResults("retry")).toEqual([["retry", { text: "Answer B." }, undefined]]);
   });
 
   it.each([
@@ -132,9 +127,7 @@ describe("native realtime consult request identity", () => {
     const first = createDeferred<unknown>();
     const working = createDeferred<void>();
     const persistence = createDeferred<Awaited<ReturnType<typeof processEvent>>>();
-    const speechA = "Read the latest report for Dataset A.";
-    const speechB = "Now check the independent report for Dataset B.";
-    consult.mockImplementationOnce(() => first.promise).mockResolvedValue({ text: "Answer B." });
+    consult.mockImplementationOnce(() => first.promise).mockResolvedValue(responseB);
     if (phase === "working response" || phase.includes("completed ASR")) {
       provider.submit.mockImplementationOnce(() => working.promise);
     }
@@ -175,7 +168,7 @@ describe("native realtime consult request identity", () => {
       expect(consult.mock.calls[0]?.[0]).toEqual(expect.objectContaining({ question: speechA }));
       expect(consult.mock.calls[0]?.[2].partialUserTranscript).toBe(speechA);
 
-      first.resolve({ text: "Answer A." });
+      first.resolve(responseA);
       await vi.advanceTimersByTimeAsync(0);
       expect(provider.finalResults("different")).toHaveLength(1);
       provider.invoke("retry", { question: phase === "same completed ASR" ? speechB : "message" });
@@ -190,7 +183,6 @@ describe("native realtime consult request identity", () => {
       working.resolve();
       persistence.resolve({ kind: "processed" });
       first.resolve({ text: "Cleanup." });
-      vi.useRealTimers();
     }
   });
 
@@ -200,9 +192,7 @@ describe("native realtime consult request identity", () => {
     const persisted = createDeferred<Awaited<ReturnType<typeof processEvent>>>();
     const first = createDeferred<unknown>();
     processEvent.mockReturnValueOnce(persisted.promise);
-    consult.mockImplementationOnce(() => first.promise).mockResolvedValue({ text: "Answer B." });
-    const speechA = "Read the latest report for Dataset A.";
-    const speechB = "Now check the independent report for Dataset B.";
+    consult.mockImplementationOnce(() => first.promise).mockResolvedValue(responseB);
     vi.useFakeTimers();
     try {
       provider.request.onTranscript?.("user", speechA, true);
@@ -216,7 +206,7 @@ describe("native realtime consult request identity", () => {
       expect(await busy).toBeInstanceOf(Error);
       expect(consult).toHaveBeenCalledOnce();
       expect(consult.mock.calls[0]?.[2].partialUserTranscript).toBe(speechA);
-      first.resolve({ text: "Answer A." });
+      first.resolve(responseA);
       await expect(answerA).resolves.toEqual({ text: "Answer A." });
       const answerB = delegate({ prompt: "message" });
       await vi.advanceTimersByTimeAsync(350);
@@ -226,7 +216,6 @@ describe("native realtime consult request identity", () => {
     } finally {
       persisted.resolve({ kind: "processed" });
       first.resolve({ text: "Cleanup." });
-      vi.useRealTimers();
     }
   });
 
@@ -234,29 +223,28 @@ describe("native realtime consult request identity", () => {
     const { consult, provider } = await createConsultFixture();
     const working = createDeferred<void>();
     const first = createDeferred<unknown>();
-    consult.mockImplementationOnce(() => first.promise).mockResolvedValue({ text: "Answer B." });
+    consult.mockImplementationOnce(() => first.promise).mockResolvedValue(responseB);
     provider.submit.mockImplementationOnce(() => working.promise);
     vi.useFakeTimers();
     try {
       provider.invoke("first", { question: "Dataset A" });
       await vi.advanceTimersByTimeAsync(0);
-      const speechB = "Read the independent report for Dataset B.";
-      provider.request.onTranscript?.("user", speechB, false);
+      const laterSpeech = "Read the independent report for Dataset B.";
+      provider.request.onTranscript?.("user", laterSpeech, false);
       provider.invoke("different", { question: "Dataset B" });
       await vi.advanceTimersByTimeAsync(0);
       working.resolve();
       await vi.advanceTimersByTimeAsync(350);
       expect(consult.mock.calls[0]?.[0]).toEqual({ question: "Dataset A" });
       expect(consult.mock.calls[0]?.[2].partialUserTranscript).toBeUndefined();
-      first.resolve({ text: "Answer A." });
+      first.resolve(responseA);
       await vi.advanceTimersByTimeAsync(0);
       provider.invoke("retry", { question: "message" });
       await vi.advanceTimersByTimeAsync(350);
-      expect(consult.mock.calls[1]?.[2].partialUserTranscript).toBe(speechB);
+      expect(consult.mock.calls[1]?.[2].partialUserTranscript).toBe(laterSpeech);
     } finally {
       working.resolve();
       first.resolve({ text: "Cleanup." });
-      vi.useRealTimers();
     }
   });
 
@@ -265,52 +253,44 @@ describe("native realtime consult request identity", () => {
     async (kind) => {
       const { consult, provider } = await createConsultFixture();
       const first = createDeferred<unknown>();
-      consult.mockImplementationOnce(() => first.promise).mockResolvedValue({ text: "Answer B." });
-      const speechA = "Read the latest report for Dataset A.";
-      const speechB = kind === "repeats" ? speechA : `${speechA} Include this year's totals.`;
+      consult.mockImplementationOnce(() => first.promise).mockResolvedValue(responseB);
+      const laterSpeech = kind === "repeats" ? speechA : `${speechA} Include this year's totals.`;
       vi.useFakeTimers();
       try {
         provider.request.onTranscript?.("user", speechA, true);
         provider.invoke("first", { question: "message" });
         await vi.advanceTimersByTimeAsync(0);
         expect(consult).toHaveBeenCalledOnce();
-        provider.request.onTranscript?.("user", speechB, true);
+        provider.request.onTranscript?.("user", laterSpeech, true);
         provider.invoke("different", { question: "message" });
         await vi.advanceTimersByTimeAsync(0);
         expect(provider.finalResults("different")).toEqual([
           ["different", expect.objectContaining({ status: "busy" }), undefined],
         ]);
-        first.resolve({ text: "Answer A." });
+        first.resolve(responseA);
         await vi.advanceTimersByTimeAsync(0);
         provider.invoke("retry", { question: "message" });
         await vi.advanceTimersByTimeAsync(0);
         expect(consult).toHaveBeenCalledTimes(2);
-        expect(consult.mock.calls[1]?.[2].partialUserTranscript).toBe(speechB);
+        expect(consult.mock.calls[1]?.[2].partialUserTranscript).toBe(laterSpeech);
       } finally {
         first.resolve({ text: "Cleanup." });
-        vi.useRealTimers();
       }
     },
   );
 
   it("lets exact replays keep collecting their own transcript before dispatch", async () => {
     const { consult, provider } = await createConsultFixture();
-    consult.mockResolvedValue({ text: "Answer A." });
+    consult.mockResolvedValue(responseA);
     vi.useFakeTimers();
-    try {
-      provider.request.onTranscript?.("user", "Read the latest report", false);
-      provider.invoke("first", { question: "message" });
-      await vi.advanceTimersByTimeAsync(50);
-      provider.request.onTranscript?.("user", "for Dataset A.", false);
-      provider.invoke("first", { question: "message" });
-      await vi.advanceTimersByTimeAsync(350);
-      expect(consult).toHaveBeenCalledOnce();
-      expect(consult.mock.calls[0]?.[2].partialUserTranscript).toBe(
-        "Read the latest report for Dataset A.",
-      );
-      expect(provider.finalResults("first")).toHaveLength(2);
-    } finally {
-      vi.useRealTimers();
-    }
+    provider.request.onTranscript?.("user", "Read the latest report", false);
+    provider.invoke("first", { question: "message" });
+    await vi.advanceTimersByTimeAsync(50);
+    provider.request.onTranscript?.("user", "for Dataset A.", false);
+    provider.invoke("first", { question: "message" });
+    await vi.advanceTimersByTimeAsync(350);
+    expect(consult).toHaveBeenCalledOnce();
+    expect(consult.mock.calls[0]?.[2].partialUserTranscript).toBe(speechA);
+    expect(provider.finalResults("first")).toHaveLength(2);
   });
 });

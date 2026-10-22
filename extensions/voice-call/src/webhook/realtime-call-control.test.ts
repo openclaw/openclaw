@@ -1,4 +1,3 @@
-import type http from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   RealtimeVoiceBridge,
@@ -11,6 +10,7 @@ import type { CallRecord } from "../types.js";
 import { connectWs, startUpgradeWsServer, waitForClose } from "../websocket-test-support.js";
 import { makeCall, makeBridge, makeHandler } from "./realtime-call-control.test-helpers.js";
 import { RealtimeCallHandler } from "./realtime-handler.js";
+import { sendCarrierStart } from "./realtime-handler.lifecycle.test-helpers.js";
 
 type RealtimeBridgeRequest = Parameters<RealtimeVoiceProviderPlugin["createBridge"]>[0];
 
@@ -26,23 +26,23 @@ async function openCall(params: {
   });
   const server = await startUpgradeWsServer({
     urlPath: new URL(stream.streamUrl).pathname,
-    onUpgrade: (request: http.IncomingMessage, socket, head) => {
-      params.handler.handleWebSocketUpgrade(request, socket, head);
-    },
+    onUpgrade: (request, socket, head) =>
+      params.handler.handleWebSocketUpgrade(request, socket, head),
   });
   const ws = await connectWs(server.url);
   await new Promise<void>((resolve) => {
     setImmediate(resolve);
   });
-  ws.send(
-    JSON.stringify({
-      event: "start",
-      start: { streamSid: `MZ-${params.providerCallId}`, callSid: params.providerCallId },
-    }),
-  );
+  sendCarrierStart(ws, `MZ-${params.providerCallId}`, params.providerCallId);
   onTestFinished(async () => {
     vi.useRealTimers();
-    await closeCall(params.handler, server, ws);
+    if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
+      const closed = waitForClose(ws);
+      ws.close();
+      await closed;
+    }
+    await params.handler.close();
+    await server.close();
   });
   return { server, ws };
 }
@@ -66,18 +66,9 @@ async function connectCall(
   return { ...fixture, ...connection, call, request: await created.promise };
 }
 
-async function closeCall(
-  handler: RealtimeCallHandler,
-  server: { close: () => Promise<void> },
-  ws: WebSocket,
-) {
-  if (ws.readyState !== WebSocket.CLOSED && ws.readyState !== WebSocket.CLOSING) {
-    const closed = waitForClose(ws);
-    ws.close();
-    await closed;
-  }
-  await handler.close();
-  await server.close();
+const opening = "Buenas tardes. ¿A qué hora cierran hoy?";
+function sendAudio(ws: WebSocket, audio: Buffer) {
+  ws.send(JSON.stringify({ event: "media", media: { payload: audio.toString("base64") } }));
 }
 
 describe("realtime call control over the Twilio stream", () => {
@@ -152,12 +143,7 @@ describe("realtime call control over the Twilio stream", () => {
       const signal = await consultStarted.promise;
       callbacks?.onAudio?.(Buffer.alloc(160, 0xff));
       for (let i = 0; i < 4; i += 1) {
-        ws.send(
-          JSON.stringify({
-            event: "media",
-            media: { payload: Buffer.alloc(160, 0x00).toString("base64") },
-          }),
-        );
+        sendAudio(ws, Buffer.alloc(160, 0x00));
       }
       await receivedAudio.promise;
       expect(handleBargeIn).not.toHaveBeenCalled();
@@ -225,10 +211,10 @@ describe("realtime call control over the Twilio stream", () => {
     });
 
     vi.useFakeTimers();
-    const loudFrame = Buffer.alloc(160, 0x00).toString("base64");
+    const loudFrame = Buffer.alloc(160, 0x00);
     for (let index = 0; index < 5; index += 1) {
       receivedFrame = createDeferred<void>();
-      ws.send(JSON.stringify({ event: "media", media: { payload: loudFrame } }));
+      sendAudio(ws, loudFrame);
       await receivedFrame.promise;
       await vi.advanceTimersByTimeAsync(600);
       expect(endCall).not.toHaveBeenCalled();
@@ -240,43 +226,35 @@ describe("realtime call control over the Twilio stream", () => {
     expect(endCall).toHaveBeenCalledExactlyOnceWith("call-1", { reason: "timeout" });
   });
 
-  it("waits for outbound speech and cancels the independent greeting fallback", async () => {
-    const triggerGreeting = vi.fn();
-    const opening = "Buenas tardes. ¿A qué hora cierran hoy?";
-    const call = makeCall("CA-opening", {
-      direction: "outbound",
-      metadata: { initialMessage: opening },
-    });
-    const { request: callbacks } = await connectCall("CA-opening", {
-      call,
-      nativeConsult: true,
-      bridge: { triggerGreeting },
-    });
-
-    expect(callbacks.instructions).toContain(`Answer: ${JSON.stringify(opening)}`);
-    vi.useFakeTimers();
-    callbacks?.onReady?.();
-    callbacks?.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
-    await vi.advanceTimersByTimeAsync(3_000);
-    expect(triggerGreeting).not.toHaveBeenCalled();
-  });
-
-  it("keeps function-tool outbound greetings immediate with the original instructions", async () => {
-    const triggerGreeting = vi.fn();
-    const opening = "Buenas tardes. ¿A qué hora cierran hoy?";
-    const call = makeCall("CA-function-tool-opening", {
-      direction: "outbound",
-      metadata: { initialMessage: opening },
-    });
-    const { request: callbacks } = await connectCall("CA-function-tool-opening", {
-      call,
-      bridge: { triggerGreeting },
-    });
-
-    expect(callbacks.instructions).toBe("Be helpful.");
-    callbacks?.onReady?.();
-    expect(triggerGreeting).toHaveBeenCalledExactlyOnceWith(
-      `Be helpful.\n\nStart the call by greeting the caller naturally. Include this greeting in your first spoken reply: "${opening}"`,
-    );
-  });
+  it.each([false, true])(
+    "preserves outbound greeting timing (native consult=%s)",
+    async (nativeConsult) => {
+      const triggerGreeting = vi.fn();
+      const { request } = await connectCall("CA-opening", {
+        call: makeCall("CA-opening", {
+          direction: "outbound",
+          metadata: { initialMessage: opening },
+        }),
+        nativeConsult,
+        bridge: { triggerGreeting },
+      });
+      if (nativeConsult) {
+        vi.useFakeTimers();
+      }
+      request.onReady?.();
+      if (nativeConsult) {
+        expect(request.instructions).toContain(`Answer: ${JSON.stringify(opening)}`);
+        expect(request.instructions).toContain("Then stop and listen.");
+        expect(triggerGreeting).not.toHaveBeenCalled();
+        request.onEvent?.({ direction: "server", type: "input_audio_buffer.speech_started" });
+        await vi.advanceTimersByTimeAsync(3_000);
+        expect(triggerGreeting).not.toHaveBeenCalled();
+      } else {
+        expect(request.instructions).toBe("Be helpful.");
+        expect(triggerGreeting).toHaveBeenCalledExactlyOnceWith(
+          `Be helpful.\n\nStart the call by greeting the caller naturally. Include this greeting in your first spoken reply: "${opening}"`,
+        );
+      }
+    },
+  );
 });

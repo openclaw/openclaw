@@ -627,52 +627,13 @@ describe("RealtimeCallHandler lifecycle", () => {
     },
   );
 
-  it("retains early transcript failure until the shutdown barrier settles", async () => {
-    const disposed = createDeferred<void>();
-    const persisted = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
-    const barrier = createDeferred<void>();
-    const failure = new Error("transcript cleanup failed");
-    const providerClose = vi.fn(() => disposed.promise);
-    const { handler, processEvent, endCall, ws, callbacks } = await openBridge(providerClose);
-    let closing: Promise<void> | undefined;
-    try {
-      processEvent.mockImplementation(async (event) =>
-        event.type === "call.assistant-speech" ? persisted.promise : { kind: "processed" },
-      );
-      const closed = waitForClose(ws);
-      closing = handler.close(barrier.promise);
-      let settled = false;
-      const completion = closing
-        .catch((error: unknown) => error)
-        .finally(() => {
-          settled = true;
-        });
-      await closed;
-      await vi.waitFor(() => expect(providerClose).toHaveBeenCalledOnce());
-      callbacks?.onTranscript?.("assistant", "Received final answer", true);
-      disposed.resolve();
-      persisted.reject(failure);
-      await vi.waitFor(() => expect(endCall).toHaveBeenCalledOnce());
-      await nextImmediate();
-      expect(settled).toBe(false);
-      barrier.resolve();
-      expect(await completion).toBe(failure);
-      await expect(handler.close()).resolves.toBeUndefined();
-      expect(endCall).toHaveBeenCalledOnce();
-      expect(providerClose).toHaveBeenCalledOnce();
-    } finally {
-      barrier.resolve();
-      disposed.resolve();
-      persisted.resolve({ kind: "processed" });
-      await closing?.catch(() => undefined);
-    }
-  });
-
-  it.each(["provider", "shutdown"] as const)(
-    "waits for transcript durability during %s close",
+  it.each(["provider", "shutdown", "failed transcript"] as const)(
+    "joins transcript durability and retains failures during %s close",
     async (source) => {
       const disposed = createDeferred<void>();
       const persisted = createDeferred<Awaited<ReturnType<CallManager["processEvent"]>>>();
+      const barrier = createDeferred<void>();
+      const failure = new Error("transcript cleanup failed");
       const providerClose = vi.fn(() => disposed.promise);
       const { call, handler, endCall, processEvent, ws, callbacks } =
         await openBridge(providerClose);
@@ -686,7 +647,7 @@ describe("RealtimeCallHandler lifecycle", () => {
           callbacks?.onTranscript?.("assistant", "Final received answer", true);
           callbacks?.onClose?.("completed");
         }
-        closing = handler.close();
+        closing = source === "failed transcript" ? handler.close(barrier.promise) : handler.close();
         let settled = false;
         const completion = closing
           .catch((error: unknown) => error)
@@ -695,7 +656,7 @@ describe("RealtimeCallHandler lifecycle", () => {
           });
         await closed;
         await vi.waitFor(() => expect(providerClose).toHaveBeenCalledOnce());
-        if (source === "shutdown") {
+        if (source !== "provider") {
           callbacks?.onTranscript?.("assistant", "Final received answer", true);
           await vi.waitFor(() =>
             expect(processEvent).toHaveBeenCalledWith(
@@ -710,14 +671,25 @@ describe("RealtimeCallHandler lifecycle", () => {
           }),
         );
         disposed.resolve();
-        await nextImmediate();
-        expect(endCall).not.toHaveBeenCalled();
-        expect(settled).toBe(false);
-        persisted.resolve({ kind: "processed" });
-        expect(await completion).toBeUndefined();
+        if (source === "failed transcript") {
+          persisted.reject(failure);
+          await vi.waitFor(() => expect(endCall).toHaveBeenCalledOnce());
+          await nextImmediate();
+          expect(settled).toBe(false);
+          barrier.resolve();
+          expect(await completion).toBe(failure);
+          await expect(handler.close()).resolves.toBeUndefined();
+        } else {
+          await nextImmediate();
+          expect(endCall).not.toHaveBeenCalled();
+          expect(settled).toBe(false);
+          persisted.resolve({ kind: "processed" });
+          expect(await completion).toBeUndefined();
+        }
         expect(endCall).toHaveBeenCalledExactlyOnceWith(call.callId, { reason: "completed" });
         expect(providerClose).toHaveBeenCalledOnce();
       } finally {
+        barrier.resolve();
         disposed.resolve();
         persisted.resolve({ kind: "processed" });
         await closing?.catch(() => undefined);

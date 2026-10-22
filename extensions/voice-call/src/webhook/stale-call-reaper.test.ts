@@ -48,11 +48,13 @@ describe("startStaleCallReaper", () => {
     }
   });
 
-  it("reaps stale calls and ignores fresh ones", async () => {
+  it("reaps only stale unanswered calls, preserving fresh and live calls", async () => {
     const endCall = vi.fn(async () => ({ success: true }));
     const stop = startReaper(endCall, () => [
       staleCall(),
       { callId: "call-fresh", startedAt: Date.now() - 10_000, state: "active" },
+      { callId: "call-speaking", startedAt: Date.now() - 120_000, state: "speaking" },
+      { callId: "call-listening", startedAt: Date.now() - 120_000, state: "listening" },
     ]);
 
     await vi.advanceTimersByTimeAsync(30_000);
@@ -117,22 +119,6 @@ describe("startStaleCallReaper", () => {
       if (throws) {
         expect(warn).toHaveBeenCalledTimes(2);
       }
-    },
-  );
-
-  it.each(["speaking", "listening"] as const)(
-    "does not reap live %s calls without answeredAt",
-    async (state) => {
-      const endCall = vi.fn(async () => ({ success: true }));
-      const stop = startReaper(endCall, () => [
-        { callId: `call-${state}`, startedAt: Date.now() - 120_000, state },
-      ]);
-
-      await vi.advanceTimersByTimeAsync(30_000);
-
-      expect(endCall).not.toHaveBeenCalled();
-
-      await stop?.();
     },
   );
 });

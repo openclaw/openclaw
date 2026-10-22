@@ -33,6 +33,7 @@ const dnsResult = () =>
     stdout: JSON.stringify({ Self: { DNSName: "bot.example.ts.net." } }),
   });
 const route = { path: "/voice", localUrl: "http://127.0.0.1:8787/webhook" };
+const funnel = ["tailscale", "funnel", "--bg", "--yes", "--set-path"];
 const funnel8443 = ["tailscale", "funnel", "--bg", "--yes", "--https", "8443", "--set-path"];
 function config(
   mode: VoiceCallConfig["tailscale"]["mode"],
@@ -53,6 +54,20 @@ function mockRoutes() {
   runCommandMock.mockImplementation(async (command: string[]) =>
     command[1] === "status" ? dnsResult() : commandResult(),
   );
+}
+function expectCommand(command: string[], nth?: number) {
+  if (nth) {
+    expect(runCommandMock).toHaveBeenNthCalledWith(nth, command, expect.any(Object));
+  } else {
+    expect(runCommandMock).toHaveBeenCalledWith(command, expect.any(Object));
+  }
+}
+function realtimeConfig(port = 443) {
+  return config("funnel", {
+    tailscale: { port, path: "/voice/webhook" },
+    serve: { path: "/voice/webhook" },
+    realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
+  });
 }
 
 describe("voice-call tailscale helpers", () => {
@@ -101,16 +116,11 @@ describe("voice-call tailscale helpers", () => {
     ).resolves.toBe("https://bot.example.ts.net/voice");
     await cleanupTailscaleExposureRoute({ mode: "serve", port: 443, path: "/voice" });
 
-    expect(runCommandMock).toHaveBeenNthCalledWith(
-      2,
+    expectCommand(
       ["tailscale", "serve", "--bg", "--yes", "--set-path", route.path, route.localUrl],
-      expect.any(Object),
+      2,
     );
-    expect(runCommandMock).toHaveBeenNthCalledWith(
-      3,
-      ["tailscale", "serve", "off", "/voice"],
-      expect.any(Object),
-    );
+    expectCommand(["tailscale", "serve", "off", "/voice"], 3);
   });
 
   it("returns null when setup cannot resolve dns or route activation fails", async () => {
@@ -133,15 +143,7 @@ describe("voice-call tailscale helpers", () => {
     );
     await cleanupTailscaleExposure(config("serve"));
 
-    expect(runCommandMock.mock.calls[1]?.[0]).toEqual([
-      "tailscale",
-      "funnel",
-      "--bg",
-      "--yes",
-      "--set-path",
-      "/voice",
-      "http://127.0.0.1:8787/webhook",
-    ]);
+    expectCommand([...funnel, route.path, route.localUrl], 2);
     expect(runCommandMock.mock.calls[2]?.[0]).toEqual(["tailscale", "serve", "off", "/voice"]);
   });
 
@@ -156,31 +158,13 @@ describe("voice-call tailscale helpers", () => {
     await setupTailscaleExposure(voiceCallConfig);
     await cleanupTailscaleExposure(voiceCallConfig);
 
-    expect(runCommandMock).toHaveBeenCalledWith(
-      [
-        "tailscale",
-        "funnel",
-        "--bg",
-        "--yes",
-        "--set-path",
-        "/voice/stream",
-        "http://127.0.0.1:8787/voice/stream",
-      ],
-      expect.any(Object),
-    );
-    expect(runCommandMock).toHaveBeenCalledWith(
-      ["tailscale", "funnel", "off", "/voice/stream"],
-      expect.any(Object),
-    );
+    expectCommand([...funnel, "/voice/stream", "http://127.0.0.1:8787/voice/stream"]);
+    expectCommand(["tailscale", "funnel", "off", "/voice/stream"]);
   });
 
   it("uses HTTPS 8443 for legacy webhook and realtime routes and cleanup", async () => {
     mockRoutes();
-    const voiceCallConfig = config("funnel", {
-      tailscale: { mode: "funnel", port: 8443, path: "/voice/webhook" },
-      serve: { port: 8787, path: "/voice/webhook" },
-      realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
-    });
+    const voiceCallConfig = realtimeConfig(8443);
 
     await expect(setupTailscaleExposure(voiceCallConfig)).resolves.toBe(
       "https://bot.example.ts.net:8443/voice/webhook",
@@ -223,16 +207,9 @@ describe("voice-call tailscale helpers", () => {
       }
       return commandResult();
     });
-    const voiceCallConfig = config("funnel", {
-      tailscale: { mode: "funnel", port: 443, path: "/voice/webhook" },
-      serve: { port: 8787, path: "/voice/webhook" },
-      realtime: { enabled: true, streamPath: "/voice/stream/realtime" },
-    });
+    const voiceCallConfig = realtimeConfig();
 
     await expect(setupTailscaleExposure(voiceCallConfig)).resolves.toBeNull();
-    expect(runCommandMock).toHaveBeenCalledWith(
-      ["tailscale", "funnel", "off", "/voice/webhook"],
-      expect.any(Object),
-    );
+    expectCommand(["tailscale", "funnel", "off", "/voice/webhook"]);
   });
 });
