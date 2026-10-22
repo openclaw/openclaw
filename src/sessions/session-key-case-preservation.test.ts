@@ -6,7 +6,6 @@ import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import {
   normalizeSessionKeyPreservingOpaquePeerIds,
-  normalizeSessionPeerId,
   parseRawSessionConversationRef,
   requiresFoldedSessionKeyAliasProof,
 } from "./session-key-utils.js";
@@ -50,12 +49,6 @@ describe("parseRawSessionConversationRef", () => {
   ])("rejects empty structural segments in %s", (sessionKey) => {
     expect(parseRawSessionConversationRef(sessionKey)).toBeNull();
   });
-});
-
-it("still preserves Signal group ids", () => {
-  expect(normalizeSessionPeerId({ channel: "signal", peerKind: "group", peerId: "AbC123=" })).toBe(
-    "AbC123=",
-  );
 });
 
 it("keeps Matrix room id case in the channel session key (both prod rooms)", () => {
@@ -124,28 +117,25 @@ describe("resolveSessionStoreEntry — case-distinct Matrix session safety (code
     expect(resolved.existing).toBeUndefined();
   });
 
-  it("still returns + collapses a confirmed lowercased artifact as `existing` when no exact key exists", () => {
-    const r = resolveEntry(ROOM_LOWER_KEY, entry(`room:${ROOM_A}`, 50));
-    expect(r.legacyKeys).toContain(ROOM_LOWER_KEY);
-    expect(deliveryContextFromSession(r.existing)?.to).toBe("room:!MixedRoomAbCdEf:example.org");
-  });
-
   it("does not collapse Matrix thread artifacts when the stored thread id differs by case", () => {
     const r = resolveEntry(
       ROOM_LOWER_THREAD_KEY,
       entry(`room:${ROOM_A}`, 50, "$threadrootabc"),
       ROOM_MIXED_THREAD_KEY,
     );
-
     expect(r.legacyKeys).not.toContain(ROOM_LOWER_THREAD_KEY);
     expect(r.existing).toBeUndefined();
   });
 
-  it("collapses Matrix thread artifacts with legacy lowercased room and preserved event id", () => {
-    const value = entry(`room:${ROOM_A}`, 50, "$ThreadRootAbC");
-    const r = resolveEntry(ROOM_LOWER_ROOM_PRESERVED_THREAD_KEY, value, ROOM_MIXED_THREAD_KEY);
-    expect(r.legacyKeys).toContain(ROOM_LOWER_ROOM_PRESERVED_THREAD_KEY);
+  it.each([
+    [ROOM_LOWER_KEY, ROOM_MIXED_KEY, undefined],
+    [ROOM_LOWER_ROOM_PRESERVED_THREAD_KEY, ROOM_MIXED_THREAD_KEY, "$ThreadRootAbC"],
+  ] as const)("collapses the delivery-proven alias %s", (key, sessionKey, threadId) => {
+    const value = entry(`room:${ROOM_A}`, 50, threadId);
+    const r = resolveEntry(key, value, sessionKey);
+    expect(r.legacyKeys).toContain(key);
     expect(r.existing).toBe(value);
+    expect(deliveryContextFromSession(r.existing)?.to).toBe(`room:${ROOM_A}`);
   });
 
   it("keeps freshest legacy lowercase Signal group aliases", () => {

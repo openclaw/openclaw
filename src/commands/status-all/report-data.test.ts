@@ -488,10 +488,11 @@ describe("statusAllCommand report data", () => {
       output.indexOf("Gateway connection details:"),
     );
     expect(output).toContain("✓ Secret diagnostics (0)");
-    expect(lines.slice(-4)).toEqual([
+    expect(lines.slice(-5)).toEqual([
       "",
       "Pasteable debug report. Auth tokens redacted.",
       "Troubleshooting: https://docs.openclaw.ai/troubleshooting",
+      "Support: https://community.openclaw.ai/",
       "",
     ]);
   });
