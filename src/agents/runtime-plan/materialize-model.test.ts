@@ -1,10 +1,6 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import {
-  createPluginMetadataSnapshot,
-  makeRegistry,
-} from "../../config/plugin-auto-enable.test-helpers.js";
+import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { configFor } from "../model-auth.fixtures.test-support.js";
 import {
   platformModel,
@@ -53,70 +49,68 @@ function apiPlan(
 }
 
 describe("materializePreparedRuntimeModel", () => {
-  it.each(["matching", "resolved", "route-less"] as const)(
-    "rejects a retired final %s route without rejecting its API sibling",
-    async (mode) => {
-      const registry = makeRegistry([
-        { id: "retirement-owner", channels: [], providers: ["openai"], origin: "bundled" },
-      ]);
-      Object.assign(expectDefined(registry.plugins[0], "retirement fixture owner"), {
+  const retired = routeModel(
+    "gpt-retirement-fixture",
+    "openai-chatgpt-responses",
+    "https://subscription.example/v1",
+  );
+  const apiSibling = { ...retired, api: "openai-responses", baseUrl: "https://api.example/v1" };
+  const metadataSnapshot = createPluginMetadataSnapshotFixture({
+    plugins: [
+      {
+        id: "retirement-owner",
+        providers: ["openai"],
         enabledByDefault: true,
         modelCatalog: {
           suppressions: [
             {
               provider: "openai",
-              model: "gpt-retirement-fixture",
+              model: retired.id,
               retirement: {},
-              when: {
-                baseUrlHosts: ["subscription.example"],
-                providerConfigApiIn: ["openai-chatgpt-responses"],
-              },
+              when: { baseUrlHosts: ["subscription.example"], providerConfigApiIn: [retired.api] },
             },
           ],
         },
-      });
-      const metadataSnapshot = createPluginMetadataSnapshot({ manifestRegistry: registry });
-      const model = routeModel(
-        "gpt-retirement-fixture",
-        "openai-chatgpt-responses",
-        "https://subscription.example/v1",
-      );
-      const resolveModel = vi.fn(async () => ({ model }));
-      const config = configFor(
-        "openai",
-        mode === "route-less" ? model.baseUrl : "https://api.example/v1",
-        {
-          api: mode === "route-less" ? "openai-chatgpt-responses" : "openai-responses",
-        },
-      );
-      await expectModel({
+      },
+    ],
+  });
+  it.each(["matching", "resolved", "route-less", "api-sibling"] as const)(
+    "validates retirement on the final %s route",
+    async (mode) => {
+      const final = mode === "api-sibling" ? apiSibling : retired;
+      const resolveModel = vi.fn(async () => ({ model: final }));
+      const configured = mode === "route-less" || mode === "api-sibling" ? retired : apiSibling;
+      const result = expectModel({
         plan:
           mode === "route-less"
             ? { providerForAuth: "openai", authProfileProviderForAuth: "openai" }
-            : {
-                ...plan,
-                modelRoute: { ...plan.modelRoute!, modelId: model.id, baseUrl: model.baseUrl },
-              },
-        modelId: model.id,
-        config,
+            : mode === "api-sibling"
+              ? apiPlan(retired.id, {}, apiSibling.baseUrl)
+              : {
+                  ...plan,
+                  modelRoute: {
+                    ...plan.modelRoute!,
+                    modelId: retired.id,
+                    baseUrl: retired.baseUrl,
+                  },
+                },
+        modelId: retired.id,
+        config: configFor("openai", configured.baseUrl, { api: configured.api }),
         metadataSnapshot,
-        ...(mode === "resolved" ? {} : { model }),
+        ...(mode === "resolved" ? {} : { model: retired }),
         resolveModel,
-      }).rejects.toMatchObject({
-        reason: "model_not_found",
-        message: expect.stringContaining("openclaw doctor --fix"),
       });
-      expect(resolveModel).toHaveBeenCalledTimes(mode === "resolved" ? 1 : 0);
-
-      const apiModel = { ...model, api: "openai-responses", baseUrl: "https://api.example/v1" };
-      await expectModel({
-        plan: apiPlan(model.id, {}, apiModel.baseUrl),
-        modelId: model.id,
-        config,
-        metadataSnapshot,
-        model,
-        resolveModel: async () => ({ model: apiModel }),
-      }).resolves.toBe(apiModel);
+      if (mode === "api-sibling") {
+        await result.resolves.toBe(apiSibling);
+      } else {
+        await result.rejects.toMatchObject({
+          reason: "model_not_found",
+          message: expect.stringContaining("openclaw doctor --fix"),
+        });
+      }
+      expect(resolveModel).toHaveBeenCalledTimes(
+        mode === "resolved" || mode === "api-sibling" ? 1 : 0,
+      );
     },
   );
 

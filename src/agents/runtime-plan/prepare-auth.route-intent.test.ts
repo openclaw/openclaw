@@ -1,11 +1,11 @@
 import { expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
-import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createPluginMetadataSnapshotFixture as metadataSnapshot } from "../../plugins/plugin-metadata.test-support.js";
 import {
-  createApiKeyCredential,
-  createAuthProfileStoreFixture,
-  createOAuthRefreshCredential,
+  createApiKeyCredential as apiKey,
+  createAuthProfileStoreFixture as authStore,
+  createOAuthRefreshCredential as oauth,
 } from "../auth-profiles/credential-fixtures.test-support.js";
 import { createModelAuthAvailabilityResolver } from "../model-auth-availability.js";
 import { configFor } from "../model-auth.fixtures.test-support.js";
@@ -27,9 +27,9 @@ function billingFixture(primary: string, apiProfile: string, oauthProfile: strin
     modelId: "gpt-5.4-mini",
     env: {},
     config,
-    authProfileStore: createAuthProfileStoreFixture({
-      [apiProfile]: createApiKeyCredential("openai", "fixture-key"),
-      [oauthProfile]: createOAuthRefreshCredential(),
+    authProfileStore: authStore({
+      [apiProfile]: apiKey("openai", "fixture-key"),
+      [oauthProfile]: oauth(),
     }),
   };
 }
@@ -43,7 +43,7 @@ function underAmbient(
     prepareAgentRuntimeAuth({
       modelId: "model",
       env: {},
-      authProfileStore: createAuthProfileStoreFixture({}),
+      authProfileStore: authStore({}),
       ...params,
       config,
     });
@@ -111,27 +111,25 @@ it.each(["provider-profile", "auth-order", "env-fallback", "provider-auth-with-e
       authStore: authProfileStore,
       env,
     }).evaluateModelAuth("openai", { modelId: "gpt-5.4-mini" });
-    expect(prepared).toMatchObject({
-      forwardedAuthProfileId: profileId,
-      modelRoute: { authRequirement },
-    });
-    expect(available).toMatchObject({
-      availability: true,
-      selectedProfileId: profileId,
-      selectedRoute: { authRequirement },
-    });
+    expect([
+      prepared.forwardedAuthProfileId,
+      prepared.modelRoute?.authRequirement,
+      available.availability,
+      available.selectedProfileId,
+      available.selectedRoute?.authRequirement,
+    ]).toEqual([profileId, authRequirement, true, profileId, authRequirement]);
   },
 );
 
 function metadata(owner: string) {
-  return createPluginMetadataSnapshotFixture({
+  return metadataSnapshot({
     plugins: [{ id: owner, providerAuthAliases: { "fixture-alias": owner } }],
   });
 }
 
 it.each([true, false])("uses selected environment evidence (available: %s)", (available) => {
   const snapshot = (envVar: string) =>
-    createPluginMetadataSnapshotFixture({
+    metadataSnapshot({
       plugins: [
         {
           id: "fixture-owner",
@@ -167,10 +165,10 @@ it.each(["user-link", "binding", "empty"] as const)(
     const prepared = underAmbient(metadata("ambient-auth"), {
       provider: "fixture-alias",
       config,
-      metadataSnapshot: empty ? createPluginMetadataSnapshotFixture() : metadata("selected-auth"),
-      authProfileStore: createAuthProfileStoreFixture({
-        "fixture:ambient": createApiKeyCredential("ambient-auth", "synthetic-ambient"),
-        [profileId]: createApiKeyCredential(
+      metadataSnapshot: empty ? metadataSnapshot() : metadata("selected-auth"),
+      authProfileStore: authStore({
+        "fixture:ambient": apiKey("ambient-auth", "synthetic-ambient"),
+        [profileId]: apiKey(
           empty ? "fixture-alias" : "selected-auth",
           empty ? "synthetic-exact" : "synthetic-selected",
         ),

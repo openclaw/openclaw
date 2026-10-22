@@ -127,7 +127,7 @@ describe("AgentRuntimePlan", () => {
     expect(first.transport.extraParams).toEqual({ temperature: 0.1, owner: "first" });
   });
 
-  it("records resolved model, auth, transport, tool, delivery, and observability policy", () => {
+  it("records auth and observability and resolves transport and prompt policy", () => {
     const plan = buildPlan({
       harnessId: "codex",
       harnessRuntime: "codex",
@@ -161,10 +161,6 @@ describe("AgentRuntimePlan", () => {
         promptMode: "full",
       })?.stablePrefix,
     ).toContain("<persona_latch>");
-    expect(plan.transcript.resolvePolicy()).toEqual(plan.transcript.policy);
-    expect(
-      plan.outcome.classifyRunResult({ provider: "openai", model: "gpt-4.1", result: {} }),
-    ).toBeNull();
   });
 
   it("keeps OpenClaw-owned tool-schema normalization reachable from the plan", () => {

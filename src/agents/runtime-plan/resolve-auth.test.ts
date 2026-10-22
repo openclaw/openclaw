@@ -46,7 +46,7 @@ vi.mock("../../llm/oauth.js", async (importOriginal) => ({
 
 function profileThenDirect(
   plan: AgentRuntimeAuthPlan,
-  directPlan: AgentRuntimeAuthPlan,
+  directPlan: AgentRuntimeAuthPlan = authProvider,
 ): PreparedAgentRuntimeAuthAttempt[] {
   if (!plan.forwardedAuthProfileId) {
     throw new Error("expected a profile plan");
@@ -72,16 +72,27 @@ function expectAuth(params: Parameters<typeof resolveModelAuth>[0]) {
 }
 type AttemptParams = Parameters<typeof resolvePreparedRuntimeAuthAttempts<Model, string>>[0];
 function resolveAttempts(
-  params: Omit<AttemptParams, "model" | "modelId" | "errorMessage"> &
-    Partial<Pick<AttemptParams, "model" | "modelId" | "errorMessage">>,
+  params: Omit<AttemptParams, "model" | "modelId" | "errorMessage" | "materializeModel"> &
+    Partial<Pick<AttemptParams, "model" | "modelId" | "errorMessage" | "materializeModel">>,
 ) {
   return resolvePreparedRuntimeAuthAttempts({
     model: platformModel,
     modelId: "gpt-5.5",
     errorMessage: "prepared auth failed",
+    materializeModel: async () => platformModel,
     ...params,
   });
 }
+
+const firstId = "openai:first";
+const backupId = "openai:backup";
+const candidates = [firstId, backupId];
+const candidatePlan = (overrides: Partial<AgentRuntimeAuthPlan> = {}) =>
+  makeProfilePlan(firstId, { forwardedAuthProfileCandidateIds: candidates, ...overrides });
+const backupResult = {
+  auth: { profileId: backupId },
+  plan: { forwardedAuthProfileId: backupId, forwardedAuthProfileCandidateIds: [backupId] },
+};
 
 describe("resolvePreparedRuntimeModelAuth", () => {
   aroundEach((runTest) =>
@@ -141,11 +152,11 @@ describe("resolvePreparedRuntimeModelAuth", () => {
       expires: Date.now() + 600_000,
     });
     const store = authStore({
-      "openai:shared": credential,
-      "openai:unselected": { ...credential, access: "unselected-access" },
+      [firstId]: credential,
+      [backupId]: { ...credential, access: "unselected-access" },
     });
     const resolved = await resolveModelAuth({
-      plan: makeProfilePlan("openai:shared", {
+      plan: makeProfilePlan(firstId, {
         forwardedAuthProfileSource: "user",
         selectedAuthMode: "oauth",
         selectedAuthFlow: "chatgpt-token-sharing",
@@ -153,24 +164,45 @@ describe("resolvePreparedRuntimeModelAuth", () => {
       }),
       store,
     });
-    expect(resolved.auth).toMatchObject({
-      apiKey: "shared-access",
-      mode: "oauth",
-      authFlow: "chatgpt-token-sharing",
-      profileId: "openai:shared",
-    });
-    expect(resolved.plan).toMatchObject({
-      selectedAuthMode: "oauth",
-      selectedAuthFlow: "chatgpt-token-sharing",
+    expect(resolved).toMatchObject({
+      auth: {
+        apiKey: "shared-access",
+        mode: "oauth",
+        authFlow: "chatgpt-token-sharing",
+        profileId: firstId,
+      },
+      plan: {
+        selectedAuthMode: "oauth",
+        selectedAuthFlow: "chatgpt-token-sharing",
+        forwardedAuthProfileId: firstId,
+        forwardedAuthProfileSource: "user",
+        forwardedAuthProfileCandidateIds: [firstId],
+      },
     });
     expect(scopeAuthProfileStoreToPreparedPlan(store, resolved.plan).profiles).toEqual({
-      "openai:shared": credential,
+      [firstId]: credential,
+    });
+  });
+
+  it("keeps a user-locked synthetic profile terminal despite ambient auth", async () => {
+    vi.stubEnv("OPENAI_API_KEY", "ambient-key");
+    await expectAuth({
+      plan: makeProfilePlan(firstId, { forwardedAuthProfileSource: "user" }),
+      store: authStore({ [firstId]: apiKey("codex-app-server") }),
+      secretSentinels: true,
+    }).resolves.toMatchObject({
+      auth: { profileId: firstId },
+      plan: {
+        forwardedAuthProfileId: firstId,
+        forwardedAuthProfileSource: "user",
+        forwardedAuthProfileCandidateIds: [firstId],
+      },
     });
   });
 
   it("keeps a failed explicit SecretRef terminal across prepared profile candidates", async () => {
     const store = authStore({
-      "openai:missing": {
+      [firstId]: {
         type: "api_key",
         provider: "openai",
         keyRef: {
@@ -179,14 +211,13 @@ describe("resolvePreparedRuntimeModelAuth", () => {
           id: "OPENCLAW_TEST_MISSING_PREPARED_AUTH",
         },
       },
-      "openai:backup": apiKey("backup-key"),
+      [backupId]: apiKey("backup-key"),
     });
 
     await expectAuth({
-      plan: makeProfilePlan("openai:missing", {
+      plan: candidatePlan({
         selectedAuthMode: "api_key",
         modelRoute: platformRoute,
-        forwardedAuthProfileCandidateIds: ["openai:missing", "openai:backup"],
       }),
       store,
       secretSentinels: true,
@@ -196,146 +227,109 @@ describe("resolvePreparedRuntimeModelAuth", () => {
     });
   });
 
-  it(
-    "does not borrow an unprepared API-key profile for direct subscription auth",
-    { timeout: 1_000 },
-    async () => {
-      vi.stubEnv("OPENAI_API_KEY", "");
-      const store = authStore({
-        "openai:platform": apiKey("platform-key"),
-      });
+  it("does not borrow unprepared API-key profiles", { timeout: 1_000 }, async () => {
+    vi.stubEnv("OPENAI_API_KEY", "");
+    await expectAuth({
+      plan: { ...authProvider, selectedAuthMode: "token", modelRoute: subscriptionRoute },
+      model: subscriptionModel,
+      store: authStore({ [firstId]: apiKey() }),
+      secretSentinels: true,
+    }).rejects.toThrow('No API key found for provider "openai"');
+  });
 
-      await expectAuth({
-        plan: { ...authProvider, selectedAuthMode: "token", modelRoute: subscriptionRoute },
-        model: subscriptionModel,
-        store,
-        secretSentinels: true,
-      }).rejects.toThrow('No API key found for provider "openai"');
-    },
-  );
-
-  it("resolves an ambient Platform key without borrowing the OAuth-only full store", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "ambient-platform-key");
-    const store = authStore({
-      "openai:chatgpt": oauth({ access: "subscription-token", refresh: "refresh-token" }),
-    });
-
-    const resolved = await resolveModelAuth({
+  it.each([
+    ["resolves ambient auth without borrowing OAuth profiles", "api-key", "env"],
+    ["keeps authored API keys ahead of OAuth profiles", "api-key", "config"],
+    ["keeps authored OAuth ahead of API-key profiles", "oauth", "config"],
+  ] as const)("%s", async (_name, mode, source) => {
+    const subscription = mode !== "api-key";
+    const model = subscription ? subscriptionModel : platformModel;
+    const key =
+      source === "env"
+        ? "ambient-platform-key"
+        : subscription
+          ? "configured-subscription-credential"
+          : "configured-platform-key";
+    vi.stubEnv("OPENAI_API_KEY", source === "env" ? key : "");
+    const result = expectAuth({
       plan: {
         ...authProvider,
-        selectedAuthMode: "api-key",
-        modelRoute: platformRoute,
+        selectedAuthMode: mode,
+        modelRoute: subscription ? subscriptionRoute : platformRoute,
       },
-      store,
+      model,
+      cfg:
+        source === "config"
+          ? configFor("openai", model.baseUrl, {
+              apiKey: key,
+              ...(subscription ? { auth: "oauth" } : {}),
+            })
+          : {},
+      store: authStore({
+        [firstId]: subscription
+          ? apiKey()
+          : source === "env"
+            ? oauth({ access: "subscription-token", refresh: "refresh-token" })
+            : token(),
+      }),
       secretSentinels: true,
     });
-
-    expect(resolved).toMatchObject({
+    await result.resolves.toMatchObject({
       auth: {
-        apiKey: "ambient-platform-key",
-        mode: "api-key",
+        apiKey: key,
+        mode,
+        source: source === "config" ? "models.json" : expect.stringContaining("OPENAI_API_KEY"),
       },
       plan: {
         forwardedAuthProfileId: undefined,
-        selectedAuthMode: "api-key",
+        selectedAuthMode: mode,
+        modelRoute: { authRequirement: subscription ? "subscription" : "api-key" },
       },
     });
-    expect(resolved.auth.source).toContain("OPENAI_API_KEY");
   });
-
-  it.each(["api-key", "oauth"] as const)(
-    "keeps authored %s ahead of opposite-route profiles",
-    async (mode) => {
-      const subscription = mode === "oauth";
-      if (subscription) {
-        vi.stubEnv("OPENAI_API_KEY", "");
-      }
-      const model = subscription ? subscriptionModel : platformModel;
-      const key = subscription ? "configured-subscription-credential" : "configured-platform-key";
-      const store = authStore(
-        subscription
-          ? { "openai:platform": apiKey("platform-key") }
-          : {
-              "openai:chatgpt": { type: "token", provider: "openai", token: "subscription-token" },
-            },
-      );
-      const resolved = await resolveModelAuth({
-        plan: {
-          ...authProvider,
-          selectedAuthMode: mode,
-          modelRoute: subscription ? subscriptionRoute : platformRoute,
-        },
-        model,
-        cfg: configFor("openai", model.baseUrl, {
-          apiKey: key,
-          ...(subscription ? { auth: "oauth" } : {}),
-        }),
-        store,
-        secretSentinels: true,
-      });
-      expect(resolved.auth).toMatchObject({ mode });
-      if (subscription) {
-        expect(resolved).toMatchObject({
-          auth: {
-            apiKey: "configured-subscription-credential",
-            source: "models.json",
-            mode: "oauth",
-          },
-          plan: { selectedAuthMode: "oauth", modelRoute: { authRequirement: "subscription" } },
-        });
-      }
-    },
-  );
 
   it.each(["changed-class", "expired-oauth"] as const)(
     "resolves a prepared backup after %s",
     async (kind) => {
       const changed = kind === "changed-class";
-      const first = changed ? "openai:changed" : "openai:expired";
       const mode = changed ? "token" : "api-key";
       const store = authStore({
-        [first]: changed
+        [firstId]: changed
           ? apiKey("platform-key")
           : oauth({
               access: "expired-access",
               refresh: "expired-refresh",
               expires: Date.now() - 60_000,
             }),
-        "openai:backup": changed
+        [backupId]: changed
           ? token("subscription-token", Date.now() + 60_000)
           : apiKey("backup-key"),
       });
       await expectAuth({
-        plan: makeProfilePlan(first, {
+        plan: candidatePlan({
           selectedAuthMode: changed ? "token" : "api_key",
           modelRoute: changed ? subscriptionRoute : platformRoute,
-          forwardedAuthProfileCandidateIds: [first, "openai:backup"],
         }),
         model: changed ? subscriptionModel : platformModel,
         store,
         secretSentinels: true,
       }).resolves.toMatchObject({
-        auth: { profileId: "openai:backup", mode },
-        plan: {
-          forwardedAuthProfileId: "openai:backup",
-          forwardedAuthProfileCandidateIds: ["openai:backup"],
-          selectedAuthMode: mode,
-        },
+        auth: { ...backupResult.auth, mode },
+        plan: { ...backupResult.plan, selectedAuthMode: mode },
       });
     },
   );
 
   it.each([false, true])("rechecks prepared candidates after cooldown (all: %s)", async (all) => {
     const store = authStore({
-      "openai:first": apiKey("first-key"),
-      "openai:backup": apiKey("backup-key"),
+      [firstId]: apiKey("first-key"),
+      [backupId]: apiKey("backup-key"),
     });
-    const plan = makeProfilePlan("openai:first", {
-      ...(all ? {} : { selectedAuthMode: "api_key", modelRoute: platformRoute }),
-      forwardedAuthProfileCandidateIds: ["openai:first", "openai:backup"],
-    });
+    const plan = candidatePlan(
+      all ? {} : { selectedAuthMode: "api_key", modelRoute: platformRoute },
+    );
     store.usageStats = Object.fromEntries(
-      (all ? ["openai:first", "openai:backup"] : ["openai:first"]).map((id) => [
+      (all ? candidates : [firstId]).map((id) => [
         id,
         {
           cooldownUntil: Date.now() + 60_000,
@@ -348,31 +342,21 @@ describe("resolvePreparedRuntimeModelAuth", () => {
     if (all) {
       await resolution.rejects.toThrow("temporarily unavailable");
     } else {
-      await resolution.resolves.toMatchObject({
-        auth: { profileId: "openai:backup" },
-        plan: {
-          forwardedAuthProfileId: "openai:backup",
-          forwardedAuthProfileCandidateIds: ["openai:backup"],
-        },
-      });
+      await resolution.resolves.toMatchObject(backupResult);
     }
   });
 
   it("does not unlock direct fallback when a profile cools during materialization", async () => {
-    const store = authStore({
-      "openai:first": apiKey("first-key"),
-    });
-    const preparedProfile = makeProfilePlan("openai:first");
-    const directPlan = authProvider;
-    const resolveAuth = vi.fn(async () => ({ plan: directPlan, auth: "unused" }));
+    const store = authStore({ [firstId]: apiKey("first-key") });
+    const resolveAuth = vi.fn(async () => ({ plan: authProvider, auth: "unused" }));
     const materializeModel = vi.fn(async () => {
-      setProfileCooldown(store, "openai:first");
+      setProfileCooldown(store, firstId);
       return platformModel;
     });
 
     await expect(
       resolveAttempts({
-        attempts: profileThenDirect(preparedProfile, directPlan),
+        attempts: profileThenDirect(makeProfilePlan(firstId)),
         store,
         materializeModel,
         resolveAuth,
@@ -498,26 +482,4 @@ describe("resolvePreparedRuntimeModelAuth", () => {
       ]);
     },
   );
-
-  it("keeps a user-locked profile terminal when environment auth is also present", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "ambient-key");
-    const store = authStore({
-      "openai:locked": apiKey("codex-app-server"),
-    });
-
-    await expectAuth({
-      plan: makeProfilePlan("openai:locked", {
-        forwardedAuthProfileSource: "user",
-      }),
-      store,
-      secretSentinels: true,
-    }).resolves.toMatchObject({
-      auth: { profileId: "openai:locked" },
-      plan: {
-        forwardedAuthProfileId: "openai:locked",
-        forwardedAuthProfileSource: "user",
-        forwardedAuthProfileCandidateIds: ["openai:locked"],
-      },
-    });
-  });
 });
