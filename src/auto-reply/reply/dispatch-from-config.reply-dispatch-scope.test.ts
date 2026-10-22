@@ -2,18 +2,11 @@
 // Register dispatch mocks before modules that consume them.
 // oxfmt-ignore
 import {
-  acpManagerRuntimeMocks,
   acpMocks,
-  agentEventMocks,
   createDispatcher,
   createHookCtx,
-  diagnosticMocks,
   emptyConfig,
   hookMocks,
-  internalHookMocks,
-  mocks,
-  resetPluginTtsAndThreadMocks,
-  runtimePluginMocks,
   sessionBindingMocks,
   sessionStoreMocks,
   ttsMocks,
@@ -31,16 +24,17 @@ import {
   updateSessionControllerSourcePolicy,
 } from "../../sessions/session-controller.mailbox.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import type { ReplyDispatchRun } from "../get-reply-options.types.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import {
   resetDeliverySettlementFixture,
-  resetDispatchSessionMocks,
   describe0BeforeEach0,
-  dispatchReplyFromConfig as dispatchScopedReplyFromConfig,
+  dispatchReplyFromConfig,
+  createReplyOperation,
+  createDispatchGate,
+  getSessionControllerOperation,
   globalBeforeAll0,
   setNoAbort,
 } from "./dispatch-from-config.test-support.js";
@@ -56,7 +50,6 @@ import { readReplySourceInput } from "./reply-source-binding.js";
 import * as turnAdmission from "./reply-turn-admission.js";
 import { buildTestCtx } from "./test-ctx.js";
 
-let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 const handledReply = { handled: true, queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
 function discordCtx(SessionKey: string, overrides: Parameters<typeof buildTestCtx>[0] = {}) {
   return buildTestCtx({
@@ -71,8 +64,15 @@ function discordCtx(SessionKey: string, overrides: Parameters<typeof buildTestCt
   });
 }
 
+beforeAll(async () => {
+  await globalBeforeAll0();
+  ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
+  ({ runAfterReplyOperationClear } = await import("../../sessions/session-controller.js"));
+  const { testing } = await import("../../sessions/session-controller.test-support.js");
+  resetSessionControllerForTest = () => testing.resetSessionControllerForTest();
+});
+
 describe("dispatchReplyFromConfig reply hook scope", () => {
-  beforeAll(globalBeforeAll0);
   beforeEach(() => {
     describe0BeforeEach0();
     setNoAbort();
@@ -82,12 +82,6 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     };
     sessionStoreMocks.loadSessionStoreEntry.mockImplementation(readEntry);
     sessionStoreMocks.loadSessionEntry.mockImplementation(readEntry);
-  });
-  afterEach(() => {
-    sessionStoreMocks.entriesBySessionKey.clear();
-    sessionStoreMocks.loadSessionEntry
-      .mockReset()
-      .mockImplementation(() => sessionStoreMocks.currentEntry);
   });
 
   it.each([
@@ -153,7 +147,7 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       sourceKey,
       !bound ? { CommandSource: "native", CommandTargetSessionKey: targetKey } : {},
     );
-    const result = await dispatchScopedReplyFromConfig({
+    const result = await dispatchReplyFromConfig({
       ctx,
       cfg: emptyConfig,
       dispatcher: createDispatcher(),
@@ -195,7 +189,7 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     const replyResolver = vi.fn<InternalGetReplyFromConfig>();
     const guarded = { permissionMode: "guarded" as const, toolOverrides: { webSearch: false } };
 
-    const result = await dispatchScopedReplyFromConfig({
+    const result = await dispatchReplyFromConfig({
       ctx: discordCtx(sessionKey),
       cfg: emptyConfig,
       dispatcher,
@@ -215,8 +209,6 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
   });
 });
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
-let createReplyOperation: typeof import("../../sessions/session-controller.js").createReplyOperation;
-let getSessionControllerOperation: typeof import("../../sessions/session-controller.js").getSessionControllerOperation;
 let runAfterReplyOperationClear: typeof import("../../sessions/session-controller.js").runAfterReplyOperationClear;
 let resetSessionControllerForTest: typeof import("../../sessions/session-controller.test-support.js").testing.resetSessionControllerForTest;
 
@@ -258,58 +250,9 @@ function pendingFinalReply(
 }
 
 describe("dispatchReplyFromConfig reply_dispatch hook", () => {
-  beforeAll(async () => {
-    ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
-    ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-    const replyRunRegistryModule = await import("../../sessions/session-controller.js");
-    createReplyOperation = replyRunRegistryModule.createReplyOperation;
-    getSessionControllerOperation = replyRunRegistryModule.getSessionControllerOperation;
-    runAfterReplyOperationClear = replyRunRegistryModule.runAfterReplyOperationClear;
-    const { testing } = await import("../../sessions/session-controller.test-support.js");
-    resetSessionControllerForTest = () => testing.resetSessionControllerForTest();
-  });
-
   beforeEach(() => {
-    clearAgentHarnesses();
-    resetSessionControllerForTest();
-    resetInboundDedupe();
-    resetDispatchSessionMocks();
-    acpManagerRuntimeMocks.getAcpSessionManager.mockReset();
+    describe0BeforeEach0();
     resetDeliverySettlementFixture();
-    mocks.routeReply
-      .mockReset()
-      .mockResolvedValue({ ok: true, delivered: true, messageId: "mock" });
-    hookMocks.runner.hasHooks
-      .mockReset()
-      .mockImplementation((hookName?: string) => hookName === "reply_dispatch");
-    for (const mock of [
-      hookMocks.runner.runInboundClaim,
-      hookMocks.runner.runInboundClaimForPlugin,
-      hookMocks.runner.runMessageReceived,
-      hookMocks.runner.runBeforeDispatch,
-      internalHookMocks.triggerInternalHook,
-    ]) {
-      mock.mockReset().mockResolvedValue(undefined);
-    }
-    hookMocks.runner.runInboundClaimForPluginOutcome.mockReset().mockResolvedValue({
-      status: "no_handler",
-    });
-    internalHookMocks.createInternalHookEvent
-      .mockReset()
-      .mockImplementation(createInternalHookEventPayload);
-    agentEventMocks.onAgentEvent.mockReset().mockImplementation(() => () => {});
-    for (const mock of [
-      diagnosticMocks.logMessageQueued,
-      diagnosticMocks.logMessageProcessed,
-      diagnosticMocks.logSessionStateChange,
-      diagnosticMocks.markDiagnosticSessionProgress,
-    ]) {
-      mock.mockReset();
-    }
-    runtimePluginMocks.loadAgentRuntimePluginRegistryHandle
-      .mockReset()
-      .mockReturnValue(runtimePluginMocks.pluginRegistry);
-    resetPluginTtsAndThreadMocks();
   });
 
   function dispatch(options: Partial<Parameters<typeof dispatchReplyFromConfig>[0]>) {
@@ -490,19 +433,15 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         return payload;
       },
     });
-    try {
-      const result = dispatchInMemory(memory, dispatcher, params.replies, {
-        ...createHookCtx(),
-        InputProvenance: { kind: "internal_system" },
-      });
-      await hookStarted.promise;
-      await params.afterStall?.(memory);
-      await vi.advanceTimersByTimeAsync(15_000);
-      await result;
-      return { deliver, entry: memory.read() };
-    } finally {
-      vi.useRealTimers();
-    }
+    const result = dispatchInMemory(memory, dispatcher, params.replies, {
+      ...createHookCtx(),
+      InputProvenance: { kind: "internal_system" },
+    });
+    await hookStarted.promise;
+    await params.afterStall?.(memory);
+    await vi.advanceTimersByTimeAsync(15_000);
+    await result;
+    return { deliver, entry: memory.read() };
   }
 
   it("clears pending final delivery when a later queued final succeeds", async () => {
@@ -686,13 +625,11 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
 
   it("keeps bounded TTS fallback work alive past the default finalization lease", async () => {
     vi.useFakeTimers();
-    const ttsStarted = createDeferred();
-    const releaseTts = createDeferred();
+    const tts = createDispatchGate();
     const dispatcher = createDispatcher();
     hookMocks.runner.hasHooks.mockReturnValue(false);
     ttsMocks.maybeApplyTtsToPayload.mockImplementation(async (paramsUnknown: unknown) => {
-      ttsStarted.resolve();
-      await releaseTts.promise;
+      await tts.wait();
       return (paramsUnknown as { payload: ReplyPayload }).payload;
     });
 
@@ -709,7 +646,7 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
         },
       });
 
-      await ttsStarted.promise;
+      await tts.started;
       await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
 
       const active = getSessionControllerOperation("agent:test:session");
@@ -717,14 +654,13 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       expect(active?.result).toBeNull();
       expect(await requestCurrentSessionStop("agent:test:session")).toBe(false);
 
-      releaseTts.resolve();
+      tts.resolve();
       await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
       expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "reply with slow TTS" });
       expect(getSessionControllerOperation("agent:test:session")).toBeUndefined();
     } finally {
-      releaseTts.resolve();
+      tts.resolve();
       await vi.runOnlyPendingTimersAsync();
-      vi.useRealTimers();
     }
   });
 
