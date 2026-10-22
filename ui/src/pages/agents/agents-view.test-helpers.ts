@@ -77,8 +77,7 @@ export function createAgentViewTestProps(
       canRunCron: true,
     },
     basePath: "",
-    loading: false,
-    error: null,
+    listRead: null,
     selectedAgentId: "beta",
     memoryTarget: {
       read: () => (overrides.selectedAgentId === undefined ? "beta" : overrides.selectedAgentId),
@@ -103,6 +102,7 @@ export function createAgentViewTestProps(
     },
     agentFiles: {
       agentFilesError: null,
+      listRead: null,
       ...inertAgentFileControls,
     },
     agentIdentityById: {},

@@ -130,24 +130,6 @@ function cloneToken(
   return copyHtmlTags(source, token, start, end);
 }
 
-function annotatedToken(
-  TokenType: StateCore["Token"],
-  source: Token,
-  start: number,
-  end: number,
-  span: AssistantTranscriptRoleHeaderSpan,
-): Token {
-  const token = cloneToken(TokenType, source, start, end, ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE);
-  token.meta = {
-    ...(source.meta && typeof source.meta === "object" ? source.meta : {}),
-    assistantTranscriptRoleHeader: {
-      kind: span.kind,
-      role: span.role,
-    },
-  } satisfies AssistantTranscriptRoleTokenMeta;
-  return token;
-}
-
 function sliceRoleHeaderSpans(
   spans: readonly AssistantTranscriptRoleHeaderSpan[],
   spanStartIndex: number,
@@ -186,7 +168,21 @@ function splitVisibleToken(
       result.push(cloneToken(TokenType, token, localCursor, span.start));
     }
     if (span.end > span.start) {
-      result.push(annotatedToken(TokenType, token, span.start, span.end, span));
+      const roleToken = cloneToken(
+        TokenType,
+        token,
+        span.start,
+        span.end,
+        ASSISTANT_TRANSCRIPT_ROLE_NODE_TYPE,
+      );
+      roleToken.meta = {
+        ...(token.meta && typeof token.meta === "object" ? token.meta : {}),
+        assistantTranscriptRoleHeader: {
+          kind: span.kind,
+          role: span.role,
+        },
+      } satisfies AssistantTranscriptRoleTokenMeta;
+      result.push(roleToken);
     }
     localCursor = span.end;
   }

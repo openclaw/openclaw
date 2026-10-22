@@ -66,6 +66,7 @@ function renderFiles(
         return { ...createProps().readData(), ...this };
       },
       agentId: "alpha",
+      listRead: null,
       agentFileConflict: null,
       canWrite: true,
       agentFilesLoading: false,
@@ -112,15 +113,16 @@ function expectAgentTab(container: Element, text: string): HTMLElement & { disab
 }
 
 describe("renderAgents", () => {
-  it("announces an agent list failure as an alert", () => {
+  it("announces an agent list failure as an alert", async () => {
     const container = document.createElement("div");
-    renderView({ error: "Agent list unavailable" }, container);
-
-    expect(
-      Array.from(container.querySelectorAll('[role="alert"]'), (alert) =>
-        alert.textContent?.trim(),
-      ),
-    ).toEqual(["Agent list unavailable"]);
+    renderView({ listRead: Promise.resolve({ error: "Agent list unavailable" }) }, container);
+    await waitForSolid(() =>
+      expect(
+        Array.from(container.querySelectorAll('[role="alert"]'), (alert) =>
+          alert.textContent?.trim(),
+        ),
+      ).toEqual(["Agent list unavailable"]),
+    );
   });
 
   it("renders the selected agent's tool catalog loading state", () => {

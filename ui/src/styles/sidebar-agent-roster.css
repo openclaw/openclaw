@@ -395,3 +395,7 @@ openclaw-sidebar-agent-roster {
   width: 16px;
   height: 16px;
 }
+
+.sidebar-agent-roster__pin--pinned svg {
+  fill: currentColor;
+}

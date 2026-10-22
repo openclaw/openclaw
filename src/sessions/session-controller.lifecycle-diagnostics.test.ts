@@ -566,7 +566,9 @@ it("does not let pre-dispatch bypass an older preparing input or retain a failed
 });
 
 it("gates and hashes phase events without consuming the slow-warning budget", async () => {
-  setLoggerOverride({ level: "info", consoleLevel: "silent", file: logFile });
+  setLoggerOverride({ level: "info", consoleLevel: "info", consoleStyle: "pretty", file: logFile });
+  const consoleLog = vi.spyOn(console, "log").mockImplementation(() => {});
+  const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const fields = {
     phase: "source-claim" as const,
     status: "waiting" as const,
@@ -591,6 +593,7 @@ it("gates and hashes phase events without consuming the slow-warning budget", as
     prioritySourceIdHash: expect.stringMatching(/^[0-9a-f]{64}$/),
   });
   expect(JSON.stringify(phases)).not.toContain("sensitive-phase-");
+  expect(consoleLog).not.toHaveBeenCalled();
   const holder = hold("mutation", {
     scope: "phase-budget-store",
     identities: ["phase-budget-session"],
@@ -603,6 +606,10 @@ it("gates and hashes phase events without consuming the slow-warning budget", as
     await holder.promise;
   }
   expect(await records("slow")).toHaveLength(1);
+  expect(consoleWarn).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("slow session lifecycle operation"),
+  );
+  expect(consoleWarn.mock.calls[0]?.[0]).toContain("elapsedMs=1000");
 });
 it("preserves operation errors and queue release when the native logging sink throws", async () => {
   vi.resetModules();

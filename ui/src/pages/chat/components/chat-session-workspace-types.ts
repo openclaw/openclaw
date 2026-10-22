@@ -15,6 +15,8 @@ import type {
 } from "./chat-sidebar-content-types.ts";
 
 export type SessionWorkspaceArtifacts = {
+  /** Completion of the owner's admitted read; presentation observes without issuing another RPC. */
+  readResult?: Promise<void>;
   items: NonNullable<SessionWorkspaceListResult["artifacts"]>;
   /** At least one successful response; remains true through refresh/error. */
   resolved: boolean;
@@ -25,6 +27,7 @@ export type SessionWorkspaceArtifacts = {
 };
 
 export type SessionWorkspaceState = {
+  readResult?: Promise<void>;
   catalogNavigation?: SessionWorkspaceNavigation;
   pendingPreview?: { id: string; disposition: "pinned" | "preview" };
   mobileNavigation?: SessionWorkspaceMobileNavigation;
