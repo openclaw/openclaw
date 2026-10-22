@@ -77,6 +77,55 @@ function observeChanges(sessionKey: string) {
   return { changes, [Symbol.dispose]: unsubscribe };
 }
 
+function observePublications(database: ReturnType<typeof fixture>["database"], sessionKey: string) {
+  const changes: Array<{ change: SessionRowChange; inTransaction: boolean; revision: number }> = [];
+  const facts: SessionRowChange[] = [];
+  const pipelineSql: string[] = [];
+  let readingPublication = false;
+  const unsubscribe = sessionChanges.subscribe((change) => {
+    if (!("sessionKey" in change) || change.sessionKey !== sessionKey) {
+      return;
+    }
+    readingPublication = true;
+    try {
+      changes.push({
+        change,
+        inTransaction: database.db.isTransaction,
+        revision: readBoardSnapshotWithHtmlViewMetadata(database, sessionKey)!.snapshot.revision,
+      });
+    } finally {
+      readingPublication = false;
+    }
+  });
+  const stopFacts = sessionChanges.subscribeFacts((change) => {
+    if ("sessionKey" in change && change.sessionKey === sessionKey) {
+      facts.push(change);
+    }
+  });
+  clearNodeSqliteKyselyCacheForDatabase(requireNativeSqliteDatabase(database.db));
+  const host = observeHostDataSql((sql) => {
+    // Publication observers intentionally read the committed snapshot on the host.
+    if (!readingPublication) {
+      pipelineSql.push(sql);
+    }
+  });
+  return {
+    host,
+    pipelineSql,
+    changes,
+    expectRevision(revision: number) {
+      const change = { sessionKey, storePath: database.path };
+      expect(changes.splice(0)).toEqual([{ change, inTransaction: false, revision }]);
+      expect(facts.splice(0)).toEqual([{ ...change, facts: { kind: "unchanged" } }]);
+    },
+    [Symbol.dispose]() {
+      host.restore();
+      stopFacts();
+      unsubscribe();
+    },
+  };
+}
+
 function interceptSnapshotRead(
   afterRead: (snapshot: BoardSnapshotWithHtmlViewMetadata | undefined) => void | Promise<void>,
 ) {
@@ -173,99 +222,44 @@ it("admits authorized Board writes off host and publishes each committed change 
   const { database, store, target, document } = fixture();
   const assertCurrent = vi.fn();
   const authority = { assertCurrent };
-  const pipelineSql: string[] = [];
-  let readingPublication = false;
-  const changes: Array<{ change: SessionRowChange; inTransaction: boolean; revision: number }> = [];
-  const unsubscribe = sessionChanges.subscribe((change) => {
-    if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
-      readingPublication = true;
-      try {
-        changes.push({
-          change,
-          inTransaction: database.db.isTransaction,
-          revision: readBoardSnapshotWithHtmlViewMetadata(database, target.sessionKey)!.snapshot
-            .revision,
-        });
-      } finally {
-        readingPublication = false;
-      }
-    }
+  using observed = observePublications(database, target.sessionKey);
+  const { host, changes, pipelineSql, expectRevision: expectPublication } = observed;
+  expect(
+    await store.applyOps(target, [{ kind: "tab_create", tabId: "main", title: "Main" }], authority),
+  ).toMatchObject({ revision: 1, tabs: [{ tabId: "main" }] });
+  expectPublication(1);
+  const put = await store.putWidget(
+    {
+      ...htmlWidget(target.sessionKey, "status", "<p>committed</p>"),
+      declared: { tools: ["health"] },
+    },
+    authority,
+  );
+  expect(put).toMatchObject({ revision: 2, widgets: [{ revision: 1, grantState: "pending" }] });
+  expectPublication(2);
+  expect(
+    await store.grant(target, "status", "granted", 1, put.widgets[0]?.instanceId, authority),
+  ).toMatchObject({ revision: 3, widgets: [{ revision: 1, grantState: "granted" }] });
+  expectPublication(3);
+  expect(await document("status")).toMatchObject({
+    html: "<p>committed</p>",
+    grantState: "granted",
   });
-  const facts: SessionRowChange[] = [];
-  const stopFacts = sessionChanges.subscribeFacts((change) => {
-    if ("sessionKey" in change && change.sessionKey === target.sessionKey) {
-      facts.push(change);
-    }
-  });
-  clearNodeSqliteKyselyCacheForDatabase(requireNativeSqliteDatabase(database.db));
-  const host = observeHostDataSql((sql) => {
-    // The publication observer deliberately reads the committed snapshot on the host.
-    if (!readingPublication) {
-      pipelineSql.push(sql);
-    }
-  });
-  const expectPublication = (revision: number) => {
-    expect(changes).toEqual([
-      {
-        change: { sessionKey: target.sessionKey, storePath: database.path },
-        inTransaction: false,
-        revision,
-      },
-    ]);
-    expect(facts).toEqual([
-      { sessionKey: target.sessionKey, storePath: database.path, facts: { kind: "unchanged" } },
-    ]);
-    changes.length = 0;
-    facts.length = 0;
-  };
-  try {
-    expect(
-      await store.applyOps(
-        target,
-        [{ kind: "tab_create", tabId: "main", title: "Main" }],
-        authority,
-      ),
-    ).toMatchObject({ revision: 1, tabs: [{ tabId: "main" }] });
-    expectPublication(1);
-    const put = await store.putWidget(
-      {
-        ...htmlWidget(target.sessionKey, "status", "<p>committed</p>"),
-        declared: { tools: ["health"] },
-      },
-      authority,
-    );
-    expect(put).toMatchObject({ revision: 2, widgets: [{ revision: 1, grantState: "pending" }] });
-    expectPublication(2);
-    expect(
-      await store.grant(target, "status", "granted", 1, put.widgets[0]?.instanceId, authority),
-    ).toMatchObject({ revision: 3, widgets: [{ revision: 1, grantState: "granted" }] });
-    expectPublication(3);
-    expect(await document("status")).toMatchObject({
-      html: "<p>committed</p>",
-      grantState: "granted",
-    });
-    const hostBoardMutations = host.queries.filter(
+  expect(
+    host.queries.filter(
       (sql) =>
-        /^\s*(?:insert|update|delete|replace|create|alter|drop)\b/iu.test(sql) &&
-        /\bboard_(?:tabs|widgets)\b/iu.test(sql),
-    );
-    expect(hostBoardMutations).toEqual([]);
-    expect(
-      host.queries.filter(
-        (sql) => /\bfrom\s+sqlite_schema\b/iu.test(sql) && /\bboard_widgets\b/iu.test(sql),
-      ),
-    ).toEqual([]);
-    expect(changes).toEqual([]);
-    expect(assertCurrent).toHaveBeenCalled();
-    expect(pipelineSql.filter((sql) => /\bboard_(?:tabs|widgets)\b/iu.test(sql))).toEqual([]);
-    expect(
-      pipelineSql.filter((sql) => /select "entry_json" from "session_nodes"/iu.test(sql)),
-    ).toEqual([]);
-  } finally {
-    host.restore();
-    stopFacts();
-    unsubscribe();
-  }
+        /\bboard_(?:tabs|widgets)\b/iu.test(sql) &&
+        (/^\s*(?:insert|update|delete|replace|create|alter|drop)\b/iu.test(sql) ||
+          /\bfrom\s+sqlite_schema\b/iu.test(sql)),
+    ),
+  ).toEqual([]);
+  expect(changes).toEqual([]);
+  expect(assertCurrent).toHaveBeenCalled();
+  expect(
+    pipelineSql.filter((sql) =>
+      /\bboard_(?:tabs|widgets)\b|select "entry_json" from "session_nodes"/iu.test(sql),
+    ),
+  ).toEqual([]);
 });
 
 it("preserves untouched widget rows while persisting later layout changes", async () => {
@@ -301,9 +295,7 @@ it.each([false, true])(
       "<p>captured</p>",
     );
     const pending = writer.track(
-      store.putWidget(params, {
-        assertCurrent: () => authority.signal.throwIfAborted(),
-      }),
+      store.putWidget(params, { assertCurrent: () => authority.signal.throwIfAborted() }),
     );
     params.name = "changed";
     params.content = { kind: "html", html: "<p>changed</p>" };

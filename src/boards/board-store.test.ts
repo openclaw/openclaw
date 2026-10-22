@@ -18,6 +18,7 @@ import { restoreEmptyV21StorageForHistoricalFixture } from "../state/openclaw-ag
 import { BoardValidationError } from "./board-layout.js";
 import {
   boardFixture,
+  boardClient,
   closeBoardDatabases as closeDatabases,
   htmlWidget,
   mcpContent,
@@ -70,6 +71,7 @@ async function expectWidget(snapshot: Promise<BoardSnapshot>, expected: Record<s
 
 function fixture() {
   const context = boardFixture(tempDirs.make("board-store-"));
+  let store = context.store;
   return {
     ...context,
     html: (name: string, html: string) => putHtml(context.store, context.sessionKey, name, html),
@@ -79,10 +81,44 @@ function fixture() {
         .run(...values, context.sessionKey, name);
     },
     manifest: (name = "status") => {
-      const row = context.database.db
-        .prepare("SELECT manifest FROM board_widgets WHERE session_key = ? AND name = ?")
+      const row = openOpenClawAgentDatabase(context.options)
+        .db.prepare("SELECT manifest FROM board_widgets WHERE session_key = ? AND name = ?")
         .get(context.sessionKey, name) as { manifest: string };
       return JSON.parse(row.manifest);
+    },
+    pin(
+      name: string,
+      title: string,
+      html: string,
+      key?: string,
+      fallbackName = `${name}-${key?.repeat(8)}`,
+    ) {
+      return store.putWidget({
+        ...htmlWidget(context.sessionKey, name, html),
+        title,
+        ...(key
+          ? {
+              generatedIdentity: {
+                source: "show_widget" as const,
+                key: key.repeat(64),
+                fallbackName,
+              },
+            }
+          : {}),
+      });
+    },
+    readHtml: (name: string) => readBoardHtml(store, context.target, name),
+    current: () => store.getSnapshot(context.target),
+    async reopen() {
+      await closeDatabases();
+      store = new SqliteBoardStore(context.storeOptions);
+    },
+    unmark(name: string) {
+      context.database.db
+        .prepare(
+          "UPDATE board_widgets SET manifest = json_remove(manifest, '$.nameIdentity') WHERE session_key = ? AND name = ?",
+        )
+        .run(context.sessionKey, name);
     },
   };
 }
@@ -283,19 +319,26 @@ it("does not select the HTML BLOB when preparing board view metadata", async () 
 });
 
 describe("SqliteBoardStore native widgets", () => {
-  it("replaces omitted plugin props without changing unrelated layout state", async () => {
-    const { store, put, ops, snapshot: readSnapshot } = testBoard();
+  it("preserves native identity and layout through edits, reopen, and replacement", async () => {
+    const stateDir = tempDirs.make("board-native-identity-");
+    const {
+      store,
+      put,
+      ops,
+      snapshot: readSnapshot,
+    } = boardClient(createTestBoardStore({ stateDir }), boardSession);
     const putCard = (
       name: string,
       props?: Record<string, unknown>,
       placement?: BoardWidgetMaterializedPutParams["placement"],
-    ) =>
-      put({
-        name,
-        content: pluginContent(props),
-        ...(placement ? { placement } : {}),
-      });
-    const initial = await putCard("work-item", { cardId: "card-123", compact: true });
+    ) => put({ name, content: pluginContent(props), ...(placement ? { placement } : {}) });
+    const props = {
+      cardId: "card-123",
+      compact: true,
+      instanceId: "caller-selected",
+      pluginInstanceId: "caller-selected",
+    };
+    const initial = await putCard("work-item", { ...props });
     for (const name of ["left", "right"]) {
       await putCard(name, { side: name });
     }
@@ -304,7 +347,7 @@ describe("SqliteBoardStore native widgets", () => {
       name: "work-item",
       contentKind: "plugin",
       pluginKind: "workboard:card",
-      props: { cardId: "card-123", compact: true },
+      props,
       grantState: "none",
     });
     const instanceId = initial.widgets[0]?.instanceId;
@@ -314,7 +357,7 @@ describe("SqliteBoardStore native widgets", () => {
 
     const moved = await ops({ kind: "widget_move", name: "work-item", after: "right" });
     expect(moved.widgets.map((widget) => widget.name)).toEqual(["left", "right", "work-item"]);
-    expect(moved.widgets[2]?.props).toEqual({ cardId: "card-123", compact: true });
+    expect(moved.widgets[2]?.props).toEqual(props);
     expect(moved.widgets[2]?.instanceId).toBe(instanceId);
     const [left, right] = moved.widgets;
 
@@ -334,6 +377,30 @@ describe("SqliteBoardStore native widgets", () => {
       expect(resolvedWidgetName).toBe("work-item");
       expect(await readSnapshot()).toEqual(snapshot);
     }
+    const edited = await put({
+      name: "work-item",
+      title: "Updated status",
+      content: pluginContent({ ...props }),
+    });
+    expect(edited.widgets[1]).toMatchObject({ title: "Updated status", instanceId });
+    const resized = await ops({ kind: "widget_resize", name: "work-item", sizeW: 8, sizeH: 6 });
+    await closeDatabases();
+    const reopened = boardClient(createTestBoardStore({ stateDir }), boardSession);
+    expect(await reopened.snapshot()).toEqual(resized);
+    expect((await reopened.snapshot()).widgets[1]).toMatchObject({
+      title: "Updated status",
+      instanceId,
+      sizeW: 8,
+      sizeH: 6,
+    });
+    expect(
+      (await reopened.store.getSnapshotWithHtmlViewMetadata(boardSession)).htmlViewMetadata.size,
+    ).toBe(0);
+    await reopened.ops({ kind: "widget_remove", name: "work-item" });
+    const replacement = await reopened.put({ name: "work-item", content: pluginContent() });
+    expect(replacement.widgets[2]?.instanceId).toMatch(instancePattern);
+    expect(replacement.widgets[2]?.instanceId).not.toBe(instanceId);
+    expect((await reopened.snapshot()).widgets).toEqual(replacement.widgets);
   });
 
   it("rejects oversized plugin props and capability declarations", async () => {
@@ -354,44 +421,6 @@ describe("SqliteBoardStore native widgets", () => {
         declared: { tools: ["workboard.cards.move"] },
       }),
     ).rejects.toThrow("do not accept sandbox capability declarations");
-  });
-
-  it("keeps native widget identity across edits and reopen, but renews it after removal", async () => {
-    const stateDir = tempDirs.make("openclaw-board-plugin-identity-");
-    const store = createTestBoardStore({ stateDir });
-    const target = { sessionKey: "agent:main:native-identity" };
-    const content = pluginContent();
-    const initial = await store.putWidget({ ...target, name: "status", content });
-    const instanceId = initial.widgets[0]?.instanceId;
-    expect(instanceId).toMatch(instancePattern);
-
-    const edited = await store.putWidget({
-      ...target,
-      name: "status",
-      title: "Updated status",
-      content: {
-        ...content,
-        props: { instanceId: "caller-selected", pluginInstanceId: "caller-selected" },
-      },
-    });
-    expect(edited.widgets[0]).toMatchObject({ title: "Updated status", instanceId });
-    await store.applyOps(target, [{ kind: "widget_resize", name: "status", sizeW: 8, sizeH: 6 }]);
-
-    await closeDatabases();
-    const reopened = createTestBoardStore({ stateDir });
-    await expectWidget(reopened.getSnapshot(target), {
-      title: "Updated status",
-      instanceId,
-      sizeW: 8,
-      sizeH: 6,
-    });
-    expect((await reopened.getSnapshotWithHtmlViewMetadata(target)).htmlViewMetadata.size).toBe(0);
-
-    await reopened.applyOps(target, [{ kind: "widget_remove", name: "status" }]);
-    const replacement = await reopened.putWidget({ ...target, name: "status", content });
-    expect(replacement.widgets[0]?.instanceId).toMatch(instancePattern);
-    expect(replacement.widgets[0]?.instanceId).not.toBe(instanceId);
-    expect((await reopened.getSnapshot(target)).widgets[0]).toEqual(replacement.widgets[0]);
   });
 });
 
@@ -439,11 +468,7 @@ describe("SqliteBoardStore behavior", () => {
       };
       const narrow = { netOrigins: ["https://one.example"], tools: ["weather.read"] };
       const put = (text: string, declared = narrow) =>
-        putWidget({
-          name: "scoped",
-          content: documentContent(text),
-          declared,
-        });
+        putWidget({ name: "scoped", content: documentContent(text), declared });
       const first = await put("one", wide);
       await grant("scoped", 1, first.widgets[0]?.instanceId);
 
@@ -707,10 +732,7 @@ describe("SqliteBoardStore persistence", () => {
     updateWidget("manifest = ?", [JSON.stringify(health)]);
 
     await expectWidget(snapshot(), { grantState: "pending", declared: health });
-    expect(await document("status")).toMatchObject({
-      grantState: "pending",
-      declared: health,
-    });
+    expect(await document("status")).toMatchObject({ grantState: "pending", declared: health });
     await expectWidget(grant("status", 1, current.widgets[0]?.instanceId), {
       grantState: "granted",
     });
@@ -722,47 +744,8 @@ describe("SqliteBoardStore persistence", () => {
   });
 });
 
-function identityFixture() {
-  const context = fixture();
-  let store = context.store;
-  const { sessionKey, target } = context;
-  return {
-    ...context,
-    pin(
-      name: string,
-      title: string,
-      html: string,
-      key?: string,
-      fallbackName = `${name}-${key?.repeat(8)}`,
-    ) {
-      return store.putWidget({
-        ...htmlWidget(sessionKey, name, html),
-        title,
-        ...(key
-          ? {
-              generatedIdentity: {
-                source: "show_widget" as const,
-                key: key.repeat(64),
-                fallbackName,
-              },
-            }
-          : {}),
-      });
-    },
-    html: (name: string) => readBoardHtml(store, target, name),
-    snapshot: () => store.getSnapshot(target),
-    async reopen() {
-      await closeDatabases();
-      store = new SqliteBoardStore(context.storeOptions);
-    },
-    unmark(name: string) {
-      context.updateWidget("manifest = json_remove(manifest, '$.nameIdentity')", [], name);
-    },
-  };
-}
-
 it("keeps colliding titles distinct and canonical spellings stable", async () => {
-  const { pin, html } = identityFixture();
+  const { pin, readHtml: html } = fixture();
   expect((await pin("cafe-menu", "Café Menu", "accented", "a")).resolvedWidgetName).toBe(
     "cafe-menu",
   );
@@ -783,19 +766,31 @@ it("keeps colliding titles distinct and canonical spellings stable", async () =>
   });
 });
 
-it("keeps same-title explicit takeovers distinct from later generated pins", async () => {
-  const { pin, html } = identityFixture();
-  await pin("status", "Status", "generated", "c");
-  await pin("status", "Status", "manual");
-  expect(await pin("status", "Status", "generated", "c")).toMatchObject({
-    resolvedWidgetName: "status-cccccccc",
-    widgets: [{ name: "status" }, { name: "status-cccccccc" }],
-  });
-  expect((await html("status"))?.html).toContain("manual");
-});
+it.each([false, true])(
+  "persists explicit ownership after generated takeover: %s",
+  async (takeover) => {
+    const { pin, readHtml: html, reopen } = fixture();
+    if (takeover) {
+      await pin("status", "Status", "generated", "c");
+    }
+    await pin("status", "Status", "manual");
+    if (takeover) {
+      expect((await pin("status", "Status", "generated", "c")).resolvedWidgetName).toBe(
+        "status-cccccccc",
+      );
+      expect((await html("status"))?.html).toContain("manual");
+    }
+    await reopen();
+    expect(await pin("status", "Status", "generated", "c")).toMatchObject({
+      resolvedWidgetName: "status-cccccccc",
+      widgets: [{ name: "status" }, { name: "status-cccccccc" }],
+    });
+    expect((await html("status"))?.html).toContain("manual");
+  },
+);
 
 it("fails closed instead of overwriting an occupied deterministic fallback", async () => {
-  const { pin, snapshot } = identityFixture();
+  const { pin, current: snapshot } = fixture();
   await pin("status", "Manual", "manual");
   await pin("status-dddddddd", "Reserved", "reserved");
   await expect(pin("status", "Generated", "generated", "d")).rejects.toThrow(
@@ -805,14 +800,23 @@ it("fails closed instead of overwriting an occupied deterministic fallback", asy
 });
 
 it("rejects a fallback that is not distinct even on an empty board", async () => {
-  await expect(
-    identityFixture().pin("status", "Status", "generated", "f", "status"),
-  ).rejects.toThrow("generated widget fallback name must differ from its preferred name");
+  await expect(fixture().pin("status", "Status", "generated", "f", "status")).rejects.toThrow(
+    "generated widget fallback name must differ from its preferred name",
+  );
 });
 
 it("preserves a beta.5-format unmarked explicit row and reuses the generated fallback", async () => {
-  const { env, sessionKey, put, pin, html, reopen, unmark, snapshot, grant, ops } =
-    identityFixture();
+  const {
+    put,
+    pin,
+    readHtml: html,
+    reopen,
+    unmark,
+    current: snapshot,
+    grant,
+    ops,
+    manifest,
+  } = fixture();
   await pin("anchor", "Anchor", "anchor");
   const legacy = await put({
     name: "cafe-menu",
@@ -847,16 +851,13 @@ it("preserves a beta.5-format unmarked explicit row and reuses the generated fal
   expect((await snapshot()).widgets.find(({ name }) => name === "cafe-menu")).toMatchObject(
     preserved,
   );
-  const row = openOpenClawAgentDatabase({ agentId: "main", env })
-    .db.prepare("SELECT manifest FROM board_widgets WHERE session_key = ? AND name = ?")
-    .get(sessionKey, "cafe-menu-eeeeeeee") as { manifest: string };
-  expect(JSON.parse(row.manifest)).toMatchObject({
+  expect(manifest("cafe-menu-eeeeeeee")).toMatchObject({
     nameIdentity: { kind: "generated", source: "show_widget", key: "e".repeat(64) },
   });
 });
 
 it("does not infer generated ownership from a canonical unmarked title match", async () => {
-  const { pin, html, reopen, unmark } = identityFixture();
+  const { pin, readHtml: html, reopen, unmark } = fixture();
   await pin("widget-e3b21956", "が", "legacy");
   unmark("widget-e3b21956");
   await reopen();
@@ -865,14 +866,4 @@ it("does not infer generated ownership from a canonical unmarked title match", a
     widgets: [{ name: "widget-e3b21956" }, { name: "widget-f62b28f7" }],
   });
   expect((await html("widget-e3b21956"))?.html).toContain("legacy");
-});
-
-it("persists explicit ownership across restart", async () => {
-  const { pin, html, reopen } = identityFixture();
-  await pin("status", "Status", "manual");
-  await reopen();
-  expect((await pin("status", "Status", "generated", "d")).resolvedWidgetName).toBe(
-    "status-dddddddd",
-  );
-  expect((await html("status"))?.html).toContain("manual");
 });

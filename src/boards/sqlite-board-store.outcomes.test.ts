@@ -83,10 +83,7 @@ function failureOutcome(kind: "native" | "transported" | "cleanup") {
   // sqlite-worker-broker-reply.cleanup tests. Here only the delivered error matters.
   return kind === "native"
     ? error
-    : Object.assign(new Error(error.message), {
-        name: error.name,
-        code: error.code,
-      });
+    : Object.assign(new Error(error.message), { name: error.name, code: error.code });
 }
 
 it.each(["native", "transported", "cleanup"] as const)(
