@@ -170,8 +170,9 @@ suite.define(() => {
         page.waitForEvent("requestfailed", (request) => queueModule.test(request.url())),
         page.waitForEvent(
           "console",
-          (message) =>
-            message.text().startsWith("outbox-preload-error: ") && queueModule.test(message.text()),
+          (consoleMessage) =>
+            consoleMessage.text().startsWith("outbox-preload-error: ") &&
+            queueModule.test(consoleMessage.text()),
         ),
         send(page),
       ]);
