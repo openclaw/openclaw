@@ -8,7 +8,7 @@ import { listen } from "../../lib/reactive/listener.ts";
 import type { prepareUsageDateRange } from "./helpers.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.tsx";
-import { createUsageRead, UsagePending, UsageReadStatus } from "./read-status.tsx";
+import { createUsageRead, UsagePending, UsageReadStatus, type UsageRead } from "./read-status.tsx";
 import type { UsageProps, UsageSessionEntry } from "./types.ts";
 import { USAGE_TOKEN_CATEGORIES } from "./view-chart.tsx";
 
@@ -249,10 +249,11 @@ export function TimeSeriesCompact(props: TimeSeriesProps) {
   );
 }
 
-function TimeSeriesContent(props: TimeSeriesProps & { loading: boolean; read: () => null }) {
+function TimeSeriesContent(props: TimeSeriesProps & { loading: boolean; read: UsageRead }) {
+  // Loaded charts must not join the pending lane during a background refresh.
   const loading = () =>
-    (props.loading || props.detail.timeSeriesStatus.awaitingGateway) &&
-    !props.detail.timeSeriesStatus.hasLoaded;
+    !props.detail.timeSeriesStatus.hasLoaded &&
+    (props.loading || props.detail.timeSeriesStatus.awaitingGateway);
   const view = () => props.view;
   return (
     <Show
@@ -297,7 +298,7 @@ function TimeSeriesChart(props: {
   model: NonNullable<ReturnType<typeof deriveTimeSeries>["chart"]>;
   callbacks: TimeSeriesProps["callbacks"];
   status: TimeSeriesProps["detail"]["timeSeriesStatus"];
-  read: () => null;
+  read: UsageRead;
 }) {
   const model = () => props.model;
   let svg!: SVGSVGElement;

@@ -1,42 +1,54 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, Errored, isPending, latest, Loading, type Accessor } from "solid-js";
+import {
+  createDeferred,
+  createMemo,
+  Errored,
+  isPending,
+  latest,
+  Loading,
+  type Accessor,
+} from "solid-js";
 import type { PageReadResult } from "../../lib/page-request.ts";
+
+export type UsageRead = Accessor<PageReadResult | undefined>;
 
 export function createUsageRead(
   source: () => Promise<PageReadResult> | null,
   readError: () => string | null,
-) {
-  // The page projection also publishes filters and chart controls. Only a new
-  // admitted receipt or recorded failure changes this read's readiness.
-  const receipt = createMemo(source);
-  const error = createMemo(readError);
-  return createMemo(() => {
-    const pending = receipt();
-    const message = error();
-    if (!pending) {
-      if (message) {
-        throw new Error(message);
-      }
-      return null;
-    }
-    return Promise.resolve(pending).then((result) => {
-      if (result) {
-        throw result.error;
-      }
-      if (message) {
-        throw new Error(message);
-      }
-      return null;
-    });
+): UsageRead {
+  // A bare Promise return would make this identity memo another async read.
+  const receipt = createMemo(() => ({ value: latest(source) }), {
+    equals: (before, after) => before.value === after.value,
   });
+  const error = createMemo(() => latest(readError));
+  // The receipt only controls status. Deferring it keeps query and selection
+  // publications independent while an earlier read is still settling.
+  return createDeferred<PageReadResult | undefined>(
+    () => {
+      const pending = latest(receipt).value;
+      const message = latest(error);
+      const recordedError = message ? { error: new Error(message) } : null;
+      return pending
+        ? Promise.resolve(pending).then((result) => result ?? recordedError)
+        : recordedError;
+    },
+    { loadingValue: undefined },
+  );
 }
 
-/** Errors add the owner's status without replacing its accepted charts or rows. */
-export function UsageReadStatus(props: { read: Accessor<null>; children: () => JSX.Element }) {
+/** Only this status slot consumes failures; accepted charts and rows stay mounted. */
+export function UsageReadStatus(props: { read: UsageRead; children: () => JSX.Element }) {
+  const completion = () => {
+    const result = latest(props.read);
+    if (result) {
+      throw result.error;
+    }
+    return null;
+  };
   return (
     <Loading fallback={props.children()}>
       <Errored fallback={() => props.children()}>
-        {latest(props.read)}
+        {completion()}
         {props.children()}
       </Errored>
     </Loading>
@@ -44,9 +56,11 @@ export function UsageReadStatus(props: { read: Accessor<null>; children: () => J
 }
 
 export function UsagePending(props: {
-  read: Accessor<null>;
+  read: UsageRead;
   children: (pending: Accessor<boolean>) => JSX.Element;
 }) {
-  const pending = () => isPending(props.read);
-  return <Loading fallback={props.children(() => true)}>{props.children(pending)}</Loading>;
+  // The native loading value makes this probe always readable. Keep the owner
+  // props outside Loading so new query and selection facts land immediately.
+  const pending = () => isPending(props.read) || latest(props.read) === undefined;
+  return <>{props.children(pending)}</>;
 }

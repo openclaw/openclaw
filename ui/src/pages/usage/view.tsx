@@ -1,4 +1,4 @@
-import { For, Show, createMemo, type Accessor } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { extractQueryTerms } from "../../../../src/shared/usage-query.js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { Menu } from "../../components/solid/menu.tsx";
@@ -19,7 +19,7 @@ import { UsageMosaic } from "./metrics-view.tsx";
 import { buildPeakErrorHours, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageEmptyState, renderUsageLoadingStatus } from "./page-shell.tsx";
 import { applySuggestionToQuery, buildQuerySuggestions, removeQueryToken } from "./query.ts";
-import { createUsageRead, UsagePending, UsageReadStatus } from "./read-status.tsx";
+import { createUsageRead, UsagePending, UsageReadStatus, type UsageRead } from "./read-status.tsx";
 import type { UsageProps } from "./types.ts";
 import { DailyChartCompact, CostBreakdownCompact } from "./view-chart.tsx";
 import { UsageCreatorFilter, UsageCreators } from "./view-creators.tsx";
@@ -106,7 +106,7 @@ export function renderUsage(props: UsageProps) {
   );
 }
 
-function UsageView(props: UsageProps & { loading: boolean; read: Accessor<null> }) {
+function UsageView(props: UsageProps & { loading: boolean; read: UsageRead }) {
   const loading = () => props.loading;
   const overview = createMemo(() =>
     resolveUsageOverviewState({ ...props.data, loading: loading() }),

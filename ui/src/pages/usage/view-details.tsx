@@ -9,7 +9,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { parseSessionLog, prepareUsageDateRange, type ParsedSessionLog } from "./helpers.ts";
 import { charsToTokens, formatUsageCost, formatUsageTokens } from "./metrics.ts";
 import { renderUsageRefreshStatus } from "./page-shell.tsx";
-import { createUsageRead, UsagePending, UsageReadStatus } from "./read-status.tsx";
+import { createUsageRead, UsagePending, UsageReadStatus, type UsageRead } from "./read-status.tsx";
 import type { SessionLogRole, UsageContextDetail, UsageProps, UsageSessionEntry } from "./types.ts";
 import { renderSessionSummary } from "./view-session-summary.tsx";
 import { deriveTimeSeries, TimeSeriesCompact } from "./view-timeseries.tsx";
@@ -187,7 +187,7 @@ function ContextContent(props: {
   usage: UsageSessionEntry["usage"];
   expanded: boolean;
   onToggleExpanded: () => void;
-  read: () => null;
+  read: UsageRead;
   loading: boolean;
 }) {
   const status = () => (
@@ -445,7 +445,7 @@ function SessionLogsContent(props: {
   callbacks: UsageProps["callbacks"]["details"];
   entries: ParsedSessionLog[];
   intervalEntries: ParsedSessionLog[];
-  read: () => null;
+  read: UsageRead;
   loading: boolean;
 }) {
   const expandedState = createMemo(() => props.detail.sessionLogsExpanded);
@@ -459,7 +459,8 @@ function SessionLogsContent(props: {
     } = detail;
     const logs = detail.sessionLogs;
     const parsedEntries = props.entries;
-    const initialLoading = (props.loading || status.awaitingGateway) && !status.hasLoaded;
+    // Loaded logs must not join the pending lane during a background refresh.
+    const initialLoading = !status.hasLoaded && (props.loading || status.awaitingGateway);
     const initialError = status.error && !status.hasLoaded;
     const refreshStatus = initialLoading
       ? undefined
