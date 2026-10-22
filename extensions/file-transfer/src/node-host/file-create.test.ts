@@ -1,13 +1,11 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenClawPluginNodeHostCommandIo } from "openclaw/plugin-sdk/node-host";
 import { describe, expect, it, vi } from "vitest";
 import { FILE_CREATE_CHUNK_BYTES } from "../shared/file-create-protocol.js";
 import { handleFileCreate } from "./file-create.js";
 import * as fileWrite from "./file-write-path.js";
-import { useFiles } from "./node-host.test-support.js";
+import { duplexPeer, useFiles } from "./node-host.test-support.js";
 
 const { at, dir: makeDir } = useFiles("file-create-test-");
 const digest = (data: Buffer) => crypto.createHash("sha256").update(data).digest("hex");
@@ -17,37 +15,12 @@ const metadata = (target: string, data: Buffer = Buffer.from("x")) => ({
   expectedSha256: digest(data),
 });
 
-function receiver(controller = new AbortController()) {
-  let listener: ((message: Uint8Array) => void | Promise<void>) | undefined;
-  const subscribed = createDeferred<void>();
-  const ack = vi.fn(async (message: Uint8Array) => {
+function receiver() {
+  const peer = duplexPeer();
+  peer.send.mockImplementation(async (message) => {
     expect(Buffer.from(message).toString()).toBe("ack");
   });
-  const onMessage = vi.fn((callback: NonNullable<typeof listener>) => {
-    listener = callback;
-    subscribed.resolve();
-    return () => {
-      listener = undefined;
-    };
-  });
-  return {
-    controller,
-    io: {
-      signal: controller.signal,
-      emitChunk: async () => {},
-      onInput: () => {},
-      frames: { send: ack, onMessage },
-    } satisfies OpenClawPluginNodeHostCommandIo,
-    subscribed: subscribed.promise,
-    ack,
-    onMessage,
-    send: async (bytes: Uint8Array) => {
-      if (!listener) {
-        throw new Error("receiver is not subscribed");
-      }
-      await listener(bytes);
-    },
-  };
+  return peer;
 }
 
 async function authorized(filePath: string, data: Buffer) {
@@ -70,7 +43,7 @@ async function upload(params: Record<string, unknown>, data: Buffer) {
   const peer = receiver();
   const outcome = handleFileCreate(params, peer.io);
   await Promise.race([
-    peer.subscribed,
+    peer.ready,
     outcome.then((result) => {
       throw new Error(`closed before ready: ${JSON.stringify(result)}`);
     }),
@@ -79,17 +52,17 @@ async function upload(params: Record<string, unknown>, data: Buffer) {
   const sendNext = async () => {
     const chunk = data.subarray(offset, offset + FILE_CREATE_CHUNK_BYTES);
     offset += chunk.length;
-    await peer.send(chunk);
+    await peer.receive(chunk);
   };
   // The next chunk may arrive before the previous ACK send settles.
-  peer.ack.mockImplementationOnce(async (message) => {
+  peer.send.mockImplementationOnce(async (message) => {
     expect(Buffer.from(message).toString()).toBe("ack");
     await sendNext();
   });
   while (offset < data.length) {
     await sendNext();
   }
-  await peer.send(Buffer.alloc(0));
+  await peer.receive(Buffer.alloc(0));
   return { result: await outcome, peer };
 }
 
@@ -107,7 +80,7 @@ describe("file.create duplex command", () => {
       size: data.length,
       sha256: digest(data),
     });
-    expect(created.peer.ack).toHaveBeenCalledTimes(50);
+    expect(created.peer.send).toHaveBeenCalledTimes(50);
     expect(digest(await fs.readFile(target))).toBe(digest(data));
     await fs.writeFile(target, "user edit");
     const replay = await upload(await authorized(target, data), data);
@@ -126,13 +99,13 @@ describe("file.create duplex command", () => {
       ? handleFileCreate(params, peer.io).catch((error: unknown) => error)
       : undefined;
     if (duringReceive) {
-      await peer.subscribed;
-      await peer.send(data);
+      await peer.ready;
+      await peer.receive(data);
     }
     await fs.rename(parent, `${parent}-old`);
     await fs.mkdir(parent);
     if (duringReceive) {
-      await peer.send(Buffer.alloc(0));
+      await peer.receive(Buffer.alloc(0));
     }
     const result = await (receiving ?? handleFileCreate(params, peer.io));
     expect(result).not.toMatchObject({ ok: true });
@@ -174,15 +147,15 @@ describe("file.create duplex command", () => {
       const params = await authorized(target, data);
       const outcome = handleFileCreate(params, peer.io);
       const rejected = expect(outcome).rejects.toThrow();
-      await peer.subscribed;
+      await peer.ready;
       if (failure === "cancel") {
-        await peer.send(data.subarray(0, 1));
+        await peer.receive(data.subarray(0, 1));
         peer.controller.abort(new Error("source revoked"));
       } else if (failure === "chunk") {
-        await peer.send(Buffer.alloc(FILE_CREATE_CHUNK_BYTES + 1));
+        await peer.receive(Buffer.alloc(FILE_CREATE_CHUNK_BYTES + 1));
       } else {
-        await peer.send(failure === "size" ? data.subarray(0, 1) : Buffer.from("nope"));
-        await peer.send(Buffer.alloc(0));
+        await peer.receive(failure === "size" ? data.subarray(0, 1) : Buffer.from("nope"));
+        await peer.receive(Buffer.alloc(0));
       }
       await rejected;
       expect(await fs.readdir(at())).toEqual([]);
@@ -215,10 +188,10 @@ describe("file.create duplex command", () => {
     try {
       const outcome = handleFileCreate(await authorized(target, data), peer.io);
       const rejected = expect(outcome).rejects.toThrow("cancel publication");
-      await peer.subscribed;
-      await peer.send(data.subarray(0, FILE_CREATE_CHUNK_BYTES));
-      await peer.send(data.subarray(FILE_CREATE_CHUNK_BYTES));
-      await peer.send(Buffer.alloc(0));
+      await peer.ready;
+      await peer.receive(data.subarray(0, FILE_CREATE_CHUNK_BYTES));
+      await peer.receive(data.subarray(FILE_CREATE_CHUNK_BYTES));
+      await peer.receive(Buffer.alloc(0));
       await rejected;
       expect(await fs.readdir(at())).toEqual([]);
     } finally {

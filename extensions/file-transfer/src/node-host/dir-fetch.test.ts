@@ -1,7 +1,6 @@
 import crypto from "node:crypto";
 import fs from "node:fs/promises";
-import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import { createTarArchive } from "./dir-fetch-archive.js";
 import { handleDirFetch } from "./dir-fetch.js";
 import { useFiles } from "./node-host.test-support.js";
@@ -13,9 +12,7 @@ const HAS_TAR = process.platform !== "win32";
 
 async function fetchDirectory(input: Parameters<typeof handleDirFetch>[0]) {
   const result = await handleDirFetch(input);
-  if (!result.ok) {
-    throw new Error(`expected ok, got ${result.code}: ${result.message}`);
-  }
+  assert(result.ok, JSON.stringify(result));
   return result;
 }
 
@@ -65,40 +62,42 @@ describe("handleDirFetch", () => {
     expect(r.fileCount).toBe(r.entries?.length);
   });
 
-  it.runIf(HAS_TAR && process.platform !== "win32")(
-    "rejects a retargeted path before creating an archive",
-    async () => {
-      const first = at("first");
-      const second = at("second");
-      const link = at("current");
+  it.runIf(HAS_TAR).each(["symlink", "inode"])(
+    "rejects %s replacement after preflight",
+    async (kind) => {
       await seed(["first/approved.txt", "second/not-approved.txt"]);
-      await fs.symlink(first, link);
-
-      const preflight = await fetchDirectory({
-        path: link,
-        followSymlinks: true,
-        preflightOnly: true,
-      });
-      await fs.unlink(link);
-      await fs.symlink(second, link);
-
+      const target = kind === "symlink" ? at("current") : at("first");
+      if (kind === "symlink") {
+        await fs.symlink(at("first"), target);
+      }
+      const params = { path: target, followSymlinks: true };
+      const preflight = await fetchDirectory({ ...params, preflightOnly: true });
+      if (kind === "symlink") {
+        await fs.unlink(target);
+        await fs.symlink(at("second"), target);
+      } else {
+        await fs.rename(target, at("moved"));
+        await fs.rename(at("second"), target);
+      }
       const result = await handleDirFetch({
-        path: link,
-        followSymlinks: true,
+        ...params,
         expectedCanonicalPath: preflight.path,
+        ...(kind === "inode" ? { expectedBinding: preflight.binding } : {}),
       });
-
-      expect(result).toEqual({
-        ok: false,
-        code: "CANONICAL_PATH_CHANGED",
-        message: "resolved path differs from the authorized target",
-        canonicalPath: second,
-      });
+      expect(result).toMatchObject({ ok: false, code: "CANONICAL_PATH_CHANGED" });
+      if (kind === "symlink") {
+        expect(result).toEqual({
+          ok: false,
+          code: "CANONICAL_PATH_CHANGED",
+          message: "resolved path differs from the authorized target",
+          canonicalPath: at("second"),
+        });
+      }
     },
   );
 
   it.runIf(process.platform === "linux")(
-    "returns an invalid-path error for a non-UTF-8 filename instead of a partial preflight",
+    "rejects non-UTF-8 names without a partial preflight",
     async () => {
       await makeFile("valid.txt", "valid sibling");
       const nested = await makeDir("nested");
@@ -107,35 +106,12 @@ describe("handleDirFetch", () => {
         "unrepresentable filename",
       );
 
-      const result = await handleDirFetch({ path: at(), preflightOnly: true });
-
-      expect(result).toEqual({
+      expect(await handleDirFetch({ path: at(), preflightOnly: true })).toEqual({
         ok: false,
         code: "INVALID_PATH",
         message: expect.stringContaining("directory entry name is not valid UTF-8"),
         canonicalPath: at(),
       });
-    },
-  );
-
-  it.runIf(HAS_TAR)(
-    "rejects a replacement at the same canonical pathname before creating an archive",
-    async () => {
-      const target = await makeDir("target");
-      const moved = at("moved");
-      await fs.writeFile(path.join(target, "approved.txt"), "approved");
-      const preflight = await fetchDirectory({ path: target, preflightOnly: true });
-      await fs.rename(target, moved);
-      await fs.mkdir(target);
-      await fs.writeFile(path.join(target, "secret.txt"), "secret");
-
-      const result = await handleDirFetch({
-        path: target,
-        expectedCanonicalPath: preflight.path,
-        expectedBinding: preflight.binding,
-      });
-
-      expect(result).toMatchObject({ ok: false, code: "CANONICAL_PATH_CHANGED" });
     },
   );
 
@@ -154,8 +130,7 @@ describe("handleDirFetch", () => {
 
     expect(buf.subarray(0, 2)).toEqual(Buffer.from([0x1f, 0x8b]));
 
-    // file count covers the regular files we created (5); BSD tar may also
-    // list directory entries, so be generous.
+    // BSD tar may also list directory entries.
     expect(r.fileCount).toBeGreaterThanOrEqual(5);
     expect(r.entries).toEqual(
       expect.arrayContaining("a.txt b.txt sub sub/c.txt .root-note .hidden/note.txt".split(" ")),
@@ -172,14 +147,12 @@ describe("handleDirFetch", () => {
   });
 
   it.runIf(HAS_TAR)(
-    "returns TREE_TOO_LARGE when content exceeds the cap mid-stream",
+    "bounds archive bytes mid-stream",
     async () => {
-      // Write enough random content to exceed a small maxBytes. Random bytes
-      // don't compress, so gzip output is roughly the same size as input.
+      // Random bytes don't compress below the cap.
       const big = crypto.randomBytes(512 * 1024);
       await seed(["big1.bin", "big2.bin", "big3.bin"], big);
 
-      // The compressed stream must stop at the 64KB cap.
       await expectDirFetchError({ path: at(), maxBytes: 64 * 1024 }, "TREE_TOO_LARGE");
     },
     30_000,
