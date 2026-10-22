@@ -140,7 +140,7 @@ describe("subagent completion rejection ownership", () => {
       let cleanupFinished = false;
       h.completeSubagentRun.mockImplementation(async () => {
         completionSignal = getAsyncWorkSignal();
-        cleanup.track(
+        void cleanup.track(
           trackAsyncWork(async () => {
             await cleanup.wait();
             cleanupFinished = true;

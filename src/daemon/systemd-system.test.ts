@@ -1,4 +1,3 @@
-import { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
@@ -32,6 +31,7 @@ import {
 import { assertNoSystemSystemdOwnership } from "./systemd-system.js";
 const gatewayUnit = "openclaw-gateway.service";
 const notFound = () => Object.assign(new Error("missing"), { code: "ENOENT" });
+const existingStat = await fs.stat(new URL(import.meta.url));
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -42,7 +42,7 @@ beforeEach(() => {
     if (!state.paths.has(String(target))) {
       throw notFound();
     }
-    return new Stats();
+    return existingStat;
   });
   execFileUtf8.mockReset();
   execFileUtf8.mockImplementation(async (_command: string, args: string[]) =>

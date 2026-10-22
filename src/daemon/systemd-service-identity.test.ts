@@ -171,48 +171,63 @@ it("accepts root account aliases", async () => {
   }
 });
 
-it.each(["ordinary failure", "ownership refusal", "lost custody", "effect refusal"])(
-  "continues activation only after an ordinary reset failure: %s",
-  async (mode) => {
-    const denied = new Error("original maintenance custody retired");
-    let active = true;
-    resetFailure =
-      mode === "ownership refusal"
-        ? new ServiceOwnershipRefusalError("systemd-account-refused")
-        : new Error("reset-failed unavailable");
-    if (mode === "lost custody") {
-      afterReset = () => {
-        active = false;
-      };
-    }
-    const warn = vi.fn();
-    const activation = startSystemdService({
+it("retains the root privilege requirement for a pinned system unit", async () => {
+  vi.spyOn(process, "geteuid").mockReturnValue(2001);
+  await expect(
+    startSystemdService({ stdout: new PassThrough(), systemdIdentity: original }),
+  ).rejects.toThrow("sudo systemctl start openclaw.service");
+  expect(native.open).not.toHaveBeenCalled();
+  expect(native.systemctl).not.toHaveBeenCalled();
+});
+
+it("never falls back to an unbound manager when activation inspection fails", async () => {
+  native.query.mockRejectedValueOnce(new Error("native inspection unavailable"));
+  await expect(startSystemdService(options())).rejects.toThrow("native inspection unavailable");
+  expect(effects).toEqual([]);
+  expect(native.systemctl).not.toHaveBeenCalled();
+  expect(native.close).toHaveBeenCalledOnce();
+});
+
+it("warns and still attempts start when only reset-failed fails", async () => {
+  resetFailure = new Error("reset-failed unavailable");
+  const warn = vi.fn();
+  await startSystemdService({ ...options(), warn });
+  expect(effects).toEqual(["ResetFailedUnit", "StartUnit"]);
+  expect(warn).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("reset-failed did not complete"),
+  );
+});
+
+it("does not downgrade an ownership refusal from reset-failed", async () => {
+  resetFailure = new ServiceOwnershipRefusalError("systemd-account-refused");
+  const warn = vi.fn();
+  await expect(startSystemdService({ ...options(), warn })).rejects.toBe(resetFailure);
+  expect(effects).toEqual(["ResetFailedUnit"]);
+  expect(warn).not.toHaveBeenCalled();
+});
+
+it("does not downgrade lost custody during reset-failed", async () => {
+  const retired = new Error("original maintenance custody retired");
+  let active = true;
+  afterReset = () => {
+    active = false;
+  };
+  resetFailure = new Error("reset-failed interrupted");
+  const warn = vi.fn();
+  await expect(
+    startSystemdService({
       ...options(),
       warn,
-      assertCurrent() {
+      assertCurrent: () => {
         if (!active) {
-          throw denied;
+          throw retired;
         }
       },
-      beforeEffect() {
-        if (mode === "effect refusal") {
-          throw denied;
-        }
-      },
-    });
-    if (mode === "ordinary failure") {
-      await activation;
-      expect(effects).toEqual(["ResetFailedUnit", "StartUnit"]);
-      expect(warn).toHaveBeenCalledExactlyOnceWith(
-        expect.stringContaining("reset-failed did not complete"),
-      );
-    } else {
-      await expect(activation).rejects.toBe(mode === "ownership refusal" ? resetFailure : denied);
-      expect(effects).toEqual(mode === "effect refusal" ? [] : ["ResetFailedUnit"]);
-      expect(warn).not.toHaveBeenCalled();
-    }
-  },
-);
+    }),
+  ).rejects.toBe(retired);
+  expect(effects).toEqual(["ResetFailedUnit"]);
+  expect(warn).not.toHaveBeenCalled();
+});
 
 it("captures the selected native owner before stop without any mutation", async () => {
   vi.stubEnv("DBUS_SYSTEM_BUS_ADDRESS", original.bus.address);
@@ -226,6 +241,14 @@ it("captures the selected native owner before stop without any mutation", async 
   expect(effects).toEqual([]);
   expect(native.query.mock.calls.some(([args]) => args[4] === "LoadUnit")).toBe(false);
   expect(native.close).toHaveBeenCalledOnce();
+});
+
+it("refuses to capture authority for another service account", async () => {
+  current.serviceUser = "another-account";
+  await expect(
+    captureSystemdServiceIdentity({ env: {}, target: original, managerUid: 0 }),
+  ).rejects.toBeInstanceOf(ServiceOwnershipRefusalError);
+  expect(effects).toEqual([]);
 });
 
 it("root can retain the explicitly adopted non-root account through pinned stop and start", async () => {
@@ -273,4 +296,20 @@ it("checks effect-specific process facts after native inspection without requiri
     }),
   ).rejects.toThrow("process replaced");
   expect(effects).toEqual([]);
+});
+
+it("does not downgrade a final effect guard refusal from reset-failed into a start", async () => {
+  const denied = new Error("original stopped-service custody ended");
+  const warn = vi.fn();
+  await expect(
+    startSystemdService({
+      ...options(),
+      warn,
+      beforeEffect: () => {
+        throw denied;
+      },
+    }),
+  ).rejects.toBe(denied);
+  expect(effects).toEqual([]);
+  expect(warn).not.toHaveBeenCalled();
 });

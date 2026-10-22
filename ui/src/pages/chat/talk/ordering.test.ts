@@ -561,34 +561,40 @@ describe("browser Talk provider item ordering", () => {
     },
   );
 
-  it.each(["callback", "explicit"])(
-    "drains keyed finals before %s stop with unfinished ASR",
-    async (stop) => {
-      const call = createCall((entry) => {
-        if (stop === "callback" && entry.final) {
-          void call.session.stop();
-        }
-      });
-      await call.session.start();
-      const peer = Peer.instances[0]!;
-      item(peer, "u1", "user", null);
-      item(peer, "a1", "assistant", "u1");
-      final(peer, "a1", "assistant", "known answer");
-      if (stop === "explicit") {
-        expect(call.writes()).toEqual([]);
+  it("persists a keyed final before a consumer synchronously stops the call", async () => {
+    const call = createCall((entry) => {
+      if (entry.final) {
         void call.session.stop();
       }
-      await waitForFast(() => expect(call.requests.at(-1)?.method).toBe("talk.client.close"));
-      expect(
-        call.requests
-          .filter(({ method }) => method !== "talk.client.create")
-          .map(({ method }) => method),
-      ).toEqual(["talk.client.transcript", "talk.client.close"]);
-      expect(call.saved()).toEqual(["known answer"]);
-      expect(call.requests.filter(({ method }) => method === "talk.client.close")).toHaveLength(1);
-      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("unfinished transcript"));
-      final(peer, "u1", "user", "too late");
-      expect(call.writes()).toHaveLength(1);
-    },
-  );
+    });
+    await call.session.start();
+    const peer = Peer.instances[0]!;
+    item(peer, "u1", "user", null);
+    item(peer, "a1", "assistant", "u1");
+    final(peer, "a1", "assistant", "known before callback");
+    await waitForFast(() => expect(call.requests.at(-1)?.method).toBe("talk.client.close"));
+    expect(call.saved()).toEqual(["known before callback"]);
+    expect(call.requests.filter(({ method }) => method === "talk.client.close")).toHaveLength(1);
+    final(peer, "u1", "user", "late after callback");
+    expect(call.writes()).toHaveLength(1);
+  });
+
+  it("drains known finals before close when an earlier ASR item never finishes", async () => {
+    const call = await start();
+    item(call.peer, "u1", "user", null);
+    item(call.peer, "a1", "assistant", "u1");
+    final(call.peer, "a1", "assistant", "known answer");
+    expect(call.writes()).toEqual([]);
+    void call.session.stop();
+    await waitForFast(() => expect(call.requests.at(-1)?.method).toBe("talk.client.close"));
+    expect(
+      call.requests
+        .filter(({ method }) => method !== "talk.client.create")
+        .map(({ method }) => method),
+    ).toEqual(["talk.client.transcript", "talk.client.close"]);
+    expect(call.writes()[0]?.params.text).toBe("known answer");
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining("unfinished transcript"));
+    final(call.peer, "u1", "user", "too late");
+    expect(call.writes()).toHaveLength(1);
+  });
 });

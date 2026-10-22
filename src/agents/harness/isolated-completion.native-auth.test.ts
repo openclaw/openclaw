@@ -200,6 +200,7 @@ describe("runIsolatedCompletion native authorization", () => {
     async (cooled) => {
       const profilePlan = {
         providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
         modelId: "gpt-test",
         harnessAuthProvider: "openai",
         forwardedAuthProfileId: "openai:first",
@@ -208,6 +209,7 @@ describe("runIsolatedCompletion native authorization", () => {
       };
       const directPlan = {
         providerForAuth: "openai",
+        authProfileProviderForAuth: "openai",
         modelId: "gpt-test",
         harnessAuthProvider: "openai",
         modelRoute: { authRequirement: "api-key" as const },

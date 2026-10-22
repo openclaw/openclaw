@@ -248,22 +248,25 @@ describe("toSanitizedMarkdownHtml links", () => {
       [`[the fix](${pullUrl})`, "the fix"],
       [`[other/project#3434](${pullUrl})`, "other/project#3434"],
       [`[\`#3434\`](${pullUrl})`, "#3434"],
-    ])("marks %s", (input, expectedText, expectedKind, keepsTitle, expectedHref) => {
-      const fragment = render(input);
-      const link = fragment.querySelector<HTMLAnchorElement>("a");
-      expect(link?.classList.contains("markdown-github-link")).toBe(true);
-      expect(link?.textContent).toBe(expectedText);
-      expect(link?.classList.contains("markdown-github-item")).toBe(Boolean(expectedKind));
-      expect(link?.getAttribute("data-github-kind")).toBe(expectedKind ?? null);
-      if (expectedHref) {
-        expect(link?.getAttribute("href")).toBe(expectedHref);
-      }
-      if (expectedKind) {
-        expect(link?.getAttribute("title")).toBe(keepsTitle ? link?.getAttribute("href") : null);
-        expect(link?.getAttribute("rel")).toBe("noreferrer noopener");
-        expect(link?.getAttribute("target")).toBe("_blank");
-      }
-    });
+    ] satisfies Array<[string, string, string?, boolean?, string?]>)(
+      "marks %s",
+      (input, expectedText, expectedKind, keepsTitle, expectedHref) => {
+        const fragment = render(input);
+        const link = fragment.querySelector<HTMLAnchorElement>("a");
+        expect(link?.classList.contains("markdown-github-link")).toBe(true);
+        expect(link?.textContent).toBe(expectedText);
+        expect(link?.classList.contains("markdown-github-item")).toBe(Boolean(expectedKind));
+        expect(link?.getAttribute("data-github-kind")).toBe(expectedKind ?? null);
+        if (expectedHref) {
+          expect(link?.getAttribute("href")).toBe(expectedHref);
+        }
+        if (expectedKind) {
+          expect(link?.getAttribute("title")).toBe(keepsTitle ? link?.getAttribute("href") : null);
+          expect(link?.getAttribute("rel")).toBe("noreferrer noopener");
+          expect(link?.getAttribute("target")).toBe("_blank");
+        }
+      },
+    );
 
     it("keeps the full repository in long generated item chips", () => {
       const fragment = render(

@@ -43,7 +43,7 @@ describe("private worker launch wire", () => {
   const startLaunch = (
     input: Parameters<ReturnType<typeof createNodeWorkerLaunchAdapter>["launch"]>[0]["input"],
     timeoutMs: number,
-    onDispatchReady?: (invokeId: string) => void,
+    onDispatchReady?: () => void,
   ) => {
     const controller = new AbortController();
     const outcome = createNodeWorkerLaunchAdapter({

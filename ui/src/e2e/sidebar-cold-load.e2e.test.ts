@@ -241,7 +241,7 @@ suite.define(() => {
               Object.assign(
                 {
                   id: name.toLowerCase(),
-                  identity: { type: "profile", id: name.toLowerCase() },
+                  identity: { type: "profile" as const, id: name.toLowerCase() },
                   name,
                   email: `${name.toLowerCase()}@example.test`,
                   avatarUrl,

@@ -17,7 +17,9 @@ const codex = await loadBundledPluginFacade<{
   ) => Record<string, unknown>;
 }>({ pluginId: "codex", artifactBasename: "test-api.js" });
 const tempDirs = useSessionStoreTempDirs(afterAll, "codex-child-policy-");
-const prepare = (params: Parameters<typeof preparePluginHarnessToolPolicies>[0]) =>
+const prepare = (
+  params: Omit<Parameters<typeof preparePluginHarnessToolPolicies>[0], "provider" | "modelId">,
+) =>
   preparePluginHarnessToolPolicies(
     { agentId: "main", provider: "openai", modelId: "test-model", ...params },
     codex.CODEX_TOOL_POLICY_SAFE_DENY_NAMES,

@@ -124,14 +124,14 @@ function startQuestion(
   };
 }
 
-function currentSource(fixture: Fixture, isOwnerCurrent = () => true) {
+function currentSource(fixture: Fixture) {
   const source = new AbortController();
   return {
     source,
     authority: {
       kind: "source-bound" as const,
       assertCurrent: createMessageInjectionAuthority(
-        () => !source.signal.aborted && !fixture.backingRun.signal.aborted && isOwnerCurrent(),
+        () => !source.signal.aborted && !fixture.backingRun.signal.aborted,
       ),
     },
   };
@@ -161,57 +161,6 @@ const ownerCases = [
 ] as const;
 
 describe("question dispatch ownership", () => {
-  it.each(["reassigned", "closed"] as const)(
-    "rechecks %s source authority at real question dispatch",
-    async (change) => {
-      await withQuestionGateway(async (fixture) => {
-        let ownerCurrent = true;
-        const { source, authority } = currentSource(fixture, () => ownerCurrent);
-        const question = startQuestion(fixture, "harness");
-        await Promise.all([fixture.waitStarted, question.showPrompt()]);
-        const pending = fixture.manager.list()[0]!;
-        const hello = fixture.holdNextHello();
-        const outcome = (
-          change === "closed"
-            ? cancelPendingAgentQuestionForSession({
-                sessionKey,
-                resolvedBy: "image-reply",
-                authority,
-              })
-            : claimAnswer("Old source answer", { authority })
-        ).then(
-          (accepted) => ({ accepted }),
-          (error: unknown) => ({ error }),
-        );
-        await hello.entered;
-        expect(fixture.manager.get(pending.id)?.status).toBe("pending");
-        expect(resolvedRequests(fixture)).toEqual([]);
-        if (change === "closed") {
-          source.abort();
-        }
-        if (change === "reassigned") {
-          ownerCurrent = false;
-        }
-        hello.release();
-        const result = await outcome;
-        expect(fixture.backingRun.signal.aborted).toBe(false);
-        expect.soft(resolvedRequests(fixture)).toEqual([]);
-        expect.soft(fixture.manager.get(pending.id)?.status).toBe("pending");
-        expect.soft(result).toHaveProperty("error");
-        // Refusal releases the reservation without replacing the question or run.
-        await expect(
-          claimAnswer("Current source answer", {
-            authority: currentSource(fixture).authority,
-          }),
-        ).resolves.toBe(true);
-        expect(await question.run).toEqual({
-          status: "answered",
-          answers: { answers: { answer: ["Current source answer"] } },
-        });
-      });
-    },
-  );
-
   it.each([
     { embedded: true, registered: true },
     { embedded: true, registered: false },

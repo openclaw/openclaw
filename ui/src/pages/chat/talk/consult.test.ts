@@ -29,22 +29,16 @@ function createChatEvents() {
   };
 }
 
+function scheduleReply(events: ReturnType<typeof createChatEvents>, text: string) {
+  window.setTimeout(() => {
+    events.final();
+    window.setTimeout(() => events.reply(text), 300);
+  }, 0);
+}
+
 type ConsultParams = Parameters<typeof submitRealtimeTalkConsult>[0];
 function consultContext(client: object, overrides: Partial<ConsultParams["ctx"]> = {}) {
   return { client, sessionKey: "agent:main:main", callbacks: {}, ...overrides } as never;
-}
-function startConsult(
-  ctx: ConsultParams["ctx"],
-  submit: ConsultParams["submit"],
-  signal?: AbortSignal,
-) {
-  return submitRealtimeTalkConsult({
-    ctx,
-    submit,
-    signal,
-    callId: "call-1",
-    args: { question: "Check status" },
-  });
 }
 function consultFixture(
   onStart: (events: ReturnType<typeof createChatEvents>) => void,
@@ -66,21 +60,23 @@ function consultFixture(
     request,
     submit,
     start: () =>
-      startConsult(consultContext({ request, addEventListener: events.addEventListener }), submit),
+      submitRealtimeTalkConsult({
+        ctx: consultContext({ request, addEventListener: events.addEventListener }),
+        callId: "call-1",
+        args: { question: "Check status" },
+        submit,
+      }),
   };
 }
 
-function steeringFixture(mode: "steer" | "cancel", suppressed = false) {
+function steeringFixture(suppressed = false) {
   const request = vi.fn(async () => ({
     ok: true,
-    mode,
+    mode: "steer",
     sessionKey: "agent:main:main",
     active: true,
-    ...(mode === "cancel" ? { aborted: true } : { queued: true }),
-    message:
-      mode === "cancel"
-        ? "Cancelled the active OpenClaw run."
-        : "Got it. I steered the active run.",
+    queued: true,
+    message: "Got it. I steered the active run.",
     speak: !suppressed,
     show: true,
     suppress: suppressed,
@@ -141,11 +137,13 @@ describe("RealtimeTalkSession consult handoff", () => {
     const submit = vi.fn();
     const controller = new AbortController();
 
-    const consult = startConsult(
-      consultContext({ request }, { voiceSessionId: "voice-1", flushTranscriptWrites }),
+    const consult = submitRealtimeTalkConsult({
+      ctx: consultContext({ request }, { voiceSessionId: "voice-1", flushTranscriptWrites }),
+      callId: "call-1",
+      args: { question: "Check status" },
       submit,
-      controller.signal,
-    );
+      signal: controller.signal,
+    });
     await vi.waitFor(() => expect(flushTranscriptWrites).toHaveBeenCalledOnce());
 
     controller.abort();
@@ -183,11 +181,13 @@ describe("RealtimeTalkSession consult handoff", () => {
       const submit = vi.fn();
       const controller = new AbortController();
 
-      const consult = startConsult(
-        consultContext({ request }, { sessionKey: "main" }),
+      const consult = submitRealtimeTalkConsult({
+        ctx: consultContext({ request }, { sessionKey: "main" }),
+        callId: "call-1",
+        args: { question: "Check status" },
         submit,
-        controller.signal,
-      );
+        signal: controller.signal,
+      });
       await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
 
       controller.abort();
@@ -204,48 +204,33 @@ describe("RealtimeTalkSession consult handoff", () => {
   );
 
   it.each([
-    ["reply during wait", "pending", true, 251, 301, undefined],
-    ["reply after wait", "ok", true, 0, 300, undefined],
-    ["no-text fallback", "ok", false, 499, 500, undefined],
-    ["provider error", "error", false, 0, 1, "provider authentication failed"],
-    ["operator abort", "timeout", false, 0, 1, "aborted by operator"],
-  ] as const)(
-    "settles an empty final with %s",
-    async (_name, status, reply, checkpoint, end, error) => {
+    {
+      when: "pending",
+      text: "The slow source reply wins.",
+      checkpoint: 251,
+      remaining: 50,
+      wait: () => new Promise(() => {}),
+    },
+    {
+      when: "completed first",
+      text: "The source reply beats the fallback.",
+      checkpoint: 0,
+      remaining: 300,
+      wait: () => ({ runId: "run-1", status: "ok" }),
+    },
+  ])(
+    "keeps delayed source text when the empty-final wait is $when",
+    async ({ text, checkpoint, remaining, wait }) => {
       vi.useFakeTimers();
-      const wait = () =>
-        status === "pending"
-          ? new Promise(() => {})
-          : {
-              runId: "run-1",
-              status,
-              ...(status === "timeout" ? { stopReason: "rpc" } : {}),
-              ...(error ? { error } : {}),
-            };
-      const { request, submit, start } = consultFixture((events) => {
-        window.setTimeout(() => {
-          events.final();
-          if (reply) {
-            window.setTimeout(() => events.reply("The source reply wins."), 300);
-          }
-        }, 0);
-      }, wait);
+      const { submit, start } = consultFixture((events) => scheduleReply(events, text), wait);
       const consult = start();
       if (checkpoint) {
         await vi.advanceTimersByTimeAsync(checkpoint);
         expect(submit).not.toHaveBeenCalled();
       }
-      await vi.advanceTimersByTimeAsync(end - checkpoint);
+      await vi.advanceTimersByTimeAsync(remaining);
       await consult;
-      expect(request).toHaveBeenCalledWith("agent.wait", { runId: "run-1", timeoutMs: 120_000 });
-      expect(submit).toHaveBeenCalledExactlyOnceWith(
-        "call-1",
-        error
-          ? { error }
-          : {
-              result: reply ? "The source reply wins." : "OpenClaw finished with no text.",
-            },
-      );
+      expect(submit).toHaveBeenCalledExactlyOnceWith("call-1", { result: text });
     },
   );
 
@@ -255,7 +240,9 @@ describe("RealtimeTalkSession consult handoff", () => {
       (events) => {
         setImmediate(() => {
           events.final();
-          setImmediate(() => events.reply("The source reply still wins."));
+          setImmediate(() => {
+            events.reply("The source reply still wins.");
+          });
         });
       },
       () => waitResult.promise,
@@ -269,32 +256,124 @@ describe("RealtimeTalkSession consult handoff", () => {
       runId: "run-1",
       timeoutMs: 120_000,
     });
-    expect(submit).toHaveBeenCalledExactlyOnceWith("call-1", {
+    expect(submit).toHaveBeenCalledTimes(1);
+    expect(submit).toHaveBeenCalledWith("call-1", {
       result: "The source reply still wins.",
     });
   });
 
+  it("submits the no-text fallback after an empty final and completed Gateway run", async () => {
+    vi.useFakeTimers();
+    const { request, submit, start } = consultFixture(
+      (events) => {
+        window.setTimeout(() => events.final(), 0);
+      },
+      () => ({ runId: "run-1", status: "ok" }),
+    );
+
+    const consult = start();
+
+    await vi.advanceTimersByTimeAsync(499);
+    expect(submit).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    await consult;
+
+    expect(request).toHaveBeenCalledWith("agent.wait", {
+      runId: "run-1",
+      timeoutMs: 120_000,
+    });
+    expect(submit).toHaveBeenCalledWith("call-1", {
+      result: "OpenClaw finished with no text.",
+    });
+  });
+
   it.each([
-    ["steer", false],
-    ["cancel", false],
-    ["steer", true],
-  ] as const)(
-    "routes %s controls (suppressed: %s) and only speaks steer results",
-    async (mode, suppressed) => {
-      const { request, ctx } = steeringFixture(mode, suppressed);
-      const speakControlResult = vi.fn();
-      await steerRealtimeTalkActiveConsult({ ctx, text: "use the safer path", speakControlResult });
-      expect(request).toHaveBeenCalledWith("talk.client.steer", {
-        sessionKey: "agent:main:main",
-        text: "use the safer path",
-      });
-      if (mode === "cancel") {
-        expect(speakControlResult).not.toHaveBeenCalled();
-      } else {
-        expect(speakControlResult).toHaveBeenCalledWith(
-          expect.stringContaining('Status: "Got it. I steered the active run."'),
-        );
-      }
+    {
+      waitResult: { runId: "run-1", status: "error", error: "provider authentication failed" },
+      expected: "provider authentication failed",
     },
-  );
+    {
+      waitResult: {
+        runId: "run-1",
+        status: "timeout",
+        stopReason: "rpc",
+        error: "aborted by operator",
+      },
+      expected: "aborted by operator",
+    },
+  ])("submits $expected from terminal empty-final waits", async ({ waitResult, expected }) => {
+    const { submit, start } = consultFixture(
+      (events) => {
+        setImmediate(() => {
+          events.final();
+        });
+      },
+      () => waitResult,
+    );
+
+    await start();
+
+    expect(submit).toHaveBeenCalledWith("call-1", { error: expected });
+  });
+
+  it("routes active consult steering through Gateway control endpoints", async () => {
+    const { request, ctx } = steeringFixture(false);
+
+    await steerRealtimeTalkActiveConsult({
+      ctx,
+      text: "use the safer path",
+    });
+
+    expect(request).toHaveBeenCalledWith("talk.client.steer", {
+      sessionKey: "agent:main:main",
+      text: "use the safer path",
+    });
+  });
+
+  it("can suppress cancel control speech while the original consult submits the cancel result", async () => {
+    const request = vi.fn(async () => ({
+      ok: true,
+      mode: "cancel",
+      sessionKey: "agent:main:main",
+      active: true,
+      aborted: true,
+      message: "Cancelled the active OpenClaw run.",
+      speak: true,
+      show: true,
+      suppress: false,
+    }));
+    const speakControlResult = vi.fn();
+
+    await steerRealtimeTalkActiveConsult({
+      ctx: {
+        client: { request, addEventListener: vi.fn() },
+        sessionKey: "agent:main:main",
+        callbacks: {},
+      } as never,
+      text: "cancel that",
+      speakControlResult,
+    });
+
+    expect(request).toHaveBeenCalledWith("talk.client.steer", {
+      sessionKey: "agent:main:main",
+      text: "cancel that",
+    });
+    expect(speakControlResult).not.toHaveBeenCalled();
+  });
+
+  it("speaks legacy suppressed steer acknowledgements instead of leaving voice silent", async () => {
+    const { ctx } = steeringFixture(true);
+
+    const speakControlResult = vi.fn();
+
+    await steerRealtimeTalkActiveConsult({
+      ctx,
+      text: "use the safer path",
+      speakControlResult,
+    });
+
+    expect(speakControlResult).toHaveBeenCalledWith(
+      expect.stringContaining('Status: "Got it. I steered the active run."'),
+    );
+  });
 });

@@ -46,7 +46,7 @@ export function useStreamFixture() {
   });
   return {
     cleanups,
-    closeServer(server: net.Server, peers: Iterable<{ destroy(): void }> = []) {
+    closeServer: (server: net.Server, peers: Iterable<{ destroy(): void }> = []) => {
       cleanups.push(
         () =>
           new Promise<void>((resolve) => {
@@ -57,7 +57,7 @@ export function useStreamFixture() {
           }),
       );
     },
-    async gateway(kind: "desktop" | "portal", contextPath = "") {
+    gateway: async (kind: "desktop" | "portal", contextPath = "") => {
       const peer: {
         socket?: WebSocket;
         headers: Array<string | undefined>;

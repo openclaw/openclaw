@@ -1,4 +1,4 @@
-import type { Locator, Page } from "playwright";
+import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
 import type { CronJob } from "../api/types.ts";
@@ -12,7 +12,6 @@ import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
 } from "./control-ui-e2e-suite.test-support.ts";
-import { cronJob as makeCronJob, cronList } from "./cron-fixtures.test-support.ts";
 
 const suite = createControlUiE2eSuite({
   name: "Control UI cron mocked Gateway E2E",
@@ -21,12 +20,21 @@ const suite = createControlUiE2eSuite({
     `Playwright Chromium is not installed or cannot start at ${executablePath}. Run \`pnpm --dir ui exec playwright install --with-deps chromium\`, or set OPENCLAW_UI_E2E_ALLOW_MISSING_CHROMIUM=1 only when intentionally skipping this lane.`,
 });
 
-const contextOptions = createControlUiE2eContextOptions();
+const contextOptions: BrowserContextOptions = {
+  locale: "en-US",
+  serviceWorkers: "block",
+  viewport: { height: 900, width: 1_280 },
+};
 
 type GatewayScenario = NonNullable<Parameters<typeof installMockGateway>[1]>;
 
-function installCronGateway(page: Page, responses: GatewayScenario["methodResponses"] = {}) {
+function installCronGateway(
+  page: Page,
+  responses: GatewayScenario["methodResponses"] = {},
+  options: Omit<GatewayScenario, "methodResponses"> = {},
+) {
   return installMockGateway(page, {
+    ...options,
     methodResponses: {
       "cron.list": cronListResponse([]),
       "cron.runs": cronRunsResponse([]),
@@ -42,24 +50,33 @@ function cronJob(
   schedule: CronJob["schedule"],
   state: CronJob["state"] = {},
 ): CronJob {
-  return makeCronJob(id, name, {
+  return {
+    id,
     configRevision: `config-revision-${id}`,
+    name,
+    enabled: true,
     createdAtMs: Date.parse("2026-05-29T08:00:00.000Z"),
     updatedAtMs: Date.parse("2026-05-29T08:05:00.000Z"),
     schedule,
+    sessionTarget: "main",
+    wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text: `${name} fired` },
     state,
-  });
+  };
 }
 
 const pageDefaults = { offset: 0, limit: 50, hasMore: false, nextOffset: null };
 
 function cronListResponse(jobs: CronJob[], total = jobs.length) {
-  return cronList(jobs, "cron-filters-fixture", { total });
+  return { jobs, snapshotRevision: "cron-filters-fixture", total, ...pageDefaults };
 }
 
 function cronRunsResponse(entries: unknown[], total = entries.length) {
   return { entries, total, ...pageDefaults };
+}
+
+function agentPayload(message: string): CronJob["payload"] {
+  return { kind: "agentTurn", message, timeoutSeconds: 0 };
 }
 
 function run(ts: number, jobId: string, summary: string) {
@@ -214,6 +231,68 @@ suite.define(() => {
       });
       await jobTitle(page, "Nightly cron pending").waitFor({ timeout: 10_000 });
       await expect.poll(async () => jobTitle(page, "Digest every minute").count()).toBe(0);
+    });
+  });
+
+  it("keeps read-only operators on Cron browse and history surfaces", async () => {
+    const readOnlyJob = {
+      ...cronJob(
+        "read-only-job",
+        "Read-only nightly digest",
+        { kind: "cron", expr: "0 1 * * *", tz: "UTC" },
+        { lastRunStatus: "ok", lastRunAtMs: Date.parse("2026-05-29T08:10:00.000Z") },
+      ),
+      description: "Explain the nightly digest without granting write access",
+    };
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const gateway = await installCronGateway(
+        page,
+        {
+          "cron.list": cronListResponseFixture(cronListResponse([readOnlyJob])),
+          "cron.runs": cronRunsResponse([
+            {
+              ...run(1, readOnlyJob.id, "Read-only history remains available"),
+              jobName: readOnlyJob.name,
+            },
+          ]),
+          "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+        },
+        { operatorScopes: ["operator.read"] },
+      );
+
+      await page.goto(`${suite.server.baseUrl}cron`);
+      await jobTitle(page, readOnlyJob.name).waitFor({ timeout: 10_000 });
+      await page.getByRole("note").filter({ hasText: "Browsing only" }).waitFor();
+      expect(
+        await page.locator(`[data-test-id="cron-row-description-${readOnlyJob.id}"]`).textContent(),
+      ).toContain(readOnlyJob.description);
+
+      await expectCount(page, '[data-test-id="cron-new-task"]', 0);
+      await expectCount(page, `[data-test-id="cron-row-run-${readOnlyJob.id}"]`, 0);
+      await expectCount(page, `[data-test-id="cron-row-toggle-${readOnlyJob.id}"]`, 0);
+      await expectCount(page, ".cron-job-menu", 0);
+      await expectCount(page, "[data-suggestion]", 0);
+      expect(await page.locator(".cron-filter-popover__trigger").count()).toBe(1);
+
+      await jobTitle(page, readOnlyJob.name).click();
+      await page.locator("fieldset.cron-editor:disabled").waitFor();
+      expect(
+        await page.locator('[data-test-id="cron-detail-description"]').textContent(),
+      ).toContain(readOnlyJob.description);
+      await expectCount(page, '[data-test-id="cron-run-now"]', 0);
+      await expectCount(page, '[data-test-id="cron-submit"]', 0);
+      await expectCount(page, ".cron-editor-actions", 0);
+
+      await page.locator('[data-test-id="cron-detail-tab-history"]').click();
+      await page.getByText("Read-only history remains available", { exact: true }).waitFor();
+      expect(
+        await page.locator('[data-test-id="cron-detail-description"]').textContent(),
+      ).toContain(readOnlyJob.description);
+
+      const mutationMethods = new Set(["cron.add", "cron.remove", "cron.run", "cron.update"]);
+      expect(
+        (await gateway.getRequests()).filter((request) => mutationMethods.has(request.method)),
+      ).toHaveLength(0);
     });
   });
 
@@ -377,13 +456,10 @@ suite.define(() => {
   });
 
   it("keeps selected task history when a deferred overview refresh resolves last", async () => {
-    const selectedJob = {
-      ...cronJob("selected-history-job", "Selected history task", {
-        kind: "every",
-        everyMs: 60_000,
-      }),
-      description: "Saved selected-task description",
-    };
+    const selectedJob = cronJob("selected-history-job", "Selected history task", {
+      kind: "every",
+      everyMs: 60_000,
+    });
     await suite.withPage(contextOptions, async ({ page }) => {
       const gateway = await installCronGateway(page, {
         "cron.list": cronListResponseFixture(cronListResponse([selectedJob])),
@@ -415,9 +491,6 @@ suite.define(() => {
       await jobTitle(page, selectedJob.name).click();
       await page.locator('[data-test-id="cron-detail-tab-history"]').click();
       await expectRunCount(page, "Selected task history", 1);
-      expect(
-        await page.locator('[data-test-id="cron-detail-description"]').textContent(),
-      ).toContain(selectedJob.description);
 
       await gateway.resolveDeferred(
         "cron.runs",
@@ -435,6 +508,58 @@ suite.define(() => {
       await page.keyboard.press("Enter");
       await expectCount(page, '[data-filter="status"] .oc-menu-item:focus', 1);
       await dismissDropdownToNextTrigger(page, statusTrigger, deliveryTrigger);
+    });
+  });
+
+  it("creates and edits agent-turn jobs with an explicit zero timeout", async () => {
+    const existingJob = {
+      ...cronJob("existing-no-timeout", "Existing no-timeout task", {
+        kind: "every",
+        everyMs: 60_000,
+      }),
+      sessionTarget: "isolated",
+      wakeMode: "now",
+      payload: agentPayload("Continue until the existing task finishes"),
+    } satisfies CronJob;
+    await suite.withPage(contextOptions, async ({ page }) => {
+      const gateway = await installCronGateway(page, {
+        "cron.add": { id: "created-no-timeout" },
+        "cron.update": { id: existingJob.id },
+        "cron.list": cronListResponseFixture(cronListResponse([existingJob])),
+        "cron.status": { enabled: true, jobs: 1, nextWakeAtMs: null },
+      });
+
+      await page.goto(`${suite.server.baseUrl}cron`);
+      await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
+
+      await page.locator('[data-test-id="cron-new-task"]').click();
+      await page.locator("#cron-name").fill("Created no-timeout task");
+      await page.locator("#cron-payload-text").fill("Continue until the new task finishes");
+      await page.locator("details.cron-advanced > summary").click();
+      await page.locator("#cron-timeout-seconds").fill("0");
+      await page.locator('[data-test-id="cron-submit"]').click();
+
+      const addRequest = await gateway.waitForRequest("cron.add");
+      expect(requestParams(addRequest)).toMatchObject({
+        name: "Created no-timeout task",
+        payload: agentPayload("Continue until the new task finishes"),
+      });
+
+      await jobTitle(page, existingJob.name).waitFor({ timeout: 10_000 });
+      await jobTitle(page, existingJob.name).click();
+      await page.locator("details.cron-advanced > summary").click();
+      expect(await page.locator("#cron-timeout-seconds").inputValue()).toBe("0");
+      await page.locator("#cron-payload-text").fill("Continue until the edited task finishes");
+      await page.locator('[data-test-id="cron-submit"]').click();
+
+      const updateRequest = await gateway.waitForRequest("cron.update");
+      expect(requestParams(updateRequest)).toMatchObject({
+        id: existingJob.id,
+        expectedConfigRevision: existingJob.configRevision,
+        patch: {
+          payload: agentPayload("Continue until the edited task finishes"),
+        },
+      });
     });
   });
 
@@ -468,59 +593,6 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("tabpanel", { name: "Run history" }).isVisible())
         .toBe(true);
-    });
-  });
-
-  it("shows trigger indicators and filters through cron.list before pagination", async () => {
-    const timestamps = {
-      createdAtMs: Date.parse("2026-05-29T08:00:00.000Z"),
-      updatedAtMs: Date.parse("2026-05-29T08:05:00.000Z"),
-    };
-    const conditional = makeCronJob("conditional-job", "Conditional job", {
-      ...timestamps,
-      configRevision: "conditional-revision",
-      payload: { kind: "systemEvent", text: "conditional" },
-      trigger: { script: "json({ fire: true })" },
-      state: { triggerEvalCount: 42, lastTriggerEvalAtMs: Date.now() - 3 * 60_000 },
-    });
-    const plain = makeCronJob("plain-job", "Plain job", {
-      ...timestamps,
-      configRevision: "plain-revision",
-      payload: { kind: "systemEvent", text: "plain" },
-    });
-    const list = (jobs: CronJob[]) => cronList(jobs, `trigger-filter:${jobs.length}`);
-    await suite.withPage(contextOptions, async ({ page }) => {
-      const gateway = await installCronGateway(page, {
-        "cron.list": cronListResponseFixture([
-          { match: { lastRunStatus: "error" }, response: list([]) },
-          { match: { trigger: "conditional" }, response: list([conditional]) },
-          { response: list([conditional, plain]) },
-        ]),
-        "cron.runs": { entries: [], total: 0, offset: 0, limit: 50, hasMore: false },
-        "cron.status": { enabled: true, triggersEnabled: false, jobs: 2, nextWakeAtMs: null },
-      });
-      await page.goto(`${suite.server.baseUrl}cron`);
-      const conditionalRow = page.locator('[data-test-id="cron-row-conditional-job"]');
-      await conditionalRow.waitFor();
-      await page.locator('[data-test-id="cron-row-plain-job"]').waitFor();
-      expect(await conditionalRow.locator(".cron-trigger-icon").getAttribute("aria-label")).toBe(
-        "Trigger configured",
-      );
-      await page.locator(".cron-filter-popover__trigger").click();
-      await page.locator('[data-test-id="cron-jobs-trigger-filter"]').selectOption("conditional");
-      await waitForCronListRequest(gateway, (params) => params.trigger === "conditional");
-      await expectCount(page, '[data-test-id="cron-row-plain-job"]', 0);
-      expect(await conditionalRow.count()).toBe(1);
-      await conditionalRow.click();
-      await page.getByRole("tab", { name: "Run history", exact: true }).click();
-      const activity = page.locator('[data-test-id="cron-condition-activity"]');
-      await activity.waitFor();
-      for (const text of ["42", "3m ago", "Never"]) {
-        await expect.poll(() => activity.textContent()).toContain(text);
-      }
-      await expect
-        .poll(() => page.locator(".cron-empty-state").textContent())
-        .toContain("No payload runs yet");
     });
   });
 });

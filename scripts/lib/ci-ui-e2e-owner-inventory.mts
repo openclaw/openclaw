@@ -1058,6 +1058,7 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["cron"],
     ["ui/src/lib/cron/types.ts"],
   ),
+  pageWatch("ui/src/e2e/cron-trigger-filter.e2e.test.ts", ["cron"], ["ui/src/lib/cron/types.ts"]),
   {
     testFile: "ui/src/e2e/csp-jitless.e2e.test.ts",
     ownerRoots: ["src/gateway/control-ui-csp.ts", "ui/src/main.ts", "ui/src/pages/chat/route.ts"],

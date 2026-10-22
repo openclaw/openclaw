@@ -647,9 +647,11 @@ describe("subagent orphan recovery — faithful restart path", () => {
       await addSubagentRunForTests(entry);
       const entered = createDeferred();
       const release = createDeferred();
-      const acquire = SubagentLifecycleController.prototype.acquireTerminalCompletionLock;
+      const prototype = SubagentLifecycleController.prototype;
+      const acquire = vi.spyOn(prototype, "acquireTerminalCompletionLock");
+      acquire.mockRestore();
       const lock = vi
-        .spyOn(SubagentLifecycleController.prototype, "acquireTerminalCompletionLock")
+        .spyOn(prototype, "acquireTerminalCompletionLock")
         .mockImplementation(async function (this: SubagentLifecycleController, targetRunId) {
           const unlock = await acquire.call(this, targetRunId);
           if (targetRunId === runId) {
