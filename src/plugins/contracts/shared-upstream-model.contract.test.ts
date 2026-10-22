@@ -25,15 +25,6 @@ function listBundledPluginFiles(): string[] {
   return files;
 }
 
-function readBundledManifests(): Array<Record<string, unknown>> {
-  return listBundledPluginFiles()
-    .filter((file) => /^extensions\/[^/]+\/openclaw\.plugin\.json$/.test(file))
-    .map(
-      (file) =>
-        JSON.parse(fs.readFileSync(path.join(repoRoot, file), "utf8")) as Record<string, unknown>,
-    );
-}
-
 // Group aggregator aliases with first-party rows, ignoring namespace and case.
 function normalizeSharedModelId(modelId: string): string {
   return modelId.slice(modelId.indexOf("/") + 1).toLowerCase();
@@ -41,7 +32,13 @@ function normalizeSharedModelId(modelId: string): string {
 
 function collectCatalogEntries(): CatalogEntry[] {
   const entries: CatalogEntry[] = [];
-  for (const manifest of readBundledManifests()) {
+  for (const file of listBundledPluginFiles().filter((candidate) =>
+    /^extensions\/[^/]+\/openclaw\.plugin\.json$/.test(candidate),
+  )) {
+    const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, file), "utf8")) as Record<
+      string,
+      unknown
+    >;
     const providers = readRecord(readRecord(manifest.modelCatalog)?.providers) ?? {};
     // CLI backends run their own harness, so catalog code-mode tiers never reach them.
     const cliBackends = new Set(
@@ -78,16 +75,6 @@ function collectCatalogEntries(): CatalogEntry[] {
   return entries;
 }
 
-function groupBySharedModel(entries: CatalogEntry[]): Map<string, CatalogEntry[]> {
-  const groups = new Map<string, CatalogEntry[]>();
-  for (const entry of entries) {
-    const group = groups.get(entry.groupKey) ?? [];
-    group.push(entry);
-    groups.set(entry.groupKey, group);
-  }
-  return groups;
-}
-
 describe("bundled shared upstream model catalogs", () => {
   // Read lazily: the non-isolated contract runner shares one process, so manifest
   // IO belongs inside the tests rather than in collection.
@@ -111,17 +98,14 @@ describe("bundled shared upstream model catalogs", () => {
   it("declares the code-mode tier on every catalog row that ships a shared model", () => {
     // A silent sibling would change tools.codeMode: "auto" for the same model.
     const silent: string[] = [];
-    for (const [groupKey, group] of groupBySharedModel(readEntries())) {
-      if (group.length < 2 || !group.some((entry) => entry.codeMode)) {
+    for (const [groupKey, group] of Object.entries(
+      Object.groupBy(readEntries(), (entry) => entry.groupKey),
+    )) {
+      if (!group || group.length < 2 || !group.some((entry) => entry.codeMode)) {
         continue;
       }
-      const declared = group
-        .filter((entry) => entry.codeMode)
-        .map((entry) => `${entry.ref}=${entry.codeMode}`)
-        .toSorted()
-        .join(", ");
       for (const entry of group.filter((candidate) => !candidate.codeMode)) {
-        silent.push(`${entry.ref} (shared model ${groupKey}; siblings declare ${declared})`);
+        silent.push(`${entry.ref} (shared model ${groupKey})`);
       }
     }
 

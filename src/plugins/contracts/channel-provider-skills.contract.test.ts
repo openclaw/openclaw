@@ -48,39 +48,24 @@ function listRepositoryOwnedChannelSkillFiles(): string[] {
 }
 
 describe("bundled channel-provider skill contracts", () => {
-  const discord = (namedAccount = false): OpenClawConfig => ({
-    channels: {
-      discord: namedAccount
-        ? { accounts: { support: { token: "test-discord-token" } } }
-        : { token: "test-discord-token" },
-    },
-  });
+  const configured = (plugin: "discord" | "slack", named = false): OpenClawConfig => {
+    const credentials =
+      plugin === "discord"
+        ? { token: "test-discord-token" }
+        : { botToken: "xoxb-test-token", appToken: "xapp-test-token" };
+    return { channels: { [plugin]: named ? { accounts: { support: credentials } } : credentials } };
+  };
+  const disabledDiscord: OpenClawConfig = {
+    ...configured("discord"),
+    skills: { entries: { discord: { enabled: false } } },
+  };
   type SkillCase = [string, "discord" | "slack", OpenClawConfig, boolean, boolean?];
   it.each<SkillCase>([
-    ["Discord named-account token", "discord", discord(true), true],
-    ["Discord root token", "discord", discord(), true],
+    ["Discord named-account token", "discord", configured("discord", true), true],
+    ["Discord root token", "discord", configured("discord"), true],
     ["Discord unconfigured", "discord", {}, false],
-    [
-      "Discord explicitly disabled",
-      "discord",
-      { ...discord(), skills: { entries: { discord: { enabled: false } } } },
-      false,
-      true,
-    ],
-    [
-      "Slack named-account credentials",
-      "slack",
-      {
-        channels: {
-          slack: {
-            accounts: {
-              support: { botToken: "xoxb-test-token", appToken: "xapp-test-token" },
-            },
-          },
-        },
-      },
-      true,
-    ],
+    ["Discord explicitly disabled", "discord", disabledDiscord, false, true],
+    ["Slack named-account credentials", "slack", configured("slack", true), true],
   ])("%s", async (_label, pluginId, config, eligible, disabled = false) => {
     const workspaceDir = resolve(process.cwd(), "extensions", pluginId);
     // Load the shipped asset without discovering operator skills or activating plugin runtimes.
