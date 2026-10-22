@@ -15,29 +15,23 @@ function finiteNonNegativeNumber(value: unknown): number | null {
   return Number.isFinite(numberValue) && numberValue >= 0 ? numberValue : null;
 }
 
-function findExistingDiskSpacePath(targetPath: string): string | null {
-  let current = path.resolve(targetPath);
-  while (true) {
-    try {
-      const stats = fs.statSync(current);
-      return stats.isDirectory() ? current : path.dirname(current);
-    } catch {
-      const parent = path.dirname(current);
-      if (parent === current) {
-        return null;
-      }
-      current = parent;
-    }
-  }
-}
-
 /** Reads available bytes for the volume containing a target path. */
 export function tryReadDiskSpace(targetPath: string): DiskSpaceSnapshot | null {
   // Install/update targets may not exist yet; statfs needs the nearest existing
   // ancestor to identify the backing volume.
-  const checkedPath = findExistingDiskSpacePath(targetPath);
-  if (!checkedPath) {
-    return null;
+  let checkedPath = path.resolve(targetPath);
+  while (true) {
+    try {
+      const stats = fs.statSync(checkedPath);
+      checkedPath = stats.isDirectory() ? checkedPath : path.dirname(checkedPath);
+      break;
+    } catch {
+      const parent = path.dirname(checkedPath);
+      if (parent === checkedPath) {
+        return null;
+      }
+      checkedPath = parent;
+    }
   }
   try {
     const stats = fs.statfsSync(checkedPath);
