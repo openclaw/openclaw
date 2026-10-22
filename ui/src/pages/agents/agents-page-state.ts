@@ -23,10 +23,12 @@ import { modelCatalogRefreshError, readAgentModelCatalog } from "../../lib/model
 import { createGitHubIdentityView } from "../../lib/reactive/domain-github-identity.ts";
 import { observeState } from "../../lib/reactive/observe-state.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { createTimeout } from "../../lib/reactive/timers.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
 import { createAgentConfigActions } from "./agent-config-actions.ts";
 import { createAgentCronPresenter } from "./agent-cron-presenter.ts";
 import { createAgentsPageLifetime } from "./agents-page-lifetime.ts";
+import { createAgentsPagePresentation } from "./agents-page-presentation.ts";
 import type { GeneratedAvatar } from "./avatar-picker.tsx";
 import {
   loadAgentFileContent,
@@ -36,6 +38,8 @@ import {
 } from "./files.ts";
 import {
   type AgentIdentityDraft,
+  type AgentIdentityOutcome,
+  identityDraftStatus,
   resetIdentityDraft,
   saveIdentityDraft,
   selectIdentityAvatar,
@@ -65,7 +69,7 @@ type AgentsPageData = Omit<AgentsState, "agentsLoading" | "agentsError"> &
     agentFileActive: string | null;
     identityDraft: AgentIdentityDraft;
     identitySaving: boolean;
-    identityError: string | null;
+    identityOutcome: Promise<AgentIdentityOutcome> | null;
     cron: CronState;
     sessionKey: string;
     agentsPanel: AgentsPanel;
@@ -89,6 +93,8 @@ export function createAgentsPageState(
 ) {
   let routeData = initialRouteData;
   let active = true;
+  const presentation = createAgentsPageLifetime();
+  const identityPresentation = createAgentsPagePresentation(presentation.retired);
   const [skillsFilter, setSkillsFilter] = createSignal("");
   const identities = projectOwner(context.agentIdentity, (identity) => identity.entries());
   const channels = projectOwner(context.channels, (source) => source.state);
@@ -108,7 +114,7 @@ export function createAgentsPageState(
     agentFileSaving: false,
     identityDraft: { name: null, emoji: null, avatar: null },
     identitySaving: false,
-    identityError: null,
+    identityOutcome: null,
     agentSkillsRead: null,
     agentSkillsReport: null,
     agentSkillsAgentId: null,
@@ -154,8 +160,7 @@ export function createAgentsPageState(
   });
   const selectionDrafts = createAgentSelectionDrafts(state, resetSelectionState);
   let identitySaves = selectionDrafts.bindContext(context);
-  let identityAutosaveTimer: ReturnType<typeof setTimeout> | null = null;
-  const presentation = createAgentsPageLifetime();
+  const identityAutosave = createTimeout(() => void saveSelectedIdentity(), 550);
   const skills = createAgentSkillsReader(state);
   const skillReset = createAgentSkillsReset({
     retired: presentation.retired,
@@ -305,7 +310,7 @@ export function createAgentsPageState(
   }
 
   function resetForSourceChange() {
-    clearIdentityAutosave();
+    identityAutosave.cancel();
     selectionDrafts.clear();
     identitySaves = selectionDrafts.bindContext(context);
     state.agentsList = null;
@@ -567,27 +572,12 @@ export function createAgentsPageState(
     }
   }
 
-  function clearIdentityAutosave() {
-    if (identityAutosaveTimer !== null) {
-      clearTimeout(identityAutosaveTimer);
-      identityAutosaveTimer = null;
-    }
-  }
-
   function scheduleIdentitySave(delay = 550) {
-    clearIdentityAutosave();
-    const { name, emoji, avatar } = state.identityDraft;
-    if (
-      (name !== null && !name.trim()) ||
-      (emoji !== null && !emoji.trim()) ||
-      (name === null && emoji === null && avatar === null)
-    ) {
+    identityAutosave.cancel();
+    if (identityDraftStatus(state.identityDraft) !== "ready") {
       return;
     }
-    identityAutosaveTimer = setTimeout(() => {
-      identityAutosaveTimer = null;
-      void saveSelectedIdentity();
-    }, delay);
+    identityAutosave.schedule(delay);
   }
 
   async function saveSelectedIdentity() {
@@ -629,6 +619,7 @@ export function createAgentsPageState(
       onSaved: () => syncAgentState(agents),
     });
     identitySaves.set(agentId, { client, snapshot: gateway.snapshot, promise: save });
+    identityPresentation.saveIdentity(save);
     try {
       await save;
     } finally {
@@ -646,7 +637,7 @@ export function createAgentsPageState(
 
   function resetSelectionState() {
     presentation.retire();
-    clearIdentityAutosave();
+    identityAutosave.cancel();
     gateway.invalidate();
     resetModelCatalog();
     resetAgentFiles(state);
@@ -923,7 +914,7 @@ export function createAgentsPageState(
     applyRoute();
     return () => {
       selectionDrafts.retainCurrentIdentity();
-      clearIdentityAutosave();
+      identityAutosave.cancel();
       active = false;
       presentation.retire();
       cron.retire();
@@ -936,6 +927,7 @@ export function createAgentsPageState(
     };
   });
   return {
+    identitySavePending: () => identityPresentation.identitySaving() || readData().identitySaving,
     read() {
       observation.read();
       return viewProps();
