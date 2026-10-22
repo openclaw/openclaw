@@ -1,5 +1,7 @@
 import { createRoot, createSignal } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
+import { de } from "../i18n/locales/de.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createGateway, createSessions, mountSidebar } from "../test-helpers/app-sidebar.ts";
 import {
@@ -8,6 +10,7 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import { mountSolid as render } from "../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
+import { renderSidebarAgentMenu as AgentMenu } from "./app-sidebar-agent-menu.tsx";
 import {
   SidebarDropdown,
   renderSidebarNavLink,
@@ -21,6 +24,54 @@ import {
   renderSidebarSessionMenuForMenus,
 } from "./sidebar-menus-render.tsx";
 import { createSidebarMenus, type SidebarMenus } from "./sidebar-menus.tsx";
+
+it("updates retained agent creation menu labels when the locale changes", async () => {
+  await i18n.setLocale("en");
+  onTestFinished(async () => {
+    await i18n.setLocale("en");
+    i18n.registerTranslation("de", de);
+  });
+  // This new action does not have a foreign catalog translation yet.
+  i18n.registerTranslation("de", {
+    ...de,
+    agentChip: { createAgent: "Neuen Agenten erstellen" },
+  });
+  const view = render(() => (
+    <AgentMenu
+      activeId="main"
+      agents={[]}
+      identities={new Map()}
+      openMode="click"
+      position={{ x: 12, top: 30 }}
+      basePath=""
+      rosterMode={false}
+      creationDisabledReason={null}
+      resolveAvatarUrl={(url) => url}
+      avatarErrorHandler={() => vi.fn()}
+      agentUnreadCount={() => 0}
+      onShowAllAgents={vi.fn()}
+      onCreateAgent={vi.fn()}
+      onPointerEnter={vi.fn()}
+      onPointerLeave={vi.fn()}
+      onAfterShow={vi.fn()}
+      onSwitchAgent={vi.fn()}
+      onClose={vi.fn()}
+      onNavigate={vi.fn()}
+    />
+  ));
+  flush();
+  const menu = view.getByRole("menu", { hidden: true });
+  const row = view.getByRole("menuitem", { name: "Create new agent", hidden: true });
+  expect(row.getAttribute("data-value")).toBe("command:new-agent");
+
+  await i18n.setLocale("de");
+  await waitForSolid(() => {
+    expect(row.getAttribute("aria-label")).toBe("Neuen Agenten erstellen");
+    expect(row.textContent?.trim()).toBe("Neuen Agenten erstellen");
+    expect(menu.querySelector('[data-value="command:new-agent"]')).toBe(row);
+  });
+  expect(view.getByRole("menu", { hidden: true })).toBe(menu);
+});
 
 const position = { x: 12, y: 30 };
 function dropdown(overrides: Partial<SidebarDropdownProps>) {

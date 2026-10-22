@@ -1,9 +1,17 @@
 import type { EnvironmentSummary, SystemInfoResult } from "@openclaw/gateway-protocol";
 import type { PresenceEntry } from "../../api/types.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context-types.ts";
 import type {
   DevicesPageDataState,
   InventoryRemovalRequest,
 } from "../../lib/nodes/page-operations.ts";
+
+export type DevicesRouteData = {
+  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationGatewaySnapshot;
+  devices: DevicesPageDataState;
+};
 
 export type DevicesProps = Omit<
   DevicesPageDataState,
@@ -12,6 +20,7 @@ export type DevicesProps = Omit<
   loading: boolean;
   inventoryRead: () => void;
   inventoryScope: object;
+  inventorySaving?: boolean;
   onReloadInventory: () => void;
   presence: PresenceEntry[];
   gatewayVersion: string | null;

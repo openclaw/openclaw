@@ -349,7 +349,11 @@ export class AuthStorage {
   private loadError: Error | null = null;
   private errors: Error[] = [];
   private storage: StorageBackend;
-  private constructor(storage: StorageBackend, data?: AuthStorageData) {
+  private constructor(
+    storage: StorageBackend,
+    data?: AuthStorageData,
+    private readonly config?: OpenClawConfig,
+  ) {
     this.storage = storage;
     if (data) {
       this.setData(data);
@@ -364,7 +368,7 @@ export class AuthStorage {
     const scope = createAuthProfileStoreReadScope(agentDir, config);
     const preparedStore = materializeAuthStorageStore(scope.store, scope.getRuntimeSnapshots());
     assertAuthStorageSecretRefsMaterialized(preparedStore);
-    return new AuthStorage(new SqliteAuthStorageBackend(scope, preparedStore));
+    return new AuthStorage(new SqliteAuthStorageBackend(scope, preparedStore), undefined, config);
   }
 
   static async forAgentAsync(
@@ -376,7 +380,7 @@ export class AuthStorage {
     assertAuthStorageSecretRefsMaterialized(preparedStore);
     const backend = new SqliteAuthStorageBackend(scope, preparedStore, true);
     const data = projectAuthoritativeAuthStorageData(scope.store, scope.getRuntimeSnapshots());
-    return new AuthStorage(backend, data);
+    return new AuthStorage(backend, data, config);
   }
 
   /**
@@ -646,7 +650,12 @@ export class AuthStorage {
   }
 
   async login(providerId: OAuthProviderId, callbacks: OAuthLoginCallbacks): Promise<void> {
-    const credentials = await loginAuthStorageOAuthProvider(this, providerId, callbacks);
+    const credentials = await loginAuthStorageOAuthProvider(
+      this,
+      providerId,
+      callbacks,
+      this.config,
+    );
     await this.setAsync(providerId, { type: "oauth", ...credentials });
   }
 
@@ -671,6 +680,7 @@ export class AuthStorage {
     let source: AuthProfileCredentialSource | undefined;
     const result = await refreshAuthStorageOAuthCredential({
       authStorage: this,
+      config: this.config,
       storage: {
         withLock: (update) =>
           this.storage.updateAsync
@@ -787,13 +797,19 @@ export class AuthStorage {
               return resolved(provider.getApiKey(updatedCred));
             }
             return resolved(
-              (await resolveAuthStoragePluginOAuthCredential(providerId, updatedCred, false))
-                ?.apiKey,
+              (
+                await resolveAuthStoragePluginOAuthCredential(
+                  providerId,
+                  updatedCred,
+                  false,
+                  this.config,
+                )
+              )?.apiKey,
             );
           }
 
           // Refresh truly failed - return undefined so model discovery skips this provider
-          // User can /login to re-authenticate (credentials preserved for retry)
+          // User can /login to replace a rejected or uncertain refresh grant.
           return resolved(undefined);
         }
       } else {
@@ -801,7 +817,8 @@ export class AuthStorage {
           return resolved(provider.getApiKey(cred));
         }
         return resolved(
-          (await resolveAuthStoragePluginOAuthCredential(providerId, cred, false))?.apiKey,
+          (await resolveAuthStoragePluginOAuthCredential(providerId, cred, false, this.config))
+            ?.apiKey,
         );
       }
     }

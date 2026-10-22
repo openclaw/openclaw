@@ -70,6 +70,8 @@ export const databaseWorkerExtensionTestFiles = [
   // Provider-owned embedding auth resolves shared-store ownership through the host broker.
   "extensions/alibaba/video-generation-provider.test.ts",
   "extensions/google/embedding-provider.test.ts",
+  "extensions/google/vertex-adc-refresh.test.ts",
+  "extensions/google/transport-stream.test.ts",
   "extensions/openai/binary-transport.test.ts",
   "extensions/openai/embedding-provider.test.ts",
   "extensions/openai/realtime-voice-provider-routing.test.ts",
@@ -123,6 +125,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/tlon/src/monitor/ingress.test.ts",
   "extensions/tlon/src/monitor/index.test.ts",
   "extensions/twitch/src/twitch-ingress.test.ts",
+  "extensions/twitch/src/oauth-owner.test.ts",
   "extensions/twitch/src/monitor.test.ts",
   "extensions/whatsapp/src/auto-reply.web-auto-reply.media-delivery.test.ts",
   "extensions/whatsapp/src/auto-reply/monitor/process-message.test.ts",
@@ -435,6 +438,8 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/msteams/src/sent-message-cache.state.test.ts",
   "extensions/msteams/src/sso-token-store.test.ts",
   "extensions/msteams/src/token.test.ts",
+  "extensions/msteams/src/token-refresh-boundary.test.ts",
+  "extensions/google-meet/src/oauth-owner.test.ts",
   "extensions/nostr/src/nostr-state-store.test.ts",
   "extensions/onepassword/index.worker.test.ts",
   "extensions/onepassword/src/tool-list.test.ts",
@@ -533,6 +538,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/imessage/src/send.sqlite.test.ts",
   "extensions/imessage/src/send.test.ts",
   "extensions/x/src/guest-usage.test.ts",
+  "extensions/x/src/client.test.ts",
 ];
 
 export function isDatabaseWorkerExtensionRoot(root) {

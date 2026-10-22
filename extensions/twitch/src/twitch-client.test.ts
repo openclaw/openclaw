@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { StaticAuthProvider, type AuthProvider } from "@twurple/auth";
 import { LogLevel, type ChatClientOptions } from "@twurple/chat";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -51,8 +52,14 @@ function registerHandler<T>(handlers: T[]) {
   });
 }
 
-const mockAddUserForToken = vi.fn().mockResolvedValue("123456");
-const mockOnRefreshFailure = vi.fn();
+const mockManagedAuthProvider = vi.fn<(...args: unknown[]) => Promise<AuthProvider>>(
+  async () => new StaticAuthProvider("test-client-id", "synthetic-managed"),
+);
+
+vi.mock("./oauth-owner.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./oauth-owner.js")>()),
+  createManagedTwitchAuthProvider: (...args: unknown[]) => mockManagedAuthProvider(...args),
+}));
 
 vi.mock("@twurple/chat", () => ({
   ChatClient: class {
@@ -80,12 +87,8 @@ vi.mock("@twurple/chat", () => ({
 const mockAuthProvider = { constructor: vi.fn() };
 
 vi.mock("@twurple/auth", () => ({
-  StaticAuthProvider: function StaticAuthProvider(...args: unknown[]) {
+  StaticAuthProvider: function MockStaticAuthProvider(...args: unknown[]) {
     mockAuthProvider.constructor(...args);
-  },
-  RefreshingAuthProvider: class {
-    addUserForToken = mockAddUserForToken;
-    onRefreshFailure = mockOnRefreshFailure;
   },
 }));
 
@@ -149,8 +152,8 @@ describe("TwitchClientManager", () => {
   }
 
   function pendingAuthentication() {
-    const authentication = createDeferred<string>();
-    mockAddUserForToken.mockImplementationOnce(() => authentication.promise);
+    const authentication = createDeferred<AuthProvider>();
+    mockManagedAuthProvider.mockImplementationOnce(() => authentication.promise);
     return { authentication, connection: manager.getClient(authAccount) };
   }
 
@@ -268,9 +271,9 @@ describe("TwitchClientManager", () => {
 
   it("does not create a client when disconnect completes during authentication setup", async () => {
     const { authentication, connection } = pendingAuthentication();
-    expect(mockAddUserForToken).toHaveBeenCalledOnce();
+    expect(mockManagedAuthProvider).toHaveBeenCalledOnce();
     await manager.disconnectAll();
-    authentication.resolve("123456");
+    authentication.resolve(new StaticAuthProvider("test-client-id", "synthetic-managed"));
     await expect(connection).rejects.toThrow("Twitch connection cancelled");
     expect(mockConnect).not.toHaveBeenCalled();
   });
@@ -292,18 +295,18 @@ describe("TwitchClientManager", () => {
       const currentConnection = activeManager.getClient(activeAccount);
       try {
         if (same) {
-          expect(mockAddUserForToken).toHaveBeenCalledTimes(2);
+          expect(mockManagedAuthProvider).toHaveBeenCalledTimes(2);
         }
         const activeClient = await currentConnection;
         if (!same) {
           await manager.disconnectAll();
         }
-        authentication.resolve("123456");
+        authentication.resolve(new StaticAuthProvider("test-client-id", "synthetic-managed"));
         expect(await staleOutcome).toBe("cancelled");
         expect(await activeManager.getClient(activeAccount)).toBe(activeClient);
         expect(mockConnect).toHaveBeenCalledOnce();
       } finally {
-        authentication.resolve("123456");
+        authentication.resolve(new StaticAuthProvider("test-client-id", "synthetic-managed"));
         await Promise.allSettled([staleConnection, currentConnection]);
       }
     },
@@ -319,27 +322,11 @@ describe("TwitchClientManager", () => {
     ]);
   });
 
-  it("should register refreshing tokens for Twurple chat intent", async () => {
-    await manager.getClient(refreshingAccount);
-    expect(mockAddUserForToken.mock.calls).toEqual([
-      [
-        {
-          accessToken: "mock-token-from-tests",
-          refreshToken: "test-refresh-token",
-          expiresIn: 3600,
-          obtainmentTimestamp: 1_700_000_000_000,
-        },
-        ["chat"],
-      ],
-    ]);
-    expect(mockAuthProvider.constructor).not.toHaveBeenCalled();
-  });
-
-  it("retries client creation after an earlier addUserForToken failure (83853)", async () => {
-    mockAddUserForToken.mockRejectedValueOnce(new Error("token bind failed"));
+  it("retries client creation after an earlier auth setup failure (83853)", async () => {
+    mockManagedAuthProvider.mockRejectedValueOnce(new Error("token bind failed"));
     await expect(manager.getClient(refreshingAccount)).rejects.toThrow("token bind failed");
     await manager.getClient(refreshingAccount);
-    expect(mockAddUserForToken).toHaveBeenCalledTimes(2);
+    expect(mockManagedAuthProvider).toHaveBeenCalledTimes(2);
   });
 
   it("should throw error when clientId is missing", async () => {

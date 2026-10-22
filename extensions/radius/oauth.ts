@@ -7,6 +7,8 @@ import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import type { OAuthCredential } from "openclaw/plugin-sdk/provider-auth";
 import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
 import {
+  createOAuthRefreshError,
+  createOAuthRefreshResponseError,
   type OAuthCredentials,
   throwIfOAuthLoginAborted,
 } from "openclaw/plugin-sdk/provider-oauth-runtime";
@@ -61,6 +63,9 @@ async function postOAuthForm(
       requestHeaders: {},
     });
     if (!response.ok || payload.error !== undefined) {
+      if (fields.grant_type === "refresh_token") {
+        throw createOAuthRefreshResponseError("Radius OAuth refresh", response.status, payload);
+      }
       throw new RadiusOAuthError(payload.error, response.status);
     }
     return payload;
@@ -78,7 +83,7 @@ function parseToken(payload: Record<string, unknown>, previousRefresh?: string):
           // Refresh early without making short-lived tokens immediately stale.
           bufferMs: Math.min(60_000, Math.floor(lifetimeMs / 2)),
         });
-  const refresh = payload.refresh_token ?? previousRefresh;
+  const refresh = payload.refresh_token === undefined ? previousRefresh : payload.refresh_token;
   if (
     typeof payload.access_token !== "string" ||
     !payload.access_token.trim() ||
@@ -89,7 +94,12 @@ function parseToken(payload: Record<string, unknown>, previousRefresh?: string):
   ) {
     throw new Error("Radius OAuth returned invalid credentials. Retry sign-in.");
   }
-  return { access: payload.access_token, refresh, expires };
+  return {
+    access: payload.access_token,
+    refresh,
+    expires,
+    ...(typeof payload.scope === "string" ? { scope: payload.scope } : {}),
+  };
 }
 
 export async function loginRadiusOAuth(ctx: ProviderAuthContext): Promise<OAuthCredentials> {
@@ -218,5 +228,13 @@ export async function refreshRadiusOAuthCredential(
     grant_type: "refresh_token",
     refresh_token: credential.refresh,
   });
-  return { ...credential, ...parseToken(payload, credential.refresh) };
+  try {
+    return { ...credential, ...parseToken(payload, credential.refresh) };
+  } catch (cause) {
+    throw createOAuthRefreshError(
+      "Radius OAuth refresh returned invalid credentials. Sign in again.",
+      { version: 1, phase: "after-token-response", outcome: "unknown" },
+      { cause },
+    );
+  }
 }

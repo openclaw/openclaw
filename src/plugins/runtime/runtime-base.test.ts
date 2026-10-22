@@ -2,5 +2,8 @@ import { expect, it } from "vitest";
 import { createRuntimeBase } from "./runtime-base.js";
 
 it("advertises command-scoped native subagents to installed plugins", () => {
-  expect(createRuntimeBase().capabilities).toContain("command-native-subagents-v1");
+  const capabilities = createRuntimeBase().capabilities;
+  expect(capabilities).toContain("command-native-subagents-v1");
+  expect(capabilities).toContain("native-subagent-list-v1");
+  expect(capabilities?.every((capability) => typeof capability === "string")).toBe(true);
 });

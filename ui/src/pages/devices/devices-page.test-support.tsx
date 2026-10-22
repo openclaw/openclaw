@@ -17,9 +17,10 @@ import {
 import { createModalDialogTestFixture } from "../../test-helpers/modal-dialog.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { DevicesPage, type DevicesRouteData } from "./devices-page.tsx";
+import { DevicesPage } from "./devices-page.tsx";
+import type { DevicesRouteData } from "./view.types.ts";
 
-const gatewayPresence: PresenceEntry = { mode: "gateway", host: "Gateway host", ts: 1_000 };
+export const gatewayPresence: PresenceEntry = { mode: "gateway", host: "Gateway host", ts: 1_000 };
 export const pairedDevice = {
   deviceId: "device-1",
   displayName: "MacBook Pro",
@@ -171,6 +172,10 @@ export function mountPage(
     config: context.runtimeConfig.state,
     router,
     dispose,
+    leaveRoute() {
+      void router.navigate("usage", {});
+      flush();
+    },
     refreshPresentation() {
       setPresentation({ routeData });
       flush();
