@@ -2,7 +2,6 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { getQueriesForElement } from "@solidjs/testing-library";
-import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import {
@@ -135,24 +134,6 @@ it("locks every global dreaming control when config mutation is unavailable", ()
   ).toBe(true);
 });
 
-it("keeps the edited field mounted when the owner publishes updated config", () => {
-  const [dreaming, setDreaming] = createSignal<Record<string, unknown>>({ frequency: "0 3 * * *" });
-  const view = mountSolid(() => (
-    <CuratedSettingsPanel
-      {...panelDefaults}
-      config={dreamingConfig(dreaming())}
-      onPatch={(_, _path, value) => setDreaming({ frequency: value })}
-    />
-  ));
-  flush();
-  const input = numberInput(view.container, "Dreaming frequency");
-  editNumber(input, "0 4 * * *");
-  flush();
-
-  expect(numberInput(view.container, "Dreaming frequency")).toBe(input);
-  expect(input.value).toBe("0 4 * * *");
-});
-
 it("rejects invalid numbers, accepts valid edits, and clears emptied values", () => {
   const onPatch = vi.fn();
   const container = renderInto({ enabled: true, phases: { light: { lookbackDays: 7 } } }, onPatch);
@@ -220,7 +201,11 @@ it("submits edited values and removals through the shared config owner without m
     );
     toggle.checked = false;
     toggle.dispatchEvent(new Event("change", { bubbles: true }));
-    editNumber(numberInput(view.container, "Dreaming frequency"), "");
+    const frequency = numberInput(view.container, "Dreaming frequency");
+    editNumber(frequency, "");
+    flush();
+    expect(numberInput(view.container, "Dreaming frequency")).toBe(frequency);
+    expect(frequency.value).toBe("");
     runtimeConfig.patchForm(["agents", "defaults", "userTimezone"], "Etc/UTC");
     await vi.advanceTimersByTimeAsync(CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS);
     await runtimeConfig.waitForPendingWrites();

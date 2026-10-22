@@ -9,6 +9,43 @@ export function normalizeOpenAIStrictCompatSchema(schema: unknown, toolName?: st
   return normalizeToolSchema(schema, "compat", toolName) as TSchema;
 }
 
+/** Finds nested open dictionaries whose keys compatibility normalization closes. */
+export function findCompatClosedObjectPaths(schema: unknown, path: string): string[] {
+  return collectCompatClosedObjectPaths(truncateToolSchemaDepth(schema), path);
+}
+
+function collectCompatClosedObjectPaths(schema: unknown, path: string, nested = false): string[] {
+  if (Array.isArray(schema)) {
+    return schema.flatMap((entry, index) =>
+      collectCompatClosedObjectPaths(entry, `${path}[${index}]`, true),
+    );
+  }
+  if (!isRecord(schema)) {
+    return [];
+  }
+  const violations =
+    nested &&
+    schema.type === "object" &&
+    !("additionalProperties" in schema) &&
+    (!isRecord(schema.patternProperties) || Object.keys(schema.patternProperties).length === 0) &&
+    (!("properties" in schema) ||
+      (isRecord(schema.properties) && Object.keys(schema.properties).length === 0))
+      ? [path]
+      : [];
+  for (const key of SCHEMA_MAP_KEYS) {
+    const map = schema[key];
+    if (isRecord(map)) {
+      for (const [name, child] of Object.entries(map)) {
+        violations.push(...collectCompatClosedObjectPaths(child, `${path}.${key}.${name}`, true));
+      }
+    }
+  }
+  for (const key of SCHEMA_NESTED_KEYS) {
+    violations.push(...collectCompatClosedObjectPaths(schema[key], `${path}.${key}`, true));
+  }
+  return violations;
+}
+
 /**
  * Returns whether a regex pattern contains a lookahead or lookbehind group.
  * Escaped parentheses, character classes, and named groups are not lookarounds.

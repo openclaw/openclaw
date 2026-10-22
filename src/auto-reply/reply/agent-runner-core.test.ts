@@ -52,6 +52,9 @@ it.each([{ armed: false }, { armed: true }, { claimChanged: true }])(
         ? undefined
         : "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
     expect(reply?.text).toBe(expected);
+    if (claimChanged) {
+      expect(reply?.isError).toBe(true);
+    }
   },
 );
 

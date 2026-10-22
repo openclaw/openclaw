@@ -34,6 +34,7 @@ import {
   transferMcpLoopbackClientGrant,
 } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
+import { setMinimalCliPrepareDeps } from "./mcp-http.test-support.js";
 import * as toolResolution from "./tool-resolution.js";
 
 vi.mock("../plugins/hook-runner-global.js", () => ({ getGlobalHookRunner: () => null }));
@@ -98,14 +99,7 @@ beforeEach(({ signal }) => {
       },
     ],
   });
-  setCliRunnerPrepareTestDeps({
-    isWorkspaceBootstrapPending: async () => false,
-    makeBootstrapWarn: () => () => {},
-    resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
-    resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
-    prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
-    loadManifestModelCatalog: () => [],
-  });
+  setMinimalCliPrepareDeps(setCliRunnerPrepareTestDeps);
 });
 
 afterEach(async () => {

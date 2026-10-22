@@ -110,11 +110,7 @@ beforeEach(() => {
       { assertCurrent() {} },
     ),
   );
-  vi.spyOn(configLoader, "loadModelsConfigWithSource").mockResolvedValue({
-    sourceConfig: cfg,
-    resolvedConfig: cfg,
-    diagnostics: [],
-  });
+  vi.spyOn(configLoader, "loadModelsConfig").mockResolvedValue(cfg);
   vi.spyOn(gateway, "isImplicitLocalGatewayTarget").mockResolvedValue(true);
   vi.spyOn(gatewayLock, "readActiveGatewayLockIdentity").mockResolvedValue({
     pid: 123,
@@ -193,14 +189,14 @@ describe("models list published transport", () => {
   );
 
   it("refreshes the selected Gateway's inventory without resolving local provider secrets", async () => {
-    vi.mocked(configLoader.loadModelsConfigWithSource).mockRejectedValue(
+    vi.mocked(configLoader.loadModelsConfig).mockRejectedValue(
       new Error("Local provider secret unavailable"),
     );
     vi.mocked(gateway.callGateway).mockResolvedValue({
       models: [model, { provider: "catalog-provider", id: "reader", name: "Unknown route" }],
     });
     await list({ agent: "work", provider: "catalog-provider", json: true, refresh: true });
-    expect(configLoader.loadModelsConfigWithSource).not.toHaveBeenCalled();
+    expect(configLoader.loadModelsConfig).not.toHaveBeenCalled();
     expect(catalog.withPreparedModelCatalogOwner).not.toHaveBeenCalled();
     expect(proxyLifecycle.startProxy).not.toHaveBeenCalled();
     expect(localStateOwner.runWithLocalStateOwner).not.toHaveBeenCalled();
@@ -373,11 +369,7 @@ describe("models list published transport", () => {
       { provider: "claude-cli", id: "claude-opus-5", name: "Claude Opus 5" },
       { provider: "claude-cli", id: "claude-haiku-4-5", name: "Claude Haiku 4.5" },
     ];
-    vi.mocked(configLoader.loadModelsConfigWithSource).mockResolvedValue({
-      sourceConfig: claudeCfg,
-      resolvedConfig: claudeCfg,
-      diagnostics: [],
-    });
+    vi.mocked(configLoader.loadModelsConfig).mockResolvedValue(claudeCfg);
     vi.mocked(gatewayLock.readActiveGatewayLockIdentity).mockResolvedValue(undefined);
     const pluginRegistry = createEmptyPluginRegistry();
     pluginRegistry.cliBackends.push({

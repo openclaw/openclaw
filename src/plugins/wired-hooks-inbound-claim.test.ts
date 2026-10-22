@@ -18,13 +18,6 @@ const inboundClaimCtx = {
 const forumEvent = { ...inboundClaimEvent, channel: "forum", conversationId: "123:topic:77" };
 const forumCtx = { ...inboundClaimCtx, channelId: "forum", conversationId: "123:topic:77" };
 
-function expectFirstErrorLog(
-  logger: { error: ReturnType<typeof vi.fn> },
-  expected: readonly unknown[],
-): void {
-  expect(logger.error.mock.calls).toEqual([expected]);
-}
-
 describe("inbound_claim hook runner", () => {
   const runTargeted = (
     runner: ReturnType<typeof createHookRunnerWithRegistry>["runner"],
@@ -73,7 +66,9 @@ describe("inbound_claim hook runner", () => {
     );
 
     expect(result).toEqual({ handled: true });
-    expectFirstErrorLog(logger, ["[hooks] inbound_claim handler from test-plugin failed: boom"]);
+    expect(logger.error).toHaveBeenCalledExactlyOnceWith(
+      "[hooks] inbound_claim handler from test-plugin failed: boom",
+    );
     expect(succeeding).toHaveBeenCalledTimes(1);
   });
 
@@ -102,9 +97,9 @@ describe("inbound_claim hook runner", () => {
       await vi.advanceTimersByTimeAsync(5);
 
       await expect(run).resolves.toEqual({ status: "error", error: "timed out after 5ms" });
-      expectFirstErrorLog(logger, [
+      expect(logger.error).toHaveBeenCalledExactlyOnceWith(
         "[hooks] inbound_claim handler from test-plugin failed: timed out after 5ms",
-      ]);
+      );
     } finally {
       vi.useRealTimers();
     }

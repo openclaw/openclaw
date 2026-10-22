@@ -165,10 +165,8 @@ export type ResolvedSessionEntryUpdateResult<T> =
     }
   | {
       canonicalKey: string;
-      entry: SessionEntry;
       found: true;
       result: T;
-      storeKey: string;
     };
 
 export type SessionTranscriptAccessScope = Omit<SessionAccessScope, "sessionKey"> & {
@@ -218,13 +216,6 @@ export type SessionEntrySummary = {
   sessionKey: string;
   /** Entry value cloned from the backing store unless the caller requested borrowed reads. */
   entry: SessionEntry;
-};
-
-export type SessionEntryReadView = {
-  /** Row stored under the exact persisted key; no alias or canonical-key resolution. */
-  get(sessionKey: string): SessionEntry | undefined;
-  /** Every persisted row; call only when exact-key probes cannot settle the lookup. */
-  entries(): SessionEntrySummary[];
 };
 
 /** Session entry read by the exact persisted session key, without alias resolution. */

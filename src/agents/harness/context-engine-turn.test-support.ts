@@ -3,8 +3,31 @@ import { appendTranscriptMessage } from "../../config/sessions/session-accessor.
 import type { TranscriptTurnBoundary } from "../../config/sessions/transcript-entry-anchor.js";
 import { createPassthroughEngineMethods } from "../../context-engine/context-engine.test-support.js";
 import type { ContextEngine } from "../../context-engine/types.js";
+import { finalizeHarnessContextEngineTurn } from "./context-engine-lifecycle.js";
 import type { ContextEngineLogicalTurnLease } from "./context-engine-logical-turn.js";
 import type { ContextEngineTurnAttemptFacts } from "./context-engine-turn-attempt.js";
+
+export function createTurnTarget(storePath: string, sessionId: string) {
+  return { agentId: "main", sessionId, sessionKey: `agent:main:${sessionId}`, storePath };
+}
+
+export const createCommitTurn = () =>
+  vi.fn<NonNullable<ContextEngine["commitTurn"]>>(async () => ({ status: "committed" }));
+
+type FinalizeParams = Parameters<typeof finalizeHarnessContextEngineTurn>[0];
+export function finalizeTurn(
+  params: Pick<FinalizeParams, "sessionFile" | "sessionIdUsed"> & Partial<FinalizeParams>,
+) {
+  return finalizeHarnessContextEngineTurn({
+    messagesSnapshot: [],
+    prePromptMessageCount: 0,
+    promptError: false,
+    aborted: false,
+    yieldAborted: false,
+    warn: vi.fn(),
+    ...params,
+  });
+}
 
 export function createTurnBoundary(
   storePath: string,

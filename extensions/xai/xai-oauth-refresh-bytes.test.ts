@@ -33,17 +33,15 @@ describe("xAI OAuth refresh response bytes", () => {
       status: 200,
       prefix: '{"access_token":"access-2","refresh_token":"refresh-2-',
       suffix: '","expires_in":120}',
-      error: "xAI OAuth refresh failed",
     },
     {
       status: 400,
       prefix: '{"error":"invalid_grant","error_description":"unknown token ',
       suffix: '"}',
-      error: "invalid_grant (unknown token",
     },
   ])(
     "handles invalid UTF-8 in HTTP $status without retrying",
-    async ({ status, prefix, suffix, error }) => {
+    async ({ status, prefix, suffix }) => {
       const fetchImpl = vi.fn<typeof fetch>(async () =>
         byteStreamResponse(
           Buffer.concat([Buffer.from(prefix), Buffer.from([0xe2, 0x82]), Buffer.from(suffix)]),
@@ -52,11 +50,11 @@ describe("xAI OAuth refresh response bytes", () => {
       );
       vi.stubGlobal("fetch", fetchImpl);
       const refreshing = refreshXaiOAuthCredential(credential);
-      await expect(refreshing).rejects.toThrow(error);
-      if (status === 200) {
-        await expect(refreshing).rejects.toBeInstanceOf(Error);
-        await expect(refreshing).rejects.not.toThrow("�");
-      }
+      await expect(refreshing).rejects.toMatchObject({
+        message: "xAI OAuth refresh response could not be read",
+        oauthRefreshOutcome: { version: 1, phase: "token-response", outcome: "unknown", status },
+      });
+      await expect(refreshing).rejects.not.toThrow("�");
       expect(fetchImpl).toHaveBeenCalledTimes(1);
     },
   );

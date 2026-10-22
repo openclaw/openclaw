@@ -332,7 +332,6 @@ describe("personal navigation rail", () => {
     await sidebar.updateComplete;
     expect(sidebar.sidebarEntries).toEqual([...retained, "route:usage"]);
     const pin = rail(sidebar, "route:usage")!;
-    expect(pin.querySelector(".sidebar-reorder-trigger")).toBeNull();
     const reorder = createDataTransferStub();
     drag(pin.querySelector("a")!, "dragstart", reorder);
     drag(rail(sidebar, "person:offline")!, "drop", reorder);

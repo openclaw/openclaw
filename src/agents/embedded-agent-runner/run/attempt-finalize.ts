@@ -99,7 +99,6 @@ export function finalizeEmbeddedAttempt(
       result.didSendDeterministicApprovalPrompt === true ||
       hasCommittedMessagingToolDeliveryEvidence(result) ||
       hasAcceptedSessionSpawn(result.acceptedSessionSpawns) ||
-      result.heartbeatToolResponse !== undefined ||
       (result.clientToolCalls?.length ?? 0) > 0 ||
       result.yieldDetected === true ||
       result.lastToolError !== undefined ||

@@ -413,6 +413,13 @@ describe("HTTP gateway owner profiles", () => {
         const result = await authenticate(method);
         assert(result.ok, "Expected authenticated request");
         expect(result.requestAuth.user).toBeUndefined();
+        if (method === "token" || method === "password") {
+          expect(result.requestAuth).toMatchObject({
+            authMethod: method,
+            trustDeclaredOperatorScopes: false,
+            operatorRoleActor: { kind: "system" },
+          });
+        }
         expect(result.requestAuth.authenticatedUserProfile).toMatchObject({
           displayName: profileId ? "Saved Owner" : "Gateway Person",
         });

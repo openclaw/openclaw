@@ -390,6 +390,7 @@ async function runCronIsolatedAgentTurnInTrace(
               const executionParams: Parameters<typeof executeCronRun>[0] = {
                 ...prepared.context,
                 operatorAuthority: operator?.authority,
+                occurrence: params.occurrence,
                 runId,
                 cfg: params.cfg,
                 job: params.job,

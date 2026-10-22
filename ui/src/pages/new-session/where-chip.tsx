@@ -1,4 +1,4 @@
-import { createMemo, For, Loading, Show } from "solid-js";
+import { action, createMemo, createOptimistic, For, Loading, Show } from "solid-js";
 import { resolveCloudProfileIconData } from "../../components/provider-icon-data.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import type { PopoverHandle } from "../../components/solid/popover.tsx";
@@ -10,6 +10,7 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { SessionMenuItem, CloudProfileMenuItems } from "./cloud-target-view.tsx";
 import type { DevicePlacementOption } from "./device-placement.ts";
+import type { SuggestedProfileAdoption } from "./draft-suggested-cloud-profile.ts";
 import {
   environmentPlacementRuntime,
   environmentCloudDisabledReason,
@@ -125,6 +126,21 @@ export function WhereChip(props: {
   state: ReturnType<typeof resolveWhereChip>;
   ref?: (handle: PopoverHandle) => void;
 }) {
+  const [saving, setSaving] = createOptimistic(false);
+  const presentAdoption = action(function* (request: SuggestedProfileAdoption) {
+    if (request.isCurrent()) {
+      setSaving(true);
+    }
+    yield Promise.race([request.completion, request.retired]);
+  });
+  const adoptSuggestedProfile = () => {
+    void props.params.place.suggestedCloudProfile.adopt((request) => {
+      // Publish the owner's admitted operation before its presentation joins the tick.
+      void Promise.resolve()
+        .then(() => presentAdoption(request))
+        .catch(request.reportError);
+    });
+  };
   const selectCloudOption = (kind: "os" | "machine", id: string) =>
     props.params.place.cloudMachines[kind === "os" ? "selectOs" : "select"](
       props.params.place.cloudProfileId,
@@ -277,12 +293,13 @@ export function WhereChip(props: {
       busy,
     };
   });
+  const busy = () => saving() || view().busy;
   function CloudHeading(heading: { pending?: boolean }) {
     return (
       <EnvironmentHeading
         label={t("newSession.cloud")}
         action="manage-cloud-workers"
-        disabled={view().busy}
+        disabled={busy()}
         onAction={
           props.params.place.isAdmin() && !heading.pending && !view().showSuggestion
             ? () => {
@@ -329,7 +346,7 @@ export function WhereChip(props: {
               aria-label={t("newSession.environmentSearchPlaceholder")}
               placeholder={t("newSession.environmentSearchPlaceholder")}
               value={props.params.place.browser.environmentQuery}
-              disabled={view().busy}
+              disabled={busy()}
               onInput={(event: Event) => {
                 if (event.currentTarget instanceof HTMLInputElement) {
                   props.params.place.browser.changeEnvironmentQuery(event.currentTarget.value);
@@ -342,7 +359,7 @@ export function WhereChip(props: {
               <EnvironmentHeading
                 label={t("newSession.yourDevices")}
                 action="connect-machine"
-                disabled={view().busy}
+                disabled={busy()}
                 onAction={props.params.place.isAdmin() ? props.params.onConnectMachine : undefined}
               />
             </Show>
@@ -359,7 +376,7 @@ export function WhereChip(props: {
                   aria-pressed={props.params.place.autoDevice ? "true" : "false"}
                   aria-description={view().autoHelp}
                   disabled={
-                    view().busy ||
+                    busy() ||
                     (!props.params.place.autoDevice &&
                       Boolean(props.state.autoDeviceDisabledReason))
                   }
@@ -397,7 +414,7 @@ export function WhereChip(props: {
                   title: view().hostDisabledReason,
                   onSelect: () => props.params.place.selectDevice(""),
                 }}
-                submitting={view().busy}
+                submitting={busy()}
               />
             ) : undefined}
             <For each={view().devices} keyed={(device) => device.deviceId}>
@@ -430,7 +447,7 @@ export function WhereChip(props: {
                     onSelect: () => props.params.place.selectDevice(device().deviceId),
                   };
                 });
-                return <SessionMenuItem item={item()} submitting={view().busy} />;
+                return <SessionMenuItem item={item()} submitting={busy()} />;
               }}
             </For>
             <Loading
@@ -464,7 +481,7 @@ export function WhereChip(props: {
                       title: entry().disabledReason,
                       onSelect: () => props.params.place.selectHostedEnvironment(entry().id),
                     }}
-                    submitting={view().busy}
+                    submitting={busy()}
                   />
                 )}
               </For>
@@ -520,9 +537,9 @@ export function WhereChip(props: {
                   checked: false,
                   disabled: Boolean(view().cloudDisabledReason),
                   title: view().cloudDisabledReason,
-                  onSelect: () => void props.params.place.suggestedCloudProfile.adopt(),
+                  onSelect: adoptSuggestedProfile,
                 }}
-                submitting={view().busy}
+                submitting={busy()}
               />
             ) : undefined}
             <CloudProfileMenuItems
@@ -533,7 +550,7 @@ export function WhereChip(props: {
                 selectedMachine: props.state.selectedMachineId,
                 onSelectOs: (id) => selectCloudOption("os", id),
                 onSelectMachine: (id) => selectCloudOption("machine", id),
-                submitting: view().busy,
+                submitting: busy(),
                 compact: true,
                 disabled: Boolean(view().cloudDisabledReason),
                 disabledReason: view().cloudDisabledReason,
@@ -572,7 +589,7 @@ export function WhereChip(props: {
                   title: t("newSession.catalogUnavailable"),
                   onSelect: () => undefined,
                 }}
-                submitting={view().busy}
+                submitting={busy()}
               />
             ) : undefined}
             <Loading on={cloudProfilesCompletion()}>

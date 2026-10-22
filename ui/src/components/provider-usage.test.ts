@@ -27,11 +27,8 @@ const history = (daily: History["daily"], overrides: Partial<History> = {}): Sna
     ...overrides,
   },
 });
-function renderUsage(snapshot: Snapshot) {
-  const container = document.createElement("div");
-  mountSolid(() => renderProviderUsageDetails(snapshot), { container });
-  return container;
-}
+const renderUsage = (snapshot: Snapshot) =>
+  mountSolid(() => renderProviderUsageDetails(snapshot)).container;
 const bars = (container: HTMLElement) =>
   Array.from(container.querySelectorAll<HTMLElement>(".provider-cost-chart span"), (bar) => [
     bar.style.height,
@@ -52,11 +49,7 @@ it.each([
   { unit: " Credits ", amount: "12.5  Credits ", zero: "0  Credits " },
 ])("renders provider-reported cost history and attribution for $unit", ({ unit, amount, zero }) => {
   const today = new Date().toISOString().slice(0, 10);
-  const usage = {
-    requests: 42,
-    cacheReadTokens: 400,
-    totalTokens: 1_250,
-  };
+  const usage = { requests: 42, cacheReadTokens: 400, totalTokens: 1_250 };
   const container = renderUsage(
     history([day(today, 12.5, usage), day("2026-01-01", 0, { requests: 1 })], {
       unit,
@@ -67,9 +60,9 @@ it.each([
   for (const text of [amount, "43 requests", "gpt-5.5", "Responses"]) {
     expect(container.textContent).toContain(text);
   }
-  const chart = container.querySelector('[role="group"][aria-label="Daily provider cost"]');
-  expect(chart).not.toBeNull();
-  expect(chart!.querySelectorAll('[role="img"]')).toHaveLength(2);
+  expect(
+    container.querySelectorAll('[role="group"][aria-label="Daily provider cost"] [role="img"]'),
+  ).toHaveLength(2);
   expect(bars(container)).toEqual([bar(today, amount, "100%"), bar("2026-01-01", zero, "0%")]);
   expect(container.querySelectorAll(".provider-cost-breakdown strong")[1]?.textContent).toBe(
     amount,
@@ -80,15 +73,11 @@ it("preserves nonfinite chart maxima, signed amounts, and source-order cache tot
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(new Date("2026-09-07T12:00:00Z"));
   const today = new Date().toISOString().slice(0, 10);
-  const provider = {
-    provider: "openai",
-    displayName: "OpenAI",
-    ...history([
-      day(today, 2, { cacheReadTokens: 2 ** 53 }),
-      day(today, Number.NaN, { cacheReadTokens: 1, cacheWriteTokens: -(2 ** 53) }),
-      day(today, -0),
-    ]),
-  };
+  const provider = history([
+    day(today, 2, { cacheReadTokens: 2 ** 53 }),
+    day(today, Number.NaN, { cacheReadTokens: 1, cacheWriteTokens: -(2 ** 53) }),
+    day(today, -0),
+  ]);
   const before = structuredClone(provider);
   const container = renderUsage(provider);
   expect(bars(container)).toEqual([
@@ -97,11 +86,7 @@ it("preserves nonfinite chart maxima, signed amounts, and source-order cache tot
     bar(today, "-0 credits", "0%"),
   ]);
   const windows = container.querySelectorAll(".provider-cost-window strong");
-  expect(Array.from(windows, (value) => value.textContent)).toEqual([
-    "NaN credits",
-    "NaN credits",
-    "NaN credits",
-  ]);
+  expect(Array.from(windows, (value) => value.textContent)).toEqual(Array(3).fill("NaN credits"));
   expect(container.querySelector(".provider-cost-tokens")?.textContent).toContain("0 cache");
   expect(provider).toEqual(before);
 });

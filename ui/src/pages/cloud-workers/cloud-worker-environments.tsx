@@ -7,6 +7,8 @@ import {
   createStore,
   Errored,
   For,
+  isPending,
+  latest,
   Loading,
   Show,
   onSettled,
@@ -73,13 +75,17 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
   const [selected, setSelected] = createSignal<string | null>(null, { ownedWrite: true });
   const [view, setView] = createStore<{
     result: SnapshotsResult | null;
-    loading: boolean;
     inventory: EnvironmentsListResult | null;
   }>({
     result: null,
-    loading: false,
     inventory: null,
   });
+  const [loadRequest, setLoadRequest] = createSignal<{ promise: Promise<void> }>();
+  const readPending = createMemo<boolean>(() => loadRequest()?.promise.then(() => false) ?? false, {
+    loadingValue: true,
+  });
+  // Keep accepted inventory visible while optional image details are still loading.
+  const loading = () => isPending(readPending) || latest(readPending);
   const [notice, setNotice] = createSignal<string | null>(null);
   const operations: Partial<Record<MutationSlot, GatewayConnectionScope>> = {};
   const [preparation, showPreparation] = createOptimistic<GatewayConnectionScope | null>(null);
@@ -138,9 +144,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     delete operations.destroying;
     setFeedback(null);
     polling.cancel();
-    setView((draft) => {
-      draft.loading = false;
-    });
+    setLoadRequest(undefined);
     setNotice(null);
     activeConfirmation?.abort();
   }
@@ -178,7 +182,10 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     // Config and permission receipts invalidate the inventory at their synchronous owners.
     const stop = runtime.subscribe(syncInventoryInputs);
     syncInventoryInputs();
-    return stop;
+    return () => {
+      stop();
+      activeConfirmation?.abort();
+    };
   });
 
   const canCall = (method: string) =>
@@ -208,9 +215,6 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
     }
     const request = {};
     activeLoad = request;
-    setView((draft) => {
-      draft.loading = true;
-    });
     const promise = (async () => {
       try {
         const inventory = await scope.client.request<EnvironmentsListResult>("environments.list", {
@@ -256,9 +260,6 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
       } finally {
         if (gateway.isCurrent(scope) && activeLoad === request) {
           activeLoad = undefined;
-          setView((draft) => {
-            draft.loading = false;
-          });
           polling.cancel();
           // This native microtask samples settled state once for polling, without subscribing.
           queueMicrotask(() => {
@@ -286,6 +287,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
         }
       }
     })();
+    setLoadRequest({ promise });
     setFeedback({ promise });
     return promise;
   }
@@ -584,7 +586,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
             fallback={
               <SettingsEmpty
                 message={
-                  view.loading ? (
+                  loading() ? (
                     t("common.loading")
                   ) : (
                     <>
@@ -646,7 +648,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
                   <CloudWorkerEnvironmentSheet
                     environment={environment()}
                     profiles={view.result?.profiles ?? []}
-                    busy={view.loading || presented("image") || presented("preparing")}
+                    busy={loading() || presented("image") || presented("preparing")}
                     canCall={canCall}
                     deleteReason={deleteReason}
                     onRebuild={prepare}
@@ -681,7 +683,7 @@ export function CloudWorkerEnvironments(props: { machines: () => JSX.Element }) 
                     image={image()}
                     label={image().profileId ?? image().profileKey}
                     actions
-                    busy={view.loading || presented("image")}
+                    busy={loading() || presented("image")}
                     canCall={canCall}
                     deleteReason={deleteReason}
                     onMutate={mutateImage}

@@ -267,6 +267,7 @@ export function projectSidebarAgentSessionRows({
     rowsByKey: visibleRowsByKey,
     loadingChildKeys: host.sessionData.loadingChildSessionKeys,
     isChildSessionVisible,
+    compareSessions,
     resolveAttention,
     toSidebarSession: navigationState.toSidebarSession,
   });

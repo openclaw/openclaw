@@ -905,6 +905,11 @@ describe("Codex app-server config", () => {
         },
       }),
     },
+    {
+      name: "managed Git settings",
+      secrets: ["git-first", "git-second"] as const,
+      options: (secret: string) => ({ managedGitConfigParameters: secret }),
+    },
   ])("isolates shared clients by $name without exposing secrets", ({ secrets, options }) => {
     const keyFor = (secret: string) =>
       codexAppServerStartOptionsKey({

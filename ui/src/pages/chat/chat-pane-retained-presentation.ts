@@ -80,12 +80,15 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     const workspace = getSessionWorkspace(state);
     const board = this.resolveBoardView();
     const scope = gatewayPresentationScope(this.context.gateway);
+    const boardReady =
+      this.boardProvider !== undefined || this.boardProviderLease?.provider === board.provider;
     let binding = this.detailsOutputsBinding;
     if (
       !binding ||
       binding.state !== state ||
       binding.workspace !== workspace ||
       binding.provider !== board.provider ||
+      binding.boardReady !== boardReady ||
       binding.client !== state.client ||
       binding.connected !== state.connected ||
       binding.sessionId !== state.currentSessionId ||
@@ -105,15 +108,10 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
         state,
         workspace,
         board.provider,
+        boardReady,
       );
     }
-    return projectDetailsOutputs(
-      binding,
-      workspace,
-      board,
-      this.boardProvider !== undefined || this.boardProviderLease?.provider === board.provider,
-      icons,
-    );
+    return projectDetailsOutputs(binding, workspace, board, icons);
   }
 
   override dispose(): void {

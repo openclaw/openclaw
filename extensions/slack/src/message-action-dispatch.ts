@@ -100,6 +100,14 @@ export async function handleSlackMessageAction(params: {
     return formatSlackTarget({ teamId: target?.teamId, kind: "channel", id: channelId });
   };
 
+  if (action === "channel-create") {
+    return await invokeSlackAction({
+      action: "createChannel",
+      name: readStringParam(actionParams, "name", { required: true }),
+      teamId: readStringParam(actionParams, "teamId"),
+    });
+  }
+
   if (action === "conversation-open") {
     return await invokeSlackAction({
       action: "openConversation",

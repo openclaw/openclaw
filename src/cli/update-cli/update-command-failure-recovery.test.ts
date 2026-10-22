@@ -112,7 +112,7 @@ beforeEach(async () => {
   mocks.managedService.mockReset();
   vi.mocked(verifyUpdatedGateway)
     .mockReset()
-    .mockResolvedValue({ ok: false, score: 0, summary: "stopped-free" });
+    .mockResolvedValue({ ok: false, summary: "stopped-free" });
   vi.stubEnv("OPENCLAW_STATE_DIR", dirs.make("failure-recovery-state-"));
   root = dirs.make("failure-recovery-package-");
   await fs.writeFile(
@@ -488,7 +488,6 @@ it("does not reconfirm the same Gateway version against a different installed bu
       const ok = expectedVersion === runningVersion && expectedBuildId === "previous-build";
       return {
         ok,
-        score: ok ? 7 : 0,
         summary: ok ? "healthy" : "installed runtime identity mismatch",
       };
     },
@@ -579,7 +578,6 @@ it.each([
       const ok = !effectivePort || gatewayPort === 19431;
       return {
         ok,
-        score: ok ? 7 : 0,
         summary: ok ? "Gateway version and readiness verified." : "wrong Gateway endpoint",
       };
     });

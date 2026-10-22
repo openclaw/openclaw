@@ -23,13 +23,7 @@ async function fixture(operation: Operation) {
       return providerSettled;
     },
   });
-  const fake = fakeRunner();
-  const start = fake.runner.start.bind(fake.runner);
-  fake.runner.start = (argv, options) => {
-    const child = start(argv, options);
-    fake.starts.at(-1)!.process.becomeReady();
-    return child;
-  };
+  const fake = fakeRunner(undefined, { ready: true });
   const manager = createWorkerTunnelManager({ runner: fake.runner });
   const service = support.createService(provider, {
     tunnelManager: manager,

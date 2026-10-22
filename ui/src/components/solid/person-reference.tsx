@@ -23,7 +23,7 @@ import {
   resolveUiDefaultAgentId,
 } from "../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
-import { updatePersonActivityCard } from "../person-activity-card.tsx";
+import { updatePersonActivityCard, type PersonCardInput } from "../person-activity-card.tsx";
 import { observePersonActivityData } from "../person-activity-data.ts";
 import { personActivityRouting } from "../person-activity-link.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "../portaled-hovercard.ts";
@@ -56,13 +56,15 @@ function PersonReferenceContent(props: PersonReferenceProps) {
   let trigger: HTMLButtonElement | undefined;
   let stopRoute: (() => void) | undefined;
   let stopEvents: (() => void)[] = [];
-  let person: PresenceViewer | null | undefined;
+  let personRead: Promise<PresenceViewer | null> | null = null;
   let activity: ReturnType<typeof observePersonActivityData> | undefined;
   const activityExpiry = createPresenceActivityLifecycle(
-    () =>
-      projectPresencePayload(activity?.data?.presencePayload).users.filter((user) =>
-        presenceMatchesProfile(user, person?.identity),
-      ),
+    () => {
+      const profile = context ? profileDirectory(context.gateway).get(profileId()) : undefined;
+      return projectPresencePayload(activity?.data?.presencePayload).users.filter((user) =>
+        presenceMatchesProfile(user, profile && { type: "profile", id: profile.id }),
+      );
+    },
     () => renderCard(),
   );
 
@@ -78,7 +80,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     stopEvents.forEach((stop) => stop());
     stopEvents = [];
     portal.reset();
-    person = undefined;
+    personRead = null;
     trigger?.setAttribute("aria-expanded", "false");
     trigger?.setAttribute("aria-haspopup", "dialog");
   }
@@ -146,16 +148,15 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     if (context) {
       activity = observePersonActivityData(context, () => renderCard());
     }
-    person = connection.capture() ? undefined : null;
+    personRead = connection.capture() ? loadPerson(card) : null;
     renderCard();
-    void loadPerson(card);
   }
 
   async function loadPerson(card: HTMLDivElement) {
     const scope = connection.capture();
     const requestedId = profileId();
     if (!scope || !context) {
-      return;
+      return null;
     }
     let resolved: PresenceViewer | null = null;
     try {
@@ -178,10 +179,10 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       // An unavailable or unauthorized profile remains an explicit, unresolved reference.
     }
     if (portal.card !== card || profileId() !== requestedId || !connection.isCurrent(scope)) {
-      return;
+      return null;
     }
-    person = resolved;
-    renderCard();
+    activityExpiry.sync();
+    return resolved;
   }
 
   function renderCard() {
@@ -191,65 +192,79 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       return;
     }
     const data = activity?.data;
-    const presence = projectPresencePayload(data?.presencePayload).users.find((user) =>
-      presenceMatchesProfile(user, person?.identity),
-    );
-    const user = person && {
-      ...person,
-      name: presence?.name ?? person.name,
-      avatarUrl: presence?.avatarUrl ?? person.avatarUrl,
-      watchedSessions: presence?.watchedSessions ?? [],
-      entries: presence?.entries ?? (data?.presencePayload ? [] : undefined),
-    };
     const defaults = {
       agentsList: context?.agents.state.agentsList,
       hello: context?.gateway.snapshot.hello,
     };
     const scope = connection.capture();
     const route = context?.router.getState().location;
+    const name = label();
     portal.renderContents(card, () =>
       updatePersonActivityCard(
         card,
-        user && context
+        personRead && context
           ? {
-              user,
-              ariaName: person?.name ?? label(),
-              sessionData: data,
-              watchAgentId: resolveUiDefaultAgentId(defaults),
-              mainKey: resolveUiConfiguredMainKey(defaults),
-              globalScope: isUiGlobalScopeConfigured(defaults),
-              routing: personActivityRouting(context, close),
-              openSession: (row, agentId, options) => {
-                const face = resolveSessionPreferredFace(row);
-                close();
-                runSessionNavigationIntent(props.host, {
-                  agentId,
-                  face,
-                  sessionKey: row.key,
-                  commit: () => {
-                    if (
-                      !scope ||
-                      context.router.getState().location !== route ||
-                      !connection.isCurrent(scope)
-                    ) {
-                      return false;
-                    }
-                    prepareSessionNavigationHandoff(context.gateway, options.pathname, row.key);
-                    context.navigate(face, options);
-                    selectApplicationSession({
-                      selection: context.agentSelection,
-                      gateway: context.gateway,
-                      sessionKey: row.key,
-                      agentId,
-                    });
-                    return true;
-                  },
-                });
-              },
+              name,
+              read: personRead.then<PersonCardInput | { status: "unavailable"; name: string }>(
+                (person) => {
+                  if (!person) {
+                    return { status: "unavailable", name };
+                  }
+                  const presence = projectPresencePayload(data?.presencePayload).users.find(
+                    (user) => presenceMatchesProfile(user, person.identity),
+                  );
+                  return {
+                    user: {
+                      ...person,
+                      name: presence?.name ?? person.name,
+                      avatarUrl: presence?.avatarUrl ?? person.avatarUrl,
+                      watchedSessions: presence?.watchedSessions ?? [],
+                      entries: presence?.entries ?? (data?.presencePayload ? [] : undefined),
+                    },
+                    ariaName: person.name,
+                    sessionData: data,
+                    watchAgentId: resolveUiDefaultAgentId(defaults),
+                    mainKey: resolveUiConfiguredMainKey(defaults),
+                    globalScope: isUiGlobalScopeConfigured(defaults),
+                    routing: personActivityRouting(context, close),
+                    openSession: (row, agentId, options) => {
+                      const face = resolveSessionPreferredFace(row);
+                      close();
+                      runSessionNavigationIntent(props.host, {
+                        agentId,
+                        face,
+                        sessionKey: row.key,
+                        commit: () => {
+                          if (
+                            !scope ||
+                            context.router.getState().location !== route ||
+                            !connection.isCurrent(scope)
+                          ) {
+                            return false;
+                          }
+                          prepareSessionNavigationHandoff(
+                            context.gateway,
+                            options.pathname,
+                            row.key,
+                          );
+                          context.navigate(face, options);
+                          selectApplicationSession({
+                            selection: context.agentSelection,
+                            gateway: context.gateway,
+                            sessionKey: row.key,
+                            agentId,
+                          });
+                          return true;
+                        },
+                      });
+                    },
+                  };
+                },
+              ),
             }
           : {
-              status: person === undefined ? "loading" : "unavailable",
-              name: person?.name ?? label(),
+              status: "unavailable",
+              name,
             },
         () => portal.position(),
       ),

@@ -152,10 +152,7 @@ async function waitForObservedApprovalEvent(params: {
         event: observedMatch,
         expectedKind: params.expectedKind,
       });
-      return {
-        event: observedMatch,
-        since: undefined,
-      };
+      return observedMatch;
     }
     const remainingMs = params.timeoutMs - (Date.now() - startedAt);
     if (remainingMs <= 0) {
@@ -494,7 +491,7 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
     roomIds: dmRoomIds,
     timeoutMs: context.timeoutMs,
   });
-  if (channelApproval.event.approval?.id !== dmApproval.event.approval?.id) {
+  if (channelApproval.event.approval?.id !== dmApproval.approval?.id) {
     throw new Error("target=both delivered different approval ids to channel and DM");
   }
   await resolveApprovalDecision({
@@ -510,7 +507,7 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
       event.type === "m.room.message" &&
       event.approval?.id === approvalId &&
       event.eventId !== channelApproval.event.eventId &&
-      event.eventId !== dmApproval.event.eventId,
+      event.eventId !== dmApproval.eventId,
     roomId: context.roomId,
     timeoutMs: MATRIX_QA_APPROVAL_SHORT_WINDOW_MS,
   });
@@ -520,7 +517,7 @@ export async function runApprovalChannelTargetBothScenario(context: MatrixQaScen
   return {
     details: [
       `channel approval event: ${channelApproval.event.eventId}`,
-      `dm approval event: ${dmApproval.event.eventId}`,
+      `dm approval event: ${dmApproval.eventId}`,
       `approval id: ${approvalId}`,
       `cleanup decision: allow-once`,
     ].join("\n"),

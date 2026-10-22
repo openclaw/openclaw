@@ -141,7 +141,7 @@ menu bar, or run `openclaw-mac status --json`, which reports the app version
 and build.
 
 For a manual install, use Node 26 (recommended) or another supported release:
-Node 24.16+ or Node 26.1+. Install `openclaw` globally:
+Node 24.22.1+ or Node 26.12.1+. Install `openclaw` globally:
 
 The command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
 omit `--allow-scripts=openclaw`.

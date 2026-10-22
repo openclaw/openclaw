@@ -8,13 +8,13 @@ import {
   type MenuEntry,
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
-import { copyToClipboard } from "../../../lib/clipboard.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import { sessionPullRequestStateIcons } from "../../../lib/session-pull-request-presentation.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
+import { createPullRequestCopy } from "./chat-pull-request-copy.ts";
 import {
   ChecksRows,
   StatusWarning,
@@ -43,8 +43,6 @@ export function PullRequestActions(props: {
   const controls = createMenuControls();
   const parentPresented = useContext(ContentPresentation);
   let menu: MenuHandle | undefined;
-  const [copying, setCopying] = createSignal(false);
-  const [copyFailed, setCopyFailed] = createSignal(false);
   const [page, setPage] = createSignal<"home" | "checks" | "monitoring">("home");
   let backButton: HTMLButtonElement | undefined;
   let checksButton: HTMLButtonElement | undefined;
@@ -61,27 +59,14 @@ export function PullRequestActions(props: {
   const [menuOpen, setMenuOpen] = createSignal(false);
   const presentation = createMemo(() => projectPresentation(props.presented));
   const presented = () => parentPresented() && !props.dismissed && presentation().read();
-  const copy = async () => {
-    if (copying()) {
-      return;
-    }
-    const url = props.pullRequest.url;
-    setCopying(true);
-    setCopyFailed(false);
-    const current = () =>
-      presented() && menu?.overlay.open === true && props.pullRequest.url === url;
-    const copied = await copyToClipboard(url, current);
-    setCopying(false);
-    if (!current()) {
-      return;
-    }
-    if (copied) {
+  const clipboard = createPullRequestCopy({
+    url: () => props.pullRequest.url,
+    presented: () => presented() && menu?.overlay.open === true,
+    onCopied: () => {
       menu?.close();
       showToast({ message: t("chat.pullRequests.linkCopied") });
-    } else {
-      setCopyFailed(true);
-    }
-  };
+    },
+  });
   const checks = () => props.pullRequest.checks;
   const rollup = () => {
     const current = checks();
@@ -317,14 +302,14 @@ export function PullRequestActions(props: {
                 id: "copy",
                 label: t("chat.pullRequests.copyLink"),
                 icon: <Icon name="link" />,
-                disabled: copying(),
+                disabled: clipboard.copying(),
                 closeOnSelect: false,
               },
               {
                 kind: "content",
                 id: "copy-error",
                 content: (
-                  <Show when={copyFailed()}>
+                  <Show when={clipboard.failed()}>
                     <p class="chat-pr-menu__error" role="alert">
                       {t("chat.pullRequests.copyFailed")}
                     </p>
@@ -393,7 +378,7 @@ export function PullRequestActions(props: {
       onOpenChange={(open) => {
         setMenuOpen(open);
         if (!open) {
-          setCopyFailed(false);
+          clipboard.retire();
           setPage("home");
         }
       }}
@@ -415,7 +400,7 @@ export function PullRequestActions(props: {
           props.onDismiss();
         }
         if (item.id === "copy") {
-          void copy();
+          void clipboard.copy();
         }
       }}
     />

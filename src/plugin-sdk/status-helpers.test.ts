@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { evaluateChannelHealth } from "../gateway/channel-health-policy.js";
 import {
-  asString,
   createAsyncComputedAccountStatusAdapter,
   buildComputedAccountStatusSnapshot,
   buildRuntimeAccountStatusSnapshot,
@@ -17,12 +16,6 @@ import {
 } from "./status-helpers.js";
 
 describe("status issue composition", () => {
-  it("preserves the shipped asString compatibility semantics", () => {
-    expect(asString("  work  ")).toBe("work");
-    expect(asString("   ")).toBeUndefined();
-    expect(asString(42)).toBeUndefined();
-  });
-
   it("coerces only standard and requested account fields", () => {
     expect(
       readAccountStatusSnapshot(
@@ -41,16 +34,11 @@ describe("status issue composition", () => {
   });
 
   it("builds standard open-policy and missing-auth issues", () => {
+    const account = { channel: "zalo", accountId: "default" };
     expect(
-      standardDmPolicyOpenIssue({
-        channel: "zalo",
-        accountId: "default",
-        channelLabel: "Zalo",
-        configPath: "channels.zalo",
-      }),
+      standardDmPolicyOpenIssue({ ...account, channelLabel: "Zalo", configPath: "channels.zalo" }),
     ).toEqual({
-      channel: "zalo",
-      accountId: "default",
+      ...account,
       kind: "config",
       message: 'Zalo dmPolicy is "open", allowing any user to message the bot without pairing.',
       fix: 'Set channels.zalo.dmPolicy to "pairing" or "allowlist" to restrict access.',
@@ -83,17 +71,8 @@ const defaultAccountSnapshot = {
   lastOutboundAt: null,
 };
 
-const adapterAccount = {
-  accountId: "default",
-  enabled: true,
-  profileUrl: "https://example.test",
-};
-
-const adapterRuntime = {
-  accountId: "default",
-  running: true,
-};
-
+const adapterAccount = { accountId: "default", enabled: true, profileUrl: "https://example.test" };
+const adapterRuntime = { accountId: "default", running: true };
 const adapterProbe = { ok: true };
 
 const expectedAdapterAccountSnapshot = {
@@ -106,24 +85,21 @@ const expectedAdapterAccountSnapshot = {
   connected: true,
 };
 
-function resolveAccountSnapshot({
-  account,
-  runtime,
-  probe,
-}: {
-  account: typeof adapterAccount;
-  runtime?: { running?: boolean };
-  probe?: typeof adapterProbe;
-}) {
-  return {
+function createStatus(mode: "sync" | "async") {
+  const resolveAccountSnapshot = ({
+    account,
+    runtime,
+    probe,
+  }: {
+    account: typeof adapterAccount;
+    runtime?: { running?: boolean };
+    probe?: typeof adapterProbe;
+  }) => ({
     accountId: account.accountId,
     enabled: account.enabled,
     configured: true,
     extra: { profileUrl: account.profileUrl, connected: runtime?.running ?? false, probe },
-  };
-}
-
-function createStatus(mode: "sync" | "async") {
+  });
   const options = {
     defaultRuntime: createDefaultChannelRuntimeState("default"),
     resolveAccountSnapshot,
@@ -146,13 +122,12 @@ function accountSnapshot(mode: "sync" | "async", ingressUnavailable?: true) {
 }
 
 it("builds account status when configured is computed outside resolver", () => {
-  expect(
-    buildComputedAccountStatusSnapshot({
-      accountId: "default",
-      enabled: true,
-      configured: false,
-    }),
-  ).toEqual({
+  const snapshot = buildComputedAccountStatusSnapshot({
+    accountId: "default",
+    enabled: true,
+    configured: false,
+  });
+  expect(snapshot).toEqual({
     ...defaultAccountSnapshot,
     enabled: true,
     stateReason: "not configured",

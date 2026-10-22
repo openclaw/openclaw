@@ -12,9 +12,10 @@ import {
   cleanupUsagePageTest,
   contextWeight,
   focusDocument,
-  preloadUsage,
   refreshButton,
   usagePoints,
+  loadUsagePage,
+  selectUsageSession,
 } from "./usage-page.test-support.ts";
 
 beforeEach(focusDocument);
@@ -46,9 +47,8 @@ function readOverview(
 }
 
 async function selectSession(request: Parameters<typeof createUsagePageFixture>[0]) {
-  const fixture = await createUsagePageFixture(request);
-  await preloadUsage(fixture.page);
-  fixture.page.querySelector<HTMLButtonElement>(".session-bar-selection")!.click();
+  const fixture = await loadUsagePage(request);
+  selectUsageSession(fixture.page);
   return fixture;
 }
 

@@ -1,21 +1,29 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { realpathSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { SandboxConfig } from "../../agents/sandbox/types.js";
 import type { WorktreeAllocationGuard } from "../../agents/worktrees/allocation.js";
-import { splitNullBuffer } from "../../agents/worktrees/git-path-inventory.js";
 import { requireGit, requireGitBuffer, runGit } from "../../agents/worktrees/git.js";
 import { timeWorktreePreparationPhase } from "../../agents/worktrees/preparation-timing.js";
 import type { WorktreeWorkerAuthority } from "../../agents/worktrees/types.js";
 import { resolveStateDir } from "../../config/state-dir.js";
-import { prepareLocalWorkspaceCheckout } from "./local-workspace-checkout.js";
+import {
+  assertLocalWorkspaceDirectory,
+  initializeLocalWorkspaceProjection,
+} from "./local-workspace-checkout.js";
 import {
   admitLocalWorkspaceSourcePaths,
+  captureLocalWorkspaceArchiveBaseline,
   decodeLocalWorkspaceGitPaths,
   parseLocalWorkspaceSourcePaths,
   selectLocalWorkspaceCanonicalPaths,
 } from "./local-workspace-inventory.js";
+import type { LocalWorkspaceManifestCheckpoint } from "./local-workspace-manifest-scan.js";
+import {
+  createLocalWorkspaceManifestTree,
+  localWorkspaceManifestRootReference,
+} from "./local-workspace-manifest-tree.js";
 import type { LocalWorkspaceStore, LocalWorkspaceProjection } from "./local-workspace-store.js";
 import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { AcceptedWorkspacePublicationIndeterminateError } from "./workspace-accepted-publication.js";
@@ -26,7 +34,6 @@ import {
   parseWorkerWorkspaceReconciliationPlan,
   serializeWorkerWorkspaceReconciliationPlan,
 } from "./workspace-manifest.js";
-import { workspacePathAncestors } from "./workspace-path-ancestors.js";
 import { buildCacheInputPaths } from "./workspace-path-exclusions.js";
 import {
   applyStagedWorkerWorkspace,
@@ -57,17 +64,6 @@ function projectionPath(owner: LocalWorkspaceOwner) {
     owner.worktree.id,
     "workspace",
   );
-}
-
-async function assertOwnedDirectory(directory: string) {
-  const stat = await fs.lstat(directory);
-  if (
-    !stat.isDirectory() ||
-    stat.isSymbolicLink() ||
-    (await fs.realpath(directory)) !== directory
-  ) {
-    throw new Error("Local sandbox workspace directory changed; preserved for recovery");
-  }
 }
 
 export function projectionOperations(
@@ -108,8 +104,49 @@ export function projectionOperations(
       selectCurrent(() => owner.workerAuthority?.assertCurrent?.());
     },
   };
-  const update = async (patch: Parameters<typeof store.update>[1]) => {
-    row = await store.update(current(), patch, owner.workerAuthority);
+  const update = async (
+    patch: Parameters<typeof store.update>[1],
+    manifest?: Parameters<typeof store.update>[3],
+  ) => {
+    row = await store.update(current(), patch, owner.workerAuthority, manifest);
+  };
+  const baselineDocument = async () => {
+    const document = await store.manifest(current(), { kind: "materialize" });
+    current();
+    if (document.kind !== "materialize") {
+      throw new Error("Local workspace baseline materialization is missing");
+    }
+    return document;
+  };
+  // Full documents cross this boundary only for initial creation and old receipts,
+  // or when an archive/publication explicitly needs the complete inventory.
+  const replaceBaseline = async (
+    raw: string,
+    ref: string,
+    patch: Parameters<typeof store.update>[1] = {},
+  ) => {
+    const manifest = parseWorkerWorkspaceManifest(raw, ref, await buildCacheInputs());
+    const records = createLocalWorkspaceManifestTree([
+      ...manifest.entries,
+      ...(manifest.directories ?? []).map((entryPath) => ({
+        path: entryPath,
+        type: "directory" as const,
+      })),
+    ]);
+    await update(patch, {
+      previousRoot: current().baseline_ref,
+      resultingRoot: localWorkspaceManifestRootReference(records, manifest.baseCommit),
+      records: [...records.values()],
+      removed: [],
+      replace: true,
+    });
+  };
+  const migrateBaseline = async () => {
+    const selected = current();
+    // A legacy pending receipt owns its full-document identity until settlement.
+    if (selected.baseline_json && selected.baseline_ref && !selected.pending_ref) {
+      await replaceBaseline(selected.baseline_json, selected.baseline_ref);
+    }
   };
   const sourcePath = (target: Direction) =>
     target === "canonical" ? current().projection_path : owner.worktree.path;
@@ -132,25 +169,18 @@ export function projectionOperations(
           : new Set(admitted);
       preparedInputPaths = paths;
       const retained = buildCacheInputPaths(paths);
-      if (owner.worktree.snapshotRef && selected.baseline_json && selected.baseline_ref) {
-        const baseline = parseWorkerWorkspaceManifest(
-          selected.baseline_json,
-          selected.baseline_ref,
+      if (owner.worktree.snapshotRef && selected.baseline_ref) {
+        const archived = await requireGitBuffer(
+          owner.worktree.repoRoot,
+          ["ls-tree", "-r", "-z", "--name-only", owner.worktree.snapshotRef],
+          { signal, beforeRun: assertCurrent },
         );
-        const prior = buildCacheInputPaths(baseline.entries.map((entry) => entry.path));
-        if ([...prior].some((entryPath) => !retained.has(entryPath))) {
-          const archived = await requireGitBuffer(
-            owner.worktree.repoRoot,
-            ["ls-tree", "-r", "-z", "--name-only", owner.worktree.snapshotRef],
-            { signal, beforeRun: assertCurrent },
-          );
-          current();
-          // Older archives lost later index membership. Preserve exact archived inputs,
-          // including ambiguous old caches, without admitting future directory contents.
-          for (const entryPath of buildCacheInputPaths(decodeLocalWorkspaceGitPaths(archived))) {
-            retained.add(entryPath);
-            paths.add(entryPath);
-          }
+        current();
+        // Older archives lost later index membership. The snapshot owns these exact
+        // inputs, including derived-looking names, but not future directory contents.
+        for (const entryPath of buildCacheInputPaths(decodeLocalWorkspaceGitPaths(archived))) {
+          retained.add(entryPath);
+          paths.add(entryPath);
         }
       }
       const known = new Set(admitted);
@@ -164,22 +194,22 @@ export function projectionOperations(
   const canonicalPaths = async () => {
     const retained = await buildCacheInputs();
     const selected = current();
+    const document = selected.baseline_ref ? await baselineDocument() : undefined;
     return await selectLocalWorkspaceCanonicalPaths({
       root: owner.worktree.path,
       admittedPaths: selected.source_paths_json,
       preparedPaths: preparedInputPaths,
       signal,
       assertCurrent,
-      baseline:
-        selected.baseline_json && selected.baseline_ref
-          ? parseWorkerWorkspaceManifest(selected.baseline_json, selected.baseline_ref, retained)
-          : undefined,
+      baseline: document
+        ? parseWorkerWorkspaceManifest(document.rawManifest, document.manifestRef, retained)
+        : undefined,
     });
   };
   const capture = async (target: Direction, preserveDirectories?: ReadonlySet<string>) => {
     const selected = current();
     const root = sourcePath(target);
-    await assertOwnedDirectory(root);
+    await assertLocalWorkspaceDirectory(root);
     current();
     // Never inspect guest Git metadata on the host. Canonical inventory uses only
     // the trusted managed worktree; ignored host files cannot enter the projection.
@@ -194,6 +224,47 @@ export function projectionOperations(
     });
     current();
     return snapshot;
+  };
+  const scan = async (target: Direction): Promise<LocalWorkspaceManifestCheckpoint> => {
+    if (owner.worktree.snapshotRef) {
+      await buildCacheInputs();
+    }
+    await assertLocalWorkspaceDirectory(sourcePath(target));
+    const snapshot = await store.manifest(current(), {
+      kind: "scan",
+      target,
+      canonicalRoot: owner.worktree.path,
+    });
+    current();
+    if (snapshot.kind !== "scan") {
+      throw new Error("Local workspace checkpoint scan is missing");
+    }
+    // Carry the scan's fresh host admission into the receipt and future custody.
+    if (snapshot.buildCacheInputs.length) {
+      const admitted = parseLocalWorkspaceSourcePaths(current().source_paths_json);
+      const known = new Set(admitted);
+      const added = snapshot.buildCacheInputs.filter((entryPath) => !known.has(entryPath));
+      if (added.length) {
+        await update({ source_paths_json: JSON.stringify([...admitted, ...added]) });
+      }
+    }
+    inputPaths = Promise.resolve(snapshot.buildCacheInputs);
+    preparedInputPaths = undefined;
+    const { observedRecords, ...checkpoint } = snapshot;
+    if (observedRecords.length) {
+      // These are only fresh identities for unchanged nodes. Persisting them
+      // before reservation cannot advance content or consume pending edits.
+      await update(
+        {},
+        {
+          previousRoot: snapshot.previousRoot,
+          resultingRoot: snapshot.previousRoot!,
+          records: observedRecords,
+          removed: [],
+        },
+      );
+    }
+    return checkpoint;
   };
   const recover = async () => {
     const selected = current();
@@ -225,11 +296,11 @@ export function projectionOperations(
       stagedResultRef: selected.pending_ref,
       assertCurrent,
     });
-    await update({ pending_ref: null });
+    await update({ pending_ref: null, checkpoint_json: null });
   };
   const settle = async (
     retainAccepted = false,
-    preparedSnapshot?: Awaited<ReturnType<typeof capture>>,
+    preparedSnapshot?: LocalWorkspaceManifestCheckpoint,
   ) => {
     await recover();
     if (!retainAccepted) {
@@ -239,11 +310,7 @@ export function projectionOperations(
     if (!selected.pending_ref) {
       return;
     }
-    if (
-      !selected.baseline_ref ||
-      !selected.baseline_json ||
-      !pendingDirection(selected.pending_target)
-    ) {
+    if (!selected.baseline_ref || !pendingDirection(selected.pending_target)) {
       throw new Error("Local workspace result has no accepted baseline");
     }
     const target = pendingDirection(selected.pending_target)!;
@@ -261,34 +328,57 @@ export function projectionOperations(
           "Workspace integration source is unavailable; retry github_publish prepare_pr for an imported PR, or refresh_base for the selected project. Saved work was preserved.",
         );
       }
-      const snapshot = preparedSnapshot ?? (await capture(target));
+      let snapshot = preparedSnapshot;
+      if (!snapshot && selected.checkpoint_json) {
+        // No Git receipt owns these bytes yet. After interruption, recapture the
+        // still-owned source into the same reservation before staging its delta.
+        snapshot = await scan(target);
+        await update({ checkpoint_json: JSON.stringify(snapshot) });
+      }
+      const legacy = snapshot ? undefined : await capture(target);
+      const baseline = snapshot ? undefined : await baselineDocument();
       await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
         root: owner.worktree.path,
         stagingRoot: sourcePath(target),
         stagedResultRef: selected.pending_ref,
-        baseManifestRef: selected.baseline_ref,
-        currentManifestRef: snapshot.manifestRef,
-        baseManifestRaw: selected.baseline_json,
-        currentManifestRaw: snapshot.rawManifest,
-        buildCacheInputs: await buildCacheInputs(),
+        baseManifestRef: snapshot?.baseManifestRef ?? baseline!.manifestRef,
+        currentManifestRef: snapshot?.currentManifestRef ?? legacy!.manifestRef,
+        baseManifestRaw: snapshot?.baseManifestRaw ?? baseline!.rawManifest,
+        currentManifestRaw: snapshot?.currentManifestRaw ?? legacy!.rawManifest,
+        buildCacheInputs: snapshot?.buildCacheInputs ?? (await buildCacheInputs()),
         assertCurrent,
       });
       current();
     }
+    const checkpoint = current().checkpoint_json
+      ? (JSON.parse(current().checkpoint_json!) as LocalWorkspaceManifestCheckpoint) // SAFETY: Owner-written checkpoint.
+      : undefined;
+    if (checkpoint && checkpoint.previousRoot !== selected.baseline_ref) {
+      throw new Error("Local workspace checkpoint no longer matches its baseline");
+    }
+    const refreshBaseline = refresh ? await baselineDocument() : undefined;
     let conflictPaths: string[] | undefined;
     await withStagedWorkerWorkspaceResult(
       {
         root: owner.worktree.path,
         stagedResultRef: selected.pending_ref,
-        buildCacheInputs: await buildCacheInputs(),
+        buildCacheInputs: checkpoint?.buildCacheInputs ?? (await buildCacheInputs()),
       },
       async (snapshot) => {
         current();
         if (
           refresh &&
-          (!snapshot.current.baseCommit || snapshot.baseManifestRef !== selected.baseline_ref)
+          (!snapshot.current.baseCommit ||
+            snapshot.baseManifestRef !== refreshBaseline!.manifestRef)
         ) {
           throw new Error("Local workspace result no longer matches its accepted baseline");
+        }
+        if (
+          checkpoint &&
+          (snapshot.baseManifestRef !== checkpoint.baseManifestRef ||
+            snapshot.currentManifestRef !== checkpoint.currentManifestRef)
+        ) {
+          throw new Error("Local workspace checkpoint payload changed");
         }
         await applyStagedWorkerWorkspace({
           root: targetPath(target),
@@ -316,26 +406,31 @@ export function projectionOperations(
               // A conflicting result remains a durable pending receipt. No guest
               // bytes are discarded or silently replaced by the canonical side.
               try {
-                await update(
-                  conflictPaths.length
-                    ? { journal_json: null, journal_pack: null }
-                    : refresh && target === "canonical"
-                      ? {
-                          pending_target: "projection",
-                          journal_json: null,
-                          journal_pack: null,
-                        }
-                      : {
-                          ...(refresh ? { base_commit: snapshot.current.baseCommit! } : {}),
-                          // Parsing can filter old runtime paths; retain bytes matching the receipt digest.
-                          baseline_json: snapshot.currentManifestRaw,
-                          baseline_ref: snapshot.currentManifestRef,
-                          // Retain the accepted ref until its Git cleanup completes.
-                          pending_target: null,
-                          journal_json: null,
-                          journal_pack: null,
-                        },
-                );
+                if (conflictPaths.length) {
+                  await update({ journal_json: null, journal_pack: null });
+                } else if (refresh && target === "canonical") {
+                  await update({
+                    pending_target: "projection",
+                    journal_json: null,
+                    journal_pack: null,
+                  });
+                } else {
+                  const patch = {
+                    ...(refresh ? { base_commit: snapshot.current.baseCommit! } : {}),
+                    pending_target: null,
+                    journal_json: null,
+                    journal_pack: null,
+                  };
+                  if (checkpoint) {
+                    await update(patch, checkpoint);
+                  } else {
+                    await replaceBaseline(
+                      snapshot.currentManifestRaw,
+                      snapshot.currentManifestRef,
+                      patch,
+                    );
+                  }
+                }
               } catch (error) {
                 throw new AcceptedWorkspacePublicationIndeterminateError("commit", error);
               }
@@ -366,11 +461,19 @@ export function projectionOperations(
   };
   const synchronize = async (target: Direction) => {
     await settle();
-    const snapshot = await capture(target);
-    if (snapshot.manifestRef === current().baseline_ref) {
+    await migrateBaseline();
+    const snapshot = await scan(target);
+    if (snapshot.resultingRoot === snapshot.previousRoot) {
+      if (snapshot.records.length || snapshot.removed.length) {
+        await update({}, snapshot);
+      }
       return;
     }
-    await update({ pending_ref: workerWorkspaceResultRef(randomUUID()), pending_target: target });
+    await update({
+      pending_ref: workerWorkspaceResultRef(randomUUID()),
+      pending_target: target,
+      checkpoint_json: JSON.stringify(snapshot),
+    });
     await settle(false, snapshot);
   };
   const prepare = async (dependencies?: {
@@ -401,6 +504,7 @@ export function projectionOperations(
           source_paths_json: sourcePaths,
           baseline_json: null,
           baseline_ref: null,
+          checkpoint_json: null,
           pending_ref: null,
           pending_target: null,
           journal_json: null,
@@ -413,67 +517,18 @@ export function projectionOperations(
     }
     const selected = current();
     if (!selected.baseline_ref) {
-      const parent = path.dirname(selected.projection_path);
-      await fs.mkdir(parent, { recursive: true, mode: 0o700 });
-      await assertOwnedDirectory(parent);
-      current();
-      // No runtime can use an uncommitted initial projection. Only this durable
-      // reservation owns interrupted preparation; never recreate a ready checkout.
-      await fs.rm(selected.projection_path, { recursive: true, force: true });
-      const temporary = await fs.mkdtemp(path.join(parent, ".prepare-"));
-      try {
-        const repo = path.join(temporary, "workspace");
-        const checkout = {
-          source: owner.worktree.path,
-          destination: repo,
-          temporaryRoot: temporary,
-          baseCommit: selected.base_commit,
-          branch: owner.worktree.branch,
-          signal,
-          assertCurrent,
-        };
-        const cloned =
-          dependencies &&
-          (await (
-            await import("./local-workspace-template.js")
-          ).cloneLocalWorkspaceTemplate({
-            ...checkout,
-            repoRoot: owner.worktree.repoRoot,
-            templateRoot: path.dirname(parent),
-            env: owner.env ?? process.env,
-            sandbox: dependencies.sandbox,
-            guard: {
-              ...dependencies.allocation,
-              signal: dependencies.allocation.signal
-                ? AbortSignal.any([signal, dependencies.allocation.signal])
-                : signal,
-              commitGuard: () => {
-                dependencies.allocation.commitGuard();
-                current();
-              },
-            },
-          }));
-        if (!cloned) {
-          await timeWorktreePreparationPhase("checkout", () =>
-            prepareLocalWorkspaceCheckout(checkout),
-          );
-        }
-        const initial = await timeWorktreePreparationPhase("snapshot", async () =>
-          captureWorkspaceManifestDocument({
-            root: repo,
-            baseCommit: selected.base_commit,
-            buildCacheInputs: new Set(await buildCacheInputs()),
-            signal,
-          }),
-        );
-        current();
-        await fs.rename(repo, selected.projection_path);
-        await update({ baseline_json: initial.rawManifest, baseline_ref: initial.manifestRef });
-      } finally {
-        await fs.rm(temporary, { recursive: true, force: true });
-      }
+      const initial = await initializeLocalWorkspaceProjection({
+        owner,
+        projectionPath: selected.projection_path,
+        baseCommit: selected.base_commit,
+        signal,
+        assertCurrent,
+        buildCacheInputs,
+        dependencies,
+      });
+      await replaceBaseline(initial.rawManifest, initial.manifestRef);
     }
-    await assertOwnedDirectory(current().projection_path);
+    await assertLocalWorkspaceDirectory(current().projection_path);
     if (selected.baseline_ref) {
       await timeWorktreePreparationPhase("synchronizeCanonical", () => synchronize("canonical"));
     }
@@ -485,6 +540,7 @@ export function projectionOperations(
     workerAuthority,
     canonicalPaths,
     buildCacheInputs,
+    baselineDocument,
     prepare,
     reuse: async () => (row?.baseline_ref ? await prepare() : undefined),
     synchronize,
@@ -526,13 +582,13 @@ export function projectionOperations(
           await buildCacheInputs(),
         );
         current();
-        if (receipt.currentManifestRef !== selected.baseline_ref) {
+        const baseline = await baselineDocument();
+        if (receipt.currentManifestRef !== baseline.manifestRef) {
           throw new Error("Archive restore receipt changed");
         }
-        await update({
-          baseline_json: receipt.baseManifestRaw,
-          baseline_ref: receipt.baseManifestRef,
+        await replaceBaseline(receipt.baseManifestRaw, receipt.baseManifestRef, {
           pending_target: "canonical",
+          checkpoint_json: null,
         });
       }
       await settle(true);
@@ -551,7 +607,8 @@ export function projectionOperations(
         );
       }
       const accepted = await capture("canonical");
-      if (accepted.manifestRef !== current().baseline_ref) {
+      const baseline = await baselineDocument();
+      if (accepted.manifestRef !== baseline.manifestRef) {
         throw new Error("Local workspace changed before archive capture");
       }
       const manifest = parseWorkerWorkspaceManifest(
@@ -560,47 +617,24 @@ export function projectionOperations(
         await buildCacheInputs(),
       );
       const projection = current().projection_path;
-      // Git omits accepted ignored leaves and empty directories; retain only that delta.
-      if (!/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/u.test(snapshotCommit)) {
-        throw new Error("Invalid archive snapshot commit");
-      }
-      const listed = await requireGitBuffer(
-        owner.worktree.repoRoot,
-        ["ls-tree", "-r", "-z", "--name-only", snapshotCommit],
-        {
+      const { rawManifest: base, manifestRef: baseRef } =
+        await captureLocalWorkspaceArchiveBaseline({
+          root: owner.worktree.repoRoot,
+          snapshotCommit,
+          manifest,
           signal,
-          beforeRun: current,
-          maxOutputBytes: 64 * 1024 * 1024,
-        },
-      );
-      current();
-      const paths = new Set(splitNullBuffer(listed).map((entry) => entry.toString("hex")));
-      const entries = manifest.entries.filter((entry) =>
-        paths.has(Buffer.from(entry.path).toString("hex")),
-      );
-      const directories = new Set<string>();
-      for (const entry of entries) {
-        for (const parent of workspacePathAncestors(entry.path)) {
-          directories.add(parent);
-        }
-      }
-      const base = serializeWorkerWorkspaceManifest({
-        ...manifest,
-        entries,
-        directories: [...directories].toSorted(),
-      });
-      const baseRef = "sha256:" + createHash("sha256").update(base).digest("hex");
+          assertCurrent,
+        });
       if (baseRef === accepted.manifestRef) {
         return;
       }
       const resultRef = workerWorkspaceResultRef(randomUUID());
       // Reservation precedes the Git effect. Interrupted staging recaptures the
       // still-owned projection against this same reduced base on ordinary recovery.
-      await update({
-        baseline_json: base,
-        baseline_ref: baseRef,
+      await replaceBaseline(base, baseRef, {
         pending_ref: resultRef,
         pending_target: "canonical",
+        checkpoint_json: null,
       });
       await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
         root: owner.worktree.repoRoot,
@@ -623,10 +657,10 @@ export function projectionOperations(
       ) {
         throw new Error("Local sandbox has pending edits; restore its worktree before cleanup");
       }
-      let accepted =
-        selected.baseline_json && selected.baseline_ref
-          ? { raw: selected.baseline_json, ref: selected.baseline_ref }
-          : undefined;
+      const baseline = selected.baseline_ref ? await baselineDocument() : undefined;
+      let accepted = baseline
+        ? { raw: baseline.rawManifest, ref: baseline.manifestRef }
+        : undefined;
       if (selected.pending_ref) {
         if (!retireSnapshot || owner.worktree.removedAt === undefined) {
           throw new Error("Archive receipt still owns its restore data");
@@ -638,7 +672,7 @@ export function projectionOperations(
             await buildCacheInputs(),
           );
           current();
-          if (receipt.baseManifestRef !== selected.baseline_ref) {
+          if (receipt.baseManifestRef !== baseline?.manifestRef) {
             throw new Error("Archive retention receipt changed");
           }
           accepted = {
@@ -668,17 +702,16 @@ export function projectionOperations(
         throw new Error("Local sandbox runtime still owns its workspace; cleanup deferred");
       }
       const parent = path.dirname(selected.projection_path);
-      await assertOwnedDirectory(parent);
+      await assertLocalWorkspaceDirectory(parent);
       current();
       // Once expiry starts, an older restore must not find a usable Git snapshot
       // after its accepted overlay has been retired.
       await retireSnapshot?.(assertCurrent);
       current();
       if (selected.pending_ref && accepted) {
-        await update({
-          baseline_json: accepted.raw,
-          baseline_ref: accepted.ref,
+        await replaceBaseline(accepted.raw, accepted.ref, {
           pending_target: null,
+          checkpoint_json: null,
         });
         await cleanupAccepted();
       }

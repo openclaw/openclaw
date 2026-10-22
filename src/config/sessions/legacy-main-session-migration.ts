@@ -387,7 +387,7 @@ async function migrateLegacyMainSessionKeysInternal(
         const resolved = withEngineStoreAdmission(() =>
           resolvePhysicalStores({ cfg, env, legacyAgentId, mode }),
         );
-        base.warnings.push(...resolved.warnings);
+        base.warnings = resolved.warnings;
         rowsMayExist =
           resolved.unreadable.length > 0 ||
           resolved.jsonPaths.length > 0 ||

@@ -30,18 +30,29 @@ type TwitchUsersResponse = {
   data: TwitchUser[];
 };
 
-function normalizeUsername(input: string): string {
-  const trimmed = input.trim();
-  if (trimmed.startsWith("@")) {
-    return normalizeLowercaseStringOrEmpty(trimmed.slice(1));
+export async function resolveTwitchTargets(
+  inputs: string[],
+  account: TwitchAccountConfig,
+  _kind: ChannelResolveKind,
+  log?: ChannelLogSink,
+): Promise<ChannelResolveResult[]> {
+  if (!account.clientId || !account.accessToken) {
+    log?.error("Missing Twitch client ID or accessToken");
+    return inputs.map((input) => ({
+      input,
+      resolved: false,
+      note: "missing Twitch credentials",
+    }));
   }
-  return normalizeLowercaseStringOrEmpty(trimmed);
-}
 
-function createHelixUserResolver(clientId: string, accessToken: string) {
+  const normalizedToken = normalizeToken(account.accessToken);
+
+  const clientId = account.clientId;
   let tokenValidated = false;
 
-  return async (query: { id: string } | { login: string }): Promise<TwitchUser | null> => {
+  async function resolveHelixUser(
+    query: { id: string } | { login: string },
+  ): Promise<TwitchUser | null> {
     const controller = new AbortController();
     // ApiClient retries AbortError past the deadline. This sequential startup
     // resolver uses Twurple's public one-shot call so cancellation stays bounded.
@@ -53,7 +64,7 @@ function createHelixUserResolver(clientId: string, accessToken: string) {
           tokenInfo = await callTwitchApi<TwitchTokenInfo>(
             { type: "auth", url: "validate" },
             clientId,
-            accessToken,
+            normalizedToken,
             undefined,
             fetchOptions,
           );
@@ -72,7 +83,7 @@ function createHelixUserResolver(clientId: string, accessToken: string) {
       const response = await callTwitchApi<TwitchUsersResponse>(
         { type: "helix", url: "users", query },
         clientId,
-        accessToken,
+        normalizedToken,
         undefined,
         fetchOptions,
       );
@@ -88,32 +99,15 @@ function createHelixUserResolver(clientId: string, accessToken: string) {
     } finally {
       controller.abort();
     }
-  };
-}
-
-export async function resolveTwitchTargets(
-  inputs: string[],
-  account: TwitchAccountConfig,
-  _kind: ChannelResolveKind,
-  log?: ChannelLogSink,
-): Promise<ChannelResolveResult[]> {
-  if (!account.clientId || !account.accessToken) {
-    log?.error("Missing Twitch client ID or accessToken");
-    return inputs.map((input) => ({
-      input,
-      resolved: false,
-      note: "missing Twitch credentials",
-    }));
   }
-
-  const normalizedToken = normalizeToken(account.accessToken);
-
-  const resolveHelixUser = createHelixUserResolver(account.clientId, normalizedToken);
 
   const results: ChannelResolveResult[] = [];
 
   for (const input of inputs) {
-    const normalized = normalizeUsername(input);
+    const trimmed = input.trim();
+    const normalized = normalizeLowercaseStringOrEmpty(
+      trimmed.startsWith("@") ? trimmed.slice(1) : trimmed,
+    );
 
     if (!normalized) {
       results.push({

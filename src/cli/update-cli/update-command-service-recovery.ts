@@ -129,7 +129,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
             ? launchAgentRecovery.message
             : launchAgentRecovery.detail,
       },
-      { env },
+      params.updateRun,
     );
   }
   if (launchAgentRecovery.status !== "recovered") {
@@ -385,7 +385,7 @@ export async function admitInstalledGatewayRecovery(
       params.opts.run.runId,
       { recovery: result.recovery },
       (message) => defaultRuntime.error(message),
-      { env: params.opts.run.env },
+      params.opts.run,
     );
   }
   return true;

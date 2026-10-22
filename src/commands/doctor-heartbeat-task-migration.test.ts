@@ -7,7 +7,6 @@ import { tryResolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { heartbeatTaskDeclarationKey } from "../cron/heartbeat-task.js";
 import { readCronJobScratchState } from "../cron/scratch-store.js";
 import { CronService } from "../cron/service.js";
 import {
@@ -27,6 +26,7 @@ import { captureEnv } from "../test-utils/env.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { ensureHeartbeatMonitorJobs } from "./doctor-heartbeat-cadence-migration.js";
 import { resolveLegacyHeartbeatSession } from "./doctor-heartbeat-session.js";
+import { heartbeatTaskDeclarationKey } from "./doctor-heartbeat-task-identity.js";
 import {
   collectHeartbeatTaskMigrationFindings,
   maybeMigrateHeartbeatTasksToCron,
@@ -47,7 +47,6 @@ function createTestCronService(storePath: string, cfg: OpenClawConfig, nowMs: nu
     defaultAgentId: tryResolveAmbientOwnerAgentId(cfg),
     log,
     enqueueSystemEvent: () => false,
-    requestHeartbeat: noop,
     runIsolatedAgentJob: async () => ({
       status: "skipped",
       error: "tests do not execute cron jobs",

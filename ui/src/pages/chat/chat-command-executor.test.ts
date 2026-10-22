@@ -601,33 +601,30 @@ describe("executeSlashCommand directives", () => {
 
 describe("executeSlashCommand /steer (soft inject)", () => {
   it.each([
-    [{ status: "started", runId: "run-1" }, true, "succeeded"],
-    [{ status: "ok", runId: "run-ok", messageSeq: 2 }, undefined, "succeeded"],
-    [{ status: "timeout", runId: "run-timeout", summary: "aborted" }, undefined, "timeout"],
-    [{ status: "error", runId: "run-error", summary: "aborted" }, undefined, "failed"],
-  ] as const)(
-    "sends the selected session and settles a %j steer ACK",
-    async (ack, pending, key) => {
-      const request = mockRequests({ "chat.send": () => ack });
-      const result = await runCommand(request, "steer", "try a different approach");
-      expect(result.content).toBe(resultText(`steer.${key}`));
-      expect(result.pendingCurrentRun).toBe(pending);
-      if (key !== "succeeded") {
-        expect(result.content).not.toBe(resultText("steer.succeeded"));
-      }
-      const { payload } = requireRequestCall(request, "chat.send");
-      expect(payload).toMatchObject({
-        sessionKey: "agent:main:main",
-        message: "try a different approach",
-        deliver: false,
-        queueMode: "steer",
-        idempotencyKey: expect.any(String),
-      });
-      expect(payload).not.toHaveProperty("expectedRunId");
-      expect(payload).not.toHaveProperty("expectedLeafEntryId");
-      expectNoRequestCall(request, "sessions.list");
-    },
-  );
+    [{ status: "started", runId: "run-1" }, "succeeded"],
+    [{ status: "ok", runId: "run-ok", messageSeq: 2 }, "succeeded"],
+    [{ status: "timeout", runId: "run-timeout", summary: "aborted" }, "timeout"],
+    [{ status: "error", runId: "run-error", summary: "aborted" }, "failed"],
+  ] as const)("sends the selected session and settles a %j steer ACK", async (ack, key) => {
+    const request = mockRequests({ "chat.send": () => ack });
+    const result = await runCommand(request, "steer", "try a different approach");
+    expect(result.content).toBe(resultText(`steer.${key}`));
+    expect(result.failed ?? false).toBe(key !== "succeeded");
+    if (key !== "succeeded") {
+      expect(result.content).not.toBe(resultText("steer.succeeded"));
+    }
+    const { payload } = requireRequestCall(request, "chat.send");
+    expect(payload).toMatchObject({
+      sessionKey: "agent:main:main",
+      message: "try a different approach",
+      deliver: false,
+      queueMode: "steer",
+      idempotencyKey: expect.any(String),
+    });
+    expect(payload).not.toHaveProperty("expectedRunId");
+    expect(payload).not.toHaveProperty("expectedLeafEntryId");
+    expectNoRequestCall(request, "sessions.list");
+  });
 
   it("returns steer usage when no message is provided", async () => {
     const request = vi.fn();

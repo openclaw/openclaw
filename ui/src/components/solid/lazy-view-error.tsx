@@ -115,6 +115,11 @@ export function LazyViewError(props: {
         }
         actions={
           <>
+            {props.onClose ? (
+              <button class="btn" type="button" onClick={(event) => props.onClose?.(event)}>
+                {t("common.close")}
+              </button>
+            ) : undefined}
             <button
               ref={props.retryRef}
               class="btn lazy-view-error__action"
@@ -122,11 +127,6 @@ export function LazyViewError(props: {
             >
               {props.actionLabel ?? (props.stale ? t("common.reload") : t("lazyView.retry"))}
             </button>
-            {props.onClose ? (
-              <button class="btn" type="button" onClick={(event) => props.onClose?.(event)}>
-                {t("common.close")}
-              </button>
-            ) : undefined}
           </>
         }
         detail={formatUiError(props.error)}

@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { Show, action, createOptimistic } from "solid-js";
+import { Errored, Loading, Show, action, createMemo, createOptimistic } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { showToast } from "../lib/toast.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
@@ -32,14 +32,15 @@ export function LightboxAction(props: {
 export function LightboxChrome(props: {
   focusableRef: FocusableRef;
   title: string;
-  originalUrl: string;
+  originalUrl: Promise<string>;
   externalImageUrl: string;
-  resolvingOriginal: boolean;
+  hasGallery: boolean;
   isVideo: boolean;
   onDownloadImage: () => Promise<void>;
   onClose: (event?: Event) => void;
   children: JSX.Element;
 }) {
+  const originalUrl = createMemo(() => props.originalUrl);
   return (
     <section class="lightbox">
       <header class="header">
@@ -62,48 +63,68 @@ export function LightboxChrome(props: {
         </div>
       </header>
       {props.children}
-      <Show when={!props.isVideo || props.originalUrl || props.resolvingOriginal}>
-        <openclaw-modal-actions class="lightbox-footer">
-          <Show
-            when={props.isVideo}
+      <Show
+        when={props.isVideo}
+        fallback={
+          <openclaw-modal-actions class="lightbox-footer">
+            <LightboxImageDownload
+              focusableRef={props.focusableRef}
+              onDownload={props.onDownloadImage}
+            />
+            <Show when={props.externalImageUrl}>
+              <a
+                ref={props.focusableRef()}
+                class="action external-image"
+                href={props.externalImageUrl}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={t("chat.imageLightbox.openOriginal")}
+              >
+                <Icon name="externalLink" />
+              </a>
+            </Show>
+          </openclaw-modal-actions>
+        }
+      >
+        {/* A failed original link must not hide the selected video or its controls. */}
+        <Errored fallback={null}>
+          <Loading
+            on={props.originalUrl}
             fallback={
-              <LightboxImageDownload
-                focusableRef={props.focusableRef}
-                onDownload={props.onDownloadImage}
-              />
+              <Show when={props.hasGallery}>
+                <LightboxVideoOriginal focusableRef={props.focusableRef} url="" />
+              </Show>
             }
           >
-            <a
-              ref={props.focusableRef()}
-              class="action open-original"
-              href={props.originalUrl || undefined}
-              aria-disabled={props.originalUrl ? "false" : "true"}
-              tabindex={props.originalUrl ? 0 : -1}
-              target="_blank"
-              rel="noreferrer"
-              aria-label={t("chat.imageLightbox.openOriginal")}
-            >
-              <span class="open-original-label">{t("chat.imageLightbox.openOriginal")}</span>
-              <span class="open-original-icon" aria-hidden="true">
-                <Icon name="externalLink" />
-              </span>
-            </a>
-          </Show>
-          <Show when={!props.isVideo && props.externalImageUrl}>
-            <a
-              ref={props.focusableRef()}
-              class="action external-image"
-              href={props.externalImageUrl}
-              target="_blank"
-              rel="noreferrer"
-              aria-label={t("chat.imageLightbox.openOriginal")}
-            >
-              <Icon name="externalLink" />
-            </a>
-          </Show>
-        </openclaw-modal-actions>
+            <Show when={originalUrl()}>
+              {(url) => <LightboxVideoOriginal focusableRef={props.focusableRef} url={url()} />}
+            </Show>
+          </Loading>
+        </Errored>
       </Show>
     </section>
+  );
+}
+
+function LightboxVideoOriginal(props: { focusableRef: FocusableRef; url: string }) {
+  return (
+    <openclaw-modal-actions class="lightbox-footer">
+      <a
+        ref={props.focusableRef()}
+        class="action open-original"
+        href={props.url || undefined}
+        aria-disabled={props.url ? "false" : "true"}
+        tabindex={props.url ? 0 : -1}
+        target="_blank"
+        rel="noreferrer"
+        aria-label={t("chat.imageLightbox.openOriginal")}
+      >
+        <span class="open-original-label">{t("chat.imageLightbox.openOriginal")}</span>
+        <span class="open-original-icon" aria-hidden="true">
+          <Icon name="externalLink" />
+        </span>
+      </a>
+    </openclaw-modal-actions>
   );
 }
 

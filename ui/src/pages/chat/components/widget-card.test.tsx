@@ -2,8 +2,13 @@
 
 import { createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { ApplicationContext } from "../../../app/context-types.ts";
+import type { ApplicationGatewaySnapshot } from "../../../app/gateway.ts";
+import { WIDGET_PROMPT_EVENT } from "../../../components/mcp-app-security.ts";
+import { ValueSignal } from "../../../lib/board/provider-signals.ts";
 import { mcpAppWidgetNameForViewId, type BoardProvider } from "../../../lib/board/provider.ts";
 import { bumpCanvasWidgetFrameConnectionGeneration } from "../../../lib/chat/canvas-widget-frame-generation.ts";
+import { projectGateway } from "../../../lib/reactive/application.ts";
 import { createTestSessionCapability } from "../../../lib/sessions/session-capability.test-support.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { disposeSidebarContextLifecycles } from "../../../test-helpers/app-sidebar-context-lifecycle.ts";
@@ -13,8 +18,11 @@ import {
   createApplicationGateway,
 } from "../../../test-helpers/application-context.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { SidebarPanel } from "./chat-sidebar-content.tsx";
 import { ToolPreview } from "./widget-card-view.tsx";
+import { ToolPreview as DeferredToolPreview } from "./widget-card.ts";
 import * as widgetExport from "./widget-export.ts";
 
 const canvasPreview = {
@@ -64,10 +72,7 @@ function showCapability(preview: PreviewState["preview"], host: HTMLElement, cap
 
 function boardProvider(overrides: Partial<BoardProvider> = {}) {
   const pinnedWidgets: { name: string }[] = [];
-  const snapshot = {
-    value: { widgets: pinnedWidgets },
-    subscribe: () => () => {},
-  };
+  const snapshot = new ValueSignal({ widgets: pinnedWidgets });
   const provider = {
     sessionKey: "agent:main:main",
     canPinWidgets: true,
@@ -108,7 +113,7 @@ function mountWidget(
   return host;
 }
 
-function initializeWidgetFrame(frame: HTMLIFrameElement) {
+function initializeWidgetFrame(frame: HTMLIFrameElement, loaded = false) {
   const channel = new MessageChannel();
   widgetPorts.push(channel.port1, channel.port2);
   window.dispatchEvent(
@@ -119,7 +124,10 @@ function initializeWidgetFrame(frame: HTMLIFrameElement) {
       ports: [channel.port2],
     }),
   );
-  frame.dispatchEvent(new Event("load"));
+  if (!loaded) {
+    frame.dispatchEvent(new Event("load"));
+  }
+  return channel;
 }
 
 async function openActions(host: HTMLElement) {
@@ -148,6 +156,110 @@ afterEach(async () => {
 });
 
 describe("widget-card", () => {
+  it.each(["transcript", "strict transcript", "sidebar"] as const)(
+    "retains the %s document through a blip and retires it on identity or access change",
+    async (surface) => {
+      // SAFETY: Raw frames only use the client as presentation identity; they issue no RPCs.
+      const client = { request: vi.fn() } as unknown as ApplicationGatewaySnapshot["client"];
+      const hello: ApplicationGatewaySnapshot["hello"] = {
+        type: "hello-ok",
+        protocol: 1,
+        auth: { role: "operator", scopes: ["operator.read"], recoveryScope: "reader-a" },
+      };
+      const fixture = createApplicationGateway();
+      fixture.publish({
+        ...fixture.gateway.snapshot,
+        client,
+        hello,
+        phase: "connected",
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/one",
+        sessionKey: "agent:main:test",
+      });
+      // SAFETY: These leaf renderers consume only the Gateway capability.
+      const provider = createSolidApplicationContextProvider({
+        gateway: fixture.gateway,
+      } as ApplicationContext);
+      const entryUrl = "/__openclaw__/canvas/documents/cv_retained/index.html";
+      const root = mountSolid(
+        () => {
+          const gateway = projectGateway(fixture.gateway);
+          return surface !== "sidebar" ? (
+            <DeferredToolPreview
+              preview={documentPreview("cv_retained", {
+                sandbox: surface === "strict transcript" ? "strict" : "scripts",
+              })}
+              surface="chat_message"
+              options={{ canvasPluginSurfaceUrl: gateway.read().snapshot.canvasPluginSurfaceUrl }}
+            />
+          ) : (
+            <SidebarPanel
+              content={{ kind: "canvas", docId: "cv_retained", entryUrl }}
+              showingRawText={false}
+              error={null}
+              onRetry={() => {}}
+              onClose={() => {}}
+              onViewRawText={() => {}}
+              onClick={() => {}}
+              onKeydown={() => {}}
+              attachmentRuntime={{}}
+              canvasPluginSurfaceUrl={gateway.read().snapshot.canvasPluginSurfaceUrl}
+            />
+          );
+        },
+        { wrapper: provider.wrapper },
+      );
+      const frame = () => root.container.querySelector<HTMLIFrameElement>("iframe");
+      await vi.dynamicImportSettled();
+      await waitForSolid(() => expect(frame()).not.toBeNull());
+      const original = frame()!;
+      const src = original.getAttribute("src");
+      original.contentDocument!.open();
+      original.contentDocument!.write('<input value="draft">');
+      original.contentDocument!.close();
+      const draft = original.contentDocument!.querySelector("input")!;
+      draft.value = "unsaved work";
+      original.dispatchEvent(new Event("load"));
+      const prompts = vi.fn();
+      root.container.addEventListener(WIDGET_PROMPT_EVENT, prompts);
+      let expectPrompts: (count: number) => Promise<void> = async () => {};
+      if (surface === "transcript") {
+        const channel = initializeWidgetFrame(original, true);
+        original.checkVisibility = () => true;
+        original.focus();
+        expectPrompts = async (count) => {
+          await new Promise<void>((resolve) => {
+            channel.port2.addEventListener("message", () => resolve(), { once: true });
+            channel.port1.postMessage({ type: "openclaw:widget-prompt", prompt: "Keep working" });
+          });
+          expect(prompts).toHaveBeenCalledTimes(count);
+        };
+      }
+      await expectPrompts(1);
+      const publish = (patch: Partial<ApplicationGatewaySnapshot>) => {
+        bumpCanvasWidgetFrameConnectionGeneration();
+        fixture.publish({ ...fixture.gateway.snapshot, ...patch });
+        flush();
+      };
+      publish({ phase: "reconnecting", hello: null, canvasPluginSurfaceUrl: null });
+      expect(frame()).toBe(original);
+      expect(original.getAttribute("src")).toBe(src);
+      await expectPrompts(1);
+      publish({
+        phase: "connected",
+        hello,
+        canvasPluginSurfaceUrl: "https://canvas.test/__openclaw__/cap/two",
+      });
+      expect(frame()).toBe(original);
+      expect(original.getAttribute("src")).toBe(src);
+      expect(original.contentDocument!.querySelector("input")).toBe(draft);
+      expect(draft.value).toBe("unsaved work");
+      await expectPrompts(2);
+      publish({ client: { request: vi.fn() } as unknown as ApplicationGatewaySnapshot["client"] });
+      expect(frame()).not.toBe(original);
+      publish({ hello: { ...hello, auth: { role: "operator", scopes: [] } } });
+      expect(frame()).toBeNull();
+    },
+  );
   it("retains video playback through title changes after the player loads", async () => {
     vi.stubGlobal(
       "ResizeObserver",
@@ -254,7 +366,7 @@ describe("widget-card", () => {
   it("keeps theme delivery attached to a retained mounted frame", async () => {
     const host = connectedHost();
     mountWidget(
-      { ...canvasPreview, url: "https://example.test/theme-widget", sandbox: "scripts" },
+      documentPreview("unused", { url: "https://example.test/theme-widget" }),
       { allowExternalEmbedUrls: true },
       host,
     );
@@ -282,6 +394,15 @@ describe("widget-card", () => {
     expect(originalSrc).toContain("/__openclaw__/cap/one/");
     if (initialized) {
       initializeWidgetFrame(original);
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          data: { type: "openclaw:widget-size", height: 48 },
+          source: original.contentWindow,
+        }),
+      );
+      expect(original.style.height).toBe("48px");
+      showCapability(preview, host, "one");
+      expect(original.getAttribute("style")).toContain("48px");
     } else {
       // HTTP error documents dispatch load without offering a widget bridge.
       original.dispatchEvent(new Event("load"));
@@ -291,6 +412,7 @@ describe("widget-card", () => {
     expect(current === original).toBe(initialized);
     if (initialized) {
       expect(current.getAttribute("src")).toBe(originalSrc);
+      expect(current.getAttribute("style")).toContain("48px");
     } else {
       expect(current.getAttribute("src")).toContain("/__openclaw__/cap/two/");
       initializeWidgetFrame(current);
@@ -313,37 +435,11 @@ describe("widget-card", () => {
     expect(host.querySelector("iframe")).toBe(remountedFrame);
   });
 
-  it("keeps a short reported frame height across a capability rotation", () => {
-    const preview = documentPreview("cv_surface_lease_height");
-    const host = connectedHost();
-    showCapability(preview, host, "one");
-    const frame = host.querySelector<HTMLIFrameElement>("iframe");
-    initializeWidgetFrame(frame!);
-    window.dispatchEvent(
-      new MessageEvent("message", {
-        data: { type: "openclaw:widget-size", height: 48 },
-        source: frame?.contentWindow,
-      }),
-    );
-    expect(frame?.style.height).toBe("48px");
-
-    // Commit the reported height to the binding before rotating the capability.
-    showCapability(preview, host, "one");
-    expect(frame?.getAttribute("style")).toContain("48px");
-
-    // Unchanged content will not report again after rotation.
-    showCapability(preview, host, "two");
-    expect(host.querySelector("iframe")).toBe(frame);
-    expect(frame?.getAttribute("style")).toContain("48px");
-  });
-
   it("unloads an external frame when external embeds become disallowed", () => {
-    const preview = {
-      ...canvasPreview,
+    const preview = documentPreview("external-policy", {
       viewId: "external-policy",
       url: "https://example.test/widget",
-      sandbox: "scripts",
-    } as const;
+    });
     const host = mountWidget(preview, { allowExternalEmbedUrls: true });
     const allowedFrame = host.querySelector("iframe");
     expect(allowedFrame?.getAttribute("src")).toBe("https://example.test/widget");
@@ -354,11 +450,9 @@ describe("widget-card", () => {
   });
 
   it("dispatches canvas HTML and MCP App content and ignores unknown kinds", async () => {
-    const canvas = mountWidget({
-      ...canvasPreview,
-      url: "/__openclaw__/canvas/documents/cv_dispatch/index.html",
-      preferredHeight: 320,
-    });
+    const canvas = mountWidget(
+      documentPreview("cv_dispatch", { preferredHeight: 320, sandbox: undefined }),
+    );
     expect(canvas.querySelector("iframe.chat-tool-card__preview-frame")).not.toBeNull();
     expect(canvas.querySelector("mcp-app-view")).toBeNull();
     expect(actionButton(canvas)).not.toBeNull();
@@ -427,6 +521,85 @@ describe("widget-card", () => {
       { boardProvider: provider },
     );
     expect(pinButton(pinned)).toMatchObject({ disabled: true, ariaLabel: "Pinned" });
+  });
+
+  it("retains pin feedback through title updates and reconciles retries with the board", async () => {
+    const first = Promise.withResolvers<void>();
+    const retry = Promise.withResolvers<void>();
+    const pinWidget = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(retry.promise);
+    const { provider, snapshot } = boardProvider({ pinWidget });
+    const preview = documentPreview("cv_pin_feedback", {
+      viewId: "cv_pin_feedback",
+      title: "Release status",
+    });
+    const host = mountWidget(preview, { boardProvider: provider });
+    const button = pinButton(host)!;
+    button.click();
+    button.click();
+    await waitForSolid(() =>
+      expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…" }),
+    );
+    expect(pinWidget).toHaveBeenCalledTimes(1);
+
+    mountWidget({ ...preview, title: "Updated release status" }, { boardProvider: provider }, host);
+    expect(pinButton(host)).toBe(button);
+    expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…", title: "Pinning…" });
+
+    first.reject(new Error("Synthetic pin failure"));
+    await waitForSolid(() =>
+      expect(button).toMatchObject({
+        disabled: false,
+        ariaLabel: "Pin to dashboard",
+        title: "Could not pin to dashboard. Try again.",
+      }),
+    );
+    button.click();
+    await waitForSolid(() =>
+      expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinning…" }),
+    );
+    expect(pinWidget).toHaveBeenLastCalledWith({
+      docId: "cv_pin_feedback",
+      name: "canvas-cv_pin_feedback",
+      title: "Updated release status",
+    });
+    snapshot.set({ widgets: [{ name: "canvas-cv_pin_feedback" }] });
+    retry.resolve();
+    await waitForSolid(() => expect(button).toMatchObject({ disabled: true, ariaLabel: "Pinned" }));
+    expect(button.hasAttribute("data-pinned")).toBe(true);
+
+    snapshot.set({ widgets: [] });
+    await waitForSolid(() =>
+      expect(button).toMatchObject({ disabled: false, ariaLabel: "Pin to dashboard" }),
+    );
+    expect(button.hasAttribute("data-pinned")).toBe(false);
+  });
+
+  it("replaces a pin target while its previous board write is still pending", async () => {
+    const pending = Promise.withResolvers<void>();
+    const first = boardProvider({ pinWidget: vi.fn(() => pending.promise) });
+    const nextPin = vi.fn(async () => undefined);
+    const next = boardProvider({ pinWidget: nextPin });
+    const host = mountWidget(documentPreview("cv_first", { viewId: "cv_first" }), {
+      boardProvider: first.provider,
+    });
+    const previousButton = pinButton(host)!;
+    previousButton.click();
+    try {
+      await waitForSolid(() => expect(previousButton.ariaLabel).toBe("Pinning…"));
+      mountWidget(
+        documentPreview("cv_next", { viewId: "cv_next" }),
+        { boardProvider: next.provider },
+        host,
+      );
+      await waitForSolid(() => {
+        expect(pinButton(host)).not.toBe(previousButton);
+        expect(pinButton(host)).toMatchObject({ disabled: false, ariaLabel: "Pin to dashboard" });
+      });
+      pinButton(host)!.click();
+      expect(nextPin).toHaveBeenCalledWith({ docId: "cv_next", name: "canvas-cv_next" });
+    } finally {
+      pending.resolve();
+    }
   });
 
   it.each([

@@ -103,7 +103,6 @@ type NodeWorkerLaunchAdapterOptions = {
   now?: () => number;
   sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   rpcTimeoutMs?: number;
-  pollIntervalMs?: number;
   cancellationTimeoutMs?: number;
 };
 
@@ -264,7 +263,6 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
   const now = options.now ?? Date.now;
   const sleep = options.sleep ?? sleepWithAbort;
   const rpcTimeoutMs = options.rpcTimeoutMs ?? DEFAULT_RPC_TIMEOUT_MS;
-  const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
   const cancellationTimeoutMs = options.cancellationTimeoutMs ?? DEFAULT_CANCELLATION_TIMEOUT_MS;
 
   const findNode = async (params: {
@@ -428,7 +426,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
       signal: params.request.cancellationSignal,
       label: "node worker cancellation",
     });
-    let delayMs = pollIntervalMs;
+    let delayMs = DEFAULT_POLL_INTERVAL_MS;
     try {
       while (!deadline.signal.aborted && deadline.remainingMs() > 0) {
         if (!params.request.isCancellationAuthorized()) {
@@ -447,7 +445,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
             if (isTerminalReceipt(validated)) {
               return validated;
             }
-            delayMs = pollIntervalMs;
+            delayMs = DEFAULT_POLL_INTERVAL_MS;
           }
         } catch (error) {
           if (deadline.signal.aborted) {
@@ -500,7 +498,7 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
     let mayHaveLaunched = false;
     let dispatchReady = false;
     let pollStatus = false;
-    let delayMs = pollIntervalMs;
+    let delayMs = DEFAULT_POLL_INTERVAL_MS;
     const markDispatchReady = () => {
       mayHaveLaunched = true;
       if (!dispatchReady) {
@@ -598,13 +596,13 @@ export function createNodeWorkerLaunchAdapter(options: NodeWorkerLaunchAdapterOp
                 input = rearmNodeWorkerLaunchInput(originalInput, admissionAttempts++);
                 expected = expectedIdentity(input);
                 pollStatus = false;
-                delayMs = pollIntervalMs;
+                delayMs = DEFAULT_POLL_INTERVAL_MS;
                 continue;
               }
               return validated;
             }
             pollStatus = true;
-            delayMs = pollIntervalMs;
+            delayMs = DEFAULT_POLL_INTERVAL_MS;
             // Older node hosts retain timed polling; negotiated waits wake on durable settlement.
             if (statusWait) {
               continue;

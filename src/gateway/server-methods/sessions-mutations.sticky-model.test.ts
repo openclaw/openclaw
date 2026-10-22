@@ -5,10 +5,7 @@ import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { clearFollowupQueue } from "../../auto-reply/reply/queue/state.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import {
-  loadSessionEntry,
-  upsertSessionEntryCore,
-} from "../../config/sessions/session-accessor.js";
+import { appendTranscriptMessageSync } from "../../config/sessions/session-accessor.js";
 import type { AgentEntryConfig } from "../../config/types.agents.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -66,14 +63,18 @@ vi.mock("../../config/config.js", async () => {
 
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createGatewaySession } from "../session-create-service.js";
+import { projectSessionPatchResult } from "../session-utils-model.js";
+import { buildGatewaySessionRow } from "../session-utils-row.js";
 import { TerminalSessionManager } from "../terminal/session-manager.js";
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
-import { sessionMutationHandlers } from "./sessions-mutations.js";
-import { registerSessionNativeRuntimeConsentTests } from "./sessions-mutations.native-consent.test-support.js";
+import {
+  createSessionMutationCatalog,
+  registerSessionNativeRuntimeConsentTests,
+  sessionMutationFixture,
+  startSessionMutationRequest,
+} from "./sessions-mutations.native-consent.test-support.js";
 import { registerSessionOperatorPreparationTests } from "./sessions-mutations.operator-preparation.test-support.js";
 import { createSessionMutationTestClient } from "./sessions-mutations.owner.test-support.js";
-import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
-import { registerSessionSandboxStickyModelTests } from "./sessions-mutations.sandbox.test-support.js";
 
 const defaultAgents: Record<string, AgentEntryConfig> = {
   main: {},
@@ -101,10 +102,9 @@ const modelCatalog: ModelCatalogEntry[] = [
   { provider: "openai", id: "gpt-5.6-sol", name: "GPT" },
 ];
 type TestClient = GatewayClient & { connId: string; invalidated: boolean };
-const sessionScope = (sessionKey: string) => ({ agentId: "main", sessionKey });
-const readSession = (key: string) => loadSessionEntry(sessionScope(key));
+const readSession = (key: string) => sessionMutationFixture(key).read();
 const seedSession = (key: string, entry: Partial<SessionEntry> = {}, agentId = "main") =>
-  upsertSessionEntryCore({ agentId, sessionKey: key }, { sessionId: key, updatedAt: 1, ...entry });
+  sessionMutationFixture(key, agentId).seed(entry);
 const selectedModel = { providerOverride: "openai", modelOverride: "gpt-5.6-sol" };
 const runtimeSelection = { model: "openai/gpt-5.6-sol", agentRuntime: "codex" };
 const personalPin = () => ({
@@ -114,15 +114,7 @@ const personalPin = () => ({
 });
 
 function catalogSnapshot(entries = modelCatalog) {
-  return {
-    entries,
-    routeVariants: entries,
-    agentId: "main",
-    agentDir: openClawTestState.agentDir("main"),
-    workspaceDir: openClawTestState.workspaceDir,
-    config: cfg,
-    catalogComplete: true,
-  };
+  return createSessionMutationCatalog(cfg, openClawTestState, entries);
 }
 
 function context(clients = new Set<TestClient>()) {
@@ -165,15 +157,11 @@ async function patchSession(
   requestContext: GatewayRequestContext = context(),
   requestClient: GatewayClient = client(scopes),
 ) {
-  const responses: Parameters<RespondFn>[] = [];
-  await sessionMutationHandlers["sessions.patch"]?.({
-    req: { type: "req", id: "sticky-model-patch", method: "sessions.patch", params },
-    params,
+  const { responses, running } = startSessionMutationRequest("sessions.patch", params, {
     client: requestClient,
     context: requestContext,
-    isWebchatConnect: () => true,
-    respond: (...response: Parameters<RespondFn>) => responses.push(response),
   });
+  await running;
   expect(responses).toHaveLength(1);
   return responses[0]!;
 }
@@ -183,8 +171,9 @@ async function personalSession(
   entry: Partial<SessionEntry> = {},
   caller = personClient(accountOwnerId),
 ) {
-  await seedSession(key, entry);
-  const before = readSession(key);
+  const { seed, read } = sessionMutationFixture(key);
+  await seed(entry);
+  const before = read();
   const connections = new Set([caller]);
   const requestContext = context(connections);
   const patch = (params: Record<string, unknown> = {}) =>
@@ -195,20 +184,30 @@ async function personalSession(
       caller,
     );
   const expectUnchanged = (response: Parameters<RespondFn>) => {
-    expect(response[0]).toBe(false);
-    expect(response[2]).toMatchObject({ code: "FORBIDDEN" });
-    expect(readSession(key)).toEqual(before);
+    expect([response[0], response[2]]).toMatchObject([false, { code: "FORBIDDEN" }]);
+    expect(read()).toEqual(before);
   };
   return { before, caller, connections, requestContext, patch, expectUnchanged };
 }
 
+function createSession(
+  options: Omit<
+    Parameters<typeof createGatewaySession>[0],
+    "cfg" | "commandSource" | "operatorRoleActor"
+  >,
+) {
+  return createGatewaySession({
+    cfg,
+    commandSource: "test",
+    operatorRoleActor: { kind: "system" },
+    ...options,
+  });
+}
+
 function runtimeOptions(key: string) {
   return {
-    cfg,
     key,
     ...runtimeSelection,
-    commandSource: "test",
-    operatorRoleActor: { kind: "system" as const },
     loadGatewayModelCatalogSnapshot: async () => catalogSnapshot(),
   };
 }
@@ -308,12 +307,34 @@ registerSessionNativeRuntimeConsentTests({
 registerSessionOperatorPreparationTests({ context, profileId: () => accountOwnerId, personClient });
 
 describe("sessions.patch sticky model persistence", () => {
-  registerSessionSandboxStickyModelTests({
-    getConfig: () => cfg,
-    patchSession,
-    configMutationRequested: () => effects.mutateConfigFileWithRetry.mock.calls.length > 0,
-    getPersistedConfig: () => persistedConfig,
-  });
+  it.each(["agent", "global"] as const)(
+    "keeps sandbox recovery local with %s defaults",
+    async (scope) => {
+      cfg.agents!.defaults!.modelSelectionScope = scope;
+      const sessionKey = `agent:main:dm:native-policy-recovery-${scope}`;
+      const sessionId = `native-policy-recovery-${scope}`;
+      await seedSession(sessionKey, { sessionId });
+      expect(
+        (
+          await patchSession({
+            key: sessionKey,
+            model: "openai/gpt-5.6-sol",
+            sandboxMode: "off",
+            permissionMode: "full",
+            expectedSessionId: sessionId,
+            expectedSandboxMode: null,
+          })
+        )[0],
+      ).toBe(true);
+      expect(readSession(sessionKey)).toMatchObject({
+        modelOverride: "gpt-5.6-sol",
+        sandboxMode: "off",
+        permissionMode: "full",
+      });
+      expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+      expect(persistedConfig).toBeUndefined();
+    },
+  );
   it.each([
     { scope: "agent", agentId: "main", model: "anthropic/claude-opus-4-6" },
     { scope: "global", agentId: "work", model: "anthropic/claude-sonnet-4-6" },
@@ -325,7 +346,7 @@ describe("sessions.patch sticky model persistence", () => {
       await seedSession(sessionKey, { sessionId: `session-scope-current-${scope}` }, agentId);
 
       expect((await patchSession({ key: sessionKey, model }))[0]).toBe(true);
-      const entry = loadSessionEntry({ agentId, sessionKey });
+      const entry = sessionMutationFixture(sessionKey, agentId).read();
       expect(entry?.modelOverrideSource).toBe("default");
       expect(entry?.providerOverride).toBeUndefined();
       expect(entry?.modelOverride).toBeUndefined();
@@ -637,7 +658,7 @@ describe("explicit session model runtimes", () => {
   it("creates an unlocked session with an explicit runtime and rejects unprivileged adoption changes", async () => {
     const sessionKey = "agent:main:created-runtime";
     const options = runtimeOptions(sessionKey);
-    const result = await createGatewaySession(options);
+    const result = await createSession(options);
     expect(result).toMatchObject({
       ok: true,
       entry: { agentRuntimeOverride: "codex", modelOverride: "gpt-5.6-sol" },
@@ -645,7 +666,7 @@ describe("explicit session model runtimes", () => {
     expect(result).not.toHaveProperty("entry.modelSelectionLocked");
     expect(result).not.toHaveProperty("entry.liveModelSwitchPending");
     const adopt = (allowExistingModelSelection: boolean) =>
-      createGatewaySession({ ...options, agentRuntime: "openclaw", allowExistingModelSelection });
+      createSession({ ...options, agentRuntime: "openclaw", allowExistingModelSelection });
     expect(await adopt(false)).toMatchObject({
       ok: false,
       error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
@@ -673,7 +694,7 @@ describe("explicit session model runtimes", () => {
       kind: "unavailable",
       message: "Refresh the model catalog.",
     });
-    expect(await createGatewaySession(runtimeOptions(sessionKey))).toMatchObject({
+    expect(await createSession(runtimeOptions(sessionKey))).toMatchObject({
       ok: false,
       error: { message: "Refresh the model catalog." },
     });
@@ -681,9 +702,121 @@ describe("explicit session model runtimes", () => {
   });
 });
 
-registerSessionRuntimeWindowTests({
-  getConfig: () => cfg,
-  getState: () => openClawTestState,
-  patchSession: (request, scopes, requestContext) =>
-    patchSession(request, scopes, { ...context(), ...requestContext }),
+describe("runtime context windows", () => {
+  const model = "openai/gpt-5.6-sol";
+  const selected = { model, agentRuntime: "codex", contextWindow: "64k" };
+  function runtimeWindowFixture() {
+    const base: ModelCatalogEntry = {
+      provider: "openai",
+      id: "gpt-5.6-sol",
+      name: "Sol",
+      reasoning: true,
+      contextWindows: [{ id: "32k", label: "32K", contextWindow: 32_000 }],
+      contextWindowDefault: "32k",
+    };
+    const native: ModelCatalogEntry = {
+      ...base,
+      nativeRuntime: "codex",
+      contextWindows: [{ id: "64k", label: "64K", contextWindow: 64_000 }],
+      contextWindowDefault: "64k",
+    };
+    const snapshot = createSessionMutationCatalog(cfg, openClawTestState, [base], [base, native]);
+    const requestContext = {
+      loadGatewayModelCatalogSnapshot: vi.fn(async () => snapshot),
+    };
+    return { base, native, snapshot, requestContext };
+  }
+
+  it("accepts the selected runtime window through patch and projects it after persistence", async () => {
+    const sessionKey = "agent:main:runtime-window-patch";
+    const { base, native, snapshot, requestContext } = runtimeWindowFixture();
+    const { seed, read } = sessionMutationFixture(sessionKey);
+    const patch = (params: Record<string, unknown>) =>
+      patchSession({ key: sessionKey, ...params }, ["operator.admin"], {
+        ...context(),
+        ...requestContext,
+      });
+    await seed(selectedModel);
+    expect((await patch(selected))[0]).toBe(true);
+    const stored = read();
+    expect(stored).toMatchObject({ contextWindow: "64k", agentRuntimeOverride: "codex" });
+    if (!stored) {
+      throw new Error("Session was not persisted");
+    }
+    const storePath = openClawTestState.statePath("agents", "main", "sessions", "sessions.json");
+    const projection = { cfg, entry: stored, storePath };
+    const project = () =>
+      projectSessionPatchResult({
+        ...projection,
+        preparedAcpMeta: null,
+        canonicalKey: sessionKey,
+        modelCatalog: snapshot.entries,
+        modelCatalogRouteVariants: snapshot.routeVariants,
+        targetAgentId: "main",
+      }).resolved;
+    const window = { contextWindow: "64k", contextWindows: native.contextWindows };
+    expect(project()).toMatchObject(window);
+    const row = buildGatewaySessionRow({
+      ...projection,
+      agentId: "main",
+      key: sessionKey,
+      store: { [sessionKey]: stored },
+      modelCatalog: new Map([
+        ["main", { entries: snapshot.entries, routeVariants: snapshot.routeVariants }],
+      ]),
+      lightweightListRow: true,
+    });
+    expect(row).toMatchObject({ ...window, contextTokens: 64_000 });
+    const contextOnly = await patch({ contextWindow: "64k" });
+    expect(contextOnly[0]).toBe(true);
+    expect(contextOnly[1]).toMatchObject({ resolved: window });
+    const invalid = await patch({ contextWindow: "32k" });
+    expect(invalid[0]).toBe(false);
+    expect(invalid[2]?.message).toContain("use 64k");
+    expect(read()?.contextWindow).toBe("64k");
+    snapshot.routeVariants = [
+      base,
+      { ...native, contextWindows: undefined, contextWindowDefault: undefined },
+    ];
+    const missing = await patch({ contextWindow: "32k" });
+    expect(missing[0]).toBe(false);
+    expect(missing[2]?.message).not.toContain("use 32k");
+    expect(project()?.contextWindows).toBeUndefined();
+    expect((await patch({ model, agentRuntime: "openclaw" }))[0]).toBe(true);
+    expect(read()).not.toHaveProperty("contextWindow");
+  });
+  it("bounds native alternative forks at 64k for a 70000-token parent", async () => {
+    const parentTokens = 70_000;
+    const { snapshot } = runtimeWindowFixture();
+    const parentKey = `agent:main:window-parent-${parentTokens}`;
+    const childKey = `agent:main:window-child-${parentTokens}`;
+    expect((await createSession({ key: parentKey })).ok).toBe(true);
+    const { scope, seed, read } = sessionMutationFixture(parentKey);
+    const stored = read();
+    if (!stored) {
+      throw new Error("Parent was not persisted");
+    }
+    appendTranscriptMessageSync(
+      { ...scope, sessionId: stored.sessionId },
+      { message: { role: "user", content: "Context-window fork fixture", timestamp: 1 } },
+    );
+    await seed({
+      ...stored,
+      totalTokens: parentTokens,
+      totalTokensFresh: true,
+      totalTokensVersion: 1,
+    });
+    const child = await createSession({
+      key: childKey,
+      parentSessionKey: parentKey,
+      fork: true,
+      ...selected,
+      loadGatewayModelCatalogSnapshot: async () => snapshot,
+    });
+    expect(child).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("70000/64000 tokens") },
+    });
+    expect(readSession(childKey)).toBeUndefined();
+  });
 });

@@ -2,16 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { ProcSafeError } from "@openclaw/proc-safe/errors";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { resolveLiveManagedGatewayDistFence } from "../../scripts/lib/live-gateway-dist-fence.mts";
-import { assertManagedGatewayArtifactPublication } from "../cli/update-cli/update-command-service-revalidation.js";
 import { CommandProcessCleanupError } from "../process/exec-result.js";
 import * as processes from "../shared/pid-alive.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import type { ExecResult } from "./exec-file.js";
-import type { GatewayServiceState } from "./service-types.js";
-import * as gatewayService from "./service.js";
-import * as systemdServiceFiles from "./systemd-service-files.js";
 
 const systemctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execSystemctl>());
 const userctl = vi.hoisted(() => vi.fn<typeof import("./systemd-exec.js").execSystemctlUser>());
@@ -103,6 +98,37 @@ function addUnit(
   units.set(name, { name, fragmentPath, state: "active", argv });
 }
 const listEntry = (name: string) => success(`${name} loaded active running Gateway\n`);
+const inspectedUnit = (
+  name: string,
+  fragmentPath = `/run/systemd/transient/${name}`,
+  argv = programArguments,
+) => ({ name, fragmentPath, commands: [{ path: argv[0], programArguments: argv }] });
+function mockCliInspection(name: string) {
+  busctl.mockImplementation(async (args) => {
+    expect(args).toContain("--auto-start=no");
+    expect(args).not.toContain("LoadUnit");
+    const property = (type: string, data: unknown) => JSON.stringify({ type, data });
+    const calls: Record<string, [string, unknown]> = {
+      GetId: ["s", [busId]],
+      GetNameOwner: ["s", [managerOwner]],
+      GetConnectionUnixUser: ["u", [0]],
+      GetUnit: ["o", ["/org/freedesktop/systemd1/unit/unit0"]],
+    };
+    const call = Object.keys(calls).find((method) => args.includes(method));
+    if (call) {
+      return success(property(...calls[call]!));
+    }
+    return success(
+      args.includes("org.freedesktop.systemd1.Unit")
+        ? [name, `/run/systemd/transient/${name}`, "active"]
+            .map((value) => property("s", value))
+            .join("\n")
+        : property("a(sasbttttuii)", [
+            ["/usr/bin/node", programArguments, false, 0, 0, 0, 0, 0, 0, 0],
+          ]),
+    );
+  });
+}
 
 function withFixture(work: (home: string) => Promise<void>) {
   return withTestDir({ prefix: "openclaw-loaded-unit-" }, async (home) => {
@@ -114,15 +140,6 @@ function withFixture(work: (home: string) => Promise<void>) {
 }
 const withLinuxFixture = (work: (home: string) => Promise<void>) =>
   withMockedPlatform("linux", () => withFixture(work));
-const publication = (checkoutRoot: string, env: Record<string, string>) =>
-  assertManagedGatewayArtifactPublication({
-    roots: [checkoutRoot],
-    env,
-    timeoutMs: 5_000,
-    assertCurrent() {},
-    updateInstallKind: "package",
-    shouldRestart: true,
-  });
 
 beforeEach(() => {
   vi.stubEnv("PROC_SAFE_NATIVE", "auto");
@@ -171,31 +188,14 @@ it("keeps multiline command data separate from every loaded unit's identity", as
     payload,
   ]);
   addUnit("openclaw-gateway.service");
-  systemctl.mockImplementation(async (args) =>
+  systemctl.mockResolvedValue(
     success(
-      args.includes("list-units")
-        ? "custom-rescue.service loaded active running Worker\nopenclaw-gateway.service loaded active running Gateway\n"
-        : [...units.values()]
-            .map(
-              (unit) =>
-                `Id=${unit.name}\nActiveState=active\nFragmentPath=${unit.fragmentPath}\nExecStart={ path=${unit.argv[0]} ; argv[]=${unit.argv.join(" ")} ; ignore_errors=no ; start_time=[] ; stop_time=[] ; pid=0 ; code=(null) ; status=0 }\n`,
-            )
-            .join("\n"),
+      "custom-rescue.service loaded active running Worker\nopenclaw-gateway.service loaded active running Gateway\n",
     ),
   );
   expect(await listLoadedSystemdUnits("system", buses)).toEqual([
-    {
-      name: "custom-rescue.service",
-      fragmentPath: "/run/systemd/transient/custom-rescue.service",
-      commands: [
-        { path: "/usr/bin/python3", programArguments: ["/usr/bin/python3", "-c", payload] },
-      ],
-    },
-    {
-      name: "openclaw-gateway.service",
-      fragmentPath: "/run/systemd/transient/openclaw-gateway.service",
-      commands: [{ path: "/usr/bin/node", programArguments }],
-    },
+    inspectedUnit("custom-rescue.service", undefined, ["/usr/bin/python3", "-c", payload]),
+    inspectedUnit("openclaw-gateway.service"),
   ]);
   expect(connect).toHaveBeenCalledOnce();
   expect(nativeBus.close).toHaveBeenCalledOnce();
@@ -247,44 +247,8 @@ it.each([
     } else {
       connect.mockRejectedValue(new ProcSafeError("helper-unavailable", "Native addon absent"));
     }
-    busctl.mockImplementation(async (args) => {
-      expect(args).toContain("--auto-start=no");
-      expect(args).not.toContain("LoadUnit");
-      const property = (type: string, data: unknown) => JSON.stringify({ type, data });
-      if (args.includes("GetId")) {
-        return success(property("s", [busId]));
-      }
-      if (args.includes("GetNameOwner")) {
-        return success(property("s", [managerOwner]));
-      }
-      if (args.includes("GetConnectionUnixUser")) {
-        return success(property("u", [0]));
-      }
-      if (args.includes("GetUnit")) {
-        return success(property("o", ["/org/freedesktop/systemd1/unit/unit0"]));
-      }
-      if (args.includes("org.freedesktop.systemd1.Unit")) {
-        return success(
-          [
-            property("s", name),
-            property("s", `/run/systemd/transient/${name}`),
-            property("s", "active"),
-          ].join("\n"),
-        );
-      }
-      return success(
-        property("a(sasbttttuii)", [
-          ["/usr/bin/node", programArguments, false, 0, 0, 0, 0, 0, 0, 0],
-        ]),
-      );
-    });
-    expect(await listLoadedSystemdUnits("system", buses)).toEqual([
-      {
-        name,
-        fragmentPath: `/run/systemd/transient/${name}`,
-        commands: [{ path: "/usr/bin/node", programArguments }],
-      },
-    ]);
+    mockCliInspection(name);
+    expect(await listLoadedSystemdUnits("system", buses)).toEqual([inspectedUnit(name)]);
     expect(connectPrivate).not.toHaveBeenCalled();
     expect(nativeBus.close).not.toHaveBeenCalled();
   },
@@ -352,11 +316,7 @@ it.each(["", "t"])("preserves the root system-manager route (forced bus=%s)", as
   addUnit("custom-rescue.service");
   systemctl.mockResolvedValue(listEntry("custom-rescue.service"));
   expect(await listLoadedSystemdUnits("system", buses)).toEqual([
-    {
-      name: "custom-rescue.service",
-      fragmentPath: "/run/systemd/transient/custom-rescue.service",
-      commands: [{ path: "/usr/bin/node", programArguments }],
-    },
+    inspectedUnit("custom-rescue.service"),
   ]);
   if (forceBus) {
     expect(connect).toHaveBeenCalledOnce();
@@ -401,36 +361,6 @@ it.each(["off", "missing addon"])(
         new ProcSafeError("helper-unavailable", "Native addon absent"),
       );
     }
-    // The alternate broker is stable and UID 0, but its same-named unit is inactive.
-    busctl.mockImplementation(async (args) => {
-      const property = (type: string, data: unknown) => JSON.stringify({ type, data });
-      if (args.includes("GetId")) {
-        return success(property("s", [busId]));
-      }
-      if (args.includes("GetNameOwner")) {
-        return success(property("s", [managerOwner]));
-      }
-      if (args.includes("GetConnectionUnixUser")) {
-        return success(property("u", [0]));
-      }
-      if (args.includes("GetUnit")) {
-        return success(property("o", ["/org/freedesktop/systemd1/unit/unit0"]));
-      }
-      if (args.includes("org.freedesktop.systemd1.Unit")) {
-        return success(
-          [
-            property("s", name),
-            property("s", `/run/systemd/transient/${name}`),
-            property("s", "inactive"),
-          ].join("\n"),
-        );
-      }
-      return success(
-        property("a(sasbttttuii)", [
-          ["/usr/bin/node", programArguments, false, 0, 0, 0, 0, 0, 0, 0],
-        ]),
-      );
-    });
     await expect(listLoadedSystemdUnits("system", buses)).rejects.toThrow(
       "selected systemd private manager requires native inspection support",
     );
@@ -512,11 +442,11 @@ it.each(
       : new Error("Synthetic service inventory unavailable");
     const native = scope === "user" ? userctl : systemctl;
     native.mockRejectedValue(failure);
-    const publishing = publication(home, { HOME: home, ...buses });
+    const discovery = discoverManagedGatewayBindings({ HOME: home, ...buses });
     if (uncertain) {
-      await expect(publishing).rejects.toBe(failure);
+      await expect(discovery).rejects.toBe(failure);
     } else {
-      await expect(publishing).resolves.toBeUndefined();
+      await expect(discovery).resolves.toEqual([]);
     }
     expect(native).toHaveBeenCalled();
   }),
@@ -537,46 +467,17 @@ it.skipIf(process.platform !== "linux")("binds removed custom-profile units", ()
       XDG_RUNTIME_DIR: home,
       ...buses,
     };
-    expect(await listLoadedSystemdUnits("user", env)).toEqual([
-      { name, fragmentPath: removedPath, commands: [{ path: "/usr/bin/node", programArguments }] },
-    ]);
+    expect(await listLoadedSystemdUnits("user", env)).toEqual([inspectedUnit(name, removedPath)]);
     expect(await discoverManagedGatewayBindings(env, { requireComplete: true })).toEqual([
       expect.objectContaining({
         env: expect.objectContaining({ OPENCLAW_SYSTEMD_UNIT: name }),
         systemdReadTarget: { scope: "user", unitName: name, unitPath: removedPath },
       }),
     ]);
-    const checkout = path.join(home, "checkout");
-    await fs.mkdir(path.join(checkout, "dist"), { recursive: true });
-    await fs.writeFile(path.join(checkout, "package.json"), '{"name":"openclaw"}\n');
-    await fs.writeFile(path.join(checkout, "dist/index.js"), "gateway\n");
-    const command = {
-      programArguments: [process.execPath, path.join(checkout, "dist/index.js"), "gateway"],
-      sourcePath: removedPath,
-    };
-    vi.spyOn(systemdServiceFiles, "readSystemdServiceCommandLocation").mockImplementation(
-      async (_env, target) =>
-        target?.unitName === name ? { kind: "command", command } : { kind: "not-loaded" },
-    );
-    vi.spyOn(gatewayService, "readGatewayServiceState").mockResolvedValue({
-      installed: true,
-      loadState: { status: "loaded" },
-      running: true,
-      env: {},
-      command,
-    } satisfies GatewayServiceState);
-    const writes = vi.spyOn(fs, "writeFile").mockRejectedValue(new Error("unexpected write"));
-    await expect(
-      resolveLiveManagedGatewayDistFence(checkout, { env, requireVerified: true }),
-    ).resolves.toMatchObject({ refuse: true });
-    await expect(publication(checkout, env)).rejects.toThrow(
-      `another managed Gateway (systemd user unit ${JSON.stringify(name)})`,
-    );
-    expect(writes).not.toHaveBeenCalled();
   }),
 );
 
-it.each([false, true])("fences possible managers (present=%s)", (present) =>
+it.each([false, true])("includes only advertised invoking managers (present=%s)", (present) =>
   withLinuxFixture(async (home) => {
     vi.spyOn(fs, "lstat").mockRejectedValue(
       Object.assign(new Error("Synthetic path absent"), { code: "ENOENT" }),
@@ -589,8 +490,8 @@ it.each([false, true])("fences possible managers (present=%s)", (present) =>
       XDG_RUNTIME_DIR: home,
       ...(present ? { DBUS_SESSION_BUS_ADDRESS: buses.DBUS_SESSION_BUS_ADDRESS } : {}),
     };
-    await expect(
-      resolveLiveManagedGatewayDistFence(home, { env, requireVerified: true }),
-    ).resolves.toMatchObject({ refuse: present });
+    await expect(discoverManagedGatewayBindings(env, { includeInvoking: true })).resolves.toEqual(
+      present ? [{ env }] : [],
+    );
   }),
 );

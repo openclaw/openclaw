@@ -22,23 +22,10 @@ const historyEntry = (name: string, phone: string, body: string) => ({
   senderJid: `${phone.slice(1)}@s.whatsapp.net`,
 });
 
-const makeBlockedQuotedReplyMessage = (id: string): ReplyContextParams["msg"] =>
+const makeBlockedQuotedReplyMessage = (): ReplyContextParams["msg"] =>
   createTestWebInboundMessage({
-    event: { id },
-    payload: { body: "Current message" },
-    platform: {
-      chatJid: "123@g.us",
-      recipientJid: "+2000",
-      senderName: "Alice",
-      senderJid: "111@s.whatsapp.net",
-      senderE164: "+111",
-      selfE164: "+999",
-    },
     admission: {
-      accountId: "default",
       conversation: { kind: "group", id: "123@g.us" },
-      sender: { id: "111@s.whatsapp.net" },
-      senderAccess: { reasonCode: "group_policy_allowed" },
     },
     quote: {
       id: "blocked-reply",
@@ -59,11 +46,11 @@ describe("whatsapp inbound context visibility", () => {
   });
 
   it("redacts blocked quoted replies in allowlist mode", () => {
-    expect(visibleReply(makeBlockedQuotedReplyMessage("msg-reply-1"))).toBeNull();
+    expect(visibleReply(makeBlockedQuotedReplyMessage())).toBeNull();
   });
 
   it("renders structured quoted media only at the visible preview boundary", () => {
-    const msg = makeBlockedQuotedReplyMessage("msg-reply-media");
+    const msg = makeBlockedQuotedReplyMessage();
     msg.quote = {
       context: {
         id: "quoted-sticker",
@@ -75,8 +62,10 @@ describe("whatsapp inbound context visibility", () => {
 
     const reply = visibleReply(msg);
 
-    expect(reply?.body).toBe("<media:sticker>");
-    expect(reply?.media).toEqual({ contentType: "image/webp", kind: "sticker" });
+    expect(reply).toMatchObject({
+      body: "<media:sticker>",
+      media: { contentType: "image/webp", kind: "sticker" },
+    });
   });
 });
 

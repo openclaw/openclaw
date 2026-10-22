@@ -26,6 +26,7 @@ import {
 import { resolveAuthProfileFailureReason } from "../embedded-agent-runner/run/auth-profile-failure-policy.js";
 import { mergeAttemptToolMediaPayloads } from "../embedded-agent-runner/run/tool-media-payloads.js";
 import { isFailoverError } from "../failover-error.js";
+import { resolveRetryAfterMs } from "../failover/retry-evidence.js";
 import {
   createMissingReplyNotice,
   MISSING_REPLY_NOTICE_TEXT,
@@ -93,6 +94,7 @@ async function settleCliAuthProfile(params: {
         agentDir: params.agentDir,
         runId: params.terminal.runId,
         modelId: params.terminal.modelId,
+        retryAfterMs: resolveRetryAfterMs(formatErrorMessage(error), Date.now(), error),
       });
     }
   } catch (error) {
@@ -473,7 +475,6 @@ export function buildCliRunResult(params: {
   const replyExpectation = resolveReplyExpectation(runParams);
   const payloadsForVisibleCompletion = filterAgentRunTerminalPayloadsForPresentation({
     payloads: payloadsWithToolMedia,
-    isHeartbeatTrigger: runParams.trigger === "heartbeat" && !runParams.continuesConversation,
   });
   const unflushed = !sessionBindingDisabled && effectiveCliSessionId && bindingFlushOk === false;
   const terminalInterruption = output.terminalInterruption;

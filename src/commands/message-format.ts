@@ -1,4 +1,5 @@
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import { readNonEmptyStringPreservingWhitespace } from "@openclaw/normalization-core/string-coerce";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   getTerminalTableWidth,
@@ -16,6 +17,7 @@ import {
   type MessageActionResult,
 } from "../infra/outbound/message-action-contracts.js";
 import { formatTargetDisplay } from "../infra/outbound/target-resolver.js";
+import { readParsedField } from "../utils/string-readers.js";
 import { shortenText } from "./text-format.js";
 
 const resolveChannelLabel = (channel: ChannelId) =>
@@ -25,13 +27,7 @@ function firstNonemptyString(
   record: Record<string, unknown> | undefined,
   ...keys: string[]
 ): string {
-  for (const key of keys) {
-    const value = record?.[key];
-    if (typeof value === "string" && value) {
-      return value;
-    }
-  }
-  return "";
+  return (record && readParsedField(record, keys, readNonEmptyStringPreservingWhitespace)) ?? "";
 }
 
 type FormatOpts = {
@@ -130,79 +126,6 @@ function renderMessageList(
       { key: "Author", header: "Author", minWidth: 10 },
       { key: "Text", header: "Text", flex: true, minWidth: 24 },
       { key: "Id", header: "Id", minWidth: 10 },
-    ],
-    rows,
-  }).trimEnd();
-}
-
-function extractDiscordSearchResultsMessages(results: unknown): unknown[] | null {
-  if (!results || typeof results !== "object") {
-    return null;
-  }
-  const raw = (results as { messages?: unknown }).messages;
-  if (!Array.isArray(raw)) {
-    return null;
-  }
-  // Discord search returns messages as array-of-array; first element is the message.
-  const flattened: unknown[] = [];
-  for (const entry of raw) {
-    if (Array.isArray(entry) && entry.length > 0) {
-      flattened.push(entry[0]);
-    } else if (entry && typeof entry === "object") {
-      flattened.push(entry);
-    }
-  }
-  return flattened;
-}
-
-function renderReactions(payload: unknown, opts: FormatOpts): string | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const reactions = (payload as { reactions?: unknown }).reactions;
-  if (!Array.isArray(reactions)) {
-    return null;
-  }
-
-  const rows = reactions.slice(0, opts.displayLimit ?? 50).map((r) => {
-    const entry = r as Record<string, unknown>;
-    const emojiObj = entry.emoji as Record<string, unknown> | undefined;
-    const emoji =
-      firstNonemptyString(emojiObj, "raw") || firstNonemptyString(entry, "name", "emoji", "key");
-    const count = typeof entry.count === "number" ? String(entry.count) : "";
-    const userList = Array.isArray(entry.users)
-      ? (entry.users as unknown[])
-          .slice(0, 8)
-          .map((u) => {
-            if (typeof u === "string") {
-              return u;
-            }
-            if (!u || typeof u !== "object") {
-              return "";
-            }
-            const user = u as Record<string, unknown>;
-            return firstNonemptyString(user, "tag", "username", "id");
-          })
-          .filter(Boolean)
-      : [];
-    return {
-      Emoji: emoji,
-      Count: count,
-      Users: shortenText(userList.join(", "), 72),
-    };
-  });
-
-  if (rows.length === 0) {
-    return theme.muted("No reactions.");
-  }
-
-  // Escape remote labels and users only for display; raw keys remain identities in JSON.
-  return renderTerminalSafeTable({
-    width: opts.width,
-    columns: [
-      { key: "Emoji", header: "Emoji", minWidth: 8 },
-      { key: "Count", header: "Count", align: "right", minWidth: 6 },
-      { key: "Users", header: "Users", flex: true, minWidth: 20 },
     ],
     rows,
   }).trimEnd();
@@ -329,9 +252,52 @@ export function formatMessageCliText(
     return [ok("✅ Reaction updated.")];
   }
 
-  const reactionsTable = renderReactions(payload, formatOpts);
-  if (reactionsTable !== null && result.action === "reactions") {
-    return [heading("Reactions"), reactionsTable];
+  if (result.action === "reactions" && payload && typeof payload === "object") {
+    const reactions = (payload as { reactions?: unknown }).reactions;
+    if (Array.isArray(reactions)) {
+      const rows = reactions.slice(0, displayLimit ?? 50).map((r) => {
+        const entry = r as Record<string, unknown>;
+        const emojiObj = entry.emoji as Record<string, unknown> | undefined;
+        const emoji =
+          firstNonemptyString(emojiObj, "raw") ||
+          firstNonemptyString(entry, "name", "emoji", "key");
+        const count = typeof entry.count === "number" ? String(entry.count) : "";
+        const userList = Array.isArray(entry.users)
+          ? (entry.users as unknown[])
+              .slice(0, 8)
+              .map((u) => {
+                if (typeof u === "string") {
+                  return u;
+                }
+                if (!u || typeof u !== "object") {
+                  return "";
+                }
+                const user = u as Record<string, unknown>;
+                return firstNonemptyString(user, "tag", "username", "id");
+              })
+              .filter(Boolean)
+          : [];
+        return {
+          Emoji: emoji,
+          Count: count,
+          Users: shortenText(userList.join(", "), 72),
+        };
+      });
+      // Escape remote labels and users only for display; raw keys remain identities in JSON.
+      const table =
+        rows.length === 0
+          ? theme.muted("No reactions.")
+          : renderTerminalSafeTable({
+              width,
+              columns: [
+                { key: "Emoji", header: "Emoji", minWidth: 8 },
+                { key: "Count", header: "Count", align: "right", minWidth: 6 },
+                { key: "Users", header: "Users", flex: true, minWidth: 20 },
+              ],
+              rows,
+            }).trimEnd();
+      return [heading("Reactions"), table];
+    }
   }
 
   if (result.action === "read" || result.action === "list-pins") {
@@ -364,7 +330,21 @@ export function formatMessageCliText(
 
   if (result.action === "search") {
     const results = (payload as { results?: unknown }).results;
-    let list = extractDiscordSearchResultsMessages(results);
+    let list: unknown[] | null = null;
+    if (results && typeof results === "object") {
+      const raw = (results as { messages?: unknown }).messages;
+      if (Array.isArray(raw)) {
+        list = [];
+        // Discord search returns messages as array-of-array; first element is the message.
+        for (const entry of raw) {
+          if (Array.isArray(entry) && entry.length > 0) {
+            list.push(entry[0]);
+          } else if (entry && typeof entry === "object") {
+            list.push(entry);
+          }
+        }
+      }
+    }
     if (list === null) {
       const messages = asOptionalObjectRecord(payload)?.messages;
       if (Array.isArray(messages)) {

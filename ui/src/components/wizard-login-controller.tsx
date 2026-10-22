@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup } from "solid-js";
+import { createMemo, createSignal, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { registerModelSetupEnglish } from "../i18n/locales/en-model-setup.ts";
 import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
@@ -23,6 +23,7 @@ export function createWizardLogin(options: {
   sessionExpiredMessage: () => string;
   finishingMessage?: () => string;
   onAnswer?: (value: unknown, includeValue?: boolean) => void;
+  onPresentationChange?: () => void;
   onBackgroundCompletion?: (completion: ModelSetupWizardCompletion) => Promise<void>;
 }) {
   const [state, setState] = createSignal<ModelSetupWizardState>({ phase: "idle" });
@@ -54,11 +55,14 @@ export function createWizardLogin(options: {
       }
       stepId = next.phase === "step" ? next.step.id : null;
       setState(next);
+      if (next.phase === "starting" || next.phase === "step") {
+        options.onPresentationChange?.();
+      }
     },
     cancelledMessage: () => t("modelSetup.wizard.cancelled"),
     gatewayNotRespondingMessage: () => t("modelSetup.wizard.gatewayNotResponding"),
   });
-  onCleanup(() => {
+  onSettled(() => () => {
     // Cancellation still retires the session, but teardown cannot publish UI state.
     disposed = true;
     generation += 1;
@@ -157,12 +161,13 @@ export type WizardLoginState = ReturnType<typeof createWizardLogin>;
 
 export function WizardLogin(props: {
   controller: WizardLoginState;
+  busy?: boolean;
   options?: Parameters<WizardLoginState["viewProps"]>[0];
 }) {
   const view = createMemo(() => props.controller.viewProps(props.options));
   return (
     <div onModal-cancel={(event: Event) => event.preventDefault()}>
-      <ModelSetupWizard {...view()} />
+      <ModelSetupWizard {...view()} busy={props.busy} />
     </div>
   );
 }

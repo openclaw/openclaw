@@ -507,7 +507,30 @@ describe("maybeRepairGatewayDaemon", () => {
     await runDoctorHealthContributionList(ctx, contributions);
 
     expect(ctx).toMatchObject({ healthOk: false, gatewayHealthSkipped: false });
-    expect(ctx.runtime.error).toHaveBeenCalledOnce();
+    expect(ctx.healthFindings).toEqual([
+      {
+        checkId: "core/doctor/gateway-health",
+        severity: "warning",
+        category: "fix-now",
+        message: "Gateway health check failed: health failed",
+        fixHint:
+          "Run openclaw gateway status --deep using the same profile and account, inspect the reported startup errors, then rerun Doctor.",
+        docsUrl: "https://docs.openclaw.ai/cli/doctor/checks#gateway-and-service-repairs",
+      },
+    ]);
+    const { showDoctorHealthSummary } = await import("../flows/doctor-health-contribution.js");
+    showDoctorHealthSummary(ctx);
+    const output = vi.mocked(ctx.runtime.log).mock.calls.map(([message]) => message);
+    expect(output).toEqual([
+      "Fix now:",
+      "- Gateway health check failed: health failed",
+      "  Next step: Run openclaw gateway status --deep using the same profile and account, inspect the reported startup errors, then rerun Doctor.",
+      "  Docs: https://docs.openclaw.ai/cli/doctor/checks#gateway-and-service-repairs",
+    ]);
+    expect(ctx.updateWarnings).toEqual([
+      "core/doctor/gateway-health: Gateway health check failed: health failed",
+    ]);
+    expect(ctx.runtime.error).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
     expect(service.isLoaded).not.toHaveBeenCalled();
     expect(service.readCommand).not.toHaveBeenCalled();

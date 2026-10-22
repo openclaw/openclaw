@@ -15,21 +15,30 @@ import {
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runSecretsConfigureInteractive } from "./configure.js";
 
-it.each([true, false])(
-  "keeps configure JSON output parseable without changing shared credentials (store present: %s)",
-  (storePresent) =>
+it.each(["plaintext", "references", "missing"])(
+  "keeps configure JSON output parseable without changing shared credentials (%s)",
+  (kind) =>
     withOpenClawTestState({ layout: "home" }, async (state) => {
       await state.writeConfig({});
-      const sharedStore = createAuthProfileStoreFixture({
-        "openai:plaintext": createApiKeyCredential("openai", "synthetic-plaintext-value"),
-        "openai:residue": {
-          ...createApiKeyCredential("openai", "synthetic-residue-value"),
-          keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
-        },
-        "openai:reference": createApiKeyCredential("openai", "$OPENAI_API_KEY"),
-      });
+      const keyRef = { source: "env" as const, provider: "default", id: "OPENAI_API_KEY" };
+      const sharedStore = createAuthProfileStoreFixture(
+        kind === "plaintext"
+          ? {
+              "openai:plaintext": createApiKeyCredential("openai", "synthetic-plaintext-value"),
+              "openai:residue": {
+                ...createApiKeyCredential("openai", "synthetic-residue-value"),
+                keyRef,
+              },
+              "openai:reference": createApiKeyCredential("openai", "$OPENAI_API_KEY"),
+            }
+          : {
+              "openai:ref": { type: "api_key", provider: "openai", keyRef },
+              "openai:dollar": createApiKeyCredential("openai", "$OPENAI_API_KEY"),
+              "openai:braced": createApiKeyCredential("openai", "${OPENAI_API_KEY}"),
+            },
+      );
       noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, state.env);
-      if (storePresent) {
+      if (kind !== "missing") {
         const { db } = openOpenClawStateDatabase({ env: state.env });
         try {
           db.prepare(
@@ -77,14 +86,17 @@ it.each([true, false])(
           message: "No configurable secret-bearing fields found for this agent scope.",
         },
       });
-      if (storePresent) {
+      if (kind === "plaintext") {
+        expect(stderr.match(/Shared auth-profile store/g)).toHaveLength(1);
+        expect(stderr).toContain("Shared auth-profile store");
         expect(stderr).toContain("2 plaintext credential(s)");
         expect(stderr).toContain("cannot migrate shared credentials");
-        expect(readPersistedSharedAuthProfileStoreRaw(state.env)).toEqual(sharedStore);
       } else {
         expect(stderr).not.toContain("Shared auth-profile store");
-        expect(readPersistedSharedAuthProfileStoreRaw(state.env)).toBeNull();
       }
+      expect(readPersistedSharedAuthProfileStoreRaw(state.env)).toEqual(
+        kind === "missing" ? null : sharedStore,
+      );
       expect(`${stdout}${stderr}`).not.toContain("synthetic-plaintext-value");
       expect(`${stdout}${stderr}`).not.toContain("synthetic-residue-value");
       expect(await fs.readFile(state.configPath, "utf8")).toBe(configBefore);

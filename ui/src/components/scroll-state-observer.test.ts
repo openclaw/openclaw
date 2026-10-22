@@ -4,7 +4,7 @@ import { observeScrollState } from "./scroll-state-observer.ts";
 
 type Publish = Parameters<typeof observeScrollState>[1];
 let container: HTMLDivElement;
-let resized: (entries: ResizeObserverEntry[]) => void;
+let resized: (entries: Pick<ResizeObserverEntry, "target">[]) => void;
 const unobserve = vi.fn();
 const observations: ReturnType<typeof observeScrollState>[] = [];
 const atStart = { scrollable: true, atStart: true, atEnd: false };
@@ -14,8 +14,8 @@ beforeEach(() => {
   vi.stubGlobal(
     "ResizeObserver",
     class {
-      constructor(callback: ResizeObserverCallback) {
-        resized = (entries) => callback(entries, this);
+      constructor(callback: typeof resized) {
+        resized = callback;
       }
       observe = vi.fn();
       unobserve = unobserve;
@@ -80,15 +80,7 @@ it("updates scroll boundaries after resize and stops observing after disconnect"
   const observation = watch(element, publish);
   vi.advanceTimersToNextFrame();
   element.scrollTop = 100;
-  resized([
-    {
-      target: element,
-      borderBoxSize: [],
-      contentBoxSize: [],
-      devicePixelContentBoxSize: [],
-      contentRect: new DOMRectReadOnly(),
-    },
-  ]);
+  resized([{ target: element }]);
   expect(publish).toHaveBeenLastCalledWith(atStart);
   vi.advanceTimersToNextFrame();
   expect(publish).toHaveBeenLastCalledWith({ scrollable: true, atStart: false, atEnd: true });

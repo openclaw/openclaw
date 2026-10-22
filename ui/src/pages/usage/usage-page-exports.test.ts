@@ -9,8 +9,11 @@ import {
   cleanupUsagePageTest,
   contextWeight,
   loadUsagePage,
+  queryUsagePage,
+  settleUsagePage,
   usageCalls,
 } from "./usage-page.test-support.ts";
+import { texts } from "./view-render.test-support.ts";
 import { buildAggregatesFromSessions } from "./view.test-support.ts";
 
 afterEach(cleanupUsagePageTest);
@@ -102,27 +105,17 @@ it.each<
     });
     await page.refresh();
     await page.updateComplete;
-    const settled = async () => {
-      await vi.waitFor(() => expect(page.usageLoading).toBe(false));
-      await page.updateComplete;
-    };
     for (const [index, label] of selected.entries()) {
       page
         .querySelector<HTMLButtonElement>(`.session-bar-selection[aria-label="${label}"]`)!
         .dispatchEvent(new MouseEvent("click", { bubbles: true, shiftKey: index > 0 }));
-      await settled();
+      await settleUsagePage(page);
     }
     if (query) {
-      const input = page.querySelector<HTMLInputElement>(".usage-query-input")!;
-      input.value = query;
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      await settled();
+      await queryUsagePage(page, query);
     }
     if (menuProvider) {
-      expect(
-        [...page.querySelectorAll(".session-bar-title")].map((row) => row.textContent?.trim()),
-      ).toEqual(["Team Planning"]);
+      expect(texts(page.element, ".session-bar-title")).toEqual(["Team Planning"]);
       const trigger = page.querySelector<HTMLButtonElement>(
         '[id="usage-filter-provider:trigger"]',
       )!;
@@ -138,18 +131,12 @@ it.each<
           query: page.querySelector<HTMLInputElement>(".usage-query-input")!.value.trim(),
         }),
       );
-      await settled();
+      await settleUsagePage(page);
       trigger.click();
       expect
         .soft(page.querySelector<HTMLInputElement>(".usage-query-input")!.value)
         .toBe(`${query} provider:openai `);
-      expect
-        .soft(
-          [...page.querySelectorAll(".usage-metric-badge strong")].map((value) =>
-            value.textContent?.trim(),
-          ),
-        )
-        .toEqual(["100", "$1.00", "1"]);
+      expect.soft(texts(page.element, ".usage-metric-badge strong")).toEqual(["100", "$1.00", "1"]);
     }
     // Selection narrows accounting and exports, not the roster available for comparison.
     expect(
@@ -209,11 +196,11 @@ it.each<
     expect
       .soft(payload.sessions.map((session) => session.key).toSorted((a, b) => a.localeCompare(b)))
       .toEqual(keys);
-    expect(payload.totals?.totalTokens).toBe(tokens);
-    expect(payload.daily.reduce((sum, day) => sum + day.totalTokens, 0)).toBe(tokens);
-    expect
-      .soft(payload.sessions.reduce((sum, session) => sum + (session.usage?.totalTokens ?? 0), 0))
-      .toBe(tokens);
+    expect([
+      payload.totals?.totalTokens,
+      payload.daily.reduce((sum, day) => sum + day.totalTokens, 0),
+      payload.sessions.reduce((sum, session) => sum + (session.usage?.totalTokens ?? 0), 0),
+    ]).toEqual([tokens, tokens, tokens]);
     for (const session of payload.sessions) {
       expect(session.contextWeight).toEqual(contextWeight(session.label!));
     }

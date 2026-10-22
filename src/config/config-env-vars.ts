@@ -414,15 +414,10 @@ export function prepareConfigRuntimeEnv(params: {
   previousConfig: OpenClawConfig;
   nextConfig: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  previousOwnedEnv?: Readonly<Record<string, string>>;
 }): PreparedConfigRuntimeEnv {
   const targetEnv = params.env ?? process.env;
   const before = snapshotEnvByPlatformKey(targetEnv);
-  const preparedEnv = createConfigRuntimeEnvBase(
-    params.previousConfig,
-    targetEnv,
-    params.previousOwnedEnv ? { ownedEnv: params.previousOwnedEnv } : {},
-  );
+  const preparedEnv = createConfigRuntimeEnvBase(params.previousConfig, targetEnv);
   const base = { ...fsSafeEnvInput(preparedEnv) };
   applyConfigEnvVars(params.nextConfig, preparedEnv);
   const preparedOwnedEnv = collectConfigRuntimeEnvOwnership(params.nextConfig, base, preparedEnv);
@@ -445,19 +440,17 @@ export type PreparedConfigRuntimeEnvLoad = {
 export function prepareConfigRuntimeEnvLoad(params: {
   previousConfig: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
-  previousOwnedEnv?: Readonly<Record<string, string>>;
   preservedKeys?: ReadonlySet<string>;
 }): PreparedConfigRuntimeEnvLoad {
   const targetEnv = params.env ?? process.env;
   const originalEnv = cloneEnvWithPlatformSemantics(targetEnv);
   const before = snapshotEnvByPlatformKey(originalEnv);
   const env = createConfigRuntimeEnvBase(params.previousConfig, targetEnv, {
-    ownedEnv: params.previousOwnedEnv,
     preservedKeys: params.preservedKeys,
   });
   const initialBase = snapshotEnvByPlatformKey(env);
   const retainedOwnedEnv = Object.fromEntries(
-    Object.entries(params.previousOwnedEnv ?? resolveAppliedConfigEnvOwnership(targetEnv)).filter(
+    Object.entries(resolveAppliedConfigEnvOwnership(targetEnv)).filter(
       ([key, value]) => initialBase.get(envSnapshotKey(key))?.value === value,
     ),
   );

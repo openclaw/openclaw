@@ -358,7 +358,8 @@ vi.mock("../gateway/call.js", async () => {
   };
 });
 
-vi.mock("../process/exec.js", () => ({
+vi.mock("../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../process/exec.js")>()),
   runExec,
   runCommandWithTimeout,
 }));
@@ -412,12 +413,9 @@ vi.mock("../flows/doctor-tool-schema-runtime.js", () => ({
   collectRuntimeToolSchemaFindings: vi.fn().mockResolvedValue([]),
 }));
 
+// mock-isolation: Doctor fixtures isolate host browser probes; the real browser owner has its production-path permission proof.
 vi.mock("./doctor-browser.js", () => ({
-  maybeRepairOwnedChromeExtensionNativeHosts: vi.fn().mockResolvedValue({
-    changes: [],
-    warnings: [],
-  }),
-  noteChromeMcpBrowserReadiness: vi.fn().mockResolvedValue(undefined),
+  collectBrowserReadinessFindings: vi.fn().mockResolvedValue([]),
 }));
 
 vi.mock("./doctor-memory-recall.js", () => ({
@@ -429,8 +427,9 @@ vi.mock("./doctor-memory-search.js", () => ({
   noteMemorySearchHealth,
 }));
 
-// mock-isolation: Keep plugin discovery outside the command fixture.
-vi.mock("../plugins/doctor-contract-registry.js", () => ({
+// mock-isolation: Isolate config repair discovery; recovery inventory remains real.
+vi.mock("../plugins/doctor-contract-registry.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/doctor-contract-registry.js")>()),
   withDeferredPluginDoctorMigrations: (_pluginIds: readonly string[], run: () => unknown) => run(),
   applyPluginDoctorCompatibilityMigrations: (config: unknown) => ({
     config,
