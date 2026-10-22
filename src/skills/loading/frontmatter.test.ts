@@ -27,25 +27,23 @@ describe("resolveSkillManifestMetadata install validation", () => {
     sha256,
   });
 
-  it.each([
-    { kind: "brew", formula: "wget --HEAD" },
-    { kind: "node", package: "file:../malicious" },
-    { kind: "go", module: "https://evil.example/mod" },
-    { kind: "download", url: "file:///tmp/payload.tgz" },
-  ])("drops unsafe $kind install specs", (spec) => {
-    expect(resolveInstall(spec)).toBeUndefined();
-  });
-
-  it("accepts safe install specs", () => {
-    const specs = [
-      { kind: "brew", formula: "python@3.12" },
-      { kind: "node", package: "@scope/pkg@1.2.3" },
-      { kind: "go", module: "example.com/tool/cmd@v1.2.3" },
-      { kind: "uv", package: "uvicorn[standard]==0.31.0" },
-      { kind: "download", url: "https://example.com/tool.tar.gz" },
-    ];
+  const targets: Array<[kind: string, field: string, safe: string, unsafe?: string]> = [
+    ["brew", "formula", "python@3.12", "wget --HEAD"],
+    ["node", "package", "@scope/pkg@1.2.3", "file:../malicious"],
+    ["go", "module", "example.com/tool/cmd@v1.2.3", "https://evil.example/mod"],
+    ["uv", "package", "uvicorn[standard]==0.31.0"],
+    ["download", "url", "https://example.com/tool.tar.gz", "file:///tmp/payload.tgz"],
+  ];
+  it("accepts all safe install specs together", () => {
+    const specs = targets.map(([kind, field, safe]) => ({ kind, [field]: safe }));
     expect(resolveInstall(...specs)).toEqual(specs);
   });
+  it.each(targets.filter((target) => target[3]))(
+    "rejects unsafe %s targets",
+    (kind, field, _safe, unsafe) => {
+      expect(resolveInstall({ kind, [field]: unsafe })).toBeUndefined();
+    },
+  );
 
   it("normalizes a download installer's optional SHA-256 digest", () => {
     const sha256 = "a".repeat(64);
