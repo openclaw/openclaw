@@ -238,7 +238,7 @@ export async function withChromeMcpLease<T>(
     const timeoutMs = options.timeoutMs;
     const release = await getChromeMcpRoutingState(lease.session).operationPermits.acquire({
       signal,
-      deadlineAtMs: timeoutMs !== undefined && timeoutMs > 0 ? Date.now() + timeoutMs : undefined,
+      timeoutMs,
     });
     if (!release) {
       if (signal?.aborted) {

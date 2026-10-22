@@ -10,6 +10,20 @@ type PermitWaiter = {
  * FIFO admission with caller-owned lifetime. Cancellation/deadlines only stop
  * waiting: an acquired permit stays held until its idempotent release is called.
  * acquire returns null on cancellation/expiry; tryAcquire returns null when busy.
+ *
+ * Prefer the relative timeoutMs budget: a positive value bounds a queued wait by
+ * elapsed time on the monotonic clock, so an NTP step back cannot widen the wait
+ * and a forward step cannot expire a healthy waiter (for this budget). A
+ * non-positive timeoutMs means no deadline (immediate admission), matching how
+ * callers treat explicit timeouts. When both are supplied, timeoutMs wins and
+ * deadlineAtMs is ignored.
+ *
+ * deadlineAtMs is the absolute wall-clock deadline retained for callers (e.g. the
+ * codex inference relay) that share one deadline across a request. Unlike
+ * timeoutMs, it is re-seeded/consumed on Date.now(), so a wall-clock step shifts
+ * the effective wait (back step widens, forward step shortens it). That residual
+ * behavior is an accepted part of the absolute-deadline contract; callers that
+ * need a wall-clock-step-invariant bound must use timeoutMs instead.
  */
 export function createPermitPool(limit: number) {
   let active = 0;
@@ -56,10 +70,20 @@ export function createPermitPool(limit: number) {
     tryAcquire,
     async acquire({
       signal,
+      timeoutMs,
       deadlineAtMs,
-    }: { signal?: AbortSignal; deadlineAtMs?: number } = {}): Promise<PermitRelease | null> {
+    }: {
+      signal?: AbortSignal;
+      timeoutMs?: number;
+      deadlineAtMs?: number;
+    } = {}): Promise<PermitRelease | null> {
+      const monotonicDeadlineAtMs =
+        timeoutMs !== undefined && timeoutMs > 0 ? performance.now() + timeoutMs : undefined;
+      const effectiveDeadlineAtMs = monotonicDeadlineAtMs ?? deadlineAtMs;
+      const now = () => (monotonicDeadlineAtMs !== undefined ? performance.now() : Date.now());
       const expired = () =>
-        signal?.aborted === true || (deadlineAtMs !== undefined && Date.now() >= deadlineAtMs);
+        signal?.aborted === true ||
+        (effectiveDeadlineAtMs !== undefined && now() >= effectiveDeadlineAtMs);
       if (expired()) {
         return null;
       }
@@ -87,8 +111,8 @@ export function createPermitPool(limit: number) {
         };
         signal?.addEventListener("abort", cancel, { once: true });
         waiters.push(waiter);
-        if (deadlineAtMs !== undefined) {
-          cancelDeadline = scheduleAbsoluteDeadline(deadlineAtMs, cancel, undefined, {
+        if (effectiveDeadlineAtMs !== undefined) {
+          cancelDeadline = scheduleAbsoluteDeadline(effectiveDeadlineAtMs, cancel, now, {
             unref: true,
           });
         }

@@ -73,6 +73,7 @@ it("rechecks deadlines on release even before an expiry timer runs", async () =>
   aborted.abort();
   await expect(pool.acquire({ signal: aborted.signal })).resolves.toBeNull();
   await expect(pool.acquire({ deadlineAtMs: Date.now() })).resolves.toBeNull();
+  await expect(pool.acquire({ timeoutMs: 0 })).resolves.toBeTypeOf("function");
 });
 
 it.each([
@@ -99,6 +100,33 @@ it.each([
     }
   },
 );
+
+it("bounds a queued wait by elapsed time, not wall-clock steps", async () => {
+  const pool = createPermitPool(1);
+  const owner = pool.tryAcquire();
+  const waiting = pool.acquire({ timeoutMs: 300 });
+  vi.setSystemTime(Date.now() - 200);
+  await vi.advanceTimersByTimeAsync(299);
+  expect(pool.pendingCount).toBe(1);
+  await vi.advanceTimersByTimeAsync(1);
+  expect(await waiting).toBeNull();
+  expect(pool.pendingCount).toBe(0);
+  owner?.();
+});
+
+it("does not expire a healthy waiter when the wall clock steps forward", async () => {
+  const pool = createPermitPool(1);
+  const holder = await pool.acquire();
+  const waiting = pool.acquire({ timeoutMs: 300 });
+  // A forward wall-clock step must not spuriously cancel a healthy queued waiter.
+  // On a wall-clock implementation, releasing the holder would recheck the queued
+  // waiter against a now-ahead-of-deadline Date.now() and expire it early; on the
+  // monotonic budget it stays healthy and is admitted.
+  vi.setSystemTime(Date.now() + 500);
+  holder?.();
+  await expect(waiting).resolves.toBeTypeOf("function");
+  await releaseAcquired(waiting);
+});
 
 it("preserves FIFO and capacity when a queued waiter cancels after sustained turnover", async () => {
   const pool = createPermitPool(1);
