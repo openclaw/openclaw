@@ -169,6 +169,7 @@ describe("BoardWidgetSandboxHost", () => {
     );
     expect(f.post).toHaveBeenCalledWith(
       {
+        jsonrpc: "2.0",
         method: "ui/notifications/sandbox-resource-ready",
         params: { html: "<!doctype html><p>weather</p>", renderId: expect.any(String) },
       },

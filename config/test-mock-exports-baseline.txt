@@ -6994,7 +6994,6 @@
 ["src/state/openclaw-state-worker-registry.test.ts","../agents/worktrees/dispatch.worker.js","b780ebc90f016c175baacee528fa77c1c3dbcea6f0ecc83c01ad124a99ca1814",1]
 ["src/state/openclaw-state-worker-registry.test.ts","../infra/push-apns-store.worker.js","96b414196c7c75f91d075f7eb610dca2a602348f78df96a172fa26ff823bc086",1]
 ["src/state/openclaw-state-worker-registry.test.ts","../infra/push-web-store.worker.js","146cee7f35c3a079bdfaaf7e4e63feb061c97d50fa1724bbbf1637ad1172c067",1]
-["src/status/status-plugin-health.installed.test.ts","../channels/plugins/read-only.js","3711566fa2cbec2751a1fca84cce681e8cada28cd02b8eb7575245109e4df611",1]
 ["src/status/status-plugin-health.runtime.test.ts","../channels/plugins/read-only.js","3711566fa2cbec2751a1fca84cce681e8cada28cd02b8eb7575245109e4df611",1]
 ["src/status/status-text.test.ts","./status-plugin-health.runtime.js","020e45cc9ad63a7f1a0b2cf3ab7893ed7b347118b31dbe4f847e6aad7595f8bf",1]
 ["src/status/status-text.test.ts","./status-plugin-health.runtime.js","3beaba7dc9bbfabf1a65a9844c912833d3f1eccb2acefdbdcd19a789ff330766",1]
