@@ -639,24 +639,8 @@ describe("exit", () => {
     return { panel, controllers: terminals, request, emit };
   }
 
-  it("closes the last normally exited shell without another close RPC and reopens fresh", async () => {
+  it("retires shells independently, closes the last without an RPC, and reopens fresh", async () => {
     const { panel, controllers, request, emit } = await mountExitedSession();
-    emit("terminal.exit", { sessionId: "session-1", ...normalExit });
-    await panel.updateComplete;
-    expect(panel).toMatchObject({ hostedTabs: [], terminalPanelOpen: false });
-    expect(controllers[0]!.dispose).toHaveBeenCalledOnce();
-    expect(request.mock.calls.some(([method]) => method === "terminal.close")).toBe(false);
-    expect(JSON.parse(sessionStorage.getItem("openclaw.terminal.sessions.v1") ?? "[]")).toEqual([]);
-    expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-bottom")).toBe(
-      "0px",
-    );
-    panel.toggle();
-    await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
-    expect(request.mock.calls.filter(([method]) => method === "terminal.open")).toHaveLength(2);
-  });
-
-  it("selects the remaining shell instead of closing the panel", async () => {
-    const { panel, emit } = await mountExitedSession();
     const remaining = panel.activeHostedTabId;
     togglePanel(panel, { newSession: true });
     await waitForFast(() => expect(panel.hostedTabs).toHaveLength(2));
@@ -668,25 +652,23 @@ describe("exit", () => {
       activeHostedTabId: remaining,
       terminalPanelOpen: true,
     });
-  });
-
-  it("allows removing an exited diagnostic tab while offline", async () => {
-    const { panel, request, emit } = await mountExitedSession();
-    emit("terminal.exit", { sessionId: "session-1", reason: "error", exitCode: 7 });
+    emit("terminal.exit", { sessionId: "session-1", ...normalExit });
     await panel.updateComplete;
-
-    await updatePanel(panel, { gatewayConnected: false });
-    expect(panel.hostedTabs[0]?.closeDisabled).toBe(false);
-    const close = panel.querySelector<HTMLButtonElement>(".tabstrip-tab__close")!;
-    expect(close.disabled).toBe(false);
-    close.click();
-    await panel.updateComplete;
-    expect(panel.hostedTabs).toEqual([]);
+    expect(panel).toMatchObject({ hostedTabs: [], terminalPanelOpen: false });
+    expect(controllers[0]!.dispose).toHaveBeenCalledOnce();
     expect(request.mock.calls.some(([method]) => method === "terminal.close")).toBe(false);
+    expect(savedIds()).toEqual([]);
+    expect(document.documentElement.style.getPropertyValue("--oc-terminal-reserve-bottom")).toBe(
+      "0px",
+    );
+    panel.toggle();
+    await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
+    expect(request.mock.calls.filter(([method]) => method === "terminal.open")).toHaveLength(3);
   });
 
   it.each([
     { reason: "process_exit", exitCode: 7 },
+    { reason: "error", exitCode: 7 },
     { reason: "process_exit", exitCode: 0, signal: 15 },
     { reason: "process_exit", exitCode: null },
     { reason: "error", exitCode: 0, error: "PTY failed" },
@@ -698,7 +680,7 @@ describe("exit", () => {
   ] satisfies Exit[])(
     "preserves output for $reason / $exitCode / $signal / $error",
     async (exit) => {
-      const { panel, controllers, emit } = await mountExitedSession();
+      const { panel, controllers, request, emit } = await mountExitedSession();
       const data = "Diagnostic output\r\n";
       emit("terminal.data", { sessionId: "session-1", seq: data.length, data });
       emit("terminal.exit", { sessionId: "session-1", ...exit });
@@ -709,6 +691,14 @@ describe("exit", () => {
       });
       expect(controllers[0]!.dispose).not.toHaveBeenCalled();
       expect(controllers[0]!.write).toHaveBeenCalledWith(new TextEncoder().encode(data));
+      await updatePanel(panel, { gatewayConnected: false });
+      expect(panel.hostedTabs[0]?.closeDisabled).toBe(false);
+      const close = panelButton(panel, ".tabstrip-tab__close")!;
+      expect(close.disabled).toBe(false);
+      close.click();
+      await panel.updateComplete;
+      expect(panel.hostedTabs).toEqual([]);
+      expect(request.mock.calls.some(([method]) => method === "terminal.close")).toBe(false);
     },
   );
 

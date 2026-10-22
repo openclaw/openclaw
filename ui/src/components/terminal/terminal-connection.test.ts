@@ -165,12 +165,15 @@ describe("TerminalConnection", () => {
     });
     deferRequest("terminal.attach", recovery);
 
+    emitData(0, "nope", "other");
+    expect(data).toEqual([]);
     emitData(5, "hello");
     // startOfChunk=7, but expected=5. The missing bytes are already in the ring.
     emitData(12, "world");
     // This frame races before the server takes its attach snapshot. It must be
     // covered by replay, not rendered twice or treated as another gap.
     emitData(19, "covered");
+    emitExit({ exitCode: null, signal: null, reason: "detached" });
     recovery.resolve(sessionResult({ buffer: "hello??worldcovered", seq: 19 }));
 
     await vi.waitFor(() =>
@@ -183,6 +186,8 @@ describe("TerminalConnection", () => {
 
     emitData(20, "!");
     expect(data).toEqual(["hello", "!"]);
+    expect(exits).toEqual([]);
+    expect(conn.size).toBe(1);
   });
 
   it("does not let a superseded recovery drain the replacement stream queue", async () => {
@@ -257,23 +262,6 @@ describe("TerminalConnection", () => {
     conn.dispose();
   });
 
-  it("discards a detached exit that predates a successful recovery rebind", async () => {
-    await openSession(sink);
-    const recovery = createDeferred<TestSessionResult>();
-    deferRequest("terminal.attach", recovery);
-
-    emitData(5, "hello");
-    emitData(12, "world");
-    emitExit({ exitCode: null, signal: null, reason: "detached" });
-    recovery.resolve(sessionResult({ buffer: "complete output", seq: 12 }));
-
-    await vi.waitFor(() => expect(replays).toEqual(["complete output"]));
-    emitData(13, "!");
-    expect(data).toEqual(["hello", "!"]);
-    expect(exits).toEqual([]);
-    expect(conn.size).toBe(1);
-  });
-
   it("delivers the received tail and exit when recovery loses the finished session", async () => {
     await openSession(sink);
     const recovery = createDeferred<never>();
@@ -325,12 +313,6 @@ describe("TerminalConnection", () => {
     };
     await expect(openSession()).rejects.toBeInstanceOf(TerminalOpenTimeoutError);
     expect(client.forceReconnects).toEqual(["terminal open watchdog timeout"]);
-  });
-
-  it("does not deliver data to the wrong session", async () => {
-    await openSession(sink);
-    emitData(0, "nope", "other");
-    expect(data).toEqual([]);
   });
 
   it("marks the session unavailable when resize rejects its live owner", async () => {
@@ -435,51 +417,43 @@ describe("TerminalConnection", () => {
     expect(conn.size).toBe(2);
   });
 
-  it("attach replays the buffer before events that raced ahead, then resumes live", async () => {
+  it("orders early, replay-pending, and live attach output without replaying a stale detach", async () => {
+    const replay = createDeferred();
     const attached = createDeferred<TestSessionResult>();
     deferRequest("terminal.attach", attached);
-
-    const attachPromise = conn.attach("s1", testSink({ onData: (chunk) => data.push(chunk) }));
-    // Post-snapshot bytes the server emits between rebind and the response.
-    emitData(21, " tail");
-    expect(data).toEqual([]);
-
-    attached.resolve(sessionResult({ buffer: "replayed history", seq: 16 }));
-    const result = await attachPromise;
-    expect(result.buffer).toBe("replayed history");
-    expect(client.requests[0]).toEqual({
-      method: "terminal.attach",
-      params: { sessionId: "s1" },
-    });
-    // Buffer first, then the raced event, then live data.
-    emitData(26, " live");
-    expect(data).toEqual(["replayed history", " tail", " live"]);
-  });
-
-  it("awaits asynchronous initial replay before flushing live output", async () => {
-    const replay = createDeferred();
     const order: string[] = [];
-    client.nextResponse = sessionResult({ buffer: "snapshot", seq: 8 });
-
-    const attachPromise = conn.attach("s1", {
-      onData: (chunk) => order.push(`data:${chunk}`),
-      onReplay: async ({ data: snapshot, mode }) => {
-        order.push(`${mode}:${snapshot}`);
-        await replay.promise;
-        order.push("replay:done");
-      },
-      onExit: () => {},
-    });
-    await vi.waitFor(() => expect(order).toEqual(["initial:snapshot"]));
-
-    emitData(9, "!");
-    expect(order).toEqual(["initial:snapshot"]);
+    const attachPromise = conn.attach(
+      "s1",
+      testSink({
+        onData: (chunk) => order.push(`data:${chunk}`),
+        onReplay: async ({ data: snapshot, mode }) => {
+          order.push(`${mode}:${snapshot}`);
+          await replay.promise;
+          order.push("replay:done");
+        },
+      }),
+    );
+    emitData(21, " tail");
+    emitExit({ exitCode: null, signal: null, reason: "detached" });
+    expect(order).toEqual([]);
+    attached.resolve(sessionResult({ buffer: "replayed history", seq: 16 }));
+    await vi.waitFor(() => expect(order).toEqual(["initial:replayed history"]));
+    emitData(26, " live");
+    expect(order).toEqual(["initial:replayed history"]);
     replay.resolve();
-
-    await attachPromise;
-    expect(order).toEqual(["initial:snapshot", "replay:done", "data:!"]);
+    expect((await attachPromise).buffer).toBe("replayed history");
+    expect(client.requests[0]).toEqual({ method: "terminal.attach", params: { sessionId: "s1" } });
+    emitData(27, "!");
+    expect(order).toEqual([
+      "initial:replayed history",
+      "replay:done",
+      "data: tail",
+      "data: live",
+      "data:!",
+    ]);
+    expect(exits).toEqual([]);
+    expect(conn.size).toBe(1);
   });
-
   it("rejects initial replay failures without retaining a stream", async () => {
     client.nextResponse = sessionResult({ buffer: "snapshot", seq: 8 });
 
@@ -496,22 +470,6 @@ describe("TerminalConnection", () => {
     ).rejects.toThrow("replay failed");
     expect(replaySignal?.aborted).toBe(true);
     expectRetired();
-  });
-
-  it("discards a detached exit that predates successful session adoption", async () => {
-    const attached = createDeferred<TestSessionResult>();
-    deferRequest("terminal.attach", attached);
-
-    const attachPromise = conn.attach("s1", sink);
-    emitExit({ exitCode: null, signal: null, reason: "detached" });
-    attached.resolve(sessionResult({ buffer: "snapshot", seq: 8 }));
-
-    await attachPromise;
-    emitData(9, "!");
-    expect(replays).toEqual(["snapshot"]);
-    expect(data).toEqual(["!"]);
-    expect(exits).toEqual([]);
-    expect(conn.size).toBe(1);
   });
 
   it.each(["buffer", "seq"] as const)(
