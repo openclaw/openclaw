@@ -37,7 +37,7 @@ import {
 } from "./export.test-helpers.js";
 import { TRAJECTORY_RUNTIME_FILE_MAX_BYTES } from "./paths.js";
 import { appendSqliteTrajectoryRuntimeEvents } from "./runtime-store.test-support.js";
-import type { TrajectoryEvent } from "./types.js";
+import type { TrajectoryBundleManifest, TrajectoryEvent } from "./types.js";
 
 const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-trajectory-"));
 let tempDirId = 0;
@@ -64,7 +64,11 @@ function exportPaths() {
 }
 
 function readJson<T = Record<string, unknown>>(outputDir: string, file: string): T {
-  return JSON.parse(fs.readFileSync(path.join(outputDir, file), "utf8"));
+  return JSON.parse(readText(outputDir, file));
+}
+
+function readText(outputDir: string, file: string): string {
+  return fs.readFileSync(path.join(outputDir, file), "utf8");
 }
 
 function readEvents(outputDir: string): TrajectoryEvent[] {
@@ -107,6 +111,32 @@ function runtimeAttemptEvents(
       ...(data ? { data } : {}),
     }),
   );
+}
+
+function runtimeSeries(
+  rows: Array<[string, Record<string, unknown>, number?, Partial<TrajectoryEvent>?]>,
+) {
+  return rows.map(([type, data, seconds, overrides], index) =>
+    createRuntimeEvent(type, {
+      data,
+      ts: new Date(Date.parse("2026-04-22T08:00:00Z") + (seconds ?? index) * 1000).toISOString(),
+      seq: index + 1,
+      sourceSeq: index + 1,
+      ...overrides,
+    }),
+  );
+}
+
+function leaf(id: string, parentId: string, targetId: string | null, extra = {}) {
+  return { type: "leaf", id, parentId, targetId, ...extra };
+}
+
+function opaque(id: string, parentId: string, extra = {}) {
+  return { type: "metadata", id, parentId, ...extra };
+}
+
+function sessionWarning(code: string, rows: number[], message: string, count = rows.length) {
+  return { source: "session", code, count, rows, message };
 }
 
 function exportFrom(
@@ -222,55 +252,7 @@ describe("exportTrajectoryBundle", () => {
     writeSimpleSessionFile(sessionFile);
     fs.mkdirSync(outputDir);
 
-    try {
-      await exportFrom(tmpDir, { sessionFile });
-      throw new Error("expected trajectory export to reject an existing output directory");
-    } catch (error) {
-      expect((error as NodeJS.ErrnoException).code).toBe("EEXIST");
-    }
-  });
-
-  it("exports SQLite-backed runtime rows without a runtime JSONL sidecar", async () => {
-    const tmpDir = makeTempDir();
-    const storePath = path.join(tmpDir, "sessions.json");
-    const sessionId = "session-1";
-    const sessionKey = "agent:main:session-1";
-    await replaceTranscriptEvents(
-      {
-        agentId: "main",
-        sessionId,
-        sessionKey,
-        storePath,
-      },
-      [
-        sessionHeader(tmpDir, sessionId),
-        messageEntry("entry-user", null, userMessage("hello from sqlite"), 40),
-      ],
-    );
-    appendSqliteTrajectoryRuntimeEvents({ agentId: "main", sessionId, storePath }, [
-      createRuntimeEvent("sqlite-runtime", {
-        traceId: sessionId,
-        ts: "2026-04-01T05:46:41.000Z",
-        sourceSeq: 1,
-        sessionId,
-        sessionKey,
-      }),
-    ]);
-
-    const bundle = await exportFrom(tmpDir, {
-      sessionFile: formatSqliteSessionFileMarker({
-        agentId: "main",
-        sessionId,
-        storePath,
-      }),
-      sessionId,
-      sessionKey,
-    });
-
-    expect(bundle.manifest.runtimeEventCount).toBe(1);
-    expect(bundle.manifest.sourceFiles.runtime).toBeUndefined();
-    expect(eventTypes(bundle.events)).toContain("sqlite-runtime");
-    expect(fs.existsSync(path.join(tmpDir, "trajectory", "session-1.jsonl"))).toBe(false);
+    await expect(exportFrom(tmpDir, { sessionFile })).rejects.toMatchObject({ code: "EEXIST" });
   });
 
   it("exports logical-agent runtime events from a shared physical store", async () => {
@@ -355,7 +337,6 @@ describe("exportTrajectoryBundle", () => {
   });
 
   it("exports usage from truncated model completion runtime events", async () => {
-    const { tmpDir, sessionTarget, outputDir } = exportPaths();
     const usage = {
       input: 384_954,
       output: 5_624,
@@ -364,33 +345,27 @@ describe("exportTrajectoryBundle", () => {
       total: 724_402,
     };
     const promptCache = { readTokens: 333_824, writeTokens: 51_130 };
-    await replaceTranscriptEvents(sessionTarget, simpleSessionEntries(tmpDir));
-    const runtimeEvent: TrajectoryEvent = createRuntimeEvent("model.completed", {
-      ts: "2026-04-22T08:00:02.000Z",
-      sourceSeq: 1,
-      data: {
-        truncated: true,
-        originalBytes: 300_000,
-        limitBytes: 256 * 1024,
-        reason: "trajectory-event-size-limit",
-        usage,
-        promptCache,
-        stopReason: "stop_sequence",
-        droppedFields: ["messagesSnapshot"],
-      },
-    });
-    appendSqliteTrajectoryRuntimeEvents(sessionTarget, [runtimeEvent]);
-
-    await exportFrom(tmpDir, { sessionTarget });
-
-    const artifacts = readJson(outputDir, "artifacts.json") as {
-      usage?: unknown;
-      promptCache?: unknown;
-      stopReason?: unknown;
-    };
-    expect(artifacts.usage).toEqual(usage);
-    expect(artifacts.promptCache).toEqual(promptCache);
-    expect(artifacts.stopReason).toBe("stop_sequence");
+    const artifacts = await exportRuntimeArtifacts([
+      createRuntimeEvent("model.completed", {
+        ts: "2026-04-22T08:00:02.000Z",
+        sourceSeq: 1,
+        data: {
+          truncated: true,
+          originalBytes: 300_000,
+          limitBytes: 256 * 1024,
+          reason: "trajectory-event-size-limit",
+          usage,
+          promptCache,
+          stopReason: "stop_sequence",
+          droppedFields: ["messagesSnapshot"],
+        },
+      }),
+    ]);
+    expect([artifacts?.usage, artifacts?.promptCache, artifacts?.stopReason]).toEqual([
+      usage,
+      promptCache,
+      "stop_sequence",
+    ]);
   });
 
   const staleCompletion = {
@@ -627,17 +602,15 @@ describe("exportTrajectoryBundle", () => {
       "sk-top-level-export-secret",
     ];
     sessionTarget.sessionKey = expectDefined(rawSecrets[5], "synthetic session key");
-    const header = sessionHeader(tmpDir);
-    const userEntry = {
-      ...messageEntry(
+    await replaceTranscriptEvents(sessionTarget, [
+      sessionHeader(tmpDir),
+      messageEntry(
         "entry-user",
         null,
         userMessage(`user pasted ${rawSecrets[0]} keep-visible-marker`),
+        40,
       ),
-      timestamp: "2026-04-01T05:46:40.000Z",
-    };
-    const assistantEntry = {
-      ...messageEntry(
+      messageEntry(
         "entry-assistant",
         "entry-user",
         assistantMessage([
@@ -653,50 +626,37 @@ describe("exportTrajectoryBundle", () => {
           },
         ]),
       ),
-      timestamp: "2026-04-01T05:46:41.000Z",
-    };
-    const compactionEntry = {
-      type: "compaction",
-      id: "entry-compaction",
-      parentId: "entry-assistant",
-      timestamp: "2026-04-01T05:46:42.000Z",
-      summary: `compaction summary saw ${rawSecrets[2]}`,
-      firstKeptEntryId: "entry-assistant",
-      tokensBefore: 1024,
-      details: { note: rawSecrets[3] },
-    };
-    const branchSummaryEntry = {
-      type: "branch_summary",
-      id: "entry-branch-summary",
-      parentId: "entry-compaction",
-      timestamp: "2026-04-01T05:46:43.000Z",
-      fromId: "entry-assistant",
-      summary: `branch summary saw ${rawSecrets[4]}`,
-      details: { token: rawSecrets[0] },
-    };
-    await replaceTranscriptEvents(sessionTarget, [
-      header,
-      userEntry,
-      assistantEntry,
-      compactionEntry,
-      branchSummaryEntry,
+      {
+        type: "compaction",
+        id: "entry-compaction",
+        parentId: "entry-assistant",
+        timestamp: "2026-04-01T05:46:42.000Z",
+        summary: `compaction summary saw ${rawSecrets[2]}`,
+        firstKeptEntryId: "entry-assistant",
+        tokensBefore: 1024,
+        details: { note: rawSecrets[3] },
+      },
+      {
+        type: "branch_summary",
+        id: "entry-branch-summary",
+        parentId: "entry-compaction",
+        timestamp: "2026-04-01T05:46:43.000Z",
+        fromId: "entry-assistant",
+        summary: `branch summary saw ${rawSecrets[4]}`,
+        details: { token: rawSecrets[0] },
+      },
     ]);
-    appendSqliteTrajectoryRuntimeEvents(sessionTarget, [
-      Object.assign(
-        createRuntimeEvent("context.compiled", {
-          sourceSeq: 1,
-          data: {
-            systemPrompt: `system includes ${rawSecrets[1]}`,
-            tools: [{ name: "danger", description: `tool mentions ${rawSecrets[2]}` }],
-          },
-        }),
-        { apiKey: rawSecrets[5] },
-      ),
-      createRuntimeEvent("trace.metadata", {
-        ts: "2026-04-22T08:00:01.000Z",
-        seq: 2,
-        sourceSeq: 2,
-        data: {
+    const runtimeEvents = runtimeSeries([
+      [
+        "context.compiled",
+        {
+          systemPrompt: `system includes ${rawSecrets[1]}`,
+          tools: [{ name: "danger", description: `tool mentions ${rawSecrets[2]}` }],
+        },
+      ],
+      [
+        "trace.metadata",
+        {
           harness: { type: "openclaw", token: rawSecrets[3] },
           metadata: {
             [`https://example.test/callback?token=${rawSecrets[1]}`]: "secret-looking metadata key",
@@ -706,24 +666,20 @@ describe("exportTrajectoryBundle", () => {
             userPromptPrefixText: `prefix ${rawSecrets[0]}`,
           },
         },
-      }),
-      createRuntimeEvent("prompt.submitted", {
-        ts: "2026-04-22T08:00:02.000Z",
-        seq: 3,
-        sourceSeq: 3,
-        data: { prompt: `submitted ${rawSecrets[1]}` },
-      }),
-      createRuntimeEvent("trace.artifacts", {
-        ts: "2026-04-22T08:00:03.000Z",
-        seq: 4,
-        sourceSeq: 4,
-        runId: rawSecrets[5],
-        data: {
+      ],
+      ["prompt.submitted", { prompt: `submitted ${rawSecrets[1]}` }],
+      [
+        "trace.artifacts",
+        {
           assistantTexts: [`assistant ${rawSecrets[2]}`],
           finalPromptText: `final ${rawSecrets[3]}`,
         },
-      }),
+        3,
+        { runId: rawSecrets[5] },
+      ],
     ]);
+    Object.assign(expectDefined(runtimeEvents[0], "context event"), { apiKey: rawSecrets[5] });
+    appendSqliteTrajectoryRuntimeEvents(sessionTarget, runtimeEvents);
 
     const bundle = await exportFrom(tmpDir, { sessionTarget, sessionKey: rawSecrets[5] });
 
@@ -758,13 +714,7 @@ describe("exportTrajectoryBundle", () => {
     const oversizedContent = "x".repeat(TRAJECTORY_RUNTIME_FILE_MAX_BYTES + 1);
 
     await replaceTranscriptEvents({ agentId: "main", sessionId, sessionKey, storePath }, [
-      {
-        type: "session",
-        version: 3,
-        id: sessionId,
-        timestamp: "2026-04-01T05:46:39.000Z",
-        cwd: tmpDir,
-      },
+      sessionHeader(tmpDir, sessionId),
       messageEntry("entry-user", null, userMessage(oversizedContent), 40),
     ]);
 
@@ -816,41 +766,32 @@ describe("exportTrajectoryBundle", () => {
       "2026-04-01T05:46:40.000Z",
     );
     expect(bundle.manifest.warnings).toEqual([
-      {
-        source: "session",
-        code: "invalid-session-row",
-        count: 2,
-        rows: [2, 4],
-        message: "Skipped a session JSONL row that is not a session entry object.",
-      },
-      {
-        source: "session",
-        code: "invalid-session-json",
-        count: 1,
-        rows: [3],
-        message: "Skipped a session JSONL row that is not valid JSON.",
-      },
+      sessionWarning(
+        "invalid-session-row",
+        [2, 4],
+        "Skipped a session JSONL row that is not a session entry object.",
+      ),
+      sessionWarning(
+        "invalid-session-json",
+        [3],
+        "Skipped a session JSONL row that is not valid JSON.",
+      ),
     ]);
     expect(readJson(outputDir, "manifest.json").warnings).toEqual(bundle.manifest.warnings);
   });
 
   it("reports incomplete transcript branches while exporting the reachable suffix", async () => {
     const bundle = await exportBranch([
-      {
-        ...messageEntry("orphan-tail", "missing-imported-parent", assistantText("reachable tail")),
-        timestamp: "2026-04-01T05:46:40.000Z",
-      },
+      messageEntry("orphan-tail", "missing-imported-parent", assistantText("reachable tail"), 40),
     ]);
 
     expect(eventTypes(bundle.events)).toEqual(["assistant.message"]);
     expect(bundle.manifest.warnings).toEqual([
-      {
-        source: "session",
-        code: "incomplete-session-branch",
-        count: 1,
-        rows: [2],
-        message: "Exported the reachable session branch suffix after a missing parent link.",
-      },
+      sessionWarning(
+        "incomplete-session-branch",
+        [2],
+        "Exported the reachable session branch suffix after a missing parent link.",
+      ),
     ]);
   });
 
@@ -859,20 +800,11 @@ describe("exportTrajectoryBundle", () => {
       [
         messageEntry("linear-user", undefined, userMessage("hello"), 40),
         messageEntry("linear-assistant", undefined, assistantText("done"), 41),
-        {
-          type: "metadata",
-          id: "linear-metadata",
-          parentId: "linear-assistant",
-          payload: { source: "plugin" },
-        },
+        opaque("linear-metadata", "linear-assistant", { payload: { source: "plugin" } }),
         messageEntry("side-assistant", "linear-assistant", assistantText("side"), 42),
-        {
-          type: "leaf",
-          id: "active-leaf",
-          parentId: "side-assistant",
-          targetId: "linear-assistant",
+        leaf("active-leaf", "side-assistant", "linear-assistant", {
           appendParentId: "linear-metadata",
-        },
+        }),
       ],
       "session-linear",
     );
@@ -886,14 +818,10 @@ describe("exportTrajectoryBundle", () => {
     const bundle = await exportBranch([
       messageEntry("active-tail", null, userMessage("active"), 40),
       messageEntry("inactive-tail", "active-tail", assistantText("side delivery"), 41),
-      {
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "inactive-tail",
+      leaf("active-leaf", "inactive-tail", "active-tail", {
         timestamp: "2026-04-01T05:46:42.000Z",
-        targetId: "active-tail",
         appendParentId: null,
-      },
+      }),
     ]);
 
     expect(eventTypes(bundle.events)).toEqual(["user.message"]);
@@ -905,13 +833,9 @@ describe("exportTrajectoryBundle", () => {
     const bundle = await exportBranch([
       messageEntry("active-tail", null, userMessage("active"), 40),
       messageEntry("inactive-tail", "active-tail", assistantText("side delivery"), 41),
-      {
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "inactive-tail",
+      leaf("active-leaf", "inactive-tail", "active-tail", {
         timestamp: "2026-04-01T05:46:42.000Z",
-        targetId: "active-tail",
-      },
+      }),
       messageEntry("replacement", "active-leaf", assistantText("replacement"), 43),
     ]);
 
@@ -927,19 +851,11 @@ describe("exportTrajectoryBundle", () => {
     const bundle = await exportBranch(
       [
         messageEntry("inactive-root", null, userMessage("inactive"), 40),
-        {
-          type: "leaf",
-          id: "empty-leaf",
-          parentId: "inactive-root",
+        leaf("empty-leaf", "inactive-root", null, {
           timestamp: "2026-04-01T05:46:41.000Z",
-          targetId: null,
           appendParentId: null,
-        },
-        {
-          type: "metadata",
-          id: "plugin-metadata",
-          parentId: "inactive-root",
-        },
+        }),
+        opaque("plugin-metadata", "inactive-root"),
       ],
       "session-empty",
     );
@@ -951,20 +867,12 @@ describe("exportTrajectoryBundle", () => {
   it("traverses opaque append parents while exporting the active branch", async () => {
     const bundle = await exportBranch([
       messageEntry("active-root", null, userMessage("active"), 40),
-      {
-        type: "metadata",
-        id: "plugin-metadata",
-        parentId: "active-root",
-      },
+      opaque("plugin-metadata", "active-root"),
       messageEntry("side-delivery", "active-root", assistantText("side delivery"), 41),
-      {
-        type: "leaf",
-        id: "active-leaf",
-        parentId: "side-delivery",
+      leaf("active-leaf", "side-delivery", "active-root", {
         timestamp: "2026-04-01T05:46:42.000Z",
-        targetId: "active-root",
         appendParentId: "plugin-metadata",
-      },
+      }),
       messageEntry("active-tail", "plugin-metadata", assistantText("active tail"), 43),
     ]);
 
@@ -985,13 +893,11 @@ describe("exportTrajectoryBundle", () => {
 
     expect(eventTypes(bundle.events)).toEqual(["user.message", "assistant.message"]);
     expect(bundle.manifest.warnings).toEqual([
-      {
-        source: "session",
-        code: "cyclic-session-branch",
-        count: 1,
-        rows: [3],
-        message: "Stopped trajectory session branch export at a cyclic parent link.",
-      },
+      sessionWarning(
+        "cyclic-session-branch",
+        [3],
+        "Stopped trajectory session branch export at a cyclic parent link.",
+      ),
     ]);
   });
 
@@ -1074,7 +980,10 @@ describe("exportTrajectoryBundle", () => {
 
     process.env.HOME = homeDir;
     try {
-      await exportFrom(tmpDir, { sessionTarget });
+      const bundle = await exportFrom(tmpDir, { sessionTarget });
+      expect(bundle.manifest.runtimeEventCount).toBe(1);
+      expect(bundle.manifest.sourceFiles.runtime).toBeUndefined();
+      expect(eventTypes(bundle.events)).toContain("mixed-paths");
     } finally {
       if (previousHome === undefined) {
         delete process.env.HOME;
@@ -1094,20 +1003,18 @@ describe("exportTrajectoryBundle", () => {
     const { tmpDir, sessionTarget, outputDir } = exportPaths();
     await replaceTranscriptEvents(sessionTarget, toolCallSessionEntries(tmpDir));
 
-    const runtimeEvents: TrajectoryEvent[] = [
-      createRuntimeEvent("session.started", {
-        sourceSeq: 1,
-        data: {
+    const runtimeEvents = runtimeSeries([
+      [
+        "session.started",
+        {
           trigger: "user",
           workspacePath: path.join(tmpDir, "inside.txt"),
           prefixOnlyPath: `${tmpDir}2/outside.txt`,
         },
-      }),
-      createRuntimeEvent("context.compiled", {
-        ts: "2026-04-22T08:00:01.000Z",
-        seq: 2,
-        sourceSeq: 2,
-        data: {
+      ],
+      [
+        "context.compiled",
+        {
           systemPrompt: `system prompt for ${path.join(tmpDir, "instructions.md")}\n${"Follow the conversation faithfully. 🦞\n".repeat(80)}`,
           tools: [
             {
@@ -1117,12 +1024,10 @@ describe("exportTrajectoryBundle", () => {
             },
           ],
         },
-      }),
-      createRuntimeEvent("trace.metadata", {
-        ts: "2026-04-22T08:00:01.500Z",
-        seq: 3,
-        sourceSeq: 3,
-        data: {
+      ],
+      [
+        "trace.metadata",
+        {
           harness: { type: "openclaw", version: "0.1.0" },
           model: { provider: "openai", name: "gpt-5.4" },
           skills: {
@@ -1140,44 +1045,35 @@ describe("exportTrajectoryBundle", () => {
             },
           },
         },
-      }),
-      createRuntimeEvent("prompt.submitted", {
-        ts: "2026-04-22T08:00:02.000Z",
-        seq: 4,
-        sourceSeq: 4,
-        data: {
-          prompt: "Please read the weather skill",
-        },
-      }),
-      createRuntimeEvent("trace.artifacts", {
-        ts: "2026-04-22T08:00:03.000Z",
-        seq: 5,
-        sourceSeq: 5,
-        data: {
+        1.5,
+      ],
+      ["prompt.submitted", { prompt: "Please read the weather skill" }, 2],
+      [
+        "trace.artifacts",
+        {
           finalStatus: "success",
           terminalError: "non_deliverable_terminal_turn",
           assistantTexts: ["done"],
           stopReason: "stop_sequence",
           finalPromptText: `final prompt from ${path.join(tmpDir, "prompt.txt")}\n${"A retained observation from the conversation.\n".repeat(80)}`,
           finalPromptTextOriginalLength: 12_345,
-          itemLifecycle: {
-            startedCount: 1,
-            completedCount: 1,
-            activeCount: 0,
-          },
+          itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
         },
-      }),
-    ];
+        3,
+      ],
+    ]);
     appendSqliteTrajectoryRuntimeEvents(sessionTarget, runtimeEvents);
 
-    const exportAtFixedTime = async (directory: string) => {
+    const exportAtFixedTime = async (directory: string, useLegacyMarker = false) => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(new Date("2026-04-22T09:00:00.000Z"));
       try {
         return await exportFrom(tmpDir, {
           outputDir: directory,
-          sessionTarget,
-          sessionFile: path.join(tmpDir, "stale-session.jsonl"),
+          sessionTarget: useLegacyMarker ? undefined : sessionTarget,
+          sessionFile: useLegacyMarker
+            ? formatSqliteSessionFileMarker(sessionTarget)
+            : path.join(tmpDir, "stale-session.jsonl"),
           sessionKey: "agent:main:session-1",
           systemPrompt: "fallback prompt",
           tools: [{ name: "fallback" }],
@@ -1202,16 +1098,16 @@ describe("exportTrajectoryBundle", () => {
     expect(fs.existsSync(path.join(tmpDir, "session-1.jsonl"))).toBe(false);
     expect(bundle.manifest.eventCount).toBeGreaterThanOrEqual(5);
     expect(bundle.manifest.runtimeEventCount).toBe(runtimeEvents.length);
-    expect(fs.readdirSync(outputDir).toSorted()).toEqual([
+    const contents = [
       "artifacts.json",
       "events.jsonl",
-      "manifest.json",
       "metadata.json",
       "prompts.json",
       "session-branch.json",
       "system-prompt.txt",
       "tools.json",
-    ]);
+    ];
+    expect(fs.readdirSync(outputDir).toSorted()).toEqual([...contents, "manifest.json"].toSorted());
     expect(bundle.supplementalFiles).toEqual(["metadata.json", "artifacts.json", "prompts.json"]);
 
     const exportedEvents = readEvents(outputDir);
@@ -1220,43 +1116,35 @@ describe("exportTrajectoryBundle", () => {
     expect(JSON.stringify(exportedEvents)).toContain("$WORKSPACE_DIR/inside.txt");
     expect(JSON.stringify(exportedEvents)).not.toContain("$WORKSPACE_DIR2");
 
-    const manifest = readJson(outputDir, "manifest.json") as {
-      contents?: Array<{ path: string; mediaType: string; bytes: number }>;
-      sourceFiles?: { session?: string; runtime?: string };
-      workspaceDir?: string;
-    };
-    expect(manifest.workspaceDir).toBe("$WORKSPACE_DIR");
-    expect(manifest.sourceFiles?.session).toBe("agent:…on-1");
-    expect(manifest.sourceFiles?.runtime).toBeUndefined();
-    expect(manifest.contents?.map((entry) => entry.path).toSorted()).toEqual([
-      "artifacts.json",
-      "events.jsonl",
-      "metadata.json",
-      "prompts.json",
-      "session-branch.json",
-      "system-prompt.txt",
-      "tools.json",
-    ]);
+    const manifest = readJson<TrajectoryBundleManifest>(outputDir, "manifest.json");
+    expect([
+      manifest.workspaceDir,
+      manifest.sourceFiles.session,
+      manifest.sourceFiles.runtime,
+    ]).toEqual(["$WORKSPACE_DIR", "agent:…on-1", undefined]);
+    expect(manifest.contents?.map((entry) => entry.path).toSorted()).toEqual(contents);
     const emptyContents = (manifest.contents ?? []).filter((entry) => entry.bytes <= 0);
     expect(emptyContents).toStrictEqual([]);
 
     const metadata = readJson(outputDir, "metadata.json") as {
       skills?: { entries?: Array<{ id?: string; invoked?: boolean }> };
     };
-    expect(metadata.skills?.entries?.[0]?.id).toBe("weather");
-    expect(metadata.skills?.entries?.[0]?.invoked).toBe(true);
-    const prompts = fs.readFileSync(path.join(outputDir, "prompts.json"), "utf8");
-    const artifacts = fs.readFileSync(path.join(outputDir, "artifacts.json"), "utf8");
-    const systemPrompt = fs.readFileSync(path.join(outputDir, "system-prompt.txt"), "utf8");
-    const tools = fs.readFileSync(path.join(outputDir, "tools.json"), "utf8");
-    expect(prompts).toContain("$WORKSPACE_DIR/AGENTS.md");
-    expect(artifacts).toContain("$WORKSPACE_DIR/prompt.txt");
-    expect(JSON.parse(artifacts).finalPromptTextOriginalLength).toBe(12_345);
-    expect(JSON.parse(artifacts).stopReason).toBe("stop_sequence");
-    expect(artifacts).toContain("non_deliverable_terminal_turn");
-    expect(systemPrompt).toContain("$WORKSPACE_DIR/instructions.md");
-    expect(tools).toContain("$WORKSPACE_DIR/docs");
-    expect(`${prompts}\n${artifacts}\n${systemPrompt}\n${tools}`).not.toContain(tmpDir);
+    expect(metadata.skills?.entries?.[0]).toMatchObject({ id: "weather", invoked: true });
+    expect(readJson(outputDir, "artifacts.json")).toMatchObject({
+      finalPromptTextOriginalLength: 12_345,
+      stopReason: "stop_sequence",
+    });
+    for (const [file, marker] of [
+      ["prompts.json", "$WORKSPACE_DIR/AGENTS.md"],
+      ["artifacts.json", "$WORKSPACE_DIR/prompt.txt"],
+      ["artifacts.json", "non_deliverable_terminal_turn"],
+      ["system-prompt.txt", "$WORKSPACE_DIR/instructions.md"],
+      ["tools.json", "$WORKSPACE_DIR/docs"],
+    ] as const) {
+      const text = readText(outputDir, file);
+      expect(text).toContain(marker);
+      expect(text).not.toContain(tmpDir);
+    }
 
     const options = toDatabaseOptions(resolveSqliteReadScope(sessionTarget));
     runOpenClawAgentWriteTransaction((database) => {
@@ -1308,6 +1196,11 @@ describe("exportTrajectoryBundle", () => {
         );
       }
     }
+    const markerBundle = await exportAtFixedTime(path.join(tmpDir, "marker-bundle"), true);
+    expect(markerBundle.manifest.runtimeEventCount).toBe(runtimeEvents.length);
+    expect(markerBundle.manifest.sourceFiles.runtime).toBeUndefined();
+    expect(eventTypes(markerBundle.events)).toContain("context.compiled");
+    expect(fs.existsSync(path.join(tmpDir, "trajectory", "session-1.jsonl"))).toBe(false);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

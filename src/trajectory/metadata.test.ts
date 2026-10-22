@@ -1,4 +1,3 @@
-// Trajectory metadata tests cover metadata capture and normalization.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL } from "../config/redact-snapshot.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -8,34 +7,17 @@ import type { SkillSnapshot } from "../skills/types.js";
 
 type ResolvedSkillEntry = NonNullable<SkillSnapshot["resolvedSkills"]>[number];
 
-const loadPluginManifestRegistry = vi.hoisted(() => vi.fn(() => ({ plugins: [] })));
+const loadPluginMetadataSnapshot = vi.hoisted(() =>
+  vi.fn(() => ({ plugins: [], manifestRegistry: { plugins: [] } })),
+);
 
 vi.mock("../infra/git-commit.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/git-commit.js")>()),
   resolveCommitHash: () => "abcdef0",
 }));
 
-vi.mock("../infra/os-summary.js", () => ({
-  resolveOsSummary: () => ({
-    platform: "darwin",
-    arch: "arm64",
-    release: "test-release",
-    label: "test-os",
-  }),
-}));
-
-vi.mock("../plugins/plugin-registry.js", () => ({
-  loadPluginManifestRegistryForPluginRegistry: loadPluginManifestRegistry,
-}));
-
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: () => {
-    const registry = loadPluginManifestRegistry();
-    return {
-      plugins: registry.plugins,
-      manifestRegistry: registry,
-    };
-  },
+  loadPluginMetadataSnapshot,
 }));
 
 import { buildTrajectoryArtifacts, buildTrajectoryRunMetadata } from "./metadata.js";
@@ -69,44 +51,26 @@ function skill(name: string, description: string): ResolvedSkillEntry {
 }
 
 const partialSkill = {
-  name: undefined,
-  description: undefined,
-  filePath: undefined,
-  baseDir: undefined,
   source: "workspace",
-  sourceInfo: undefined,
   disableModelInvocation: false,
 } as unknown as ResolvedSkillEntry;
 
 afterEach(() => {
   resetPluginRuntimeStateForTest();
-  loadPluginManifestRegistry.mockClear();
+  loadPluginMetadataSnapshot.mockClear();
 });
 
 describe("trajectory metadata", () => {
   it("uses prepared plugin metadata without rescanning manifests", () => {
     const captured = metadata({
-      pluginMetadataSnapshot: {
-        plugins: [
-          {
-            id: "prepared-plugin",
-            name: "Prepared Plugin",
-            origin: "bundled",
-            channels: [],
-            providers: [],
-            cliBackends: [],
-            hooks: [],
-            skills: [],
-          },
-        ],
-      } as never,
+      pluginMetadataSnapshot: { plugins: [{ id: "prepared-plugin" }] } as never,
     });
 
     expect(captured.plugins).toMatchObject({
       source: "manifest-registry",
       entries: [{ id: "prepared-plugin" }],
     });
-    expect(loadPluginManifestRegistry).not.toHaveBeenCalled();
+    expect(loadPluginMetadataSnapshot).not.toHaveBeenCalled();
   });
 
   it("redacts harness argv and local paths with the support redaction rules", () => {
@@ -150,15 +114,8 @@ describe("trajectory metadata", () => {
     registry.plugins.push(
       createPluginRecord({
         id: "demo-plugin",
-        name: "Demo Plugin",
-        version: "1.2.3",
-        source: "bundled",
-        origin: "bundled",
         imported: true,
         toolNames: ["demo_tool"],
-        channelIds: ["demo-channel"],
-        providerIds: ["demo-provider"],
-        agentHarnessIds: ["openclaw"],
       }),
     );
     setActivePluginRegistry(registry, "trajectory-metadata-test");
