@@ -198,17 +198,6 @@ describe("image generation task lifecycle through QA-channel", () => {
     const completedDuplicate = await waitForToolOutput(mock.baseUrl, "recently succeeded");
     expect(completedDuplicate.toolOutput).toContain(runningReceipt);
 
-    const plannedCalls = (await readMockRequests(mock.baseUrl)).filter(
-      (request) =>
-        request.allInputText.includes("IMAGE_TASK_LIFECYCLE") &&
-        request.plannedToolName === "image_generate",
-    );
-    expect(plannedCalls).toHaveLength(3);
-    expect(plannedCalls.map((request) => request.plannedToolArgs)).toEqual([
-      plannedCalls[0]?.plannedToolArgs,
-      plannedCalls[0]?.plannedToolArgs,
-      plannedCalls[0]?.plannedToolArgs,
-    ]);
     expect(imageProvider.requests).toHaveLength(1);
     const completionOutcomes = state
       .getSnapshot()

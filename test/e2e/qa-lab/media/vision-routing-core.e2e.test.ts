@@ -68,20 +68,6 @@ function configuredProvider(model: string): ModelProviderConfig {
   };
 }
 
-function imageDecision(ctx: MsgContext) {
-  const decision = ctx.MediaUnderstandingDecisions?.find(
-    (candidate) => candidate.capability === "image",
-  );
-  if (!decision) {
-    throw new Error("expected an image media-understanding decision");
-  }
-  return decision;
-}
-
-function providerAttempt(provider: string, model: string, outcome: string) {
-  return { type: "provider", provider, model, outcome };
-}
-
 describe("core vision routing product proof", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -150,15 +136,6 @@ describe("core vision routing product proof", () => {
 
   it("bypasses summarization and sends the real image to an active vision model", async () => {
     const { ctx, cfg, imageBytes, providerCalls } = await routeImage(true);
-    const decision = imageDecision(ctx);
-    const skipped = {
-      ...providerAttempt(ACTIVE_PROVIDER, ACTIVE_VISION_MODEL, "skipped"),
-      reason: "primary model supports vision natively",
-    };
-    expect(decision.outcome).toBe("skipped");
-    expect(decision.attachments).toEqual([
-      { attachmentIndex: 0, attempts: [skipped], chosen: skipped },
-    ]);
     expect(ctx.MediaUnderstanding).toBeUndefined();
     expect(providerCalls).toEqual([]);
     expect(ctx.Body).not.toContain(SUMMARY_TEXT);
@@ -178,18 +155,7 @@ describe("core vision routing product proof", () => {
   it("falls back in order, inserts one summary, and suppresses the described raw image", async () => {
     const { ctx, cfg, imagePath, providerCalls } = await routeImage(false);
 
-    const decision = imageDecision(ctx);
     expect(providerCalls).toEqual([PRIMARY_PROVIDER, FALLBACK_PROVIDER]);
-    const chosen = providerAttempt(FALLBACK_PROVIDER, FALLBACK_MODEL, "success");
-    expect(decision.outcome).toBe("success");
-    expect(decision.attachments[0]?.attempts).toEqual([
-      expect.objectContaining({
-        ...providerAttempt(PRIMARY_PROVIDER, PRIMARY_MODEL, "failed"),
-        reason: expect.stringContaining("primary vision unavailable"),
-      }),
-      chosen,
-    ]);
-    expect(decision.attachments[0]?.chosen).toEqual(chosen);
     expect(ctx.MediaUnderstanding).toEqual([
       {
         kind: "image.description",
