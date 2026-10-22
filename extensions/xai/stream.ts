@@ -186,11 +186,7 @@ function createXaiToolPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undef
       delete payload.reasoning_effort;
     }
     // All reasoning xAI models should still request + later replay encrypted_content.
-    if (
-      !isXaiProviderId(model.provider) ||
-      model.api !== "openai-responses" ||
-      model.reasoning !== true
-    ) {
+    if (!isXaiProviderId(model.provider) || model.api !== "openai-responses" || !model.reasoning) {
       return;
     }
     const existing = payload.include;
