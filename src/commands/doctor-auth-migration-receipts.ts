@@ -44,36 +44,6 @@ export type AuthProfileMigrationSourceReceipt = {
   env?: NodeJS.ProcessEnv;
 };
 
-function createAuthProfileMigrationSourceReceipt(params: {
-  sourcePath: string;
-  sourceBytes: Buffer;
-  sourceRecordCount: number;
-  targetDatabasePath: string;
-  targetTable: AuthProfileMigrationSourceReceipt["targetTable"];
-  targetStoreKey?: AuthProfileMigrationSourceReceipt["targetStoreKey"];
-  now?: Date;
-  env?: NodeJS.ProcessEnv;
-}): AuthProfileMigrationSourceReceipt {
-  const sourcePath = path.resolve(params.sourcePath);
-  const sourceSha256 = sha256Hex(params.sourceBytes);
-  const sourceKey = `auth-profile-v2:${sha256Hex(`${sourcePath}\0${sourceSha256}`)}`;
-  const stamp = (params.now ?? new Date()).toISOString().replaceAll(":", "-");
-  return {
-    sourceKey,
-    runId: `${sourceKey}:${randomUUID()}`,
-    sourcePath,
-    sourceSha256,
-    sourceSizeBytes: params.sourceBytes.byteLength,
-    sourceRecordCount: params.sourceRecordCount,
-    sourceBytes: Buffer.from(params.sourceBytes),
-    targetDatabasePath: path.resolve(params.targetDatabasePath),
-    targetTable: params.targetTable,
-    ...(params.targetStoreKey ? { targetStoreKey: params.targetStoreKey } : {}),
-    archivePath: `${sourcePath}.migrated-${stamp}-${randomUUID()}`,
-    ...(params.env ? { env: params.env } : {}),
-  };
-}
-
 export function prepareAuthProfileSourceReceipt(params: {
   pathname: string;
   targetDatabasePath: string;
@@ -90,16 +60,25 @@ export function prepareAuthProfileSourceReceipt(params: {
   } catch {
     // The migration parser reports malformed input separately; receipts never include its bytes.
   }
-  return createAuthProfileMigrationSourceReceipt({
-    sourcePath: params.pathname,
-    sourceBytes,
+  const now = new Date(params.now());
+  const sourcePath = path.resolve(params.pathname);
+  const sourceSha256 = sha256Hex(sourceBytes);
+  const sourceKey = `auth-profile-v2:${sha256Hex(`${sourcePath}\0${sourceSha256}`)}`;
+  const stamp = now.toISOString().replaceAll(":", "-");
+  return {
+    sourceKey,
+    runId: `${sourceKey}:${randomUUID()}`,
+    sourcePath,
+    sourceSha256,
+    sourceSizeBytes: sourceBytes.byteLength,
     sourceRecordCount,
-    targetDatabasePath: params.targetDatabasePath,
+    sourceBytes: Buffer.from(sourceBytes),
+    targetDatabasePath: path.resolve(params.targetDatabasePath),
     targetTable: params.targetTable,
     ...(params.targetStoreKey ? { targetStoreKey: params.targetStoreKey } : {}),
-    now: new Date(params.now()),
+    archivePath: `${sourcePath}.migrated-${stamp}-${randomUUID()}`,
     ...(params.env ? { env: params.env } : {}),
-  });
+  };
 }
 
 export function assertAuthProfileMigrationSourcesUnchanged(

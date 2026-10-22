@@ -571,7 +571,6 @@ export async function handleFeishuMessage(params: {
     }
 
     ({ requireMention } = resolveFeishuReplyPolicy({
-      isDirectMessage: false,
       cfg,
       accountId: account.accountId,
       groupId: ctx.chatId,

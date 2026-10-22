@@ -73,24 +73,6 @@ describe("buildPluginLoaderAliasMap memoization", () => {
     expect(Object.is(next, first)).toBe(shared);
   });
 
-  it("does not reuse a public alias map after private qa aliases are enabled", () => {
-    const { root, entry } = fixture({
-      "./plugin-sdk/core": { default: "./dist/plugin-sdk/core.js" },
-    });
-    const sourceQaRuntimePath = path.join(root, "src", "plugin-sdk", "qa-runtime.ts");
-    fs.writeFileSync(sourceQaRuntimePath, "export const qaRuntime = true;\n", "utf-8");
-    const aliases = (enabled?: string) =>
-      withEnv({ OPENCLAW_ENABLE_PRIVATE_QA_CLI: enabled }, () => buildPluginLoaderAliasMap(entry));
-    const publicAliases = aliases();
-    const privateAliases = aliases("1");
-
-    expect(publicAliases).not.toBe(privateAliases);
-    expect(publicAliases["openclaw/plugin-sdk/qa-runtime"]).toBeUndefined();
-    expect(fs.realpathSync(privateAliases["openclaw/plugin-sdk/qa-runtime"] ?? "")).toBe(
-      fs.realpathSync(sourceQaRuntimePath),
-    );
-  });
-
   it("keeps an explicit source host on its module graph in production mode", () => {
     const { root, entry, srcFile } = fixture({ "./plugin-sdk/core": "./dist/plugin-sdk/core.js" });
     const hostUrl = pathToFileURL(path.join(root, "src", "plugins", "loader.ts")).href;

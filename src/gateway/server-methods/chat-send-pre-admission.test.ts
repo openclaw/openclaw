@@ -414,7 +414,6 @@ it.each(["pending", "evicted", "superseded"] as const)(
       stopReason: "rpc",
       attemptId: "attempt",
       requestIdentity: params.request.requestIdentity,
-      endedAt: 200,
     });
     if (reservation === "superseded") {
       expect(written).toBe(false);

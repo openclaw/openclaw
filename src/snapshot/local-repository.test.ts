@@ -1143,7 +1143,7 @@ describe("snapshot manifest parser", () => {
     ["user version", manifest({ database: { userVersion: 2 ** 31 } }), /userVersion is invalid/u],
     ["empty artifact", manifest({ artifact: { sizeBytes: 0 } }), /sizeBytes is invalid/u],
   ])("rejects %s", async (_name, value, error, expectedId = snapshotId) => {
-    const snapshotDir = path.join(await createTempDir(), snapshotId);
+    const snapshotDir = path.join(await createTempDir(), expectedId);
     await fs.mkdir(snapshotDir);
     await fs.writeFile(
       path.join(snapshotDir, SNAPSHOT_MANIFEST_FILENAME),
@@ -1151,7 +1151,7 @@ describe("snapshot manifest parser", () => {
       "utf8",
     );
 
-    await expect(readSnapshotManifest(snapshotDir, expectedId)).rejects.toThrow(error);
+    await expect(readSnapshotManifest(snapshotDir)).rejects.toThrow(error);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

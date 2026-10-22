@@ -1,6 +1,7 @@
 import type fs from "node:fs";
 import path from "node:path";
 import { replaceFileAtomic, replaceFileAtomicSync } from "@openclaw/fs-safe/atomic";
+import JSON5 from "json5";
 import { root } from "../infra/fs-safe.js";
 import { readExistingStateRootMode } from "../infra/private-dir-mode.js";
 import {
@@ -51,7 +52,7 @@ import {
 } from "./recovery-policy.js";
 import type { ConfigFileSnapshot } from "./types.openclaw.js";
 
-type ObserveRecoveryDeps = Pick<NormalizedConfigIoDeps, "fs" | "json5" | "env" | "homedir"> & {
+type ObserveRecoveryDeps = Pick<NormalizedConfigIoDeps, "fs" | "env" | "homedir"> & {
   logger: Pick<typeof console, "warn">;
 };
 
@@ -117,12 +118,9 @@ function createRecoveryCommitEffect(params: {
   };
 }
 
-function parseBackupConfigRaw(
-  deps: ObserveRecoveryDeps,
-  backupRaw: string,
-): { parsed: unknown } | null {
+function parseBackupConfigRaw(backupRaw: string): { parsed: unknown } | null {
   try {
-    return { parsed: deps.json5.parse(backupRaw) };
+    return { parsed: JSON5.parse(backupRaw) };
   } catch {
     return null;
   }
@@ -286,7 +284,7 @@ function* planSuspiciousConfigRead(
     (backupRaw
       ? createConfigHealthFingerprint({
           raw: backupRaw,
-          parsed: parseBackupConfigRaw(deps, backupRaw)?.parsed ?? {},
+          parsed: parseBackupConfigRaw(backupRaw)?.parsed ?? {},
           stat: null,
         })
       : undefined);
@@ -303,7 +301,7 @@ function* planSuspiciousConfigRead(
   if (!backupRaw) {
     return null;
   }
-  const backupParse = parseBackupConfigRaw(deps, backupRaw);
+  const backupParse = parseBackupConfigRaw(backupRaw);
   // Reject ineligible backup bytes before migration and validation; a stale healthy
   // fingerprint cannot make them recoverable.
   if (!backupParse || !resolveGatewayMode(backupParse.parsed)) {
@@ -548,7 +546,7 @@ export async function recoverConfigFromLastKnownGoodCore(params: {
     return false;
   }
   const backupStat = await deps.fs.promises.stat(lastGoodPath).catch(() => null);
-  const backupParse = parseBackupConfigRaw(deps, backupRaw);
+  const backupParse = parseBackupConfigRaw(backupRaw);
   if (!backupParse) {
     return false;
   }

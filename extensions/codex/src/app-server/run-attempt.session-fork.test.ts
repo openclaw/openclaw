@@ -34,6 +34,15 @@ const cases = [
   { completeParent: true, rebuilt: false },
   { completeParent: true, rebuilt: true },
 ];
+const clientMetadata = (threadId: string, generation: unknown) => ({
+  thread_id: threadId,
+  "x-codex-turn-metadata": JSON.stringify({
+    thread_id: threadId,
+    request_kind: "turn",
+    [CODEX_INFERENCE_GENERATION_KEY]: generation,
+  }),
+});
+
 it.each(cases)("forks %j", async ({ completeParent, rebuilt }) => {
   let inferenceAdmitted = false;
   let sideRequest: JsonObject | undefined;
@@ -66,15 +75,10 @@ it.each(cases)("forks %j", async ({ completeParent, rebuilt }) => {
               instructions: "rebuilt native base",
               tools: [],
               input: [...nativeInput, ...completed, question],
-              client_metadata: {
-                thread_id: "fork-thread",
-                "x-codex-turn-metadata": JSON.stringify({
-                  thread_id: "fork-thread",
-                  request_kind: "turn",
-                  [CODEX_INFERENCE_GENERATION_KEY]:
-                    request.responsesapiClientMetadata[CODEX_INFERENCE_GENERATION_KEY],
-                }),
-              },
+              client_metadata: clientMetadata(
+                "fork-thread",
+                request.responsesapiClientMetadata[CODEX_INFERENCE_GENERATION_KEY],
+              ),
             }).body;
             const execution = await createCodexInferenceModelBinding({
               client: harness.client,
@@ -165,14 +169,7 @@ it.each(cases)("forks %j", async ({ completeParent, rebuilt }) => {
     instructions: "native base",
     tools: [{ type: "function", name: "read", parameters: { type: "object" } }],
     input: parentInput,
-    client_metadata: {
-      thread_id: binding?.threadId ?? "thread-1",
-      "x-codex-turn-metadata": JSON.stringify({
-        thread_id: binding?.threadId ?? "thread-1",
-        request_kind: "turn",
-        [CODEX_INFERENCE_GENERATION_KEY]: parentGeneration,
-      }),
-    },
+    client_metadata: clientMetadata(binding?.threadId ?? "thread-1", parentGeneration),
   };
   route.context.prepare({ ...parentRequest, input: [] });
   const expectedRequest = route.context.prepare(parentRequest).body;
