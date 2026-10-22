@@ -1,5 +1,6 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { OpenClawPluginServiceContextV2 } from "openclaw/plugin-sdk/plugin-entry";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   createPluginStateKeyedStoreV2ForTests,
@@ -71,12 +72,33 @@ export function persistentBeamTestStore(pluginId = "beam") {
 
 export const beamTestNow = Date.parse("2026-07-27T12:00:00.000Z");
 export const beamTestLogger = { warn: () => {}, info: () => {}, error: () => {} };
+export function beamTestServiceContext(): OpenClawPluginServiceContextV2 {
+  return {
+    config: {},
+    stateDir: "/unused",
+    logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
+    scheduler: createTestPluginServiceScheduler(),
+  };
+}
+
+export function beamTestBarrier() {
+  const started = createDeferred<void>();
+  const release = createDeferred<void>();
+  const run = vi.fn(async () => {
+    started.resolve();
+    await release.promise;
+  });
+  return { started: started.promise, release: release.resolve, run };
+}
+
 export type BeamTestSession = {
   threadId: string;
   name?: string;
   modelProvider?: string;
   recencyAt: number;
 };
+export const beamTestSessions = (ids: string[], recencyAt = beamTestNow): BeamTestSession[] =>
+  ids.map((threadId) => ({ threadId, recencyAt }));
 
 export function beamTestMirrorConfig(overrides: Record<string, unknown> = {}) {
   const mirror = {
@@ -151,13 +173,15 @@ export function createBeamTestCatalog(
 type RunnerOptions = Parameters<typeof createBeamMirrorRunner>[0];
 export function createBeamTestRunner({
   endpoint,
+  listCatalogs = () => [createBeamTestCatalog()],
   ...options
-}: Pick<RunnerOptions, "listCatalogs"> & Partial<RunnerOptions> & { endpoint?: string }) {
+}: Partial<RunnerOptions> & { endpoint?: string } = {}) {
   return createBeamMirrorRunner({
     runtime: createBeamTestRuntime(beamTestMirrorConfig(endpoint ? { endpoint } : {})),
     logger: beamTestLogger,
     now: () => beamTestNow,
     signal: new AbortController().signal,
+    listCatalogs,
     ...options,
   });
 }
