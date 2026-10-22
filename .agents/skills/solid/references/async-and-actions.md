@@ -80,6 +80,12 @@ abort RPCs. Do not call a publishing owner command from a pure memo: it may
 synchronously write a signal, and it can duplicate admission already owned by
 the route, reconnect handler, or event coordinator.
 
+[Runtime Config](../../../../ui/src/lib/config/runtime-config-capability.ts)
+also retains its admitted `schemaRead` completion. The
+[Config view](../../../../ui/src/pages/config/view.tsx) observes that receipt,
+keeps an accepted editor mounted during refresh, and retries failed reads
+through the same owner.
+
 If the owner instead exposes a pure asynchronous read operation, it can be
 called directly: `createMemo(() => owner.readDetails(props.id))`. The owner
 still owns the complete request identity and accepted result. Do not replace
@@ -176,6 +182,13 @@ Use a generator action to retain the transition context across async work.
 Keep admission and write settlement in the existing owner. Derive an
 optimistic store from the owner's readable result; never write optimistic
 values into its authoritative snapshot.
+
+An action schedules its transaction drain before resolving its promise; do not
+add `flush()` solely because the caller awaits it. The
+[update card](../../../../ui/src/components/sidebar-update-card.tsx) awaits its
+target check and then revalidates live authority before opening confirmation.
+Its test publishes new target props as that check completes, proving the
+confirmation reads the fresh target without a forced flush.
 
 ```ts
 // Construct these inside a memo keyed by scope() and connectionEpoch().
@@ -376,13 +389,15 @@ const invalid = createMemo(
   () =>
     completion()?.then(
       (value) => Boolean(value),
-      () => true,
+      () => false,
     ) ?? false,
   { loadingValue: false },
 );
 ```
 
-Bind `aria-invalid` from `!saving() && invalid()` on the retained input. Inside
+A callback rejection does not mark the objective invalid; only expected returned
+validation feedback does. Bind `aria-invalid` from `!saving() && invalid()` on the
+retained input. Inside
 the narrow `Errored` slot, show a returned `message()` as ordinary validation
 feedback. The initial loading values cover first readiness; the saving checks
 avoid reading either derivation while an attempt is pending. Hide only the alert
@@ -504,21 +519,21 @@ drafts outside the error slot so retry can recover the region in place.
 
 Use `lazy` for the component code, and retain the route's existing component
 loader. The loader still controls when import begins and when the router
-considers the module ready:
+considers the module ready. The [cron route](../../../../ui/src/pages/cron/route.tsx)
+preloads its [entry](../../../../ui/src/pages/cron/cron-page-entry.tsx) this way:
 
 ```ts
 // route.tsx: keep rendering and its runtime imports behind the route boundary.
 component: async () => {
   const entry = await import("./cron-page-entry.tsx");
   await entry.CronPage.preload();
-  return entry;
+  return { renderSolid: entry.renderSolid };
 },
 ```
 
 ```tsx
 // cron-page-entry.tsx: loaded only by the route's component loader.
 export const CronPage = lazy(() => import("./cron-page.tsx"), { export: "CronPage" });
-export const header = true;
 export function renderSolid(props: SolidRouteProps) {
   return (
     <Loading>
@@ -538,9 +553,8 @@ action made Solid retain runtime initializers; the generated boot groups
 initially put them beside Markdown code, which pulled that entire chunk into
 startup even though cron stayed lazy. The chunking owner keeps these small
 runtime modules together. Do not fix grouping by importing private package
-internals. The one-time shared Solid action/optimistic runtime cost was explicitly
-approved for W-SOLID2-RECIPES, with its offset tracked by HF-STARTUP-BUDGET;
-that exception does not authorize later pages to increase startup budgets.
+internals. The measured startup ratchet owns the budget; later pages must not
+increase a boot surface beyond its build-variance allowance.
 
 ## Reveal sibling regions
 

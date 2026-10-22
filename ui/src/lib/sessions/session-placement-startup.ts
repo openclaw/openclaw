@@ -15,10 +15,10 @@ import { formatUiError } from "../../lib/format-error.ts";
 import { isAwaitingGatewayFailure } from "../../lib/gateway-availability.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import {
+  formatTerminalChatSendAckError,
   isTerminalFailureChatSendAck,
   normalizeChatSendAck,
 } from "../../pages/chat/chat-send-ack.ts";
-import { formatTerminalChatSendAckError } from "../../pages/chat/chat-send-support.ts";
 import type { HumanMention } from "../chat/chat-types.ts";
 import type { SessionCapability } from "./session-capability.ts";
 import { readSessionPlacementPolicy } from "./session-placement-policy.ts";

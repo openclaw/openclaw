@@ -67,10 +67,6 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
   const commandFailed = createMemo(async () => Boolean(await completion()?.catch(() => true)), {
     loadingValue: false,
   });
-  const readPermissions = () => {
-    latest(presentation.read);
-    return null;
-  };
   let menu: MenuHandle | undefined;
   let search: HTMLInputElement | undefined;
   let searchToggle: HTMLButtonElement | undefined;
@@ -390,7 +386,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
               </div>
             }
           >
-            {readPermissions()}
+            {(latest(presentation.read), null)}
             <div
               ref={scroll}
               class="chat-pane__sharing-roster"

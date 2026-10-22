@@ -1,6 +1,9 @@
-import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
+import {
+  resolveRecommendedStarterModel,
+  runLiveProviderCatalog,
+} from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { defineSingleProviderPluginEntry } from "openclaw/plugin-sdk/provider-entry";
-import { applyVercelAiGatewayConfig, VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF } from "./onboard.js";
+import { VERCEL_AI_GATEWAY_BASE_URL, vercelAiGatewayFetchGuard } from "./models.js";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
 import {
   buildStaticVercelAiGatewayProvider,
@@ -20,8 +23,17 @@ export default defineSingleProviderPluginEntry({
     label: "Vercel AI Gateway",
     docsPath: "/providers/vercel-ai-gateway",
     manifestAuth: {
-      defaultModel: VERCEL_AI_GATEWAY_DEFAULT_MODEL_REF,
-      applyConfig: applyVercelAiGatewayConfig,
+      // Token Pass and other scoped keys list only the models they can call.
+      resolveDefaultModel: async ({ apiKey, config, signal }) =>
+        await resolveRecommendedStarterModel({
+          providerId: PROVIDER_ID,
+          config,
+          endpoint: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+          apiKey,
+          auditContext: "vercel-ai-gateway-onboarding-model-discovery",
+          fetchGuard: vercelAiGatewayFetchGuard,
+          ...(signal ? { signal } : {}),
+        }),
     },
     catalog: {
       run: async (ctx) => {

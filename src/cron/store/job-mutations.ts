@@ -36,6 +36,8 @@ function commandDeclarationDefinition(job: CronStoredJob): unknown {
     createdAtMs: _createdAtMs,
     updatedAtMs: _updatedAtMs,
     state: _state,
+    // Derived from the envelope, which the caller compares separately; a candidate has none yet.
+    payloadSource: _payloadSource,
     ...definition
   } = toPublicCronJob(job);
   // Compare the stored JSON contract, not omitted-versus-undefined JS properties.

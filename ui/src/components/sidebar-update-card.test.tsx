@@ -147,11 +147,14 @@ describe("SidebarUpdateCard", () => {
       onCheckStatus: vi
         .fn()
         .mockReturnValueOnce(expansion.promise)
-        .mockReturnValueOnce(opening.promise),
+        .mockImplementationOnce(async () => {
+          const ready = await opening.promise;
+          element.setProps({ updateAvailable: freshGitUpdate });
+          return ready;
+        }),
     });
     try {
       await element.expand();
-      await element.update({ updateAvailable: freshGitUpdate });
       expansion.resolve(true);
       await vi.waitFor(() => expect(element.action()?.disabled).toBe(false));
       const action = element.action()!;
@@ -163,6 +166,10 @@ describe("SidebarUpdateCard", () => {
       await vi.waitFor(() =>
         expect(document.querySelector("openclaw-modal-dialog")).not.toBeNull(),
       );
+      const modal = document.querySelector("openclaw-modal-dialog")!;
+      expect(modal.textContent).toContain("cccccccc");
+      expect(modal.textContent).toContain("9 commits");
+      expect(modal.textContent).not.toContain("bbbbbbbb");
     } finally {
       document.querySelector("openclaw-modal-dialog")?.dispatchEvent(new Event("modal-cancel"));
       restoreDialog();

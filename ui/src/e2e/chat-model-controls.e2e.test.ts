@@ -61,10 +61,23 @@ suite.define(() => {
         taskMs: metric("TaskDuration"),
       };
       console.log(JSON.stringify({ proof: "model-catalog-typing", ...timings }));
+      const openBefore: typeof before = await cdp.send("Performance.getMetrics");
+      const openStarted = performance.now();
       await trigger.click();
       await expect
         .poll(() => picker.locator("[data-chat-model-option]").count())
         .toBe(models.length);
+      const openAfter: typeof before = await cdp.send("Performance.getMetrics");
+      console.log(
+        JSON.stringify({
+          proof: "model-catalog-open",
+          route,
+          models: models.length,
+          elapsedMs: performance.now() - openStarted,
+          scriptMs: metric("ScriptDuration", openBefore, openAfter),
+          taskMs: metric("TaskDuration", openBefore, openAfter),
+        }),
+      );
       expect(await picker.locator("[data-chat-model-catalog-state]").count()).toBe(0);
       const refresh = picker.locator(".chat-controls__model-search-wrap [data-chat-model-refresh]");
       expect(await refresh.textContent()).toContain("Refreshing models for Example…");

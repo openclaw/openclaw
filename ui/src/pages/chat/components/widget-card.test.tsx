@@ -610,6 +610,37 @@ describe("widget-card", () => {
     expect(showToast).toHaveBeenCalledTimes(1);
   });
 
+  it("keeps pin failure feedback on the focused button without replaying its toast", async () => {
+    const pending = Promise.withResolvers<void>();
+    const { provider, snapshot } = boardProvider({ pinWidget: vi.fn(() => pending.promise) });
+    const showToast = vi.spyOn(toast, "showToast").mockReturnValue(true);
+    onTestFinished(() => showToast.mockRestore());
+    const host = connectedHost();
+    const root = mountSolid(
+      () => (
+        <WidgetPinButton
+          target={{ board: provider, name: "widget", viewId: "view", mcpApp: false }}
+        />
+      ),
+      { container: host },
+    );
+    onTestFinished(root.unmount);
+    const button = pinButton(host)!;
+    button.focus();
+    button.click();
+    pending.reject(new Error("Synthetic pin failure"));
+    await waitForSolid(() => expect(button.title).toBe("Could not pin to dashboard. Try again."));
+    expect(pinButton(host)).toBe(button);
+    expect(document.activeElement).toBe(button);
+    expect(showToast).toHaveBeenCalledExactlyOnceWith({ message: button.title });
+
+    snapshot.set({ widgets: [{ name: "widget" }] });
+    await waitForSolid(() => expect(button.title).toBe("Pinned"));
+    snapshot.set({ widgets: [] });
+    await waitForSolid(() => expect(button.title).toBe("Pin to dashboard"));
+    expect(showToast).toHaveBeenCalledTimes(1);
+  });
+
   it("replaces a pin target while its previous board write is still pending", async () => {
     const pending = Promise.withResolvers<void>();
     const first = boardProvider({ pinWidget: vi.fn(() => pending.promise) });

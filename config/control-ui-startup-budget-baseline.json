@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 315852,
-  "reason": "Defer header session and sharing menus; retain Settings-only copy behind Settings",
+  "startupJsGzipBytes": 315737,
+  "reason": "Narrow New Session metadata imports after header deferral; preserve the stricter startup baseline",
   "updatedAt": "2026-10-22"
 }

@@ -243,10 +243,6 @@ function PaletteSearch(props: {
 }) {
   const current = () => props.readProps();
   const sessionSearchPending = () => isPending(props.sessionRead);
-  const readSessionSearch = () => {
-    latest(props.sessionRead);
-    return null;
-  };
   // A cold receipt can suspend a pending probe; owner facts keep filtering live.
   const catalogSearchPending = () =>
     Boolean(current().searchQuery.trim()) &&
@@ -286,7 +282,7 @@ function PaletteSearch(props: {
     current().archivedTranscriptsExcluded === 0;
   return (
     <>
-      {readSessionSearch()}
+      {(latest(props.sessionRead), null)}
       {/* A cold catalog read must not hide already available commands. */}
       <Loading>{readCatalog()}</Loading>
       <Show when={current().searchQuery.trim() && current().onSelectSession}>

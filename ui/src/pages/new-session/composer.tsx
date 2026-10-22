@@ -17,6 +17,7 @@ import { isMobileBrowserPlatform, keepMobileReturnNative } from "../../lib/brows
 import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
+import { refreshSlashCommands } from "../../lib/chat/slash-command-catalog.ts";
 import {
   clearCompositionEnd,
   isComposingKeyboardEvent,
@@ -26,7 +27,6 @@ import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue as createLiveValue } from "../../lib/reactive/live-value.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
-import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
 import { createChatAttachmentInputHandle } from "../chat/components/chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.tsx";

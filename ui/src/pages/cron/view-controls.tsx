@@ -62,6 +62,7 @@ export function JobMenu(props: CronProps & { job: CronJob }) {
   const displayName = () => props.job.displayName ?? props.job.name;
   return (
     <Menu
+      lazy
       id={id}
       label={t("cron.actions.moreJob", { name: displayName() })}
       class="cron-job-menu"
