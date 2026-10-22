@@ -178,13 +178,16 @@ function ArtifactReadSlot(props: {
     return owner?.resolved ? owner.items : artifacts;
   });
   return (
-    <Errored
-      fallback={(failure, reset) => (
-        <>
-          {props.children(
-            () => props.outputs.artifacts,
-            () => false,
-          )}
+    <Loading
+      on={source()}
+      fallback={<OutputReadStatus pending error={null} label={t("outputs.loading")} />}
+    >
+      {props.children(
+        () => props.outputs.artifacts,
+        () => isPending(read),
+      )}
+      <Errored
+        fallback={(failure, reset) => (
           <OutputReadStatus
             pending={false}
             error={formatUiError(failure())}
@@ -194,24 +197,15 @@ function ArtifactReadSlot(props: {
               reset();
             }}
           />
-        </>
-      )}
-    >
-      <Loading
-        on={source()}
-        fallback={<OutputReadStatus pending error={null} label={t("outputs.loading")} />}
-      >
-        {props.children(
-          () => latest(read),
-          () => isPending(read),
         )}
+      >
         <OutputReadStatus
           pending={isPending(read) || latest(read) === null}
           error={null}
           label={latest(read) === null ? t("outputs.loading") : t("outputs.updating")}
         />
-      </Loading>
-    </Errored>
+      </Errored>
+    </Loading>
   );
 }
 
