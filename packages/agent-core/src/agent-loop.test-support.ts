@@ -1,6 +1,12 @@
 import { createAssistantMessageEventStream } from "@openclaw/ai/event-stream";
 import { createEmptyTransportUsage } from "@openclaw/ai/transports";
-import type { AssistantMessage, AssistantMessageEvent, Context, Message } from "@openclaw/llm-core";
+import type {
+  AssistantMessage,
+  AssistantMessageEvent,
+  Context,
+  Message,
+  UserMessage,
+} from "@openclaw/llm-core";
 import { Type } from "typebox";
 import { makeProviderModel } from "../../ai/src/providers/provider-model.test-support.js";
 import { createAssistantOutput } from "../../ai/src/transports/assistant-output.js";
@@ -108,7 +114,7 @@ export function reply(message: AssistantMessage, prelude: AssistantMessageEvent[
   return stream;
 }
 
-export function user(content = "run", timestamp = 1): AgentTypes.AgentMessage {
+export function user(content = "run", timestamp = 1): UserMessage {
   return { role: "user", content, timestamp };
 }
 
