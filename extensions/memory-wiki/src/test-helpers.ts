@@ -287,7 +287,7 @@ export function createMemoryWikiTestHarness() {
     const page = (
       relativePath: string,
       frontmatter: Record<string, unknown>,
-      body = `# ${frontmatter.title}\n`,
+      body = `# ${String(frontmatter.title)}\n`,
     ) => write(relativePath, renderWikiMarkdown({ frontmatter, body }));
     const read = (relativePath: string) => fs.readFile(path.join(rootDir, relativePath), "utf8");
     return { rootDir, config, write, page, read };

@@ -381,7 +381,7 @@ it("joins accepted actor node work, preserves changed session settings, and cano
   const selection = pause();
   const ingressWork = pause();
   let connectionChecks = 0;
-  ingress.mockImplementationOnce(ingressWork.wait);
+  ingress.mockImplementationOnce(() => ingressWork.wait());
   const subscribe = vi.fn();
   const nodeContext = {
     ...context,
