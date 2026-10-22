@@ -347,30 +347,58 @@ it.each(["primary", "retired"])(
   },
 );
 
-it.each(["owner", "removed-agent", "sharing", "incognito"] as const)(
-  "rejects %s changes during provider creation without writing a different target",
-  async (change) => {
-    const gate = createDeferredCore<typeof browserSession>();
-    const started = createDeferredCore();
+it.each([
+  ["provider", "owner"],
+  ["provider", "removed-agent"],
+  ["provider", "sharing"],
+  ["provider", "incognito"],
+  ["dispatch", "owner"],
+  ["bootstrap", "owner"],
+])("rejects %s setup after %s changes", async (phase, change) => {
+  const gate = createDeferredCore();
+  const entered = createDeferredCore();
+  const wait = async () => {
+    entered.resolve();
+    await gate.promise;
+  };
+  if (phase === "provider") {
     createBrowserSession.mockImplementationOnce(async () => {
-      started.resolve();
-      return await gate.promise;
+      await wait();
+      return browserSession;
     });
-    const pending = createClient({ sessionKey: "main" });
-    await started.promise;
-    if (change === "removed-agent") {
-      setConfig({ agents: { ownership: "explicit", entries: { primary: {} } } });
-    } else if (change === "owner") {
-      setConfig({ talk: { agentId: "primary" } });
-    } else {
-      await replaceSessionEntry(voiceScope, {
-        sessionId: "concurrent-session",
-        updatedAt: 1,
-        ...(change === "incognito" ? { incognito: true } : { visibility: "read-only" as const }),
-      });
-    }
-    gate.resolve(browserSession);
-    expectRejected(await pending);
+  } else if (phase === "bootstrap") {
+    mocks.bootstrap.mockImplementationOnce(async () => {
+      await wait();
+      return "Agent context fixture.";
+    });
+  }
+  const handlers: GatewayRequestHandlers =
+    phase === "provider"
+      ? {}
+      : {
+          "talk.client.create": async (request) => {
+            if (phase === "dispatch") {
+              await wait();
+            }
+            return createTalkClient(request);
+          },
+        };
+  const pending = createClient(phase === "provider" ? { sessionKey: "main" } : {}, handlers);
+  await entered.promise;
+  if (change === "removed-agent") {
+    setConfig({ agents: { ownership: "explicit", entries: { primary: {} } } });
+  } else if (change === "owner") {
+    setConfig({ talk: { agentId: "primary" } });
+  } else {
+    await replaceSessionEntry(voiceScope, {
+      sessionId: "concurrent-session",
+      updatedAt: 1,
+      ...(change === "incognito" ? { incognito: true } : { visibility: "read-only" as const }),
+    });
+  }
+  gate.resolve();
+  expectRejected(await pending);
+  if (phase === "provider") {
     expect(cancelBrowserSession).toHaveBeenCalledOnce();
     expect(
       loadSessionEntry({ agentId: "primary", sessionKey: "agent:primary:main" }),
@@ -381,8 +409,10 @@ it.each(["owner", "removed-agent", "sharing", "incognito"] as const)(
     if (change !== "sharing" && change !== "incognito") {
       expect(loadSessionEntry(voiceScope)).toBeUndefined();
     }
-  },
-);
+  } else {
+    expectNoMainSessions();
+  }
+});
 
 it.each(["agent", "hidden", "sandbox"] as const)(
   "enforces the %s role boundary on an omitted target",
@@ -400,40 +430,6 @@ it.each(["agent", "hidden", "sandbox"] as const)(
       restriction === "hidden" ? "INVALID_REQUEST" : "FORBIDDEN",
     );
     expectNoProviderSetup();
-  },
-);
-
-it.each(["lazy handler dispatch", "profile preparation"])(
-  "does not retarget during %s",
-  async (phase) => {
-    const gate = createDeferredCore();
-    const started = createDeferredCore();
-    const wait = async () => {
-      started.resolve();
-      await gate.promise;
-    };
-    if (phase === "profile preparation") {
-      mocks.bootstrap.mockImplementationOnce(async () => {
-        await wait();
-        return "Agent context fixture.";
-      });
-    }
-    const pending = createClient(
-      {},
-      {
-        "talk.client.create": async (request) => {
-          if (phase === "lazy handler dispatch") {
-            await wait();
-          }
-          return createTalkClient(request);
-        },
-      },
-    );
-    await started.promise;
-    setConfig({ talk: { agentId: "primary" } });
-    gate.resolve();
-    expectRejected(await pending);
-    expectNoMainSessions();
   },
 );
 
