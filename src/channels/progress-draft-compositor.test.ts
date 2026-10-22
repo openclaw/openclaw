@@ -29,6 +29,15 @@ function createProgress(
     update,
     rendered: () => expect(update.mock.lastCall?.[0]),
     lines: () => expect(progress.getSnapshot().lines),
+    write: (toolCallId: string, path: string, content: string) =>
+      progress.pushToolEvent({
+        toolCallId,
+        name: "write",
+        phase: "start",
+        args: { path, content },
+      }),
+    completeTool: (toolCallId: string) =>
+      progress.pushItemEvent({ toolCallId, kind: "tool", phase: "end", status: "completed" }),
     toolItem: (
       itemId: string,
       name: string,
@@ -499,23 +508,13 @@ it("projects failed message reaction progress", async () => {
 });
 
 it("retains completed edits when clearing a quiet plan", async () => {
-  const { progress, rendered, lines } = createProgress(quiet, {
+  const { progress, rendered, lines, write, completeTool } = createProgress(quiet, {
     updateOnLineChange: true,
   });
   await progress.pushPlanProgress([{ step: "Stale plan", status: "in_progress" }]);
-  await progress.pushToolEvent({
-    toolCallId: "write-1",
-    name: "write",
-    phase: "start",
-    args: { path: "src/example.ts", content: "one\ntwo" },
-  });
+  await write("write-1", "src/example.ts", "one\ntwo");
   expect(progress.getSnapshot().diffStat).toBeUndefined();
-  await progress.pushItemEvent({
-    toolCallId: "write-1",
-    kind: "tool",
-    phase: "end",
-    status: "completed",
-  });
+  await completeTool("write-1");
   expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 2, removed: 0 });
   expect(await progress.pushPlanProgress([])).toBe(true);
   rendered().toContain("📝 1 files +2");
@@ -788,18 +787,17 @@ it("applies privacy, quiet failures, approval priority and bounds to transferred
 });
 
 it("retains known mutation totals without inventing cross-owner file uniqueness", async () => {
-  const { progress } = createSnapshot({
+  const { progress, write } = createSnapshot({
     initialSnapshot: { lines: [], diffStat: { files: 1, added: 2, removed: 1 } },
   });
-  async function write(toolCallId: string, path: string) {
-    const args = { path, content: "one\ntwo\nthree" };
-    await progress.pushToolEvent({ toolCallId, name: "write", phase: "start", args });
+  async function writeCompleted(toolCallId: string, path: string) {
+    await write(toolCallId, path, "one\ntwo\nthree");
     await progress.pushItemEvent({ toolCallId, phase: "end", status: "completed" });
   }
-  await write("child-write", "possibly-the-parent-file.ts");
+  await writeCompleted("child-write", "possibly-the-parent-file.ts");
   expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 2, removed: 1 });
   progress.resetActivity();
   expect(progress.getSnapshot().diffStat).toBeUndefined();
-  await write("next-write", "new-file.ts");
+  await writeCompleted("next-write", "new-file.ts");
   expect(progress.getSnapshot().diffStat).toEqual({ files: 1, added: 3, removed: 0 });
 });
