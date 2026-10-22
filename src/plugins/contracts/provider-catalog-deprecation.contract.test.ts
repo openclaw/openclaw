@@ -141,10 +141,17 @@ describe("bundled shared upstream model catalogs", () => {
   it("declares the code-mode tier on every catalog row that ships a shared model", () => {
     // A silent sibling would change tools.codeMode: "auto" for the same model.
     const silent: string[] = [];
-    for (const [groupKey, group] of Object.entries(
-      Object.groupBy(readEntries(), (entry) => entry.groupKey),
-    )) {
-      if (!group || group.length < 2 || !group.some((entry) => entry.codeMode)) {
+    const groups = new Map<string, CatalogEntry[]>();
+    for (const entry of readEntries()) {
+      const group = groups.get(entry.groupKey);
+      if (group) {
+        group.push(entry);
+      } else {
+        groups.set(entry.groupKey, [entry]);
+      }
+    }
+    for (const [groupKey, group] of groups) {
+      if (group.length < 2 || !group.some((entry) => entry.codeMode)) {
         continue;
       }
       for (const entry of group.filter((candidate) => !candidate.codeMode)) {
