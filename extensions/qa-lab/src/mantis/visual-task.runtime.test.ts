@@ -114,7 +114,6 @@ describe("mantis visual task runtime", () => {
   const runTask = (options: MantisVisualTaskOptions) =>
     runMantisVisualTask({
       ...commonOptions(),
-      now: () => new Date("2026-05-04T12:00:00.000Z"),
       visionMode: "metadata",
       ...options,
     });
