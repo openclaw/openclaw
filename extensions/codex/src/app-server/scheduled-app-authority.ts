@@ -672,10 +672,7 @@ export function assertScheduledCodexAppAuthorityRuntime(
 export function buildLegacyScheduledCodexAppRecoveryPrompt(
   params: Pick<
     EmbeddedRunAttemptParams,
-    | "trigger"
-    | "scheduledRuntimeAuthority"
-    | "scheduledRuntimeAuthorityRecoveryRequired"
-    | "toolsAllow"
+    "trigger" | "scheduledRuntimeAuthority" | "scheduledRuntimeAuthorityRecoveryRequired"
   >,
 ): string | undefined {
   if (
@@ -685,16 +682,10 @@ export function buildLegacyScheduledCodexAppRecoveryPrompt(
   ) {
     return undefined;
   }
-  // A finite allow-list that names no Codex app tool has nothing this recovery
-  // note can restore, and the note reads as all external access being down.
-  // `undefined` and `*` leave the tool set unrestricted, so keep the note there.
-  if (
-    params.toolsAllow !== undefined &&
-    !params.toolsAllow.some((name) => name === "*" || name.startsWith("codex_apps."))
-  ) {
-    return undefined;
-  }
-  return "Scheduled Codex app access is unavailable because this automation predates runtime-specific app authority capture. Tell the operator to recreate or reauthorize it from a fresh authenticated Codex owner turn; do not claim an app action succeeded.";
+  // Matches docs/plugins/codex-native-plugins.md#scheduled-automations. A stored
+  // allow-list cannot show whether this job ever asked for apps, so the note
+  // always grants ordinary work and scopes reauthorization to app jobs.
+  return "Scheduled Codex app access is unavailable because this automation predates runtime-specific app authority capture. Other allowed tools still work: keep this job's ordinary tool cap and continue non-app work. Tell the operator to recreate or reauthorize only a job that needs app access, from a fresh authenticated Codex owner turn; do not claim an app action succeeded.";
 }
 
 /** Makes stored-cap identity part of thread reuse admission, including cap removal. */

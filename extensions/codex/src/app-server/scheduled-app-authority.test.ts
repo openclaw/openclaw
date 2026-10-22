@@ -947,33 +947,31 @@ describe("scheduled Codex app authority", () => {
     ).toBeUndefined();
   });
 
-  it("skips the legacy recovery note when the scheduled allow-list names no Codex app tool", () => {
-    expect(
+  it("keeps the legacy recovery note while the stored allow-list names no Codex app tool", () => {
+    // Issue #178003: automations whose requested app names were stripped before
+    // authority capture existed store a list like ["message"], so the list alone
+    // cannot show that this job never asked for Codex apps.
+    for (const toolsAllow of [["message"], ["notion__notion-search", "message"]]) {
+      const legacy = {
+        trigger: "cron" as const,
+        scheduledRuntimeAuthorityRecoveryRequired: true,
+        toolsAllow,
+      };
+      expect(buildLegacyScheduledCodexAppRecoveryPrompt(legacy)).toContain(
+        "Scheduled Codex app access is unavailable",
+      );
+    }
+  });
+
+  it("tells legacy scheduled caps that non-app work continues while apps need reauthorization", () => {
+    const prompt =
       buildLegacyScheduledCodexAppRecoveryPrompt({
         trigger: "cron",
         scheduledRuntimeAuthorityRecoveryRequired: true,
-        toolsAllow: ["notion__notion-search", "message"],
-      }),
-    ).toBeUndefined();
-  });
+      }) ?? "";
 
-  it("keeps the legacy recovery note while the scheduled tool set can reach Codex apps", () => {
-    const params = {
-      trigger: "cron" as const,
-      scheduledRuntimeAuthorityRecoveryRequired: true,
-    };
-    expect(
-      buildLegacyScheduledCodexAppRecoveryPrompt({
-        ...params,
-        toolsAllow: ["codex_apps.slack.slack_send"],
-      }),
-    ).toContain("Scheduled Codex app access is unavailable");
-    expect(buildLegacyScheduledCodexAppRecoveryPrompt(params)).toContain(
-      "Scheduled Codex app access is unavailable",
-    );
-    expect(buildLegacyScheduledCodexAppRecoveryPrompt({ ...params, toolsAllow: ["*"] })).toContain(
-      "Scheduled Codex app access is unavailable",
-    );
+    expect(prompt).toContain("keep this job's ordinary tool cap and continue non-app work");
+    expect(prompt).toContain("recreate or reauthorize only a job that needs app access");
   });
 
   it("requires a deny-default app config for scheduled authority even when native tools are enabled", () => {
