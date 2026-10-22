@@ -18,6 +18,7 @@ vi.mock("../gateway/client-bootstrap.js", () => ({
     auth: { token: undefined, password: undefined },
   })),
 }));
+// mock-isolation: Capture startup callbacks without opening a real Gateway connection.
 vi.mock("../gateway/client.js", () => ({
   GatewayClient: class {
     constructor(options: Record<string, unknown>) {
@@ -28,21 +29,18 @@ vi.mock("../gateway/client.js", () => ({
     async stopAndWait(): Promise<void> {}
   },
 }));
+// mock-isolation: Startup ordering uses explicit hello delivery, not real event-loop timing.
 vi.mock("../../packages/gateway-client/src/readiness.js", () => ({
   startGatewayClientWhenEventLoopReady: vi.fn(async (client: { start: () => void }) => {
     client.start();
     return { ready: true, aborted: false, elapsedMs: 0, maxDriftMs: 0, checks: 1 };
   }),
 }));
+// mock-isolation: The bridge fixture needs scope constants without loading plugin policy state.
 vi.mock("../gateway/method-scopes.js", () => ({
   APPROVALS_SCOPE: "operator.approvals",
   READ_SCOPE: "operator.read",
   WRITE_SCOPE: "operator.write",
-}));
-vi.mock("../../packages/gateway-protocol/src/client-info.js", () => ({
-  GATEWAY_CLIENT_CAPS: { APPROVALS: "approvals" },
-  GATEWAY_CLIENT_MODES: { CLI: "cli" },
-  GATEWAY_CLIENT_NAMES: { CLI: "cli" },
 }));
 
 const ONE_MINUTE_MS = 60 * 1_000;

@@ -37,6 +37,7 @@ vi.mock("openclaw/plugin-sdk/provider-auth", () => ({
   isProviderApiKeyConfiguredAsync: isConfigured,
 }));
 
+// mock-isolation: Credential resolution is fixture-controlled without reading the host auth store.
 vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveAuth,
 }));
@@ -48,6 +49,7 @@ vi.mock("openclaw/plugin-sdk/provider-http", async () => {
   return { ...actual, ...http };
 });
 
+// mock-isolation: Token refresh is fixture-controlled without invoking Azure CLI or host credentials.
 vi.mock("./runtime.js", () => ({
   prepareFoundryRuntimeAuth: refreshAuth,
 }));
