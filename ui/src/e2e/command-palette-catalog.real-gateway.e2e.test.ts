@@ -370,9 +370,10 @@ suite.define(() => {
             '[data-provider-id="ollama"] .model-providers__head',
           );
           await expect.poll(() => providerStatus.textContent()).toContain("Models unavailable");
-          expect(
-            await settings.locator('.model-providers__catalog-progress[role="alert"]').count(),
-          ).toBe(0);
+          const retry = settings
+            .locator('.model-providers__catalog-progress[role="alert"]')
+            .getByRole("button", { name: "Retry", exact: true });
+          await retry.waitFor({ state: "visible" });
           expect(await settings.textContent()).not.toContain("Open Models to try again.");
           expect(acquisitions()).toBe(initialAcquisitions + 3);
           await open();
@@ -391,8 +392,9 @@ suite.define(() => {
 
           providerMode = "ready";
           providerModel = "recovered-fixture:latest";
-          acquisitionDiagnostics.trigger("refresh");
-          await catalogRefresh(() => refreshButton.click());
+          acquisitionDiagnostics.trigger("retry");
+          await catalogRefresh(() => retry.click());
+          await retry.waitFor({ state: "hidden" });
           await expect.poll(() => providerStatus.textContent()).not.toContain("Models unavailable");
           await open();
           await primary
@@ -400,7 +402,7 @@ suite.define(() => {
             .waitFor({ state: "visible" });
           expect(acquisitions()).toBe(initialAcquisitions + 4);
           expect(await pickerValue(primary)).toBe("fixture/anchor");
-          stages.push({ stage: "recovered-refresh", acquisitions: acquisitions() });
+          stages.push({ stage: "retry", acquisitions: acquisitions() });
           await capture("settings-retry.png");
         },
       );
