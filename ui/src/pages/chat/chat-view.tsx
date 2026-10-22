@@ -1,6 +1,6 @@
 import { dynamic } from "@solidjs/web";
 import type { Component } from "solid-js";
-import { createMemo, lazy, Loading, merge, Show } from "solid-js";
+import { createMemo, lazy, merge, Show } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { createSkillFileHovercard } from "../../components/skill-file-hovercard.tsx";
@@ -43,6 +43,7 @@ import { ChatComposer } from "./components/chat-composer.tsx";
 import { ChatConversationHistoryError } from "./components/chat-conversation-history-error.tsx";
 import { ChatConversationMobile } from "./components/chat-conversation-presentation.ts";
 import { isImageLightboxEvent, openInlineChatImage } from "./components/chat-image-lightbox.ts";
+import { ChatLazyBoundary } from "./components/chat-lazy-boundary.tsx";
 import { ChatPullRequests } from "./components/chat-pull-requests.tsx";
 import { ChatSelectionAnnotations } from "./components/chat-selection-annotations.tsx";
 import { resolveChatSwarmParent } from "./components/chat-swarm-progress-parent.ts";
@@ -148,7 +149,7 @@ function ChatFooterContent(
         }
       >
         <div class="chat-inline-approval">
-          <Loading>
+          <ChatLazyBoundary>
             <ExecApprovalCard
               props={{
                 approval: input.props.inlineApproval!,
@@ -161,7 +162,7 @@ function ChatFooterContent(
                 onDecision: input.props.onApprovalDecision!,
               }}
             />
-          </Loading>
+          </ChatLazyBoundary>
         </div>
       </Show>
       <Show when={!input.props.detailsEnabled}>
@@ -184,7 +185,7 @@ function ChatFooterContent(
         />
       </Show>
       <Show when={input.props.sessionSuggestions?.length}>
-        <Loading>
+        <ChatLazyBoundary>
           <ChatSessionSuggestions
             suggestions={input.props.sessionSuggestions ?? []}
             role={input.props.sessionSuggestionRole}
@@ -195,13 +196,13 @@ function ChatFooterContent(
               input.props.onResolveSessionSuggestion?.(suggestion, resolution)
             }
           />
-        </Loading>
+        </ChatLazyBoundary>
       </Show>
       <Show when={swarm()}>
         {(progress) => (
-          <Loading>
+          <ChatLazyBoundary>
             <ChatSwarmProgress {...progress()} />
-          </Loading>
+          </ChatLazyBoundary>
         )}
       </Show>
       <Show when={input.application}>
@@ -293,7 +294,7 @@ function ChatComposerView(input: ChatViewInput) {
           }
         >
           <div class="agent-chat__mobile-approval">
-            <Loading>
+            <ChatLazyBoundary>
               <ExecApprovalCard
                 props={{
                   approval: input.props.inlineApproval!,
@@ -307,7 +308,7 @@ function ChatComposerView(input: ChatViewInput) {
                   onDecision: input.props.onApprovalDecision!,
                 }}
               />
-            </Loading>
+            </ChatLazyBoundary>
           </div>
         </Show>
       }
@@ -639,9 +640,9 @@ function ChatContent(input: { props: ChatProps; questions: ComposerQuestions }) 
                           </Show>
                         </div>
                         <Show when={input.props.taskSuggestions?.length}>
-                          <Loading>
+                          <ChatLazyBoundary>
                             <ChatTaskSuggestionTray view={input.props} />
-                          </Loading>
+                          </ChatLazyBoundary>
                         </Show>
                       </div>
                     </Show>

@@ -1,6 +1,5 @@
 import {
   For,
-  Loading,
   Show,
   action,
   createMemo,
@@ -15,13 +14,14 @@ import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-sessio
 import { formatCompactTokenCount } from "../../../lib/format.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { createTimeout } from "../../../lib/reactive/timers.ts";
-import "../../../styles/chat/context-breakdown.css";
 import { getContextNoticeViewModel } from "./chat-composer-context.tsx";
+import "../../../styles/chat/context-breakdown.css";
 import {
   animateDetailsDesktopEntrance,
   ChatDetailsDesktopSection,
 } from "./chat-details-desktop-section.tsx";
 import type { ChatDetailsProps } from "./chat-details-types.ts";
+import { ChatLazyBoundary } from "./chat-lazy-boundary.tsx";
 
 registerEnglishCatalog(registerChatComposerEnglish);
 registerEnglishCatalog(registerChatSessionEnglish);
@@ -165,7 +165,7 @@ export function ChatDetailsContextContent(props: ChatDetailsContextContentProps)
               props.presented && props.details.pullRequestsGateway && props.details.selectedSession
             }
           >
-            <Loading
+            <ChatLazyBoundary
               fallback={
                 <PanelLoadingSkeleton
                   variant="file-list"
@@ -183,7 +183,7 @@ export function ChatDetailsContextContent(props: ChatDetailsContextContentProps)
                 limit={usage().limit}
                 approximate={usage().approximate}
               />
-            </Loading>
+            </ChatLazyBoundary>
           </Show>
           <Show when={budget() && !usage().approximate}>
             <p class="chat-context__note">
