@@ -11,8 +11,12 @@ function remember(handles: string[], userId = "123456789", accountId = "default"
   rememberDiscordDirectoryUser({ accountId, userId, handles });
 }
 
-function rewrite(text: string, options: Parameters<typeof rewriteDiscordKnownMentions>[1] = {}) {
-  return rewriteDiscordKnownMentions(text, { accountId: "default", ...options });
+function expectRewrite(
+  text: string,
+  expected: string,
+  options: Parameters<typeof rewriteDiscordKnownMentions>[1] = {},
+) {
+  expect(rewriteDiscordKnownMentions(text, { accountId: "default", ...options })).toBe(expected);
 }
 
 it("formatMention formats channel mentions from ids", () => {
@@ -28,48 +32,40 @@ describe("rewriteDiscordKnownMentions", () => {
 
   it("rewrites @name mentions when a cached user id exists", () => {
     remember(["Alice", "@alice_user", "alice#1234"]);
-    expect(rewrite("ping @Alice and @alice_user")).toBe("ping <@123456789> and <@123456789>");
+    expectRewrite("ping @Alice and @alice_user", "ping <@123456789> and <@123456789>");
   });
 
   it("rewrites configured mention aliases before the cache", () => {
     remember(["vladislava"], "111111111");
-    const rewritten = rewrite("ping @Vladislava and @BuildBot#1234", {
-      mentionAliases: {
-        BuildBot: "222222222",
-        Vladislava: "333333333",
-      },
+    expectRewrite("ping @Vladislava and @BuildBot#1234", "ping <@333333333> and <@222222222>", {
+      mentionAliases: { BuildBot: "222222222", Vladislava: "333333333" },
     });
-    expect(rewritten).toBe("ping <@333333333> and <@222222222>");
   });
 
   it.each([".", "...", ",", "!", "?", ":", ";", ")"])(
     "preserves %s after known mentions",
     (suffix) => {
-      expect(
-        rewrite(`@alice${suffix} @alice.dev${suffix} @alice#1234${suffix}`, {
-          mentionAliases: { alice: "111111111", "alice.dev": "222222222" },
-        }),
-      ).toBe(`<@111111111>${suffix} <@222222222>${suffix} <@111111111>${suffix}`);
+      expectRewrite(
+        `@alice${suffix} @alice.dev${suffix} @alice#1234${suffix}`,
+        `<@111111111>${suffix} <@222222222>${suffix} <@111111111>${suffix}`,
+        { mentionAliases: { alice: "111111111", "alice.dev": "222222222" } },
+      );
     },
   );
 
   it("prefers the longest known handle before treating trailing dots as punctuation", () => {
     remember(["alice.."], "333333333");
-    expect(
-      rewrite("@alice. @alice.. @alice...", {
-        mentionAliases: { alice: "111111111", "alice.": "222222222" },
-      }),
-    ).toBe("<@222222222> <@333333333> <@333333333>.");
+    expectRewrite("@alice. @alice.. @alice...", "<@222222222> <@333333333> <@333333333>.", {
+      mentionAliases: { alice: "111111111", "alice.": "222222222" },
+    });
   });
 
   it("preserves unknown mentions and reserved mentions", () => {
     remember(["alice"]);
     const text = "hello @unknown. @everyone. @here... @alice.dev. @a.";
-    expect(
-      rewrite(text, {
-        mentionAliases: { everyone: "111111111", here: "222222222", a: "333333333" },
-      }),
-    ).toBe(text);
+    expectRewrite(text, text, {
+      mentionAliases: { everyone: "111111111", here: "222222222", a: "333333333" },
+    });
   });
 
   it.each<[string, string?]>([
@@ -86,11 +82,9 @@ describe("rewriteDiscordKnownMentions", () => {
     ["https://example.com/@alice"],
     ["user@alice.com"],
   ])("resolves prose mentions while preserving URLs and emails: %s", (text, expected) => {
-    expect(
-      rewrite(`${text} @alice.`, {
-        mentionAliases: { alice: "123456789", "alice.com": "987654321", "host.com": "111111111" },
-      }),
-    ).toBe(`${expected ?? text} <@123456789>.`);
+    expectRewrite(`${text} @alice.`, `${expected ?? text} <@123456789>.`, {
+      mentionAliases: { alice: "123456789", "alice.com": "987654321", "host.com": "111111111" },
+    });
   });
 
   it.each([
@@ -109,19 +103,19 @@ describe("rewriteDiscordKnownMentions", () => {
     ],
   ])("does not rewrite mentions inside code: %s", (input, expected) => {
     remember(["alice"]);
-    expect(rewrite(input)).toBe(expected);
+    expectRewrite(input, expected);
   });
 
   it("does not end longer code fences at triple-backtick literals inside the body", () => {
     remember(["alice"]);
     const text = '````ts\nconst fence = "```";\n@alice\n```` text @alice';
-    expect(rewrite(text)).toBe('````ts\nconst fence = "```";\n@alice\n```` text <@123456789>');
+    expectRewrite(text, '````ts\nconst fence = "```";\n@alice\n```` text <@123456789>');
   });
 
   it("is account-scoped", () => {
     remember(["alice"], "999888777", "ops");
-    expect(rewrite("@alice")).toBe("@alice");
-    expect(rewrite("@alice", { accountId: "ops" })).toBe("<@999888777>");
+    expectRewrite("@alice", "@alice");
+    expectRewrite("@alice", "<@999888777>", { accountId: "ops" });
   });
 });
 

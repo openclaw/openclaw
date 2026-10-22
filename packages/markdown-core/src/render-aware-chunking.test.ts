@@ -2,6 +2,15 @@ import { expect, it } from "vitest";
 import { FormatCapabilityProfile } from "./format-capabilities.js";
 import type { MarkdownIR } from "./ir.js";
 import { markdownToIR, sliceMarkdownIR } from "./ir.js";
+import {
+  attributed,
+  htmlLink,
+  plainIR,
+  renderChunks,
+  style,
+  marker,
+  identity,
+} from "./markdown.test-support.js";
 import { renderMarkdownWithAttributedRanges } from "./render-attributed.js";
 import {
   renderMarkdownIRChunksWithinLimit,
@@ -9,12 +18,6 @@ import {
 } from "./render-aware-chunking.js";
 import { renderMarkdownWithMarkers } from "./render.js";
 
-const htmlLink = ({ start, end, href }: MarkdownIR["links"][number]) => ({
-  start,
-  end,
-  open: `<a href="${href}">`,
-  close: "</a>",
-});
 const boldMarker = { bold: { open: "*", close: "*" } };
 const sourceTexts = (chunks: RenderedMarkdownChunk<unknown>[]) =>
   chunks.map(({ source }) => source.text);
@@ -24,31 +27,14 @@ const renderedValues = <T>(chunks: RenderedMarkdownChunk<T>[]) =>
 function renderEscapedHtml(ir: MarkdownIR): string {
   return renderMarkdownWithMarkers(ir, {
     styleMarkers: {
-      bold: { open: "<b>", close: "</b>" },
+      bold: marker("b"),
       code_block: { open: "<pre><code>", close: "</code></pre>" },
     },
     escapeText: (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;"),
   });
 }
 
-function renderChunks<T extends string | { text: string }>(
-  ir: MarkdownIR,
-  limit: number,
-  renderChunk: (chunk: MarkdownIR) => T,
-  assistantTranscriptRoleMessageBoundaries = false,
-) {
-  return renderMarkdownIRChunksWithinLimit({
-    ir,
-    limit,
-    renderChunk,
-    assistantTranscriptRoleMessageBoundaries,
-    measureRendered: (rendered) =>
-      typeof rendered === "string" ? rendered.length : rendered.text.length,
-  });
-}
-
 const plainText = (ir: MarkdownIR) => ir.text;
-const plainIR = (text: string): MarkdownIR => ({ text, styles: [], links: [] });
 
 it("splits at exact rendered budgets while retaining source and formatting", () => {
   const unbounded = "one two three four five six seven eight nine ten";
@@ -200,62 +186,55 @@ it("keeps Unicode boundaries through initial, retry, and whitespace splits", () 
   }
 });
 
-it("preserves semantic whitespace from styles, links, and transcript annotations", () => {
-  const cases: [MarkdownIR, MarkdownIR, string[]][] = [
-    [
-      markdownToIR("```\n \n```"),
-      { ...plainIR(" \n"), styles: [{ start: 0, end: 2, style: "code_block" }] },
-      ["<pre><code> \n</code></pre>"],
-    ],
-    [
-      sliceMarkdownIR(markdownToIR("**a b**"), 1, 2),
-      { ...plainIR(" "), styles: [{ start: 0, end: 1, style: "bold" }] },
-      ["<b> </b>"],
-    ],
-    [
-      sliceMarkdownIR(markdownToIR("[a b](https://example.com)"), 1, 2),
-      { ...plainIR(" "), links: [{ start: 0, end: 1, href: "https://example.com" }] },
-      ['<a href="https://example.com"> </a>'],
-    ],
-    [
-      sliceMarkdownIR(
-        markdownToIR("user[Thu 2026]", { assistantTranscriptRoleHeaders: true }),
-        8,
-        9,
-      ),
-      {
-        ...plainIR(" "),
-        annotations: [
-          {
-            start: 0,
-            end: 1,
-            type: "assistant_transcript_role",
-            kind: "role_timestamp_bracket",
-            role: "user",
-          },
-        ],
-      },
-      ["<code> </code>"],
-    ],
-    [plainIR(" \n"), plainIR(" \n"), []],
-  ];
-  for (const [ir, expectedSource, expectedRendered] of cases) {
-    const chunks = renderChunks(ir, 64, (chunk) =>
-      renderMarkdownWithMarkers(chunk, {
-        styleMarkers: {
-          bold: { open: "<b>", close: "</b>" },
-          code_block: { open: "<pre><code>", close: "</code></pre>" },
+it.each<[MarkdownIR, MarkdownIR, string[]]>([
+  [
+    markdownToIR("```\n \n```"),
+    plainIR(" \n", [style(0, 2, "code_block")]),
+    ["<pre><code> \n</code></pre>"],
+  ],
+  [
+    sliceMarkdownIR(markdownToIR("**a b**"), 1, 2),
+    plainIR(" ", [style(0, 1, "bold")]),
+    ["<b> </b>"],
+  ],
+  [
+    sliceMarkdownIR(markdownToIR("[a b](https://example.com)"), 1, 2),
+    plainIR(" ", [], [{ start: 0, end: 1, href: "https://example.com" }]),
+    ['<a href="https://example.com"> </a>'],
+  ],
+  [
+    sliceMarkdownIR(markdownToIR("user[Thu 2026]", { assistantTranscriptRoleHeaders: true }), 8, 9),
+    {
+      ...plainIR(" "),
+      annotations: [
+        {
+          start: 0,
+          end: 1,
+          type: "assistant_transcript_role",
+          kind: "role_timestamp_bracket",
+          role: "user",
         },
-        annotationMarkers: { assistant_transcript_role: { open: "<code>", close: "</code>" } },
-        escapeText: (text) => text,
-        buildLink: htmlLink,
-      }),
-    );
-    expect(renderedValues(chunks)).toEqual(expectedRendered);
-    expect(chunks.map((chunk) => chunk.source)).toEqual(
-      expectedRendered.length ? [expectedSource] : [],
-    );
-  }
+      ],
+    },
+    ["<code> </code>"],
+  ],
+  [plainIR(" \n"), plainIR(" \n"), []],
+])("preserves semantic whitespace: %j", (ir, expectedSource, expectedRendered) => {
+  const chunks = renderChunks(ir, 64, (chunk) =>
+    renderMarkdownWithMarkers(chunk, {
+      styleMarkers: {
+        bold: marker("b"),
+        code_block: { open: "<pre><code>", close: "</code></pre>" },
+      },
+      annotationMarkers: { assistant_transcript_role: marker("code") },
+      escapeText: identity,
+      buildLink: htmlLink,
+    }),
+  );
+  expect(renderedValues(chunks)).toEqual(expectedRendered);
+  expect(chunks.map((chunk) => chunk.source)).toEqual(
+    expectedRendered.length ? [expectedSource] : [],
+  );
 });
 
 it("coalesces semantic whitespace into neighboring rendered chunks", () => {
@@ -268,14 +247,8 @@ it("coalesces semantic whitespace into neighboring rendered chunks", () => {
   );
 
   expect(renderedValues(chunks)).toEqual([
-    {
-      text: `alpha${" ".repeat(15)}`,
-      ranges: [{ start: 0, length: 20, style: "MONOSPACE" }],
-    },
-    {
-      text: `    \nomega\n`,
-      ranges: [{ start: 0, length: 11, style: "MONOSPACE" }],
-    },
+    attributed(`alpha${" ".repeat(15)}`, [[0, 20, "MONOSPACE"]]),
+    attributed("    \nomega\n", [[0, 11, "MONOSPACE"]]),
   ]);
 });
 
@@ -294,7 +267,7 @@ it("preserves task-list fallback while coalescing semantic whitespace", () => {
         chunk,
         {
           styleMarkers: boldMarker,
-          escapeText: (text) => text,
+          escapeText: identity,
         },
         profile,
       ),
@@ -342,9 +315,9 @@ it.each<[string, boolean, string[], number[]]>([
   [`[alpha${" ".repeat(240)}omega](${href})`, true, [`alpha (${href})`, `omega (${href})`], [1, 1]],
 ])(
   "preserves authored links across coalesced whitespace: %s",
-  (markdown, attributed, expected, linkCounts) => {
+  (markdown, useAttributed, expected, linkCounts) => {
     const chunks = renderChunks(markdownToIR(markdown), 80, (chunk) =>
-      attributed
+      useAttributed
         ? renderMarkdownWithAttributedRanges(
             chunk,
             { styleMap: {}, trimEnd: true },
@@ -352,7 +325,7 @@ it.each<[string, boolean, string[], number[]]>([
           ).text
         : renderMarkdownWithMarkers(chunk, {
             styleMarkers: boldMarker,
-            escapeText: (text) => text,
+            escapeText: identity,
             buildLink: htmlLink,
           }),
     );

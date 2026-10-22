@@ -208,7 +208,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
         onMcpLogin={(serverName) => void page().mcpLogin.start(serverName)}
         onEditMcp={() => page().context.navigate("mcp")}
         catalog={page().state.detail?.catalog}
-        inspectionError={page().state.detail?.error ?? null}
+        inspectionRead={page().inspectionRead}
         catalogLoading={page().state.detail?.catalogLoading}
         catalogIconUrls={page().state.catalogIconUrls}
         catalogIconLoading={page().icons.catalog.isLoading}
@@ -293,7 +293,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                   connected={page().gateway.connected}
                   skillsSection={catalogSkillsSection()}
                   result={page().state.catalogDetail?.result ?? null}
-                  error={page().state.catalogDetail?.error ?? null}
+                  read={page().detailRead}
                   backHref={pathForRoute("plugins", page().context.basePath)}
                   onBack={() => page().closeCatalogDetail()}
                   onRetry={() =>

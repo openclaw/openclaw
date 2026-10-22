@@ -154,13 +154,12 @@ describe("AgentsPage gateway lifecycle", () => {
     } as unknown as ApplicationContext;
     const { page } = mountPage(client, "overview", configured);
 
-    page.read().onSetDefault("research");
+    const settingDefault = page.read().onSetDefault("research");
     expect(configured.runtimeConfig.ensureLoaded).toHaveBeenCalledOnce();
     emitGatewaySnapshot(currentGateway, snapshot(client, false));
     emitGatewaySnapshot(currentGateway, snapshot(client));
     loading.resolve();
-    await loading.promise;
-    await Promise.resolve();
+    await settingDefault;
 
     expect(stageDefaultAgent).not.toHaveBeenCalled();
     expect(save).not.toHaveBeenCalled();

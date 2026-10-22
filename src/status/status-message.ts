@@ -123,7 +123,6 @@ type StatusArgs = {
   activeModelAuth?: string;
   activeModel?: { modelProvider: string; model: string };
   usageLine?: string;
-  timeLine?: string;
   uptimeValue?: string;
   queue?: QueueStatus;
   mediaDecisions?: ReadonlyArray<MediaUnderstandingDecision>;
@@ -131,7 +130,6 @@ type StatusArgs = {
   pluginHealthLine?: string;
   channelFeatureLine?: string;
   transcriptUsage?: SessionTranscriptUsageSnapshot | null;
-  now?: number;
 };
 
 function normalizeAuthMode(value?: string) {
@@ -448,11 +446,10 @@ function resolveChannelModelNote(params: {
 export type StatusMessageParts = ReturnType<typeof buildStatusMessageParts>;
 
 export function buildStatusMessageParts(args: StatusArgs) {
-  const now = args.now ?? Date.now();
+  const now = Date.now();
   // Derive the live wall clock here so both /status and session_status expose
   // the same configured timezone without duplicating formatting at each caller.
   const cronNow = resolveCronStyleNow(args.config, now);
-  const timeLine = args.timeLine ?? cronNow?.timeLine;
   const uptimeLine = args.uptimeValue ? `⏱️ Uptime: ${args.uptimeValue}` : undefined;
   const entry = args.sessionEntry;
   const contextConfig = {
@@ -891,7 +888,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   );
 
   const text = [
-    [versionLine, timeLine, uptimeLine],
+    [versionLine, cronNow?.timeLine, uptimeLine],
     [
       `🧠 Model: ${modelValue}`,
       `🌐 Endpoint: ${selectedEndpoint ?? "unknown"}`,
@@ -958,7 +955,7 @@ export function buildStatusMessageParts(args: StatusArgs) {
   // renders keep one compact time-and-uptime line under the table.
   const presentationClockValue = cronNow
     ? `${cronNow.formattedTime} (${cronNow.userTimezone})`
-    : args.timeLine;
+    : undefined;
   const clockUptimeValue = [
     presentationClockValue,
     args.uptimeValue ? `⏱️ ${args.uptimeValue}` : null,

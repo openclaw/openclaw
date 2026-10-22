@@ -272,7 +272,7 @@ export function readClosedTranscriptTurnInDatabase(
             .as("events"),
           params.maxBytes,
           "Closed transcript turn",
-          { hasExactUtf8Bytes: true, separatorBytes: 0, maxRows: params.maxEvents },
+          { separatorBytes: 0, maxRows: params.maxEvents },
         );
       } catch (error) {
         if (error instanceof SqliteJsonlReadBudgetExceededError) {

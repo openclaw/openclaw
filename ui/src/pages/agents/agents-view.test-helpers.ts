@@ -157,7 +157,7 @@ export function createAgentViewTestProps(
     onSelectPanel: () => undefined,
     onConfigReload: async () => undefined,
     onConfigSave: async () => undefined,
-    onSetDefault: () => undefined,
+    onSetDefault: async () => undefined,
     onTogglePinnedAgent: () => undefined,
     onOpenMemoryImport: () => undefined,
     onOpenMemorySettings: () => undefined,

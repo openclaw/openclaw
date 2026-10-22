@@ -4,6 +4,7 @@ import { i18n } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { Logbook } from "./logbook-view.tsx";
+const neverRetired = new Promise<void>(() => {});
 
 describe("Logbook view", () => {
   it("renders timeline clocks in the capture host timezone and preserves detail text", async () => {
@@ -45,9 +46,12 @@ describe("Logbook view", () => {
     const client = { request } as unknown as GatewayBrowserClient;
 
     const container = document.createElement("div");
-    const view = mountSolid(() => <Logbook initialClient={client} />, {
-      container,
-    });
+    const view = mountSolid(
+      () => <Logbook initialClient={client} getRetired={() => neverRetired} />,
+      {
+        container,
+      },
+    );
     try {
       await waitForSolid(() =>
         expect(container.querySelector(".logbook-card__header")).not.toBeNull(),
@@ -118,7 +122,9 @@ describe("Logbook view", () => {
       throw new Error(`Unexpected Logbook request: ${method}`);
     });
     const client = { request } as unknown as GatewayBrowserClient;
-    const view = mountSolid(() => <Logbook initialClient={client} />);
+    const view = mountSolid(() => (
+      <Logbook initialClient={client} getRetired={() => neverRetired} />
+    ));
     try {
       await waitForSolid(() =>
         expect(view.queryByRole("button", { name: "Pause" })).not.toBeNull(),

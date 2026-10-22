@@ -214,7 +214,6 @@ export function registerUpdateCliLifecycle(fixture: UpdateCliLifecycleFixture): 
     mocks.probePortUsage.mockResolvedValue("free");
     mocks.serviceEnabled.mockResolvedValue(true);
     mocks.serviceDefinitionMutationCapability.mockResolvedValue(undefined);
-    mocks.updateFailureActionMocks.runInteractiveUpdateFailureAction.mockResolvedValue("triage");
     mocks.readPersistedInstalledPluginIndex.mockResolvedValue(null);
     mocks.restorePersistedInstalledPluginIndexIfCurrent.mockResolvedValue(true);
     mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease.mockResolvedValue({

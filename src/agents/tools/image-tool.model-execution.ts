@@ -3,7 +3,7 @@ import { normalizeMediaProviderId } from "../../../packages/media-understanding-
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MediaUnderstandingModelConfig } from "../../config/types.tools.js";
 import { MEDIA_CAPABILITY_DEFAULTS } from "../../media-understanding/defaults.constants.js";
-import { matchesMediaEntryCapability } from "../../media-understanding/entry-capabilities.js";
+import { matchesImageEntryCapability } from "../../media-understanding/entry-capabilities.js";
 import {
   describeImageWithModel,
   describeImagesWithModel,
@@ -108,9 +108,8 @@ function matchesImageTimeoutEntry(params: {
   if (
     !configuredProvider ||
     configuredProvider !== selectedProvider ||
-    !matchesMediaEntryCapability({
+    !matchesImageEntryCapability({
       entry: params.entry,
-      capability: "image",
       providerRegistry: params.providerRegistry,
     })
   ) {

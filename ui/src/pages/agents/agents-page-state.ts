@@ -718,7 +718,7 @@ export function createAgentsPageState(
     if (!canDispatch()) {
       return;
     }
-    await setDefaultAgent(runtimeConfig, agentId, () => agents.refreshList(), canDispatch);
+    return setDefaultAgent(runtimeConfig, agentId, () => agents.refreshList(), canDispatch);
   }
 
   function viewProps() {
@@ -865,7 +865,7 @@ export function createAgentsPageState(
       onOpenMemoryImport: () => context.navigate("memory-import"),
       onOpenMemorySettings: () => context.navigate("memory"),
       onOpenAgentDefaults: () => context.navigate("ai-agents"),
-      onSetDefault: (agentId: string) => void selectDefaultAgent(agentId),
+      onSetDefault: selectDefaultAgent,
     };
   }
 

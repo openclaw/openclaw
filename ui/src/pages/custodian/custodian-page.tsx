@@ -15,7 +15,7 @@ import "../../styles/custodian.css";
 import { CustodianChangeHistory, type HistorySnapshot } from "./custodian-history.tsx";
 import { custodianSessionStore, type CustodianSessionStore } from "./custodian-session-store.ts";
 import { CustodianSurface } from "./custodian-surface.tsx";
-import type { CustodianRouteData } from "./route.ts";
+import type { CustodianRouteData } from "./route.tsx";
 
 type Props = { onboarding: boolean; newAgentIntent: boolean; store: CustodianSessionStore };
 const propertyReceipts = new WeakMap<HTMLElement, (key: keyof Props) => void>();

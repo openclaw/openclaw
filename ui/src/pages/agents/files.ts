@@ -235,7 +235,7 @@ export function loadAgentFileContent(
   return requestAgentFile(state, agentId, name, { kind: "read", force: opts?.force });
 }
 
-export function saveAgentFile(
+function saveAgentFile(
   state: AgentFilesState,
   agentId: string,
   name: string,
@@ -244,7 +244,7 @@ export function saveAgentFile(
   return requestAgentFile(state, agentId, name, { kind: "write", content });
 }
 
-export function resetAgentFile(state: AgentFilesState, name: string): void {
+function resetAgentFile(state: AgentFilesState, name: string): void {
   const file = state.agentFileEditors[name];
   if (!file || !Object.hasOwn(file, "content")) {
     return;
@@ -264,11 +264,7 @@ export function resetAgentFile(state: AgentFilesState, name: string): void {
   }
 }
 
-export function reloadAgentFile(
-  state: AgentFilesState,
-  agentId: string,
-  name: string,
-): Promise<boolean> {
+function reloadAgentFile(state: AgentFilesState, agentId: string, name: string): Promise<boolean> {
   return requestAgentFile(state, agentId, name, {
     kind: "read",
     force: true,
@@ -276,7 +272,7 @@ export function reloadAgentFile(
   });
 }
 
-export async function overwriteAgentFile(
+async function overwriteAgentFile(
   state: AgentFilesState,
   agentId: string,
   name: string,

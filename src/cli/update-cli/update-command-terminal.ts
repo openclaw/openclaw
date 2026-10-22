@@ -233,12 +233,7 @@ export async function prepareUnexpectedUpdateCommandFailure(
   };
   const publish: Publisher = async (settlementFailure, onTerminalRecord) => {
     const settled = await resolveSettledUpdateCommandResult(params, result, settlementFailure);
-    return publishUpdateCommandTerminalResult(
-      params,
-      settled.result,
-      { rolledBack: false },
-      onTerminalRecord,
-    );
+    return publishUpdateCommandTerminalResult(params, settled.result, onTerminalRecord);
   };
   const published =
     deferUpdateCommandTerminalPreparation(opts.run, prepare, () => result) ||
@@ -382,7 +377,7 @@ async function settleUpdateCommandTerminalResult<T>(
         },
         failure,
       );
-      return publishUpdateCommandTerminalResult(params, result, { rolledBack: false });
+      return publishUpdateCommandTerminalResult(params, result);
     };
   }
   if (
@@ -690,14 +685,9 @@ export async function recordUpdatePackageCompletion(
 async function publishUpdateCommandTerminalResult(
   params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
   input: UpdateRunResult,
-  outcome: {
-    rolledBack: boolean;
-    downtimeMs?: number;
-    captured?: UpdateCommandTerminalRecord;
-  },
   onTerminalRecord?: PublishedRecord,
 ): Promise<UpdateRunResult> {
-  const prepared = await prepareUpdateCommandTerminalResult(params, input, outcome);
+  const prepared = await prepareUpdateCommandTerminalResult(params, input, { rolledBack: false });
   return prepared(onTerminalRecord);
 }
 
