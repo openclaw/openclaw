@@ -7,6 +7,8 @@ import type { RouteId } from "../../app-route-paths.ts";
 import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 import { RouterOutlet } from "../../app/router-outlet.tsx";
+import { createAgentCapability } from "../../lib/agents/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
@@ -22,6 +24,89 @@ import {
   snapshot,
 } from "./agents-page.test-support.ts";
 import { AgentsPage } from "./agents-page.tsx";
+
+it("keeps Tools Save active through the real owner's roster refresh", async () => {
+  const write = createDeferred();
+  const roster = createDeferred<typeof agentsList>();
+  let listCalls = 0;
+  const config = { agents: { entries: { main: { tools: { profile: "full" } } } } };
+  const request = vi.fn(async (method: string) => {
+    if (method === "agents.list") {
+      return ++listCalls === 1 ? agentsList : roster.promise;
+    }
+    if (method === "config.get") {
+      return {
+        config,
+        sourceConfig: config,
+        runtimeConfig: config,
+        hash: "synthetic-one",
+        valid: true,
+        issues: [],
+      };
+    }
+    if (method === "config.set") {
+      await write.promise;
+      return { config, hash: "synthetic-two" };
+    }
+    if (method === "tools.catalog") {
+      return { agentId: "main", profiles: [], groups: [] };
+    }
+    if (method === "tools.effective") {
+      return { agentId: "main", profile: "full", groups: [] };
+    }
+    throw new Error(`Unexpected request: ${method}`);
+  });
+  const client = createTestGatewayClient(request);
+  const currentGateway = gateway({
+    ...snapshot(client),
+    hello: gatewayHelloForMethods([
+      "agents.list",
+      "config.get",
+      "config.set",
+      "tools.catalog",
+      "tools.effective",
+    ]),
+  });
+  const agents = createAgentCapability(currentGateway);
+  const runtimeConfig = createRuntimeConfigCapability(currentGateway);
+  await agents.ensureList();
+  await runtimeConfig.ensureLoaded();
+  const context = { ...pageContext(currentGateway, agents), runtimeConfig };
+  completeContext(context);
+  const routeData = {
+    ...agentsRouteData(currentGateway, agentsList, "main", context.settingsAgentSelection),
+    panel: "tools" as const,
+  };
+  const mounted = mountSolid(() => (
+    <ApplicationProvider value={context}>
+      <AgentsPage routeData={routeData} />
+    </ApplicationProvider>
+  ));
+  try {
+    const save = await waitForSolid(() =>
+      mounted.getByRole<HTMLButtonElement>("button", { name: "Save" }),
+    );
+    runtimeConfig.patchForm(["agents", "entries", "main", "tools", "deny"], ["read"]);
+    await waitForSolid(() => expect(save.disabled).toBe(false));
+    save.click();
+    await waitForSolid(() =>
+      expect(request.mock.calls.some(([method]) => method === "config.set")).toBe(true),
+    );
+    write.resolve();
+    await waitForSolid(() => expect(listCalls).toBe(2));
+    expect(save.isConnected).toBe(true);
+    await waitForSolid(() => expect(save.textContent).toBe("Saving…"));
+    expect(save.disabled).toBe(true);
+    roster.resolve(agentsList);
+    await waitForSolid(() => expect(save.textContent).toBe("Save"));
+  } finally {
+    write.resolve();
+    roster.resolve(agentsList);
+    mounted.unmount();
+    runtimeConfig.dispose();
+    agents.dispose();
+  }
+});
 
 it.each(["save", "reload"] as const)(
   "leaves Agents through RouterOutlet before a held config %s settles",

@@ -8,7 +8,6 @@ import {
   createOptimistic,
   createSignal,
   isPending,
-  onSettled,
 } from "solid-js";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -49,9 +48,10 @@ export function AgentConfigButtons(
     // Reload can publish its editor lock after draining writes; keep that read
     // outside the write action so the lock reaches the form while it is pending.
     if (operation === "save") {
-      onSettled(() => {
-        void present(receipt).catch(() => undefined);
-      });
+      // Let the owner's publication land without waiting for its async reads.
+      void Promise.resolve()
+        .then(() => present(receipt))
+        .catch(() => undefined);
     }
   };
   const currentCommand = () => {
