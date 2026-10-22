@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, beforeEach, expect, it, vi } from "vitest";
+import { collectEnvVarNames } from "../../scripts/check-env-var-count.mts";
 import {
   collectCurrentSuppressionState,
   collectLintDisableDirectives,
@@ -181,3 +182,69 @@ it("checks untracked sources and tolerates unstaged deletions", () => {
 
   expect(main(root)).toBe(1);
 });
+
+it("keeps candidate batches aligned and counts environment names outside them", () => {
+  const files = Object.fromEntries(
+    Array.from({ length: 35 }, (_, index) => [
+      `src/file-${String(index).padStart(2, "0")}.ts`,
+      'const example = "/* oxlint-disable max-lines */";\n' +
+        (index === 31 ? "/* eslint-disable */\n" : "") +
+        (index === 34 ? suppression + "process.env.OPENCLAW_SUPPRESSED;\n" : ""),
+    ]),
+  );
+  const root = makeRepo([], {
+    ...files,
+    ".gitignore": "src/ignored.ts\n",
+    "src/plain.ts": "process.env.OPENCLAW_PLAIN;\n",
+  });
+  write(root, ".gitignore", "src/ignored.ts\nsrc/file-34.ts\n");
+  write(root, "src/ignored.ts", "/* eslint-disable */\n");
+  write(root, "src/untracked.ts", suppression + "process.env.OPENCLAW_UNTRACKED;\n");
+  const envVarNames = new Map<string, ReadonlySet<string>>();
+
+  expect(collectCurrentSuppressionState(root, { envVarNames })).toEqual({
+    allRules: ["src/file-31.ts"],
+    explicit: ["src/file-34.ts", "src/untracked.ts"],
+  });
+  expect(collectEnvVarNames(root, { preparedNames: envVarNames })).toEqual([
+    "OPENCLAW_PLAIN",
+    "OPENCLAW_SUPPRESSED",
+    "OPENCLAW_UNTRACKED",
+  ]);
+});
+
+it.skipIf(process.platform === "win32")(
+  "reads worktree contents despite indexed types and skip flags",
+  () => {
+    const root = makeRepo([], {
+      "fixture.txt": suppression,
+      "src/assumed.ts": "export const value = 1;\n",
+      "src/replaced.ts": "export const value = 1;\n",
+      "src/skipped.ts": "export const value = 1;\n",
+    });
+    fs.symlinkSync("../fixture.txt", path.join(root, "src/reverse.ts"));
+    fs.symlinkSync("../fixture.txt", path.join(root, "src/tracked.ts"));
+    git(root, ["add", "."]);
+    git(root, ["update-index", "--assume-unchanged", "src/assumed.ts"]);
+    git(root, ["update-index", "--skip-worktree", "src/skipped.ts"]);
+    write(root, "src/assumed.ts", suppression);
+    write(root, "src/skipped.ts", suppression);
+    fs.unlinkSync(path.join(root, "src/replaced.ts"));
+    fs.symlinkSync("../fixture.txt", path.join(root, "src/replaced.ts"));
+    fs.unlinkSync(path.join(root, "src/reverse.ts"));
+    write(root, "src/reverse.ts", suppression);
+    fs.symlinkSync("../fixture.txt", path.join(root, "src/untracked.ts"));
+
+    expect(collectCurrentSuppressionState(root)).toEqual({
+      allRules: [],
+      explicit: [
+        "src/assumed.ts",
+        "src/replaced.ts",
+        "src/reverse.ts",
+        "src/skipped.ts",
+        "src/tracked.ts",
+        "src/untracked.ts",
+      ],
+    });
+  },
+);

@@ -8,11 +8,21 @@ import { createPluginHelp } from "./plugin-help.ts";
 import { createDiscoveryDetail, createPlugin, createResult } from "./plugins-page.test-support.ts";
 import type { PluginSettingsField } from "./settings-editor.tsx";
 
-function createHelp(context: Parameters<typeof createPluginHelp>[0]) {
+function createHelp(pathname: string) {
+  const harness = createContext(vi.fn());
+  harness.setPathname(pathname);
   return createRoot((dispose) => {
     onTestFinished(dispose);
-    return { help: createPluginHelp(context), dispose };
+    return { ...harness, help: createPluginHelp(harness.context), dispose };
   });
+}
+function installedModel(id: string): Parameters<ReturnType<typeof createPluginHelp>["update"]>[0] {
+  return {
+    connected: true,
+    result: createResult(createPlugin({ id, name: id })),
+    detail: { pluginId: id },
+    catalogDetail: null,
+  };
 }
 
 afterEach(() => {
@@ -23,169 +33,109 @@ afterEach(() => {
 it.each(["plugin", "route", "connection", "disconnect"])(
   "ignores a retained setting action after its %s changes",
   async (change) => {
-    const { context, setPathname, setGatewayToken } = createContext(vi.fn());
-    setPathname("/settings/plugins/first");
-    const { help, dispose } = createHelp(context);
-    const model = (id: string) =>
-      ({
-        connected: true,
-        result: { plugins: [{ id, name: id, installed: true }] },
-        detail: { pluginId: id },
-        installedDetailTab: "configuration",
-      }) as unknown as Parameters<ReturnType<typeof createPluginHelp>["update"]>[0];
-    help.update(model("first"));
+    const { context, setPathname, setGatewayToken, help, dispose } =
+      createHelp("/settings/plugins/first");
+    help.update(installedModel("first"));
     const ask = help.ask;
     if (change === "plugin") {
-      help.update(model("second"));
+      help.update(installedModel("second"));
     } else if (change === "route") {
-      setPathname("/agents");
+      setPathname("/sessions");
     } else if (change === "connection") {
       setGatewayToken("replacement-operator");
-      help.update(model("first"));
+      help.update(installedModel("first"));
     } else {
       dispose();
     }
     const toggled = vi.fn();
     window.addEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggled);
-    try {
-      await ask({
-        path: ["plugins", "entries", "first", "config", "limit"],
-        label: "Limit",
-        value: 5,
-        schema: { type: "number" },
-        hints: {},
-      } as PluginSettingsField);
-      expect(toggled).not.toHaveBeenCalled();
-      expect(takePluginHelpDraft(context)).toBe("");
-    } finally {
-      window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggled);
-      dispose();
-    }
+    onTestFinished(() => window.removeEventListener(CUSTODIAN_PANEL_TOGGLE_EVENT, toggled));
+    await ask({
+      path: ["plugins", "entries", "first", "config", "limit"],
+      label: "Limit",
+      value: 5,
+      schema: { type: "number" },
+      hints: {},
+    } as PluginSettingsField);
+    expect(toggled).not.toHaveBeenCalled();
+    expect(takePluginHelpDraft(context)).toBe("");
   },
 );
 
-it.each<{
-  id: string;
-  name: string;
-  local: boolean;
-  contracts: Record<string, string[]> | undefined;
-  install: boolean;
-}>([
-  { id: "local-tool", name: "Local tool", local: true, contracts: undefined, install: false },
-  {
-    id: "video-plugin",
-    name: "Video provider",
-    local: false,
-    contracts: { videoGenerationProviders: ["video"] },
-    install: false,
-  },
-  {
-    id: "workboard",
-    name: "Workboard",
-    local: false,
-    contracts: { tools: ["known_tool"] },
-    install: true,
-  },
-])(
-  "publishes the catalog identity and bounded declarations for $id",
-  ({ id, name, local, contracts, install }) => {
-    const { context, setPathname } = createContext(vi.fn());
-    setPathname(`/plugins/${id}`);
-    const { help, dispose } = createHelp(context);
-    const catalog = createDiscoveryDetail(createPlugin({ id, name }));
-    catalog.plugin.id = "catalog-workboard";
-    catalog.plugin.local.pluginId = local ? id : undefined;
-    catalog.detail = {
-      ...catalog.detail,
-      origin: local ? "local" : "clawhub",
-      packageName: local ? undefined : id,
-      contracts,
+it.each<[string, string, Record<string, string[]> | undefined]>([
+  ["local-tool", "Local tool", undefined],
+  ["video-plugin", "Video provider", { videoGenerationProviders: ["video"] }],
+  ["workboard", "Workboard", { tools: ["known_tool"] }],
+])("publishes the catalog identity and bounded declarations for %s", (id, name, contracts) => {
+  const { context, help } = createHelp(`/plugins/${id}`);
+  const local = !contracts;
+  const install = Boolean(contracts?.tools);
+  const catalog = createDiscoveryDetail(createPlugin({ id, name }));
+  catalog.plugin.id = "catalog-workboard";
+  catalog.plugin.local.pluginId = local ? id : undefined;
+  catalog.detail = {
+    ...catalog.detail,
+    origin: local ? "local" : "clawhub",
+    packageName: local ? undefined : id,
+    contracts,
+    providers: [],
+    channels: [],
+    configuration: [{ name: "credential", required: true, sensitive: true }],
+    readme: "Do not inject this document.",
+  };
+  const model: Parameters<ReturnType<typeof createPluginHelp>["update"]>[0] = {
+    connected: true,
+    result: createResult([]),
+    detail: null,
+    catalogDetail: { result: catalog },
+  };
+  help.update(model);
+  expect(currentPluginHelpReference(context)).toEqual({
+    id,
+    name,
+    installed: false,
+    declared: {
       providers: [],
       channels: [],
-      configuration: [{ name: "credential", required: true, sensitive: true }],
-      readme: "Do not inject this document.",
-    };
-    const model: Parameters<ReturnType<typeof createPluginHelp>["update"]>[0] = {
-      connected: true,
-      result: createResult([]),
-      detail: null,
-      installedDetailTab: "readme",
-      catalogDetail: { result: catalog },
-    };
-    try {
-      help.update(model);
-      expect(currentPluginHelpReference(context)).toEqual({
-        id,
-        name,
-        installed: false,
-        declared: {
-          providers: [],
-          channels: [],
-          skills: [],
-          mcpServers: [],
-          ...(contracts ? { contracts: install ? [] : ["videoGenerationProviders: video"] } : {}),
-          ...(install ? { tools: ["known_tool"] } : {}),
-        },
-      });
-      if (install) {
-        help.update({
-          ...model,
-          result: createResult(createPlugin({ id, name, catalogId: "catalog-workboard" })),
-          detail: { pluginId: id, inspection: null },
-        });
-        expect(currentPluginHelpReference(context)).toMatchObject({
-          id,
-          installed: true,
-          declared: { tools: ["known_tool"] },
-        });
-      }
-    } finally {
-      dispose();
-    }
-  },
-);
-
-it.each([
-  {
-    path: ["plugins", "entries", "workboard", "hooks", "allowPromptInjection"],
-    label: "Add context to prompts",
-    value: true,
-    expected: "true",
-    sensitive: false,
-  },
-  {
-    path: ["plugins", "entries", "workboard", "llm", "allowedModels"],
-    label: "Allowed models",
-    value: ["synthetic-sensitive-value"],
-    expected: "<redacted>",
-    sensitive: true,
-  },
-])(
-  "keeps host setting paths intact and redacts sensitive Ask values: $label",
-  async ({ path, label, value, expected, sensitive }) => {
-    const { context, setPathname } = createContext(vi.fn());
-    setPathname("/settings/plugins/workboard");
-    const { help, dispose } = createHelp(context);
+      skills: [],
+      mcpServers: [],
+      ...(contracts ? { contracts: install ? [] : ["videoGenerationProviders: video"] } : {}),
+      ...(install ? { tools: ["known_tool"] } : {}),
+    },
+  });
+  if (install) {
     help.update({
-      connected: true,
-      result: { plugins: [{ id: "workboard", name: "Workboard", installed: true }] },
-      detail: { pluginId: "workboard" },
-      installedDetailTab: "configuration",
-    } as unknown as Parameters<ReturnType<typeof createPluginHelp>["update"]>[0]);
-    try {
-      await help.ask({
-        path,
-        label,
-        value,
-        schema: {},
-        hints: sensitive ? { [path.join(".")]: { sensitive: true } } : {},
-      } as PluginSettingsField);
-      expect(currentPluginHelpReference(context)?.setting?.path).toEqual(path);
-      const draft = takePluginHelpDraft(context);
-      expect(draft).toBe(`Explain ${label}\n\nCurrent value: ${expected}`);
-      expect(draft).not.toContain("synthetic-sensitive-value");
-    } finally {
-      dispose();
-    }
+      ...model,
+      result: createResult(createPlugin({ id, name, catalogId: "catalog-workboard" })),
+      detail: { pluginId: id, inspection: null },
+    });
+    expect(currentPluginHelpReference(context)).toMatchObject({
+      id,
+      installed: true,
+      declared: { tools: ["known_tool"] },
+    });
+  }
+});
+
+it.each<[string[], string, boolean | string[], string, boolean]>([
+  [["hooks", "allowPromptInjection"], "Add context to prompts", true, "true", false],
+  [["llm", "allowedModels"], "Allowed models", ["synthetic-sensitive-value"], "<redacted>", true],
+])(
+  "keeps host setting paths intact and redacts sensitive Ask values: %s",
+  async (suffix, label, value, expected, sensitive) => {
+    const path = ["plugins", "entries", "workboard", ...suffix];
+    const { context, help } = createHelp("/settings/plugins/workboard");
+    help.update(installedModel("workboard"));
+    await help.ask({
+      path,
+      label,
+      value,
+      schema: {},
+      hints: sensitive ? { [path.join(".")]: { sensitive: true } } : {},
+    } as PluginSettingsField);
+    expect(currentPluginHelpReference(context)?.setting?.path).toEqual(path);
+    const draft = takePluginHelpDraft(context);
+    expect(draft).toBe(`Explain ${label}\n\nCurrent value: ${expected}`);
+    expect(draft).not.toContain("synthetic-sensitive-value");
   },
 );

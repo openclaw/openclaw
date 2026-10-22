@@ -121,8 +121,8 @@ let started = 0;
 let sendCpuUs = 0;
 let sendFrames = 0;
 // The proxy preserves both send overloads and forwards the original socket receiver.
-// eslint-disable-next-line @typescript-eslint/unbound-method
-const originalSend = WebSocket.prototype.send;
+const { value: originalSend } = Object.getOwnPropertyDescriptors(WebSocket.prototype).send;
+assert(originalSend);
 WebSocket.prototype.send = new Proxy(originalSend, {
   apply(target, socket, args) {
     const data = args[0];

@@ -1,4 +1,13 @@
-import { createMemo, For, onSettled } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  Errored,
+  For,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
 import {
@@ -16,6 +25,7 @@ import {
   SettingsStatus,
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { AppearanceBackground } from "./appearance-background.tsx";
@@ -104,10 +114,30 @@ function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
 }
 export function AppearanceSection(props: ConfigProps) {
   let customThemeImportInput: HTMLInputElement | undefined;
+  const [importing, setImporting] = createOptimistic(false, { equals: false });
+  // Pending work belongs to the action; terminal receipts feed the error region.
+  const importResult = createMemo(() => props.customThemeImportCompletion);
+  const presentImport = action(function* (completion: Promise<void>) {
+    setImporting(true);
+    yield completion;
+  });
+  function importTheme() {
+    const completion = props.onImportCustomTheme();
+    if (completion) {
+      // Commit synchronous admission before starting the pending frame.
+      onSettled(() => {
+        // The same receipt reports failures through the inline error boundary.
+        void presentImport(completion).catch(() => undefined);
+      });
+    }
+  }
+  const importMessage = () => {
+    importResult();
+    return props.customThemeImportMessage;
+  };
   let focusFrame = 0;
-  const showCustomThemeImport = createMemo(
-    () => props.hasCustomTheme || props.customThemeImportExpanded === true,
-  );
+  const showCustomThemeImport = () =>
+    props.hasCustomTheme || props.customThemeImportExpanded === true;
   function focusImporter() {
     const input = customThemeImportInput;
     if (!input?.isConnected) {
@@ -160,11 +190,9 @@ export function AppearanceSection(props: ConfigProps) {
   const selectedTheme = createMemo(() =>
     themeOptions().find((option) => option.id === props.theme),
   );
-  const themeUnavailable = createMemo(
-    () =>
-      props.themeCatalog?.unavailableId === props.theme ||
-      (props.theme.includes("/") && Boolean(props.themeCatalog?.themes.length) && !selectedTheme()),
-  );
+  const themeUnavailable = () =>
+    props.themeCatalog?.unavailableId === props.theme ||
+    (props.theme.includes("/") && Boolean(props.themeCatalog?.themes.length) && !selectedTheme());
   const presentedTheme = createMemo(
     () =>
       selectedTheme() ?? {
@@ -192,28 +220,24 @@ export function AppearanceSection(props: ConfigProps) {
   // swatch permanently unselectable and its reset click without a visible effect.
   // Accepted cost: an override equal to its reset target reads as inherited
   // until the two diverge, when the swatches correct themselves.
-  const themeAccentSelected = createMemo(() => props.accent === "theme");
+  const themeAccentSelected = () => props.accent === "theme";
   const accentColor = createMemo(() => (themeAccentSelected() ? undefined : props.accent));
-  const defaultAccentSelected = createMemo(
-    () =>
-      props.accent === props.accentResetValue ||
-      (themeAccentSelected() && props.accentResetValue === undefined),
-  );
+  const defaultAccentSelected = () =>
+    props.accent === props.accentResetValue ||
+    (themeAccentSelected() && props.accentResetValue === undefined);
   // Preview the accent a reset lands on, never var(--accent): the live override
   // would render this swatch as a duplicate of the selected preset.
-  const themeAccentColor = createMemo(() =>
+  const themeAccentColor = () =>
     props.accentResetValue && props.accentResetValue !== "theme"
       ? props.accentResetValue
-      : "var(--theme-chip-accent)",
-  );
+      : "var(--theme-chip-accent)";
   const selectedAccentPreset = createMemo(() =>
     ACCENT_PRESETS.find((preset) => preset.hex !== undefined && preset.hex === props.accent),
   );
-  const customAccentSelected = createMemo(() =>
+  const customAccentSelected = () =>
     Boolean(
       !defaultAccentSelected() && !themeAccentSelected() && props.accent && !selectedAccentPreset(),
-    ),
-  );
+    );
   const accentSelectionStatus = createMemo(() => {
     const preset = selectedAccentPreset();
     return themeAccentSelected()
@@ -245,14 +269,38 @@ export function AppearanceSection(props: ConfigProps) {
             })}
           </p>
         ) : undefined}
-        {props.themeCatalog?.error ? (
-          <p class="settings-status settings-status--error" role="alert">
-            {props.themeCatalog.error}{" "}
-            <button type="button" class="btn btn--sm" onClick={() => props.onRetryThemeCatalog?.()}>
-              {t("common.retry")}
-            </button>
-          </p>
-        ) : undefined}
+        <Show when={props.themeCatalog?.read ?? props.themeCatalog} keyed>
+          {(initialCatalog) => {
+            const catalog = createMemo(() =>
+              "result" in initialCatalog ? initialCatalog.result : initialCatalog,
+            );
+            const status = () => {
+              const error = catalog()?.error;
+              if (error) {
+                throw new Error(error);
+              }
+              return undefined;
+            };
+            return (
+              <Errored
+                fallback={(error) => (
+                  <p class="settings-status settings-status--error" role="alert">
+                    {formatUiError(error())}{" "}
+                    <button
+                      type="button"
+                      class="btn btn--sm"
+                      onClick={() => props.onRetryThemeCatalog?.()}
+                    >
+                      {t("common.retry")}
+                    </button>
+                  </p>
+                )}
+              >
+                <Loading fallback={undefined}>{status()}</Loading>
+              </Errored>
+            );
+          }}
+        </Show>
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
             <div class="settings-theme-grid">
@@ -375,12 +423,10 @@ export function AppearanceSection(props: ConfigProps) {
                 <div class="settings-theme-import__actions">
                   <button
                     class="btn btn--sm primary"
-                    disabled={
-                      props.customThemeImportBusy || props.customThemeImportUrl.trim().length === 0
-                    }
-                    onClick={() => props.onImportCustomTheme()}
+                    disabled={importing() || props.customThemeImportUrl.trim().length === 0}
+                    onClick={importTheme}
                   >
-                    {props.customThemeImportBusy
+                    {importing()
                       ? t("common.importing")
                       : props.hasCustomTheme
                         ? t("configView.appearance.replace", {
@@ -406,17 +452,32 @@ export function AppearanceSection(props: ConfigProps) {
                     </span>
                   </div>
                 ) : undefined}
-                {props.customThemeImportMessage ? (
-                  <div
-                    class={[
-                      "settings-theme-import__message",
-                      `settings-theme-import__message--${props.customThemeImportMessage.kind}`,
-                    ]}
-                    role={props.customThemeImportMessage.kind === "error" ? "alert" : "status"}
-                  >
-                    {props.customThemeImportMessage.text}
-                  </div>
-                ) : undefined}
+                <Errored
+                  fallback={(error) => (
+                    <div
+                      class="settings-theme-import__message settings-theme-import__message--error"
+                      role="alert"
+                    >
+                      {formatUiError(error())}
+                    </div>
+                  )}
+                >
+                  <Loading>
+                    <Show when={importMessage()}>
+                      {(message) => (
+                        <div
+                          class={[
+                            "settings-theme-import__message",
+                            `settings-theme-import__message--${message().kind}`,
+                          ]}
+                          role={message().kind === "error" ? "alert" : "status"}
+                        >
+                          {message().text}
+                        </div>
+                      )}
+                    </Show>
+                  </Loading>
+                </Errored>
               </div>
             ) : (
               <p class="settings-theme-import__inline-hint">
@@ -438,17 +499,15 @@ export function AppearanceSection(props: ConfigProps) {
               <For each={ACCENT_PRESETS}>
                 {(preset) => {
                   const isDefault = preset.hex === undefined;
-                  const selected = createMemo(() =>
+                  const selected = () =>
                     isDefault
                       ? defaultAccentSelected()
-                      : !defaultAccentSelected() && preset.hex === props.accent,
-                  );
+                      : !defaultAccentSelected() && preset.hex === props.accent;
                   const label = () => t(`configView.appearance.accents.${preset.id}`);
-                  const themeChipScope = createMemo(() =>
+                  const themeChipScope = () =>
                     isDefault
                       ? `settings-accent-theme--${presentedTheme().id.includes("/") ? "custom" : presentedTheme().id}`
-                      : "",
-                  );
+                      : "";
                   return (
                     <button
                       type="button"

@@ -1,4 +1,12 @@
-import { createEffect, createMemo, createSignal, Errored, lazy, Loading, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  Errored,
+  lazy,
+  Loading,
+  Show,
+  type Element as SolidElement,
+} from "solid-js";
 import { findOverlayParent } from "../../../components/overlay-lifecycle.ts";
 import { hasProviderBrandIcon } from "../../../components/provider-icon.ts";
 import { Icon } from "../../../components/solid/icon.tsx";
@@ -20,8 +28,6 @@ import {
   createChatModelSearch,
   handleModelPickerKeydown,
   resetModelSearch,
-  syncChatModelSearch,
-  updateModelSearch,
 } from "./chat-model-picker-search.ts";
 import { createChatPickerOverlay } from "./chat-picker-overlay.ts";
 
@@ -38,6 +44,8 @@ export type ChatModelPickerParams = {
   disabled: boolean;
   disabledReason?: string;
   modelCatalogState?: ModelCatalogState;
+  /** Lets a lazy route wrap catalog status without adding its read to Chat boot. */
+  renderModelCatalogStatus?: (render: () => SolidElement) => SolidElement;
   modelSelectionLocked: boolean;
   selectionScopeDescription?: string;
   modelOptions: ModelPickerOption[];
@@ -124,6 +132,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
   // Retain the panel after first use so search and provider expansion survive dismissal.
   const [choicesMounted, mountChoices] = createSignal(false);
   const pickerOverlay = createChatPickerOverlay((target) => {
+    search.setOpen(target.open);
     if (target.open) {
       mountChoices(true);
     }
@@ -148,24 +157,6 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
       summary.focus({ preventScroll: true });
     }
   };
-  // Reapply the current search after catalog bindings settle.
-  createEffect(
-    () => [
-      choicesMounted(),
-      params.modelCatalogState,
-      params.modelOptions,
-      params.targetGroups,
-      params.accountSection,
-      params.selectedModelValue,
-      params.selectedAgentRuntime,
-    ],
-    () => {
-      if (details) {
-        syncChatModelSearch(details);
-        focusSearch();
-      }
-    },
-  );
   return (
     <ChatModelSearchContext value={search}>
       <details
@@ -240,11 +231,6 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
           class="oc-overlay chat-picker-overlay"
           data-anchored-overlay
           popover="manual"
-          onOverlay-show={() => {
-            if (searchInput?.isConnected) {
-              updateModelSearch(searchInput, true);
-            }
-          }}
         >
           <Show when={choicesMounted()}>
             <Errored
@@ -269,12 +255,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
                   onSelectionClose={closeModelPickerAfterSelection}
                   searchRef={(element) => {
                     searchInput = element;
-                    queueMicrotask(() => {
-                      if (details) {
-                        syncChatModelSearch(details);
-                        focusSearch();
-                      }
-                    });
+                    queueMicrotask(focusSearch);
                   }}
                 />
               </Loading>

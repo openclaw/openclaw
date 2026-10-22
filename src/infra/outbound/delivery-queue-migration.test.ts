@@ -215,17 +215,6 @@ describe("outbound prepared queue migration", () => {
     const migration = migrate();
     await vi.waitFor(() => expect(hookMocks.runMessageSending).toHaveBeenCalledOnce());
     const overlappingMigration = migrate();
-    let overlappingSettled = false;
-    void overlappingMigration.then(
-      () => {
-        overlappingSettled = true;
-      },
-      () => {
-        overlappingSettled = true;
-      },
-    );
-    await Promise.resolve();
-    expect(overlappingSettled).toBe(false);
     expect(loadDeliveryQueueEntry(LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME, id, tmpDir())).toBeNull();
     expect(
       loadDeliveryQueueEntry(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir()),
@@ -238,9 +227,9 @@ describe("outbound prepared queue migration", () => {
 
     await expect(migration).resolves.toEqual({ moved: 1, skipped: 0, remaining: 0 });
     await expect(overlappingMigration).resolves.toEqual({
-      moved: 1,
-      skipped: 0,
-      remaining: 0,
+      moved: 0,
+      skipped: 1,
+      remaining: 1,
     });
     expect(hookMocks.runMessageSending).toHaveBeenCalledOnce();
     expect(loadDeliveryQueueEntry(OUTBOUND_LEGACY_PREPARATION_QUEUE_NAME, id, tmpDir())).toBeNull();

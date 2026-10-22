@@ -2078,5 +2078,109 @@
         "fileUnsupported": "Этот файл памяти нельзя отобразить как текст."
       }
     }
+  },
+  "sv": {
+    "common": {
+      "loading": "Läser in…",
+      "enabled": "Aktiverad",
+      "disabled": "Inaktiverad",
+      "na": "ej tillämpligt",
+      "unknown": "Okänd"
+    },
+    "memoryPage": {
+      "memories": {
+        "searchLabel": "Sök i minnen",
+        "searchPlaceholder": "Sök i den här agentens minnen",
+        "searchButton": "Sök",
+        "idle": "Sök efter en person, ett projekt, ett beslut eller något annat som den här agenten minns.",
+        "searching": "Söker i minnen…",
+        "results": "{count} resultat",
+        "empty": "Inga minnen matchade ”{query}”.",
+        "error": "Sökningen i minnen misslyckades: {message}",
+        "retry": "Försök igen",
+        "gatewayUpdateRequired": "Uppdatera Gateway för att söka i minnen från Control UI.",
+        "hybridSearch": "hybridsökning",
+        "keywordSearch": "nyckelordssökning",
+        "lineRange": "rader {start}–{end}",
+        "score": "poäng {score}",
+        "sourceMemory": "minne",
+        "sourceSessions": "sessioner",
+        "fileLoading": "Läser in hela minnesfilen…",
+        "fileError": "Kunde inte läsa in den här minnesfilen: {message}",
+        "fileUnsupported": "Den här minnesfilen kan inte visas som text."
+      },
+      "overview": {
+        "hero": {
+          "awake": "Minnet är vaket",
+          "waking": "Väcker minnet…",
+          "hibernating": "Minnet är i viloläge",
+          "needsAttention": "Minnet behöver uppmärksamhet",
+          "noSearchRuntime": "Minnesökning på värden är inte tillgänglig",
+          "noSearchRuntimeDescription": "{engine} tillhandahåller ingen körmiljö för minnesökning på värden. Andra minnesintegrationer kan köras oberoende.",
+          "activeDescription": "{engine} · {mode}",
+          "loadingDescription": "Kontrollerar den här agentens minnesmotor och drömcykel.",
+          "offDescription": "Välj en minnesmotor i Inställningar för att väcka minnet.",
+          "disabledDescription": "Den valda minnesmotorn är inaktiverad. Aktivera den igen i Inställningar.",
+          "gatewayOffline": "Gateway är offline, så minnets status är inte tillgänglig.",
+          "hybridSearch": "hybridsökning",
+          "keywordSearch": "nyckelordssökning (utan inbäddningar)",
+          "openSettings": "Öppna inställningar",
+          "retry": "Försök igen",
+          "refresh": "Uppdatera status"
+        },
+        "schedule": {
+          "title": "Sömnschema",
+          "lightDescription": "Sorterar nya korttidsanteckningar och förbereder lovande kandidater utan att ändra långtidsminnet.",
+          "remDescription": "Reflekterar över teman och återkommande idéer i den senaste aktiviteten för att förbättra rangordningen utan att ändra långtidsminnet.",
+          "deepDescription": "Poängsätter förberedda kandidater, för över de som är värda att behålla till långtidsminnet (MEMORY.md) och skriver drömdagboken.",
+          "nextRun": "nästa {time}",
+          "lastRun": "senaste {time}",
+          "notScheduled": "Inte schemalagt",
+          "learnMore": "Så fungerar drömmar",
+          "openDocs": "Öppna drömguiden"
+        },
+        "activity": {
+          "title": "Aktivitet",
+          "promotedToday": "Överförda till långtidsminnet idag",
+          "promotedTotal": "Överförda till långtidsminnet totalt",
+          "shortTermCount": "Väntande korttidsposter",
+          "phaseHitCount": "Fassignaler",
+          "lightPhaseHitCount": "Träffar i lättsömnfasen",
+          "remPhaseHitCount": "Träffar i REM-fasen"
+        },
+        "health": {
+          "title": "Motorns hälsostatus",
+          "provider": "Leverantör",
+          "embeddings": "Vektorinbäddningar",
+          "runtime": "Körmiljö för vektorinbäddningar",
+          "healthy": "Redo",
+          "unavailable": "Inte tillgänglig",
+          "notChecked": "Inte kontrollerad",
+          "notCheckedDescription": "Det har ännu inte kontrollerats om inbäddningar är redo att användas.",
+          "checking": "Kontrollerar…",
+          "test": "Testa",
+          "testing": "Testar…"
+        },
+        "shortcuts": {
+          "title": "Utforska minnet",
+          "memories": "Sök bland minnen",
+          "diary": "Läs drömdagboken",
+          "settings": "Konfigurera minnet"
+        }
+      },
+      "dreaming": {
+        "phases": {
+          "light": {
+            "title": "Lätt sömnfas"
+          },
+          "deep": {
+            "title": "Djup sömnfas"
+          },
+          "rem": {
+            "title": "REM-fas"
+          }
+        }
+      }
+    }
   }
 }

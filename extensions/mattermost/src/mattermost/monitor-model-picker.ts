@@ -10,7 +10,6 @@ import type {
   MattermostInteractionResponse,
 } from "./interactions.js";
 import {
-  buildMattermostAllowedModelRefs,
   parseMattermostModelPickerContext,
   renderMattermostModelsPickerView,
   renderMattermostProviderPickerView,
@@ -201,7 +200,10 @@ export function createMattermostModelPickerInteractionHandler(
     }
 
     const targetModelRef = `${pickerState.provider}/${pickerState.model}`;
-    if (!buildMattermostAllowedModelRefs(data).has(targetModelRef)) {
+    if (
+      !data.providers.includes(pickerState.provider) ||
+      !data.byProvider.get(pickerState.provider)?.has(pickerState.model)
+    ) {
       return { ephemeral_text: `That model is no longer available: ${targetModelRef}` };
     }
 

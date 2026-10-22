@@ -398,7 +398,7 @@ async function readConfig(
   }
 }
 
-export async function loadConfigSchema(state: RuntimeConfigState) {
+export async function loadConfigSchema(state: RuntimeConfigState): Promise<Result<void, string>> {
   const client = state.client;
   if (
     !client ||
@@ -406,25 +406,28 @@ export async function loadConfigSchema(state: RuntimeConfigState) {
     state.configSchemaLoading ||
     !hasOperatorReadAccess(client.auth)
   ) {
-    return;
+    return ok(undefined);
   }
   const connectionEpoch = currentConfigConnectionEpoch(state);
   state.configSchemaLoading = true;
   try {
     const res = await client.request<ConfigSchemaResponse>("config.schema", {});
     if (!isCurrentConfigConnection(state, client, connectionEpoch)) {
-      return;
+      return failure("The schema refresh was superseded.");
     }
     state.configSchema = res.schema ?? null;
     state.configUiHints = res.uiHints ?? {};
     state.configSchemaVersion = res.version ?? null;
+    return ok(undefined);
   } catch (err) {
+    const message = formatUiError(err);
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
-      state.lastError = formatUiError(err);
+      state.lastError = message;
       if (state.configAutoSaveStatus === "rejected") {
         state.configAutoSaveStatus = "error";
       }
     }
+    return failure(message);
   } finally {
     if (isCurrentConfigConnection(state, client, connectionEpoch)) {
       state.configSchemaLoading = false;

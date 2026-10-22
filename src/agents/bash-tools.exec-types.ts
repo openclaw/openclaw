@@ -63,7 +63,6 @@ export type ExecToolDefaults = ExecToolRoutingDefaults & {
   mode?: ExecMode;
   bypassHostApprovalFloors?: boolean;
   trigger?: string;
-  continuesConversation?: boolean;
   pathPrepend?: string[];
   safeBins?: string[];
   strictInlineEval?: boolean;
@@ -220,6 +219,7 @@ export type ExecToolDetails = {
       sessionId: string;
       pid?: number;
       startedAt: number;
+      deadlineAtMs?: number;
       cwd?: string;
       tail?: string;
       followUp?: string;

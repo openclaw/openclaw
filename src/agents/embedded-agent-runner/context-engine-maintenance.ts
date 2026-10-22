@@ -89,20 +89,6 @@ function createDeferredTurnMaintenanceAbortSignal() {
   };
 }
 
-function resetDeferredTurnMaintenanceStateForTest(): void {
-  activeDeferredTurnMaintenanceRuns.clear();
-  maintenanceAbortControllers.clear();
-  unregisterDeferredTurnMaintenanceAbortSignalHandlers();
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[
-    Symbol.for("openclaw.contextEngineMaintenanceTestApi")
-  ] = {
-    resetDeferredTurnMaintenanceStateForTest,
-  };
-}
-
 function scheduleDeferredTurnMaintenance(
   params: DeferredTurnMaintenanceScheduleParams,
 ): Promise<void> | undefined {

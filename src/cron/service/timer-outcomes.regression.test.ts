@@ -140,22 +140,17 @@ it.each(["timer maintenance", "startup catch-up"] as const)(
     await saveCronStore(store.storePath, { version: 1, jobs });
 
     const order: string[] = [];
-    const enqueueSystemEvent = vi.fn(() => {
+    const enqueueSessionEvent = vi.fn(() => {
       const persisted = openOpenClawStateDatabase()
         .db.prepare("SELECT enabled FROM cron_jobs WHERE store_key = ? AND job_id = ?")
         .get(cronStoreKey(store.storePath), malformed.id) as { enabled: number };
       expect(persisted.enabled).toBe(0);
       order.push("notify");
     });
-    const requestHeartbeat = vi.fn(() => {
-      expect(order.at(-1)).toBe("notify");
-      order.push("heartbeat");
-    });
     const state = createCronServiceState({
       storePath: store.storePath,
       nowMs: () => now,
-      enqueueSystemEvent,
-      requestHeartbeat,
+      enqueueSessionEvent,
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
     if (path === "startup catch-up") {
@@ -164,7 +159,7 @@ it.each(["timer maintenance", "startup catch-up"] as const)(
       await onTimer(state);
     }
 
-    expect(order).toEqual(["notify", "heartbeat"]);
+    expect(order).toEqual(["notify"]);
     expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
     expect(
       (await loadCronStore(store.storePath)).jobs.find((job) => job.id === malformed.id),
@@ -173,7 +168,7 @@ it.each(["timer maintenance", "startup catch-up"] as const)(
 );
 
 it("records failure diagnostics and auto-disables on the tenth consecutive failure", async () => {
-  const enqueueSystemEvent = vi.fn();
+  const enqueueSessionEvent = vi.fn();
   const sendCronFailureAlert = vi.fn<NonNullable<CronServiceDeps["sendCronFailureAlert"]>>(
     async () => undefined,
   );
@@ -193,7 +188,7 @@ it("records failure diagnostics and auto-disables on the tenth consecutive failu
   const { state, job, apply, deferredNotifications } = outcomeFixture(
     startedAt,
     { state: { consecutiveErrors: 8 }, failureAlert: { after: 10, cooldownMs: 0 } },
-    { enqueueSystemEvent, sendCronFailureAlert, log },
+    { enqueueSessionEvent, sendCronFailureAlert, log },
   );
   apply({ status: "error", error: "ninth failure", diagnostics: structuredClone(diagnostics) });
   expect(job.enabled).toBe(true);
@@ -231,26 +226,26 @@ it("records failure diagnostics and auto-disables on the tenth consecutive failu
   expect(sendCronFailureAlert.mock.calls[0]?.[0].payload.text).toContain(
     'Automation "outcome" was auto-disabled after 10 consecutive run failures.',
   );
-  expect(enqueueSystemEvent).not.toHaveBeenCalled();
+  expect(enqueueSessionEvent).not.toHaveBeenCalled();
 });
 
 it.each([
   { name: "alerts disabled for the job", overrides: { failureAlert: false } },
   { name: "no failure route", overrides: { delivery: { mode: "none" } } },
 ] as const)("keeps the owning-agent notice with $name", async ({ overrides }) => {
-  const enqueueSystemEvent = vi.fn();
+  const enqueueSessionEvent = vi.fn();
   const sendCronFailureAlert = vi.fn(async () => undefined);
   const { state, job, apply, deferredNotifications } = outcomeFixture(
     startedAt,
     { ...overrides, state: { consecutiveErrors: 9 } } as Partial<CronJob>,
-    { enqueueSystemEvent, sendCronFailureAlert, defaultAgentId: "main" },
+    { enqueueSessionEvent, sendCronFailureAlert, defaultAgentId: "main" },
   );
 
   apply({ status: "error", error: "tenth failure" });
   expect(job.state.autoDisabled?.reason).toBe("consecutive-failures");
   expect(deferredNotifications.map(({ kind }) => kind)).toEqual(["auto-disabled"]);
   await runPostPersistCronNotifications(state, structuredClone(deferredNotifications));
-  expect(enqueueSystemEvent).toHaveBeenCalledExactlyOnceWith(
+  expect(enqueueSessionEvent).toHaveBeenCalledExactlyOnceWith(
     expect.stringContaining("was auto-disabled after 10 consecutive run failures"),
     expect.objectContaining({ contextKey: `cron:${job.id}:auto-disabled` }),
   );
@@ -446,4 +441,83 @@ it.each(["ok", "error"] as const)("force run preserves the every cadence after %
   expect(job.state.lastRunAtMs).toBe(nowMs);
   expect(job.state.lastStatus).toBe(status);
   expect(job.state.nextRunAtMs).toBe(expectedNextMs);
+});
+
+it("pauses a parent-linked job once when its parent conversation is gone", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt);
+  const pause = {
+    reason: "archived" as const,
+    parentSessionKey: "agent:main:dashboard:parent",
+  };
+  apply({ status: "skipped", error: "paused: parent archived", parentUnavailable: pause });
+  expect(job.enabled).toBe(false);
+  expect(job.state.nextRunAtMs).toBeUndefined();
+  expect(deferredNotifications).toEqual([
+    expect.objectContaining({ kind: "auto-disabled", text: "paused: parent archived" }),
+  ]);
+  // A second settled outcome for the already-paused job sends nothing new.
+  apply({ status: "skipped", error: "paused: parent archived", parentUnavailable: pause });
+  expect(deferredNotifications).toHaveLength(1);
+});
+
+it("sends one notice when an alert route also reports skipped runs", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
+    failureAlert: { after: 1, cooldownMs: 0, includeSkipped: true },
+  });
+  apply({
+    status: "skipped",
+    error: "paused: parent archived",
+    parentUnavailable: { reason: "archived", parentSessionKey: "agent:main:dashboard:parent" },
+  });
+  expect(job.enabled).toBe(false);
+  expect(deferredNotifications).toEqual([
+    expect.objectContaining({ kind: "auto-disabled", text: "paused: parent archived" }),
+  ]);
+});
+
+it("sends the pause notice to the agent that owns the gone conversation", () => {
+  const parentSessionKey = "agent:ops:dashboard:parent";
+  const { apply, deferredNotifications } = outcomeFixture(startedAt, {
+    agentId: undefined,
+    sessionKey: parentSessionKey,
+  });
+  apply({
+    status: "skipped",
+    error: "paused: parent archived",
+    parentUnavailable: { reason: "archived", parentSessionKey },
+  });
+  expect(deferredNotifications).toEqual([
+    expect.objectContaining({
+      kind: "auto-disabled",
+      job: expect.objectContaining({ agentId: "ops" }),
+    }),
+  ]);
+  expect(deferredNotifications[0]?.job).not.toHaveProperty("sessionKey");
+});
+
+it("sends the pause notice for a one-shot job too", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt, {
+    schedule: { kind: "at", at: new Date(startedAt).toISOString() },
+  });
+  apply({
+    status: "skipped",
+    error: "paused: parent removed",
+    parentUnavailable: { reason: "removed", parentSessionKey: "agent:main:dashboard:parent" },
+  });
+  expect(job.enabled).toBe(false);
+  expect(deferredNotifications.filter((notice) => notice.kind === "auto-disabled")).toHaveLength(1);
+});
+
+it("leaves a newer operator edit alone when a pause result is stale", () => {
+  const { job, apply, deferredNotifications } = outcomeFixture(startedAt);
+  apply(
+    {
+      status: "skipped",
+      error: "paused: parent archived",
+      parentUnavailable: { reason: "archived", parentSessionKey: "agent:main:dashboard:parent" },
+    },
+    { scheduleOwnership: "stale" },
+  );
+  expect(job.enabled).toBe(true);
+  expect(deferredNotifications.filter((notice) => notice.kind === "auto-disabled")).toEqual([]);
 });

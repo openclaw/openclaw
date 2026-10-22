@@ -1,5 +1,6 @@
 import type { RouteId } from "../../app-route-paths.ts";
 import type { NativeDeviceSettingsSnapshot } from "../../app/native-device-settings.ts";
+import { registerChatComposerEnglish } from "../../i18n/locales/en-chat-composer.ts";
 import { registerSessionOrganizationEnglish } from "../../i18n/locales/en-session-organization.ts";
 import {
   appearanceSettingsRouteTarget,
@@ -7,6 +8,8 @@ import {
   SETTINGS_ROUTE_TARGETS,
 } from "./route-data.ts";
 import { sessionSourcePresentations } from "./session-source-presentation.ts";
+
+registerChatComposerEnglish();
 
 registerSessionOrganizationEnglish();
 
@@ -391,6 +394,7 @@ export const SETTINGS_SEARCH_TARGETS = {
       "configView.chatPrefs.collapseTaskProgress",
       "configView.chatPrefs.collapseTaskProgressHint",
       "chat.sendShortcut",
+      "chat.sendShortcutHint",
       "chat.sendShortcutEnter",
       "chat.sendShortcutModifierEnter",
       "chat.followUpMode",

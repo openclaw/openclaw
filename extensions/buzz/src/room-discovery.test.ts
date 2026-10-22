@@ -1,5 +1,5 @@
 import { getPublicKey, type Event, type Filter, type Relay } from "nostr-tools";
-import { beforeEach, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, onTestFinished, vi } from "vitest";
 
 type AuthSigner = (template: {
   kind: number;
@@ -166,6 +166,8 @@ it.each([
   async ({ notification, firstSnapshot }) => {
     vi.useFakeTimers();
     const abort = new AbortController();
+    const timeout = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(abort.signal);
+    onTestFinished(() => timeout.mockRestore());
     type Handlers = Parameters<Relay["prepareSubscription"]>[1];
     const subscribed = Promise.withResolvers<Handlers>();
     let snapshots = 0;
@@ -189,10 +191,7 @@ it.each([
       return { close: vi.fn() };
     });
     const { waitForBuzzRoomAccess } = await import("./room-access-wait.js");
-    const waiting = waitForBuzzRoomAccess({
-      ...connection,
-      signal: abort.signal,
-    });
+    const waiting = waitForBuzzRoomAccess(connection);
     let rooms: Awaited<typeof waiting> | undefined;
     const observed = waiting.then(
       (value) => {

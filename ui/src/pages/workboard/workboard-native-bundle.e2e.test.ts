@@ -103,7 +103,9 @@ suite.define(() => {
             const tile = page.locator(".workboard-card").filter({ hasText: card.title });
             await tile.waitFor();
             const report = await gateway.waitForRequest("plugins.controlUi.report");
-            expect(report.params).toMatchObject({ pluginId: "workboard", status: "activated" });
+            expect(report.params).toMatchObject({
+              reports: [{ pluginId: "workboard", status: "activated" }],
+            });
             expect([...requestedAssets].some((url) => url.endsWith("/index.js"))).toBe(true);
             const prefix = `${engine}-${view.name}-${theme}`;
             await proof.capture(page, `${prefix}-board`, page.locator(".workboard-main"), [

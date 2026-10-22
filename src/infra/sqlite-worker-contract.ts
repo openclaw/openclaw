@@ -1,5 +1,7 @@
+import { isDeepStrictEqual } from "node:util";
 import { isNativeError, isProxy } from "node:util/types";
 import type { MessagePort } from "node:worker_threads";
+import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import type { DiagnosticWorkerRequestFields } from "./diagnostic-process-types.js";
@@ -197,6 +199,26 @@ export class SqliteWorkerError extends Error {
     this.name = "SqliteWorkerError";
     Object.defineProperty(this, retainedWorkerErrorCode, { value: code });
   }
+}
+
+/** Preserve distinct result and settlement failures when adding a worker diagnostic. */
+export function wrapSqliteWorkerError(
+  message: string,
+  code: SqliteWorkerError["code"] | undefined,
+  ...causes: unknown[]
+): Error {
+  const retained = causes
+    .filter((cause) => cause !== undefined)
+    .map((cause) => toErrorObject(cause, message))
+    .filter(
+      (cause, index, all) => all.findIndex((other) => isDeepStrictEqual(other, cause)) === index,
+    );
+  return Object.assign(
+    code === undefined ? new Error(message) : new SqliteWorkerError(message, code),
+    {
+      cause: retained.length > 1 ? new AggregateError(retained, message) : retained[0],
+    },
+  );
 }
 
 /** Carry only canonical worker classification through a local cleanup aggregate. */

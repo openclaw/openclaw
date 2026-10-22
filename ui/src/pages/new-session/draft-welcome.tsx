@@ -25,7 +25,7 @@ export function DraftWelcome(props: {
     return owner ? projectOwner(owner, (current) => current.state.result) : undefined;
   });
   // Legacy render props can publish in-place edits; only selected fields gate work.
-  const options = createMemo(() => props.options, { equals: false });
+  const options = () => props.options;
   const scope = createMemo(
     () => ({
       sessionKey: options().sessionKey,

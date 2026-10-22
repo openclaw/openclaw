@@ -137,6 +137,63 @@ describe("desktop panel presentation lifecycle", () => {
     vi.unstubAllGlobals();
   });
 
+  it.each(["desktop", "mobile"] as const)(
+    "keeps the remote surface through control changes and retries through the %s host",
+    async (platform) => {
+      const request = vi.fn(async (method: string, params?: { control?: boolean }) => {
+        if (method === "environments.status") {
+          return desktopEnvironment;
+        }
+        if (method === "desktop.observe") {
+          return { ...observed, control: params?.control === true };
+        }
+        throw new Error(`Unexpected request: ${method}`);
+      });
+      const connect = vi.fn(async (_options: Parameters<DesktopClient["connect"]>[0]) =>
+        createConnectionHandle(),
+      );
+      const panel = await mount(request, connect, {
+        requestedSource: desktopEnvironment.id,
+        presentation: { platform },
+      });
+      await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
+      const surface = panel.querySelector(".desktop-surface");
+      expect(surface).not.toBeNull();
+      connect.mock.calls[0]![0].onConnect?.();
+      await panel.updateComplete;
+      const control = panel.querySelector<HTMLButtonElement>(".desktop-rail__control")!;
+      expect(control.disabled).toBe(false);
+      expect(control.textContent).toContain("Take control");
+      control.click();
+      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(2));
+      expect(request).toHaveBeenLastCalledWith(
+        "desktop.observe",
+        expect.objectContaining({ control: true }),
+      );
+      expect(panel.querySelector(".desktop-surface")).toBe(surface);
+      expect(panel.querySelector<HTMLButtonElement>(".desktop-rail__control")!.disabled).toBe(true);
+      connect.mock.calls[1]![0].onConnect?.();
+      await panel.updateComplete;
+      expect(panel.querySelector(".desktop-surface")).toBe(surface);
+      expect(panel.querySelector(".desktop-rail__control")?.textContent).toContain(
+        platform === "mobile" ? "View only" : "Back to viewing",
+      );
+      connect.mock.calls[1]![0].onDisconnect?.({ clean: false, reason: "Synthetic link loss" });
+      await panel.updateComplete;
+      expect(panel.textContent).toContain("Synthetic link loss");
+      expect(panel.querySelector(".desktop-surface")).toBeNull();
+      const retry = [...panel.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Reconnect",
+      )!;
+      expect(retry).toBeDefined();
+      retry.click();
+      await waitForSolid(() => expect(connect).toHaveBeenCalledTimes(3));
+      expect(request).toHaveBeenLastCalledWith(
+        "desktop.observe",
+        expect.objectContaining({ control: true }),
+      );
+    },
+  );
   it("receives global toggles only while mounted as a standalone panel", async () => {
     const request = vi.fn(async () => ({ environments: [] }));
     const panel = createPanel();
@@ -167,9 +224,9 @@ describe("desktop panel presentation lifecycle", () => {
       ...desktopEnvironment,
       worker: { ...desktopEnvironment.worker, desktopApps: ["browser"] },
     };
-    const request = vi.fn(async (method: string) => {
+    const request = vi.fn(async (method: string, params?: { environmentId?: string }) => {
       if (method === "environments.status") {
-        return environment;
+        return { ...environment, id: params?.environmentId ?? environment.id };
       }
       if (method === "desktop.observe") {
         return observed;
@@ -185,6 +242,7 @@ describe("desktop panel presentation lifecycle", () => {
     });
     await waitForSolid(() => expect(connect).toHaveBeenCalledOnce());
     const button = panel.querySelector<HTMLButtonElement>(".desktop-app-button")!;
+    const surface = panel.querySelector(".desktop-surface");
     button.click();
     button.click();
     expectRequests(request, "desktop.launch", 1);
@@ -193,6 +251,8 @@ describe("desktop panel presentation lifecycle", () => {
     await waitForSolid(() => {
       expect(panel.textContent).toContain("App launch unavailable");
       expect(button.disabled).toBe(false);
+      expect(panel.querySelector(".desktop-app-button")).toBe(button);
+      expect(panel.querySelector(".desktop-surface")).toBe(surface);
     });
 
     launch = createDeferred();
@@ -201,6 +261,12 @@ describe("desktop panel presentation lifecycle", () => {
       expect(button.getAttribute("aria-busy")).toBe("true");
       expect(panel.textContent).not.toContain("App launch unavailable");
     });
+    await update(panel, { requestedSource: "another-workstation" });
+    await waitForSolid(() =>
+      expect(request).toHaveBeenCalledWith("environments.status", {
+        environmentId: "another-workstation",
+      }),
+    );
     await unmountPanel(panel);
     launch.reject(new Error("Retired launch failure"));
     await launch.promise.catch(() => {});
@@ -235,10 +301,23 @@ describe("desktop panel presentation lifecycle", () => {
     const fullscreen = mockFullscreen();
     const panel = createPanel();
     const button = await openStandalone(panel);
+    const section = panel.querySelector("section.bp");
     fullscreen.request.mockRejectedValueOnce(new Error("Fullscreen permission denied"));
     button.click();
     await waitForSolid(() => expect(panel.textContent).toContain("Fullscreen permission denied"));
+    expect(panel.querySelector(".desktop-fullscreen-button")).toBe(button);
+    expect(panel.querySelector("section.bp")).toBe(section);
+    const retry = createDeferred();
+    fullscreen.request.mockImplementationOnce(async function (this: Element) {
+      await retry.promise;
+      fullscreen.change(this);
+    });
     button.click();
+    await waitForSolid(() =>
+      expect(panel.textContent).not.toContain("Fullscreen permission denied"),
+    );
+    expect(panel.querySelector("section.bp")).toBe(section);
+    retry.resolve();
     await waitForSolid(() => expect(button.getAttribute("aria-pressed")).toBe("true"));
     expect(panel.textContent).not.toContain("Fullscreen permission denied");
     await unmountPanel(panel);

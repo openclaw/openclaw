@@ -145,6 +145,7 @@ it("applies route ownership to shell panels without session-gating desktop", asy
   const expectHomeAvailable = (homeAvailable: boolean, rail = true) => {
     refreshShellView(shell);
     expect(container.querySelector(".shell-chrome-controls__home")).toBeNull();
+    expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
     if (rail) {
       expect(
         container.querySelector(".shell--navigation-rail openclaw-app-sidebar"),
@@ -220,10 +221,8 @@ it("applies route ownership to shell panels without session-gating desktop", asy
 
   // Home now lives in the retained rail, not duplicate floating chrome.
   // The shell still projects its access through permission, reconnect, and Gateway changes.
-  expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
   context.navigation.snapshot.navCollapsed = true;
   expectHomeAvailable(true);
-  expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
   for (const phase of ["connected", "reconnecting", "offline", "connected"] as const) {
     context.gateway.snapshot.phase = phase;
     refreshShellView(shell);
@@ -234,7 +233,6 @@ it("applies route ownership to shell panels without session-gating desktop", asy
     scopes: ["operator.read", "operator.write"],
   };
   expectHomeAvailable(true);
-  expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
   context.gateway.snapshot.phase = "offline";
   expectHomeAvailable(true);
   const acceptedHello = context.gateway.snapshot.hello!;
@@ -247,7 +245,6 @@ it("applies route ownership to shell panels without session-gating desktop", asy
   expectHomeAvailable(true);
   context.gateway.snapshot.hello!.auth = { role: "operator", scopes: ["operator.read"] };
   expectHomeAvailable(false, false);
-  expect(container.querySelector(".shell-chrome-controls__custodian")).toBeNull();
   context.gateway.snapshot.phase = "offline";
   expectHomeAvailable(false, false);
 });

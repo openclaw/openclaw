@@ -19,9 +19,9 @@ This guide covers protecting that state: one-off archives, per-database
 snapshots, scheduling, offsite copies, and continuous replication for installs
 that should not re-upload whole databases on every backup.
 
-The experimental PostgreSQL Workboard store uses a local SQLite anchor plus
-PostgreSQL rows. Back it up with `openclaw backup create`, which includes the
-matched export and anchor. Stop the Gateway through its service owner first;
+PostgreSQL stores in the state, agent, Workboard, Logbook and Team Reports
+families use local SQLite anchors plus PostgreSQL rows. Use `openclaw backup create`
+to capture their matched exports and anchors. Stop the Gateway through its service owner first;
 PostgreSQL backups refuse while it is running and never stop it automatically.
 See [Database engines](/reference/database-engines#anchors-and-backups).
 

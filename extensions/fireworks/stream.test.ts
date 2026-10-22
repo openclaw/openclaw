@@ -6,10 +6,13 @@ import {
   type Model,
   type SimpleStreamOptions,
 } from "openclaw/plugin-sdk/llm";
-import { registerSingleProviderPlugin } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  capturePluginRegistration,
+  registerSingleProviderPlugin,
+  requireRegisteredProvider,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import { wrapFireworksProviderStream } from "./stream.js";
 
 const glmId = "accounts/fireworks/routers/glm-5p3-fast";
 const kimiId = "accounts/fireworks/routers/kimi-k2.6-synthetic-test";
@@ -32,7 +35,11 @@ function createModel(overrides: Partial<Model> = {}): Model {
 
 function wrapModel(model: Model, streamFn?: StreamFn, sourceApi?: Model["api"]) {
   const { provider, id: modelId } = model;
-  return wrapFireworksProviderStream({ provider, modelId, model, streamFn, sourceApi });
+  const registeredProvider = requireRegisteredProvider(
+    capturePluginRegistration(plugin).providers,
+    "fireworks",
+  );
+  return registeredProvider.wrapStreamFn?.({ provider, modelId, model, streamFn, sourceApi });
 }
 
 function capturePayload(model: Model, payload: Record<string, unknown>) {

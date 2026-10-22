@@ -54,7 +54,6 @@ function createLazyGoogleRealtimeVoiceBridge(
   req: RealtimeVoiceBridgeCreateRequest,
 ): RealtimeVoiceBridge {
   let bridgeReady = false;
-  let latestMediaTimestamp: number | undefined;
   let pendingGreeting: string | undefined;
   // Lazy startup keeps the newest microphone tail when loading stalls.
   const pendingAudio = createRealtimeVoiceAudioQueue("drop-oldest");
@@ -70,7 +69,6 @@ function createLazyGoogleRealtimeVoiceBridge(
       pendingUserMessages.length = 0;
       pendingUserMessageBytes = 0;
       pendingGreeting = undefined;
-      latestMediaTimestamp = undefined;
     },
     onProviderReady: (bridge) => {
       if (bridge) {
@@ -89,9 +87,6 @@ function createLazyGoogleRealtimeVoiceBridge(
   const flushPending = (loadedBridge: RealtimeVoiceBridge) => {
     if (!lifecycle.isActive()) {
       return;
-    }
-    if (latestMediaTimestamp !== undefined) {
-      loadedBridge.setMediaTimestamp(latestMediaTimestamp);
     }
     for (const audio of pendingAudio.drain()) {
       loadedBridge.sendAudio(audio);
@@ -124,13 +119,7 @@ function createLazyGoogleRealtimeVoiceBridge(
       }
       pendingAudio.enqueue(audio);
     },
-    setMediaTimestamp: (ts) => {
-      if (!lifecycle.isActive()) {
-        return;
-      }
-      latestMediaTimestamp = ts;
-      lifecycle.bridge?.setMediaTimestamp(ts);
-    },
+    setMediaTimestamp: () => {},
     sendUserMessage: (text) => {
       if (!lifecycle.isActive()) {
         return;
@@ -175,11 +164,7 @@ function createLazyGoogleRealtimeVoiceBridge(
       }
       return requireBridge().submitToolResult(callId, result, options);
     },
-    acknowledgeMark: () => {
-      if (lifecycle.isActive()) {
-        requireBridge().acknowledgeMark();
-      }
-    },
+    acknowledgeMark: () => {},
     close: lifecycle.close,
     isConnected: () => lifecycle.isActive() && (lifecycle.bridge?.isConnected() ?? false),
   };

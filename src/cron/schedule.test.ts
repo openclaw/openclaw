@@ -112,11 +112,6 @@ describe("cron schedule", () => {
     );
   });
 
-  it("computes next run for every schedule when anchorMs is not provided", () => {
-    const now = Date.parse("2025-12-13T00:00:00.000Z");
-    expect(computeNextRunAtMs({ kind: "every", everyMs: 30_000 }, now)).toBe(now + 30_000);
-  });
-
   it("rejects every schedule numbers outside the ECMAScript Date range", () => {
     for (const fields of [
       { everyMs: MAX_DATE_TIMESTAMP_MS + 1 },

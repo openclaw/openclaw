@@ -125,9 +125,10 @@ describe("session workspace artifacts", () => {
     const props = createSessionWorkspaceProps(fixture.state);
     props.onOpenArtifact("artifact-1");
     const content = await fixture.loadedContent();
-    if (content.kind !== "attachment" || !content.download) {
+    if (content.kind !== "attachment" || !content.download || !content.file) {
       throw new Error("Binary artifact must expose a download action");
     }
+    const file = content.file;
     const panel = document.createElement("openclaw-chat-detail-panel");
     panel.content = content;
     panel.attachmentRuntime = { connectionEpoch: 1, sessionKey: fixture.state.sessionKey };
@@ -135,7 +136,7 @@ describe("session workspace artifacts", () => {
     onTestFinished(() => panel.remove());
     await panel.updateComplete;
     const button = panel.querySelector<HTMLButtonElement>(
-      "button.chat-assistant-attachment-card__download",
+      '.session-panel-rail button[aria-label="Download file"]',
     );
     if (!button) {
       throw new Error("Binary artifact must render the attachment download action");
@@ -155,7 +156,7 @@ describe("session workspace artifacts", () => {
     ) {
       clicked.push(this);
     });
-    return { ...fixture, props, content, panel, button, saved, urls, clicked };
+    return { ...fixture, props, content, file, panel, button, saved, urls, clicked };
   }
 
   it.each([false, true])(
@@ -203,7 +204,7 @@ describe("session workspace artifacts", () => {
         started.resolve();
         return transfer.promise;
       });
-      const read = vi.spyOn(fixture.content, "download");
+      const read = vi.spyOn(fixture.file, "download");
       fixture.button.click();
       await started.promise;
       if (retirement === "reconnect") {
@@ -249,11 +250,11 @@ describe("session workspace artifacts", () => {
   });
 
   it.each([
-    ["text/plain; charset=utf-8", "Résumé 東京 🦀", true, undefined, "```"],
-    ["application/json", JSON.stringify("Résumé 東京 🦀"), false, undefined, "```json"],
+    ["text/plain; charset=utf-8", "Résumé 東京 🦀", true, undefined, ""],
+    ["application/json", JSON.stringify("Résumé 東京 🦀"), false, "Report", "json"],
     ["image/png", "iVBORw0KGgo=", true, "preview.png", undefined],
     ["text/html", "<h1>Actual artifact</h1>", true, "report.html", undefined],
-  ] as const)("previews %s source %s", async (mimeType, source, http, title, fence) => {
+  ] as const)("previews %s source %s", async (mimeType, source, http, title, language) => {
     const image = mimeType === "image/png";
     const proxy = mimeType === "text/html";
     const data = image ? source : btoa(String.fromCharCode(...new TextEncoder().encode(source)));
@@ -280,9 +281,10 @@ describe("session workspace artifacts", () => {
         rawText: url,
         src: `data:image/png;base64,${data}`,
         title: "preview.png",
+        file: { path: "", artifactId: "artifact-1", download: expect.any(Function) },
       });
     } else if (proxy) {
-      expect(content).toMatchObject({ kind: "markdown", rawText: source });
+      expect(content).toMatchObject({ kind: "file", name: "report.html", rawText: source });
       expect(request.mock.contexts).toEqual([state.client, state.client]);
       expect(request.mock.calls.map(([, query]) => query)).toEqual([
         { ...artifactQuery, transport: "http" },
@@ -290,9 +292,15 @@ describe("session workspace artifacts", () => {
       ]);
     } else {
       expect(content).toEqual({
-        kind: "markdown",
-        content: `# Unicode artifact\n\n${fence}\n${source}\n\`\`\``,
+        kind: "file",
+        path: "",
+        artifactId: "artifact-1",
+        name: title ?? "Unicode artifact",
+        content: source,
         rawText: source,
+        mimeType,
+        language,
+        download: expect.any(Function),
       });
     }
     if (http) {

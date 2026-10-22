@@ -10,6 +10,7 @@ import {
   type InstalledPluginIndexRecordStoreOptions,
 } from "../plugins/installed-plugin-index-records.js";
 import { markRetainedManagedNpmInstall } from "../plugins/managed-npm-retention.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import { shortenHomePath } from "../utils.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 
@@ -17,7 +18,6 @@ export const PLUGIN_REGISTRY_CHECK_ID = "core/doctor/plugin-registry";
 
 export type StaleManagedNpmInstallGenerationIssue = {
   kind: "stale-managed-npm-install-generation";
-  activePackageDir: string;
   packageDir: string;
   pluginId: string;
   version?: string;
@@ -39,12 +39,7 @@ export async function listStaleManagedNpmInstallGenerations(
   // deterministic recovery choice when that authority is absent or dangling.
   const activeRecords = await loadInstalledPluginIndexInstallRecords(params);
   const candidates = listRecoveredManagedNpmInstallCandidates(params);
-  const candidatesByPluginId = new Map<string, typeof candidates>();
-  for (const candidate of candidates) {
-    const entries = candidatesByPluginId.get(candidate.pluginId) ?? [];
-    entries.push(candidate);
-    candidatesByPluginId.set(candidate.pluginId, entries);
-  }
+  const candidatesByPluginId = groupRecords(candidates, (candidate) => candidate.pluginId);
 
   const stale: StaleManagedNpmInstallGenerationIssue[] = [];
   for (const [pluginId, pluginCandidates] of candidatesByPluginId) {
@@ -69,7 +64,6 @@ export async function listStaleManagedNpmInstallGenerations(
       stale.push({
         kind: "stale-managed-npm-install-generation",
         pluginId,
-        activePackageDir: activeRecord.installPath,
         packageDir,
         ...(candidate.installRecord.resolvedVersion
           ? { version: candidate.installRecord.resolvedVersion }
@@ -134,6 +128,8 @@ export function staleManagedNpmInstallGenerationToHealthFinding(
   return {
     checkId: PLUGIN_REGISTRY_CHECK_ID,
     severity: "warning",
+    category: "recommended",
+    docsUrl: "https://docs.openclaw.ai/cli/doctor/checks",
     message: `Managed npm plugin ${issue.pluginId}${issue.version ? `@${issue.version}` : ""} is a stale non-authoritative generation.`,
     path: issue.packageDir,
     target: issue.pluginId,

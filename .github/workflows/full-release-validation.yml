@@ -170,7 +170,7 @@ env:
   GH_REPO: ${{ github.repository }}
   # Read retries and one-shot dispatch recovery share this classifier; dispatch POSTs never retry.
   GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|(^|[^A-Za-z0-9_])EOF([^A-Za-z0-9_]|$)|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
   RELEASE_ISOLATION_TOOLING_CONTRACT: "2"
   FULL_RELEASE_DISPATCH_WITNESS_CONTRACT: "1"
   FULL_RELEASE_QUALIFICATION_ADMISSION_CONTRACT: "1"
@@ -178,6 +178,7 @@ env:
   FULL_RELEASE_PUBLICATION_ADMISSION_CONTRACT: "1"
   FULL_RELEASE_EXECUTION_PLAN_RESTORE_CONTRACT: "1"
   FULL_RELEASE_LANE_INPUTS_CONTRACT: "1"
+  FULL_RELEASE_ARTIFACT_RECOVERY_CONTRACT: "1"
   CHILD_EVIDENCE_REUSE: ${{ inputs.reuse_evidence && inputs.rerun_group == 'all' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/heads/release-ci/')) }}
 
 jobs:
@@ -305,7 +306,7 @@ jobs:
 
       - name: Setup admission Node.js
         env:
-          REQUESTED_NODE_VERSION: "24.x"
+          REQUESTED_NODE_VERSION: "24.22.1"
         run: |
           set -euo pipefail
           source workflow/.github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -787,12 +788,23 @@ jobs:
           NODE
 
       - name: Restore immutable plan for publication admission
+        id: publication_plan_cache
         if: github.run_attempt != 1
         continue-on-error: true
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: full-release-execution-plan
           key: full-release-execution-plan-v2-${{ github.run_id }}
+
+      - name: Restore immutable plan inputs for publication admission
+        if: ${{ github.run_attempt != 1 && steps.publication_plan_cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: full-release-execution-plan-inputs-${{ github.run_id }}-1
+          path: ${{ github.workspace }}/full-release-execution-plan-inputs
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
 
       - name: Admit publication source
         id: publication_admission
@@ -802,6 +814,7 @@ jobs:
           PUBLICATION_TARGET_ROOT: ${{ github.workspace }}/target
           PUBLICATION_REQUIRED: ${{ steps.publication_request.outputs.required }}
           FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ github.workspace }}/full-release-execution-plan/full-release-execution-plan.json
+          FULL_RELEASE_PLAN_INPUTS_PATH: ${{ github.workspace }}/full-release-execution-plan-inputs/plan-inputs.json
         run: |
           set -euo pipefail
           umask 077
@@ -818,7 +831,7 @@ jobs:
           printf 'json=%s\n' "$(jq -ec . "$RUNNER_TEMP/publication-source-admission.json")" >> "$GITHUB_OUTPUT"
 
       - name: Upload restored immutable release execution plan
-        if: github.run_attempt != 1
+        if: ${{ github.run_attempt != 1 && steps.publication_plan_cache.outputs.cache-hit == 'true' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: full-release-execution-plan-${{ github.run_id }}
@@ -1083,7 +1096,7 @@ jobs:
 
       - name: Setup Node.js
         env:
-          REQUESTED_NODE_VERSION: "24.x"
+          REQUESTED_NODE_VERSION: "24.22.1"
         run: |
           set -euo pipefail
           source workflow/.github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -1287,7 +1300,7 @@ jobs:
         if: env.CHILD_EVIDENCE_REUSE == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Dispatch CI
@@ -1479,6 +1492,9 @@ jobs:
             if [[ ! "$child_run_attempt" =~ ^[1-9][0-9]*$ || -z "${url// }" ]]; then
               echo "::error::${workflow} child run omitted its attempt or URL." >&2
               exit 1
+            fi
+            if [[ "$CHILD_WORKFLOW_KIND" == artifact-* ]]; then
+              echo "Artifact dispatch ${CHILD_WORKFLOW_KIND#artifact-} target ${TARGET_SHA}: ${url} (attempt ${child_run_attempt})"
             fi
             echo "Dispatched ${workflow}: ${url} (attempt ${child_run_attempt})"
             echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
@@ -2253,11 +2269,23 @@ jobs:
           key: full-release-execution-plan-v2-${{ github.run_id }}
 
       - name: Restore immutable release execution plan artifact
+        id: plan_restore
         if: ${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' }}
+        continue-on-error: true
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: full-release-execution-plan-${{ github.run_id }}
           path: ${{ github.workspace }}/full-release-execution-plan
+          github-token: ${{ github.token }}
+          run-id: ${{ github.run_id }}
+
+      - name: Restore immutable release execution plan inputs
+        id: plan_inputs_restore
+        if: ${{ always() && github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' && steps.plan_restore.outcome != 'success' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: full-release-execution-plan-inputs-${{ github.run_id }}-1
+          path: ${{ github.workspace }}/full-release-execution-plan-inputs
           github-token: ${{ github.token }}
           run-id: ${{ github.run_id }}
 
@@ -2276,8 +2304,9 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-cache: false
 
-      - name: Seal immutable release execution plan
-        id: plan
+      - name: Prepare immutable release execution plan inputs
+        id: plan_inputs
+        if: github.run_attempt == 1
         env:
           GH_TOKEN: ${{ github.token }}
           OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
@@ -2453,13 +2482,58 @@ jobs:
               + ({normalCi: $normalCiReuse, pluginPrereleaseIndependent: $pluginPrereleaseIndependentReuse, pluginPrereleaseCandidate: $pluginPrereleaseCandidateReuse, releaseChecksIndependent: $releaseChecksIndependentReuse, releaseChecksCandidate: $releaseChecksCandidateReuse, npmTelegram: $npmTelegramReuse, productPerformance: $productPerformanceReuse} | with_entries(select(.value != null)) | if length == 0 then {} else {childReuse: .} end)'
             )"
           fi
+          umask 077
+          mkdir -p "${GITHUB_WORKSPACE}/full-release-execution-plan-inputs"
+          printf '%s\n' "$FULL_RELEASE_PLAN_INPUTS_JSON" \
+            > "${GITHUB_WORKSPACE}/full-release-execution-plan-inputs/plan-inputs.json"
+          if [[ -f "$PUBLICATION_ADMISSION_PATH" ]]; then
+            cp "$PUBLICATION_ADMISSION_PATH" \
+              "${GITHUB_WORKSPACE}/full-release-execution-plan-inputs/publication-admission.json"
+          fi
+
+      - name: Upload immutable release execution plan inputs
+        id: plan_inputs_upload
+        if: ${{ github.run_attempt == 1 && steps.plan_inputs.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: full-release-execution-plan-inputs-${{ github.run_id }}-1
+          path: ${{ github.workspace }}/full-release-execution-plan-inputs
+          if-no-files-found: error
+          overwrite: false
+
+      - name: Seal immutable release execution plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OPENCLAW_RELEASE_CI_SUMMARY_VALIDATOR: ${{ fromJSON(needs.resolve_target.outputs.source_admission_json || '{}').qualificationAdmission != null && format('{0}/qualification-verifier/scripts/release-ci-summary.mjs', github.workspace) || format('{0}/scripts/release-ci-summary.mjs', github.workspace) }}
+          SOURCE_ADMISSION_JSON: ${{ needs.resolve_target.outputs.source_admission_json }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref || inputs.ref }}
+          RELEASE_PROFILE: ${{ inputs.release_profile }}
+          RERUN_GROUP: ${{ inputs.rerun_group }}
+          TARGET_SHA: ${{ needs.resolve_target.outputs.sha }}
+          TARGET_VERSION: ${{ needs.resolve_target.outputs.target_version }}
+          COVERAGE_POLICY: ${{ needs.resolve_target.outputs.coverage_policy }}
+          TELEGRAM_WAIVER: ${{ inputs.telegram_waiver }}
+          CANDIDATE_REQUEST_JSON: ${{ needs.resolve_target.outputs.candidate_request_json }}
+          FULL_RELEASE_RESTORE_PLAN: ${{ github.run_attempt != 1 && (steps.plan_cache.outputs.cache-hit == 'true' || steps.plan_restore.outcome == 'success') }}
+          FULL_RELEASE_PRESEAL_RECOVERY: ${{ github.run_attempt != 1 && steps.plan_cache.outputs.cache-hit != 'true' && steps.plan_restore.outcome != 'success' && steps.plan_inputs_restore.outcome == 'success' }}
+          FULL_RELEASE_PREPARATION_SOURCE_ATTEMPT: "1"
+          FULL_RELEASE_EXECUTION_PLAN_PATH: ${{ github.workspace }}/full-release-execution-plan/full-release-execution-plan.json
+          PUBLICATION_ADMISSION_PATH: ${{ github.workspace }}/full-release-execution-plan-inputs/publication-admission.json
+        run: |
+          set -euo pipefail
+          if [[ "$FULL_RELEASE_RESTORE_PLAN" != "true" ]]; then
+            export FULL_RELEASE_PLAN_INPUTS_JSON="$(
+              jq -c . "${GITHUB_WORKSPACE}/full-release-execution-plan-inputs/plan-inputs.json"
+            )"
+          fi
           node scripts/full-release-validation-state.mjs plan
 
       - name: Upload immutable release execution plan
         id: plan_upload
         # The sealer can write a valid interrupted checkpoint and exit nonzero.
-        # Only its attempt-one write signal may publish the immutable alias.
-        if: ${{ always() && github.run_attempt == 1 && steps.plan.outputs.sha256 != '' && steps.plan.outputs.source_parent_attempt == '1' }}
+        # Only a write derived from the immutable attempt-one inputs may publish the alias.
+        if: ${{ always() && steps.plan.outputs.sha256 != '' && steps.plan.outputs.source_parent_attempt == '1' && (steps.plan_inputs_upload.outcome == 'success' || steps.plan_inputs_restore.outcome == 'success') }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: full-release-execution-plan-${{ github.run_id }}
@@ -2469,7 +2543,7 @@ jobs:
 
       - name: Record immutable release execution plan digest
         id: plan_witness
-        if: ${{ always() && github.run_attempt == 1 && steps.plan_upload.outcome == 'success' }}
+        if: ${{ always() && steps.plan_upload.outcome == 'success' }}
         env:
           EXECUTION_PLAN_SHA256: ${{ steps.plan.outputs.sha256 }}
         run: |

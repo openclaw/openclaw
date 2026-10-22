@@ -23,7 +23,8 @@ import { flushPendingSessionsChangedEvents } from "./server-methods/session-chan
 import { sessionAbortHandlers } from "./server-methods/sessions-abort.js";
 import { loadGatewaySessionEntryReadOnlyAsync } from "./session-utils.js";
 
-const { createQueuedReservation, requestContext, operatorClient } = useQueuedCollectorFixture();
+const { createQueuedReservation, requestContext, requestOptions, expectChanged } =
+  useQueuedCollectorFixture();
 
 it.for(["settled", "rejected", "session replaced"] as const)(
   "qualifies queued cancellation only after owned cleanup: %s",
@@ -60,15 +61,12 @@ it.for(["settled", "rejected", "session replaced"] as const)(
         onRemoved: cleanup,
       });
       stopping = Promise.resolve(
-        expectDefined(
-          sessionAbortHandlers["sessions.abort"],
-          "Stop handler",
-        )({
-          req: { type: "req", id: "settled-queued-stop", method: "sessions.abort" },
-          params: { key: entry.childSessionKey, runId: entry.runId, agentId: "main" },
-          client: operatorClient(),
-          isWebchatConnect: () => false,
-          context,
+        sessionAbortHandlers["sessions.abort"]!({
+          ...requestOptions(context, "sessions.abort", {
+            key: entry.childSessionKey,
+            runId: entry.runId,
+            agentId: "main",
+          }),
           respond,
         }),
       );
@@ -128,18 +126,13 @@ it.for(["settled", "rejected", "session replaced"] as const)(
           lastRunId: entry.runId,
           abortedLastRun: true,
         });
-        expect(context.broadcastToConnIds).toHaveBeenCalledWith(
-          "sessions.changed",
-          expect.objectContaining({
-            sessionKey: entry.childSessionKey,
-            reason: "abort",
-            status: "killed",
-            hasActiveRun: false,
-            lastRunId: entry.runId,
-          }),
-          new Set(["observer"]),
-          expect.any(Object),
-        );
+        expectChanged(context, {
+          sessionKey: entry.childSessionKey,
+          reason: "abort",
+          status: "killed",
+          hasActiveRun: false,
+          lastRunId: entry.runId,
+        });
       } else {
         expect(respond.mock.calls[0]?.[0]).toBe(false);
         expect(publications()).not.toContainEqual(

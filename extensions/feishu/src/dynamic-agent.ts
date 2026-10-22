@@ -10,7 +10,6 @@ import type { DynamicAgentCreationConfig } from "./types.js";
 
 type DynamicAgentMutationResult = {
   created: boolean;
-  agentId?: string;
 };
 
 type MaybeCreateDynamicAgentResult = DynamicAgentMutationResult & {
@@ -177,7 +176,7 @@ export async function maybeCreateDynamicAgent(params: {
             },
           },
         ];
-        return { created: true, agentId };
+        return { created: true };
       },
     })
     .catch((error: unknown) => {
@@ -194,7 +193,6 @@ export async function maybeCreateDynamicAgent(params: {
   return {
     created: committed.result?.created ?? false,
     updatedCfg: runtime.config.current() as OpenClawConfig,
-    agentId: committed.result?.agentId,
   };
 }
 

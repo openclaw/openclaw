@@ -48,6 +48,7 @@ import {
   resolveFollowupAbortSignal,
   type FollowupRun,
 } from "./queue/types.js";
+import { prepareReplySourceAdmission } from "./reply-source-admission.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 import { prepareReplyTurnContext } from "./reply-turn-preflight.js";
 import type { createReplyTurnRotationEvidence } from "./reply-turn-rotation.js";
@@ -85,6 +86,7 @@ export type AdmittedFollowupTurn = {
   preflightFailurePayload?: ReplyPayload;
   preflightError?: Error;
   restartRecovery?: ReplyRestartRecoveryClaimController;
+  releaseSourceAdmission?: () => Promise<void>;
 };
 
 function isSameSessionGeneration(
@@ -174,7 +176,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
     const resolveRunSessionFile = (source: FollowupRun["run"]) =>
       normalizeOptionalString(replySessionKey) ?? source.sessionFile;
     const kind = params.kind ?? "queued_followup";
-    const isHeartbeat = kind !== "queued_followup" && params.defaults.opts?.isHeartbeat === true;
     const sourceSignal = resolveFollowupAbortSignal(params.queued);
     const admission = params.providedReplyOperation
       ? {
@@ -262,6 +263,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
     let queuedFollowupAdmitted = false;
     let admissionFailed = false;
     let callerOwnsOperation = false;
+    let releaseSourceAdmission: (() => Promise<void>) | undefined;
     try {
       callerOwnsOperation = params.onOperationOwned?.(operation) === true;
       params.queued.run.onOperationAdmitted?.(operation);
@@ -269,8 +271,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
         return { kind: "skipped", reason: "aborted", operation } as const;
       }
 
-      // Queue drains retain the latest live runner closure per key. Keep local dispatcher
-      // callbacks in that closure so retried non-routable items use the newest transport owner.
+      // The queued source retains its runner, including its own dispatcher callbacks.
       if (kind === "queued_followup") {
         queuedFollowupAdmitted = true;
         await params.defaults.opts?.onQueuedFollowupAdmitted?.();
@@ -396,9 +397,10 @@ export async function prepareReplyAgentTurn<TConfigured>(
             source.originatingChatType ?? source.run.chatType ?? entry?.chatType,
           ),
         });
-      const currentInboundContext = isHeartbeat
-        ? queued.currentInboundContext
-        : refreshActiveGoalContext(queued.currentInboundContext, activeEntry);
+      const currentInboundContext = refreshActiveGoalContext(
+        queued.currentInboundContext,
+        activeEntry,
+      );
       // Preallocate the one lifecycle identity passed as opts.runId; canonical
       // execution owns registration and cleanup under this same id.
       const turn: AdmittedFollowupTurn = {
@@ -442,9 +444,10 @@ export async function prepareReplyAgentTurn<TConfigured>(
             },
           };
         }
-        const refreshedInboundContext = isHeartbeat
-          ? params.queued.currentInboundContext
-          : refreshActiveGoalContext(params.queued.currentInboundContext, entry);
+        const refreshedInboundContext = refreshActiveGoalContext(
+          params.queued.currentInboundContext,
+          entry,
+        );
         turn.sendPolicy = resolveTurnSendPolicy(entry, turn.queued);
         turn.queued = { ...turn.queued, currentInboundContext: refreshedInboundContext };
         return generationRotated;
@@ -478,6 +481,13 @@ export async function prepareReplyAgentTurn<TConfigured>(
               await params.onCompactionNotice?.(phase, text, turn);
             }
           : undefined;
+      releaseSourceAdmission = await prepareReplySourceAdmission({
+        operation,
+        followupRun: turn.queued,
+        recorder: turn.queued.userTurnTranscriptRecorder,
+        runId: turn.runId,
+      });
+      turn.releaseSourceAdmission = releaseSourceAdmission;
       const preflightEntry = session.current();
       try {
         await params.signalRunStart?.();
@@ -491,7 +501,6 @@ export async function prepareReplyAgentTurn<TConfigured>(
           sessionStore,
           sessionKey: replySessionKey,
           storePath: params.defaults.storePath,
-          isHeartbeat,
           opts: { ...params.defaults.opts, runId: turn.runId },
           resolvedVerboseLevel:
             normalizeVerboseLevel(
@@ -574,6 +583,7 @@ export async function prepareReplyAgentTurn<TConfigured>(
       }
       // Only a returned turn transfers presentation cleanup to the runner.
       queuedFollowupAdmitted = false;
+      releaseSourceAdmission = undefined;
       return { kind: "admitted", configured, turn } as const;
     } catch (error) {
       admissionFailed = true;
@@ -583,11 +593,18 @@ export async function prepareReplyAgentTurn<TConfigured>(
       }
       throw failure;
     } finally {
-      if (queuedFollowupAdmitted) {
-        await settleQueuedFollowupPresentation(params.defaults.opts?.onQueuedFollowupSettled);
-      }
-      if (admissionFailed && !callerOwnsOperation) {
-        operation.complete();
+      try {
+        if (queuedFollowupAdmitted) {
+          await settleQueuedFollowupPresentation(params.defaults.opts?.onQueuedFollowupSettled);
+        }
+      } finally {
+        try {
+          await releaseSourceAdmission?.();
+        } finally {
+          if (admissionFailed && !callerOwnsOperation) {
+            operation.complete();
+          }
+        }
       }
     }
   } catch (error) {

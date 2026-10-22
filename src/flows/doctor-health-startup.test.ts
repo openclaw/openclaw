@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createNonExitingRuntime } from "../runtime.js";
 import { prepareDoctorHealthFlow, prepareDoctorStateSchema } from "./doctor-health-startup.js";
@@ -9,22 +9,22 @@ const mocks = vi.hoisted(() => ({
   note: vi.fn(),
   migrateState: vi.fn(),
 }));
-// mock-isolation: keep the startup directory probe away from operator paths and Nix policy.
+// mock-isolation: isolate startup from operator paths, config, tools, terminal and databases.
 vi.mock("../config/paths.js", () => ({
   resolveIsNixMode: () => false,
   resolveStateDir: () => "/synthetic/openclaw-state",
 }));
-// mock-isolation: read synthetic config without initializing the state-backed config runtime.
+// mock-isolation: startup admission uses synthetic config, not operator files.
 vi.mock("../config/io.runtime.js", () => ({ readSourceConfigBestEffort: mocks.config }));
-// mock-isolation: inspect synthetic CLI status without invoking the operator Tailscale executable.
+// mock-isolation: startup health checks must not execute real host commands.
 vi.mock("../process/exec.js", () => ({ runUtf8CommandWithTimeout: mocks.command }));
-// mock-isolation: capture prerequisite output without rendering to the operator terminal.
+// mock-isolation: capture startup warnings without terminal side effects.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
-// mock-isolation: avoid discovering installation ownership from the operator checkout.
+// mock-isolation: startup resolves a synthetic installation root, not the live checkout.
 vi.mock("../infra/openclaw-root.js", () => ({
   resolveOpenClawPackageRoot: vi.fn(async () => "/synthetic/openclaw"),
 }));
-// mock-isolation: capture migration admission without opening operator databases.
+// mock-isolation: startup selection must not migrate real operator databases.
 vi.mock("../infra/state-migrations.doctor.js", () => ({
   prepareLegacyStateDatabaseSchema: mocks.migrateState,
 }));
@@ -34,82 +34,53 @@ beforeEach(() => {
   mocks.config.mockReset().mockResolvedValue({ gateway: { tailscale: { mode: "serve" } } });
   mocks.command.mockReset();
   mocks.note.mockReset();
-  mocks.migrateState.mockReset().mockResolvedValue({
-    id: "state-schema",
-    phase: "shared",
-    source: [],
-    target: [],
-    requiredness: "conditional",
-    reversibility: "checkpoint-required",
-    outcome: "completed",
-    changes: [],
-    warnings: [],
-  });
+  mocks.migrateState.mockReset().mockResolvedValue({ outcome: "completed" });
 });
 
 afterEach(() => vi.unstubAllEnvs());
 
-async function startDoctor() {
-  return await prepareDoctorHealthFlow(createNonExitingRuntime(), {}, vi.fn());
-}
+it.each(["quick", "full"] as const)(
+  "preserves %s integrity selection for early shared-state migration",
+  async (check) => {
+    await prepareDoctorStateSchema(
+      {
+        incompatible: [],
+        indeterminate: [],
+        pendingMigrations: [
+          { kind: "state", path: "/state.sqlite", foundVersion: 1, supportedVersion: 2 },
+        ],
+      },
+      true,
+      check,
+    );
+    expect(mocks.migrateState).toHaveBeenCalledExactlyOnceWith(process.env, check);
+  },
+);
 
-describe("Doctor startup dependencies", () => {
-  it.each(["quick", "full"] as const)(
-    "preserves %s integrity selection for early shared-state migration",
-    async (check) => {
-      await prepareDoctorStateSchema(
-        {
-          incompatible: [],
-          indeterminate: [],
-          pendingMigrations: [
-            {
-              kind: "state",
-              path: "/synthetic/openclaw.sqlite",
-              foundVersion: 1,
-              supportedVersion: 2,
-            },
-          ],
-        },
-        true,
-        check,
-      );
-      expect(mocks.migrateState).toHaveBeenCalledExactlyOnceWith(process.env, check);
-    },
+it("continues published-updater Doctor without invoking unsupported config reads", async () => {
+  vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
+  const startup = prepareDoctorHealthFlow(
+    createNonExitingRuntime(),
+    { repair: true, nonInteractive: true },
+    vi.fn(),
   );
+  await expect(startup).resolves.toMatchObject({ root: "/synthetic/openclaw" });
+  expect(mocks.config).not.toHaveBeenCalled();
+  expect(mocks.command).not.toHaveBeenCalled();
+  expect(mocks.note).not.toHaveBeenCalled();
+});
 
-  it("continues published-updater Doctor without invoking unsupported config reads", async () => {
-    vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", "1");
-    mocks.config.mockRejectedValue(
-      new Error(
-        "Run config operation readSourceConfigBestEffort in the updated CLI after this update finishes.",
-      ),
-    );
-    await expect(
-      prepareDoctorHealthFlow(
-        createNonExitingRuntime(),
-        { repair: true, nonInteractive: true },
-        vi.fn(),
-      ),
-    ).resolves.toMatchObject({ root: "/synthetic/openclaw" });
-    expect(mocks.config).not.toHaveBeenCalled();
-    expect(mocks.command).not.toHaveBeenCalled();
-    expect(mocks.note).not.toHaveBeenCalled();
+it("reports a non-running backend before admitting Doctor maintenance", async () => {
+  mocks.command.mockResolvedValue({
+    code: 0,
+    stdout: JSON.stringify({ BackendState: "UnknownFutureState" }),
   });
-
-  it("reports a non-running backend before admitting Doctor maintenance", async () => {
-    mocks.command.mockResolvedValue({
-      code: 0,
-      stdout: JSON.stringify({ BackendState: "UnknownFutureState" }),
-    });
-    await startDoctor();
-    expect(mocks.note).toHaveBeenCalledWith(
-      expect.stringContaining("did not report a running backend"),
-      "Gateway startup prerequisite",
-    );
-    expect(mocks.note.mock.calls[0]?.[0]).toContain("Inspect");
-    // Prerequisite inspection cannot enable connectivity or alter routes.
-    expect(mocks.command.mock.calls.map(([argv]) => argv)).toEqual([
-      ["tailscale", "status", "--json"],
-    ]);
-  });
+  await prepareDoctorHealthFlow(createNonExitingRuntime(), {}, vi.fn());
+  expect(mocks.note).toHaveBeenCalledExactlyOnceWith(
+    expect.stringContaining("did not report a running backend. Inspect"),
+    "Gateway startup prerequisite",
+  );
+  expect(mocks.command.mock.calls.map(([argv]) => argv)).toEqual([
+    ["tailscale", "status", "--json"],
+  ]);
 });

@@ -35,20 +35,22 @@ openclaw-terminal-panel {
      trigger-anchored menu wider than the icons spills past the panel's
      left edge, and header anchoring makes 100% mean "panel width". */
   .tp-header {
-    --rail-header-action-glyph-size: 15px;
-
     position: relative;
   }
-  .tp-header .tabstrip-tab__icon svg,
-  .tp-header .tp-icon svg {
+  .tp-header .tabstrip-tab__icon svg {
     width: 15px;
     height: 15px;
+    stroke-width: 1.6px;
+  }
+  .tp-header .tp-icon svg {
+    width: var(--rail-header-action-glyph-size);
+    height: var(--rail-header-action-glyph-size);
     stroke-width: 1.6px;
   }
   .tp-dock-modes {
     display: flex;
     align-items: center;
-    gap: 2px;
+    gap: var(--rail-header-action-gap);
   }
   .tp-session-picker {
     position: static;
@@ -77,7 +79,7 @@ openclaw-terminal-panel {
 
     top: 4px;
   }
-  .tp-session-menu__header {
+  .tp-session-menu__header:where(:not(.session-panel-rail)) {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -87,7 +89,7 @@ openclaw-terminal-panel {
     font-weight: 600;
   }
   /* Refreshing the list is not destructive, so it reads as a plain action. */
-  .tp-session-refresh {
+  .tp-session-refresh:where(:not(.session-panel-rail__button)) {
     border: 0;
     background: transparent;
     color: var(--muted);
@@ -99,56 +101,435 @@ openclaw-terminal-panel {
   .tp-session-refresh:focus-visible {
     color: var(--text);
   }
-  .tp-session {
-    display: grid;
-    grid-template-columns: minmax(70px, auto) minmax(100px, 1fr) auto;
+  .tp-content {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    position: relative;
+    min-height: 0;
+  }
+  .tp-session-menu--inline {
+    position: absolute;
+    inset: 0;
+    max-width: none;
+    max-height: none;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: var(--bg);
+  }
+  .tp-session-menu--inline .tp-session-menu__header:where(:not(.session-panel-rail)),
+  .tp-rail:where(:not(.session-panel-rail)) {
+    display: flex;
     align-items: center;
     gap: 8px;
-    width: 100%;
+    min-height: 51px;
+    flex: none;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--border);
+    background: color-mix(in srgb, var(--bg) 55%, var(--bg-elevated));
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 500;
+  }
+  .tp-session-menu--inline .tp-session-menu__header {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+  }
+  .tp-session-menu__header > span {
+    flex: 1;
+    min-width: 0;
+  }
+  .tp-session-menu--inline .tp-session-refresh:where(:not(.session-panel-rail__button)),
+  .tp-rail__icon {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    padding: 0;
     border: 0;
-    min-height: var(--menu-item-height);
-    border-radius: var(--menu-item-radius);
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted);
+  }
+  .tp-rail:where(:not(.session-panel-rail)) svg,
+  .tp-session-refresh:where(:not(.session-panel-rail__button)) svg {
+    width: 18px;
+    height: 18px;
+  }
+  .tp-rail__identity {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .tp-rail__identity strong,
+  .tp-rail__identity span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tp-rail__identity strong {
+    font-weight: 500;
+  }
+  .tp-rail__identity span {
+    font-size: 12px;
+    color: var(--muted);
+  }
+  .tp-rail__action {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 36px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+    font: inherit;
+    font-size: 12px;
+  }
+  .tp-rail__action:last-child {
+    margin-left: auto;
+  }
+  .tp-session-list {
+    padding: 18px 12px 36px;
+  }
+  .tp-session-list__heading {
+    margin: 0 8px 5px;
+    color: var(--muted);
+    font-size: 12px;
+    font-weight: 400;
+  }
+  .tp-session {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 55px;
+    padding: 15px 8px;
+    border: 0;
+    border-radius: 8px;
     background: transparent;
     color: var(--text);
-    padding: 7px 8px;
     text-align: left;
+    font-size: 13px;
+    line-height: 20px;
   }
-  .tp-session:not(:disabled):hover,
-  .tp-session:not(:disabled):focus-visible {
-    background: var(--bg-hover);
+  .tp-session + .tp-session::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 45px;
+    right: 8px;
+    height: 1px;
+    background: var(--border);
   }
-  .tp-session:disabled {
-    opacity: 0.55;
-  }
-  .tp-session__agent {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    font-size: 12px;
-    font-weight: 600;
-  }
-  .tp-session__cwd {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
+  .tp-session__icon {
+    display: grid;
+    place-items: center;
+    width: 25px;
+    height: 25px;
+    flex: none;
     color: var(--muted);
-    font:
-      11px ui-monospace,
-      SFMono-Regular,
-      "SF Mono",
-      Menlo,
-      Consolas,
-      "Liberation Mono",
-      monospace;
+  }
+  .tp-session__icon svg {
+    width: 18px;
+    height: 18px;
+  }
+  .tp-session__identity {
+    flex: 1;
+    min-width: 0;
+  }
+  .tp-session__name,
+  .tp-session__cwd {
+    display: block;
+    overflow-wrap: anywhere;
+  }
+  .tp-session__cwd,
+  .tp-session__state {
+    font-size: 12px;
+    line-height: 18px;
+    color: var(--muted);
   }
   .tp-session__state {
+    flex: none;
+    max-width: 30%;
+    text-align: right;
+    overflow-wrap: anywhere;
+  }
+  .tp-session__indicator {
+    width: 18px;
+    flex: none;
     color: var(--muted);
-    font-size: 11px;
-    white-space: nowrap;
+  }
+  .tp-session__indicator svg {
+    width: 14px;
+    height: 14px;
   }
   .tp-session-empty {
-    padding: 10px 8px;
+    padding: 18px 20px;
     color: var(--muted);
     font-size: 12px;
+  }
+  .tp:not(.tp--mobile) {
+    .tp-session-menu:not(.tp-session-menu--inline) {
+      .tp-session-list {
+        padding: 0;
+      }
+      .tp-session {
+        min-height: 0;
+        padding-block: 8px;
+        gap: 8px;
+      }
+      .tp-session-refresh {
+        display: grid;
+        place-items: center;
+        width: var(--rail-header-action-size);
+        height: var(--rail-header-action-size);
+        padding: 0;
+        border-radius: var(--radius-md);
+      }
+      .tp-session-refresh svg {
+        width: var(--rail-header-action-glyph-size);
+        height: var(--rail-header-action-glyph-size);
+      }
+    }
+    .tp-rail__identity {
+      gap: 0;
+    }
+    .tp-rail__identity strong {
+      color: var(--text);
+      line-height: 18px;
+    }
+    .tp-rail__identity span {
+      font-size: 11px;
+      line-height: 14px;
+    }
+    .tp-rail__identity strong,
+    .tp-rail__identity span {
+      text-overflow: clip;
+      mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+    }
+    .tp-session-group > summary {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      list-style: none;
+      cursor: var(--cursor-action);
+    }
+    .tp-session-group > summary::-webkit-details-marker {
+      display: none;
+    }
+    .tp-session-list__count {
+      color: var(--muted);
+      opacity: 0.65;
+      font-variant-numeric: tabular-nums;
+    }
+    .tp-session-group > summary svg {
+      width: 12px;
+      height: 12px;
+      color: var(--muted);
+    }
+    .tp-session-group:not([open]) > summary svg {
+      transform: rotate(-90deg);
+    }
+    .tp-session:focus-visible {
+      background: var(--bg-hover);
+    }
+    .tp-session:focus-visible::before,
+    .tp-session:focus-visible + .tp-session::before {
+      opacity: 0;
+    }
+  }
+  .tp--bottom:not(.tp--mobile) .tp-actions {
+    padding-left: 0;
+    border-left: 0;
+  }
+  .tp-viewport--covered {
+    visibility: hidden;
+  }
+  .tp-composer {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 8px;
+    min-height: 44px;
+    margin: 8px 14px 14px;
+    padding: 0 0 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--bg-elevated);
+  }
+  .tp-composer__prompt {
+    font-size: 20px;
+    color: var(--muted);
+  }
+  .tp-composer input {
+    flex: 1;
+    min-width: 0;
+    height: 42px;
+    padding: 0;
+    border: 0;
+    outline-offset: 3px;
+    background: transparent;
+    color: var(--text);
+    font: 14px var(--mono);
+  }
+  .tp-composer__attach,
+  .tp-composer__submit {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--muted);
+  }
+  .tp-composer__submit {
+    width: 44px;
+    height: 44px;
+    border-radius: 9px;
+    color: var(--text);
+  }
+  .tp-composer svg {
+    width: 18px;
+    height: 18px;
+  }
+  .tp-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    max-height: 110px;
+    overflow: auto;
+    flex: none;
+    padding: 8px 14px 0;
+  }
+  .tp-attachment {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 100%;
+    padding: 3px 4px 3px 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 12px;
+  }
+  .tp-attachment > svg {
+    width: 14px;
+    height: 14px;
+    flex: none;
+  }
+  .tp-attachment > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .tp-attachment__remove {
+    width: 26px;
+    height: 26px;
+    flex: none;
+    border: 0;
+    background: transparent;
+    color: var(--muted);
+  }
+  .tp-attachment__remove svg {
+    width: 14px;
+    height: 14px;
+  }
+  .tp-composer__submit:disabled,
+  .tp-rail__action:disabled {
+    opacity: 0.3;
+  }
+  .tp--mobile .tp-header {
+    --rail-header-action-glyph-size: 15px;
+  }
+  .tp--mobile .tp-rail,
+  .tp--mobile .tp-session-menu__header {
+    min-height: 42px;
+    font-size: 14px;
+  }
+  .tp--mobile .tp-rail__icon,
+  .tp--mobile .tp-session-refresh {
+    width: 36px;
+    height: 36px;
+  }
+  .tp--mobile .tp-composer input {
+    font-size: 16px;
+  }
+  .tp--mobile .tp-session-list {
+    padding: 12px 14px;
+  }
+  .tp--mobile .tp-session-list__heading {
+    margin: 0 12px 6px;
+  }
+  .tp--mobile .tp-session-rows {
+    border-radius: 14px;
+    background: color-mix(in srgb, var(--popover) 95%, var(--text) 5%);
+  }
+  .tp--mobile .tp-session {
+    padding: 8px 12px;
+    min-height: 56px;
+    border-radius: 14px;
+  }
+  .tp--mobile .tp-session + .tp-session::before {
+    left: 49px;
+    right: 12px;
+    background: color-mix(in srgb, var(--border-strong) 65%, transparent);
+  }
+  .tp--mobile .tp-session__name {
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .tp--mobile .tp-session__name[data-scrollable="true"] {
+    mask-image: linear-gradient(to right, black calc(100% - 16px), transparent);
+  }
+  .tp--mobile .tp-session__indicator.is-current {
+    color: var(--ok);
+  }
+  .tp--mobile .tp-upload-card {
+    left: 14px;
+    right: 14px;
+    bottom: 14px;
+    width: auto;
+    font-size: 13px;
+    border-radius: 14px;
+    padding: 12px;
+  }
+  .tp--mobile .tp-upload-card__action {
+    min-height: 44px;
+    padding: 8px 12px;
+    border-radius: 12px;
+  }
+  @media (hover: hover) and (pointer: fine) {
+    .tp:not(.tp--mobile) .tp-session:hover {
+      background: color-mix(in srgb, var(--text) 2%, transparent);
+    }
+    .tp:not(.tp--mobile) .tp-session:hover::before,
+    .tp:not(.tp--mobile) .tp-session:hover + .tp-session::before {
+      opacity: 0;
+    }
+    .tp:not(.tp--mobile) .tp-session__indicator:not(.is-current) {
+      opacity: 0;
+    }
+    .tp:not(.tp--mobile) .tp-session:hover .tp-session__indicator,
+    .tp:not(.tp--mobile) .tp-session:focus-within .tp-session__indicator {
+      opacity: 0.65;
+    }
+    .tp-rail__icon:hover,
+    .tp-composer__attach:hover,
+    .tp-composer__submit:not(:disabled):hover {
+      background: var(--bg-hover);
+    }
   }
   .tp-viewport {
     position: relative;

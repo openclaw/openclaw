@@ -1,6 +1,8 @@
+import type { SessionUpdate } from "@agentclientprotocol/sdk";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { createTestAcpEventLedger } from "./event-ledger.test-support.js";
+import type { AcpAgentWaitResult } from "./translator.prompt-state.js";
 import { createPromptScenario } from "./translator.scenario.test-support.js";
 
 const sessionId = "session-1";
@@ -12,11 +14,15 @@ const throwClose = () => {
 const disconnected = "Gateway disconnected: 1006: connection lost";
 const emptyReply = { status: "ok", terminalReply: { disposition: "empty" } };
 const timeout = { status: "timeout" };
-const abortCause = "Tool validation failed: command contains unsupported flag";
 type RequestHandler = (params?: Record<string, unknown>) => unknown;
 
 function harness(
-  options: { send?: RequestHandler; wait?: RequestHandler; sessionKey?: string } = {},
+  options: {
+    send?: RequestHandler;
+    wait?: RequestHandler;
+    history?: () => unknown;
+    sessionKey?: string;
+  } = {},
 ) {
   const eventLedger = createTestAcpEventLedger();
   const recorded = createDeferred();
@@ -29,7 +35,12 @@ function harness(
     eventLedger,
     sessionKey: options.sessionKey,
     send: options.send,
-    request: (method, params) => (method === "agent.wait" ? (options.wait?.(params) ?? {}) : {}),
+    request: (method, params) =>
+      method === "agent.wait"
+        ? (options.wait?.(params) ?? {})
+        : method === "chat.history"
+          ? (options.history?.() ?? {})
+          : {},
   });
   return { ...h, eventLedger, recorded: recorded.promise };
 }
@@ -62,24 +73,6 @@ async function expectNotice(h: ReturnType<typeof harness>, accepted: boolean) {
 }
 
 afterEach(() => vi.useRealTimers());
-
-it("surfaces the abort cause before cancellation even when delivery rejects", async () => {
-  const h = harness();
-  const prompt = h.start();
-  h.sessionUpdate.mockRejectedValueOnce(new Error("client gone"));
-  await h.chat(await prompt.sent, { state: "aborted", errorMessage: abortCause });
-  await expect(prompt.result).resolves.toEqual({ stopReason: "cancelled" });
-  expect(h.sessionUpdate).toHaveBeenCalledWith({
-    sessionId,
-    update: {
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: `[OpenClaw interruption] ${abortCause}` },
-    },
-  });
-  expect(h.sessionUpdate.mock.invocationCallOrder[0]).toBeLessThan(
-    prompt.settlement.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
-  );
-});
 
 it("reconciles provisional session keys for subsequent prompts", async () => {
   const h = harness({ sessionKey: "acp:session-1", send: () => ({}) });
@@ -297,4 +290,117 @@ it("does not let a stale disconnect deadline reject a newer prompt", async () =>
   const second = h.start();
   await vi.advanceTimersByTimeAsync(5_000);
   expect(second.settlement).not.toHaveBeenCalled();
+});
+
+const visibleReply = (text = "final answer", status: AcpAgentWaitResult["status"] = "ok") => ({
+  status,
+  terminalReply: { disposition: "visible" as const, text },
+});
+const textChunks = (events: { update: SessionUpdate }[]) =>
+  events.flatMap(({ update }) =>
+    update.sessionUpdate === "agent_message_chunk" && update.content.type === "text"
+      ? [update.content.text]
+      : [],
+  );
+
+async function recoveryHarness(
+  result: AcpAgentWaitResult = visibleReply(),
+  historyText: string | null = result.terminalReply?.disposition === "visible"
+    ? result.terminalReply.text
+    : "",
+) {
+  const h = harness({
+    send: () => ({}),
+    wait: () => result,
+    history: (): unknown => ({
+      messages:
+        historyText === null
+          ? []
+          : [
+              {
+                role: "assistant",
+                content: historyText,
+                __openclaw: { runId: h.runIds[0] },
+              },
+            ],
+    }),
+  });
+  await h.eventLedger.startSession({ sessionId, sessionKey, cwd: "/tmp", complete: true });
+  const pending = h.start();
+  const runId = await pending.sent;
+  return {
+    ...h,
+    promptPromise: pending.result,
+    chunks: () => textChunks(h.sessionUpdate.mock.calls.map(([n]) => n)),
+    replay: async () =>
+      textChunks((await h.eventLedger.readReplay({ sessionId, sessionKey })).events),
+    reconnect: () => reconnect(h.agent),
+    chat: (text: string, state: "delta" | "final" = "delta") =>
+      h.chat(runId, {
+        seq: state === "delta" ? 1 : 2,
+        state,
+        message: { content: [{ type: "text", text }] },
+      }),
+  };
+}
+
+it("recovers an indented timeout reply beyond the terminal summary cap", async () => {
+  const prefix = "    " + "A".repeat(5_000);
+  const full = prefix + "B".repeat(1_000) + "\n";
+  const h = await recoveryHarness(visibleReply(full.slice(0, 4_096), "timeout"), full);
+  await h.chat(prefix);
+  h.reconnect();
+  await expect(h.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  expect(h.chunks().join("")).toBe(full);
+  expect((await h.replay()).join("")).toBe(full);
+});
+
+it("reports missing authoritative history instead of settling with the terminal summary", async () => {
+  const h = await recoveryHarness(visibleReply("summary"), null);
+  h.reconnect();
+  await expect(h.promptPromise).rejects.toThrow("Full reply recovery unavailable");
+  expect(h.chunks()).toEqual([
+    "[OpenClaw interruption] Full reply recovery unavailable (reply-not-found). Check the session history.",
+  ]);
+});
+
+it("recovers visible text before rejecting a failed run", async () => {
+  const h = await recoveryHarness({ ...visibleReply("final answer", "error"), error: "boom" });
+  h.reconnect();
+  await expect(h.promptPromise).rejects.toThrow("boom");
+  expect(h.chunks()).toEqual(["final answer", "[OpenClaw interruption] boom"]);
+});
+
+it("claims recovery before a late final event can emit the suffix twice", async () => {
+  const h = await recoveryHarness();
+  await h.chat("final");
+  const recordBlocked = createDeferred();
+  const recordUpdate = h.eventLedger.recordUpdate.bind(h.eventLedger);
+  h.eventLedger.recordUpdate = async (params) => {
+    if (textChunks([params])[0] === " answer") {
+      await recordBlocked.promise;
+    }
+    await recordUpdate(params);
+  };
+  h.reconnect();
+  await vi.waitFor(() => expect(h.chunks()).toContain(" answer"));
+  const lateFinal = h.chat("final answer", "final");
+  recordBlocked.resolve();
+  await lateFinal;
+  await expect(h.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  expect(h.chunks().filter((text) => text === " answer")).toHaveLength(1);
+});
+
+it("settles after recovered update delivery rejects", async () => {
+  const h = await recoveryHarness();
+  h.connection.sessionUpdate = vi.fn(async () => {
+    throw new Error("client gone");
+  });
+  h.reconnect();
+  await expect(h.promptPromise).resolves.toEqual({ stopReason: "end_turn" });
+  expect(await h.replay()).toContain("final answer");
+  expect(h.sessionStore.getSession(sessionId)).toMatchObject({
+    activeRunId: null,
+    abortController: null,
+  });
 });

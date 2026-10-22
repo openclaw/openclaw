@@ -17,18 +17,14 @@ import {
   truncateOversizedToolResultsInMessages,
 } from "../embedded-agent-runner/tool-result-truncation.js";
 import type { AgentMessage } from "../runtime/index.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { SessionManager } from "./session-manager.js";
 
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-session-cache-ttl-");
 
 async function createSessionScope(sessionId: string) {
   const dir = tempDirs.make();
-  const scope = {
-    agentId: "main",
-    sessionId,
-    sessionKey: `agent:main:${sessionId}`,
-    storePath: path.join(dir, "sessions.json"),
-  };
+  const scope = sessionScope(path.join(dir, "sessions.json"), sessionId);
   await upsertSessionEntryCore(scope, { sessionId, updatedAt: 1 });
   return { dir, scope };
 }

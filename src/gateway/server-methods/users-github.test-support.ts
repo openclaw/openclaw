@@ -55,10 +55,8 @@ export function resetPersonalGitHubNetwork() {
   });
   network.verify.mockReset().mockImplementation(async (token) => {
     const native = token === "synthetic-native";
-    if (
-      !native &&
-      ![tokens.accessToken, "synthetic-rotated-access", "new-access"].includes(token)
-    ) {
+    const personalTokens = [tokens.accessToken, "synthetic-rotated-access", "new-access"];
+    if (!native && !personalTokens.includes(token)) {
       return { status: "unavailable" };
     }
     return {

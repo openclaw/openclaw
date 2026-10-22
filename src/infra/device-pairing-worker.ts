@@ -1,4 +1,3 @@
-import { channel } from "node:diagnostics_channel";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { reserveWorkerEnvironmentNativePublication } from "../gateway/worker-environments/store-native-publication.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -22,7 +21,6 @@ import {
   type SqliteWorkerOperationAdmission,
 } from "./sqlite-worker-operation-admission.js";
 
-const pairingDiagnostics = channel("openclaw.device-pairing.operation");
 const pairingLog = createSubsystemLogger("gateway/device-pairing");
 
 export const DevicePairingAuthorityRefusedError = resolveGlobalSingleton(
@@ -97,13 +95,7 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
     );
   const captured = structuredClone(command);
   const credentialEnvironment = { ...process.env, ...context.environment };
-  const startedAt = pairingDiagnostics.hasSubscribers ? performance.now() : undefined;
-  let admittedAt = startedAt;
-  let publicationMs = 0;
   const operation = withDevicePairingLock(async () => {
-    if (startedAt !== undefined) {
-      admittedAt = performance.now();
-    }
     context.admission.assertCurrent();
     options.assertCurrent?.();
     // Join codes and retained setup cleanup cannot change paired-device authority.
@@ -124,7 +116,6 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       }
       const committed = admission?.committed;
       if (committed && !published) {
-        const publishingAt = startedAt === undefined ? undefined : performance.now();
         const receipt = commitReceipt(committed.facts);
         if (receipt.retiredNodeToken) {
           cacheCleanup = clearDeviceAuthToken({
@@ -158,9 +149,6 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
         }
         if (receipt.tokensReplaced) {
           options.onTokensReplaced?.(receipt.tokensReplaced.deviceId, receipt.tokensReplaced.roles);
-        }
-        if (publishingAt !== undefined) {
-          publicationMs += performance.now() - publishingAt;
         }
       }
     };
@@ -222,16 +210,6 @@ export function executeDevicePairingMutation<Key extends keyof DevicePairingWork
       }
     }
   });
-  if (startedAt !== undefined) {
-    const report = () =>
-      pairingDiagnostics.publish({
-        operation: captured.type,
-        queueMs: admittedAt! - startedAt,
-        durationMs: performance.now() - admittedAt!,
-        publicationMs,
-      });
-    void operation.then(report, report);
-  }
   const onAuthorityRefused = options.onAuthorityRefused;
   return onAuthorityRefused
     ? operation.catch((error: unknown) => {

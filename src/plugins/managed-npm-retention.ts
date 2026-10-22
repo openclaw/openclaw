@@ -115,7 +115,6 @@ export async function clearRetainedManagedNpmInstallMarker(
 export async function markRetainedManagedNpmInstall(params: {
   packageDir: string;
   pluginId: string;
-  retainedAt?: string;
   reason: string;
   assertCurrent?: () => void;
 }): Promise<boolean> {
@@ -136,7 +135,7 @@ export async function markRetainedManagedNpmInstall(params: {
       {
         version: 1,
         pluginId: params.pluginId,
-        retainedAt: params.retainedAt ?? new Date().toISOString(),
+        retainedAt: new Date().toISOString(),
         reason: params.reason,
       },
       null,

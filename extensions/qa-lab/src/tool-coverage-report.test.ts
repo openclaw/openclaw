@@ -106,7 +106,6 @@ function makeReport(scenarios: QaSeedScenarioWithSource[], suite?: QaParitySuite
   return buildQaToolCoverageReport({
     scenarios,
     summary: suite,
-    generatedAt: "2026-05-10T00:00:00.000Z",
   });
 }
 
@@ -117,8 +116,8 @@ describe("qa tool coverage report", () => {
     ]);
 
     expect(report.evaluated).toBe(false);
-    expect(report.rows).toEqual([
-      expect.objectContaining({
+    expect(report.rows).toMatchObject([
+      {
         tool: "read",
         bucket: "codex-native-workspace",
         expectedLayer: "codex-native-workspace",
@@ -128,7 +127,7 @@ describe("qa tool coverage report", () => {
         openclaw: "not-run",
         codex: "not-run",
         drift: "not-run",
-      }),
+      },
     ]);
     expect(renderQaToolCoverageMarkdownReport(report)).toContain(
       "| read | codex-native-workspace | codex-native-workspace | codex-native-workspace | yes | 1 | not-run | not-run | not-run |",
@@ -295,9 +294,9 @@ describe("qa tool coverage report", () => {
     expect(report.failures).toEqual(["web-fetch status openclaw=pass codex=fail"]);
   });
 
-  it("fails required OpenClaw dynamic tool coverage when the fixture failure mode is preserved", () => {
-    const report = makeReport(
-      [makeRequiredToolScenario("web-search", "web_search")],
+  it.each([
+    [
+      "preserved failure mode",
       summary(
         result(
           "tool-web-search",
@@ -307,31 +306,12 @@ describe("qa tool coverage report", () => {
           "at least one runtime failed",
         ),
       ),
-    );
-
-    expect(report.pass).toBe(false);
-    expect(report.failures).toEqual([
       "web-search drift=failure-mode (at least one runtime failed)",
-    ]);
-  });
-
-  it("fails untracked required tools missing from an evaluated summary", () => {
-    const report = makeReport(
-      [
-        makeScenario("tool-web-search", "web-search", {
-          toolCoverage: {
-            bucket: "openclaw-dynamic-integration",
-            expectedLayer: "openclaw-dynamic",
-            capabilityLayer: "openclaw-dynamic-direct",
-            required: true,
-          },
-        }),
-      ],
-      summary(),
-    );
-
-    expect(report.pass).toBe(false);
-    expect(report.failures).toEqual(["web-search drift=not-run"]);
+    ],
+    ["missing execution", summary(), "web-search drift=not-run"],
+  ] as const)("fails required dynamic coverage for %s", (_name, suite, failure) => {
+    const report = makeReport([makeRequiredToolScenario("web-search", "web_search")], suite);
+    expect(report).toMatchObject({ pass: false, failures: [failure] });
   });
 
   it("rejects unknown runtime capability layers", () => {

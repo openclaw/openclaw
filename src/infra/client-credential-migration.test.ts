@@ -1,15 +1,11 @@
-import { createHash, createPrivateKey, createPublicKey } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import net from "node:net";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolvePublicSessionShareToken } from "../gateway/control-ui-public-session-token.js";
-import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
-import {
-  CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
-  OPENCLAW_STATE_SCHEMA_VERSION,
-} from "../state/openclaw-state-db-contract.js";
+import { CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   executeCanonicalStateSchema,
   writeCurrentStateSchemaMetadata,
@@ -21,8 +17,7 @@ import {
   repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { admitOpenClawMaintenanceLiveAuthorityReads } from "../state/openclaw-state-maintenance-context.js";
-import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import { importClientCredentialLegacy } from "./client-credential-legacy.js";
 import {
@@ -30,6 +25,11 @@ import {
   bindFreshClientCredentialStore,
   recoverClientCredentialStore,
 } from "./client-credential-migration.js";
+import {
+  openMigrationCredentials,
+  captureClientCredentialMigrationFixture,
+  createClientCredentialMigrationFixture,
+} from "./client-credential-migration.test-support.js";
 import { readIndependentClientCredentialSource } from "./client-credential-native-bootstrap.js";
 import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
 import {
@@ -38,123 +38,26 @@ import {
 } from "./client-credential-readiness.js";
 import { serializeClientCredentialReceipt } from "./client-credential-receipt.js";
 import { CLIENT_CREDENTIAL_SCHEMA_SQL } from "./client-credential-schema.js";
-import {
-  openClientCredentialCustody,
-  runClientCredentialOperation,
-} from "./client-credential-store.js";
+import { runClientCredentialOperation } from "./client-credential-store.js";
 import { createLegacyNodeAuthFixture } from "./client-credential-store.test-support.js";
 import { withEngineStoreAdmission } from "./database-engine/admission-scope.js";
 import { withDatabaseEngineSelection } from "./database-engine/context.js";
 import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
-import { generateStoredDeviceIdentity } from "./device-identity-material.js";
+import {
+  generateStoredDeviceIdentity,
+  storedDeviceIdentityToRow,
+} from "./device-identity-material.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
-import { extractSqliteTableSchema } from "./sqlite-schema-sql.js";
-import { createVerifiedSqliteSnapshot } from "./sqlite-snapshot.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { detectLegacyDeviceAuth, migrateLegacyDeviceAuth } from "./state-migrations.device-auth.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
-async function captureFixture(sourcePath: string) {
-  await createVerifiedSqliteSnapshot({ sourcePath, targetPath: `${sourcePath}.captured` });
-  const maintenance = createOpenClawDatabaseMaintenanceScope({
-    schemaMaintenance: true,
-    assertOwnerCurrent() {},
-    assertDatabaseAccess(pathname) {
-      expect(pathname).toBe(sourcePath);
-    },
-  });
-  maintenance.run(() => admitOpenClawMaintenanceLiveAuthorityReads(sourcePath));
-  return Object.assign(maintenance, {
-    capture: {
-      path: sourcePath,
-      generation: createHash("sha256")
-        .update(fs.readFileSync(`${sourcePath}.captured`))
-        .digest("hex"),
-      assertCurrent: maintenance.assertAdmission,
-    },
-  });
-}
-
-async function fixture(customKeys = false) {
-  const root = dirs.make("client-migration-");
-  const env = { ...process.env, OPENCLAW_STATE_DIR: root };
-  const sourcePath = path.join(root, "state", "openclaw.sqlite");
-  fs.mkdirSync(path.dirname(sourcePath), { recursive: true });
-  const source = openNodeSqliteDatabase(sourcePath);
-  source.exec(
-    CLIENT_CREDENTIAL_SCHEMA_SQL.slice(
-      0,
-      CLIENT_CREDENTIAL_SCHEMA_SQL.indexOf("CREATE TABLE native_exec_socket_credentials"),
-    ),
+function fixture(customKeys = false, credentialRowCount = 1) {
+  return createClientCredentialMigrationFixture(
+    dirs.make("client-migration-"),
+    customKeys,
+    credentialRowCount,
   );
-  source.exec(extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "exec_approvals_config"));
-  source.exec(
-    "CREATE TABLE schema_meta(meta_key TEXT PRIMARY KEY, created_at INTEGER, schema_version INTEGER); INSERT INTO schema_meta VALUES ('primary',123,25); CREATE TABLE migration_sources(migration_kind TEXT); CREATE TABLE unaffected(value TEXT); INSERT INTO unaffected VALUES ('preserve'); PRAGMA user_version=25;",
-  );
-  const privateKey = createPrivateKey({
-    key: Buffer.from(
-      "302e020100300506032b657004220420" +
-        "9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60",
-      "hex",
-    ),
-    format: "der",
-    type: "pkcs8",
-  });
-  const publicKey = createPublicKey(privateKey);
-  const identity = {
-    privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
-    publicKeyPem: publicKey.export({ format: "pem", type: "spki" }),
-    deviceId: createHash("sha256")
-      .update(publicKey.export({ format: "der", type: "spki" }).subarray(-32))
-      .digest("hex"),
-    createdAtMs: 12,
-  };
-  source
-    .prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)")
-    .run(
-      "primary",
-      identity.deviceId,
-      identity.publicKeyPem,
-      identity.privateKeyPem,
-      identity.createdAtMs,
-      99,
-    );
-  source
-    .prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)")
-    .run(identity.deviceId, "v2.gateway.operator", "token-original", '["operator.read"]', 101);
-  source
-    .prepare("INSERT INTO gateway_origin_device_tokens VALUES (?,?,?,?,?,?)")
-    .run(
-      "https://gateway.example",
-      identity.deviceId,
-      "operator",
-      "origin-token",
-      '["operator.write"]',
-      102,
-    );
-  const policy = {
-    version: 1,
-    socket: { path: "/socket", token: "socket-token", future: "keep" },
-    defaults: { security: "deny" },
-    agents: {},
-  };
-  source
-    .prepare("INSERT INTO exec_approvals_config VALUES (?,?,?,?,?,?,?,?,?,?,?)")
-    .run("current", JSON.stringify(policy), "/socket", 1, "deny", null, null, null, 0, 0, 55);
-  if (customKeys) {
-    source
-      .prepare(
-        "INSERT INTO device_identities SELECT ?,device_id,public_key_pem,private_key_pem,created_at_ms,updated_at_ms FROM device_identities WHERE identity_key='primary'",
-      )
-      .run("é/custom");
-    source
-      .prepare(
-        "INSERT INTO device_auth_tokens SELECT device_id,?,token,?,updated_at_ms FROM device_auth_tokens LIMIT 1",
-      )
-      .run("é/gateway\u0301", '[ "scope/é", "control\\nvalue" ]');
-  }
-  const maintenance = await captureFixture(sourcePath);
-  return { source, sourcePath, env, identity, maintenance };
 }
 
 function nativeFixture(unrecognized = false) {
@@ -180,49 +83,61 @@ function nativeFixture(unrecognized = false) {
   return { env, sourcePath, identity };
 }
 
-describe("local client credential extraction", () => {
-  it("requires captured owner extraction for native-v0 credentials and preserves the runtime identity", async () => {
-    const f = nativeFixture();
-    expect(() => openOpenClawStateDatabase({ env: f.env })).toThrow(/backed-up migration custody/);
-    closeOpenClawStateDatabaseForTest();
-    const maintenance = await captureFixture(f.sourcePath);
-    try {
-      // Unit setup supplies the captured owner boundary explicitly. Installed-driver
-      // schema-runtime attribution remains a separate R14b integration requirement.
-      {
-        using source = openNodeSqliteDatabase(f.sourcePath);
-        maintenance.run(() =>
-          runSqliteImmediateTransactionSync(source, () => {
-            prepareClientCredentialMigration(source, {
-              path: f.sourcePath,
-              env: f.env,
-              fromVersion: 0,
-              capture: maintenance.capture,
-            });
-            executeCanonicalStateSchema(source, { includeVersionLazyAdditiveTables: true });
-            writeCurrentStateSchemaMetadata(source, 42);
-          }),
-        );
-      }
-      const shared = maintenance.run(() => openOpenClawStateDatabase({ env: f.env }));
-      expect(shared.db.prepare("PRAGMA user_version").get()).toEqual({
-        user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+function upgradeNative(
+  f: ReturnType<typeof nativeFixture>,
+  maintenance: Awaited<ReturnType<typeof captureClientCredentialMigrationFixture>>,
+) {
+  using source = openNodeSqliteDatabase(f.sourcePath);
+  maintenance.run(() =>
+    runSqliteImmediateTransactionSync(source, () => {
+      prepareClientCredentialMigration(source, {
+        path: f.sourcePath,
+        env: f.env,
+        fromVersion: 0,
+        capture: maintenance.capture,
       });
-      expect(
-        shared.db.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
-      ).toBeUndefined();
-      expect(
-        runClientCredentialOperation(f.env, { kind: "identity.read", identity_key: "primary" }),
-      ).toMatchObject({
-        kind: "identity",
-        identity: { device_id: f.identity.deviceId, private_key_pem: f.identity.privateKeyPem },
-      });
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-      await maintenance.close();
-    }
-  });
+      executeCanonicalStateSchema(source, { includeVersionLazyAdditiveTables: true });
+      writeCurrentStateSchemaMetadata(source, 42);
+    }),
+  );
+}
 
+function seedIndependent(
+  f: ReturnType<typeof nativeFixture>,
+  snapshot: ReturnType<typeof readIndependentClientCredentialSource>,
+  options: { token?: string; claimed?: boolean } = {},
+) {
+  using local = openMigrationCredentials(f.env, true);
+  runSqliteImmediateTransactionSync(local.database, () => {
+    local.database
+      .prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)")
+      .run("primary", f.identity.deviceId, f.identity.publicKeyPem, f.identity.privateKeyPem, 7, 8);
+    if (options.token) {
+      local.database
+        .prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)")
+        .run(f.identity.deviceId, "operator", options.token, "[]", 20);
+    }
+    writeClientCredentialReceipt(
+      local.database,
+      {
+        format: 1,
+        source: {
+          kind: "independent",
+          engine: "native-v0",
+          identity: snapshot.identity,
+          generation: "0",
+          sha256: snapshot.sha256,
+          destinationVersion: 1,
+        },
+        sharedFile: snapshot.file,
+        legacyImports: options.claimed ? { "auth:primary": { sha256: "b".repeat(64) } } : {},
+      },
+      "complete",
+    );
+  });
+}
+
+describe("local client credential extraction", () => {
   it.each([false, true])(
     "treats native auth absence as authoritative only when its table existed (table: %s)",
     async (authTablePresent) => {
@@ -240,25 +155,11 @@ describe("local client credential extraction", () => {
       });
       fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
       fs.writeFileSync(legacyPath, raw);
-      const maintenance = await captureFixture(f.sourcePath);
+      const maintenance = await captureClientCredentialMigrationFixture(f.sourcePath);
       try {
+        upgradeNative(f, maintenance);
         {
-          using source = openNodeSqliteDatabase(f.sourcePath);
-          maintenance.run(() =>
-            runSqliteImmediateTransactionSync(source, () => {
-              prepareClientCredentialMigration(source, {
-                path: f.sourcePath,
-                env: f.env,
-                fromVersion: 0,
-                capture: maintenance.capture,
-              });
-              executeCanonicalStateSchema(source, { includeVersionLazyAdditiveTables: true });
-              writeCurrentStateSchemaMetadata(source, 42);
-            }),
-          );
-        }
-        {
-          using local = openClientCredentialCustody(f.env, { migration: true })!;
+          using local = openMigrationCredentials(f.env);
           expect(
             readClientCredentialReceipt(local.database)?.receipt.legacyImports["auth:primary"],
           ).toEqual(authTablePresent ? { sha256: null } : undefined);
@@ -303,31 +204,25 @@ describe("local client credential extraction", () => {
     expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
   });
 
-  it("binds fresh shared bootstrap without replacing an identity created before the Gateway", () => {
-    const root = dirs.make("client-fresh-bootstrap-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
-    const identity = generateStoredDeviceIdentity(17);
-    runClientCredentialOperation(env, {
-      kind: "identity.create",
-      identity: {
-        identity_key: "primary",
-        device_id: identity.deviceId,
-        public_key_pem: identity.publicKeyPem,
-        private_key_pem: identity.privateKeyPem,
-        created_at_ms: 17,
-        updated_at_ms: 17,
-      },
-    });
+  it("preserves an existing local identity when canonical shared state first opens", () => {
+    const env = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("client-fresh-bootstrap-") };
+    const identity = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(17), 19);
+    runClientCredentialOperation(env, { kind: "identity.create", identity });
+    {
+      using local = openMigrationCredentials(env);
+      expect(readClientCredentialReceipt(local.database)).toMatchObject({
+        phase: "complete",
+        receipt: { source: null, sharedFile: null },
+      });
+    }
     try {
       const shared = openOpenClawStateDatabase({ env });
       expect(
         shared.db.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
       ).toBeUndefined();
-      const read = runClientCredentialOperation(env, {
-        kind: "identity.read",
-        identity_key: "primary",
-      });
-      expect(read).toMatchObject({ kind: "identity", identity: { device_id: identity.deviceId } });
+      expect(
+        runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
+      ).toEqual({ kind: "identity", identity });
     } finally {
       closeOpenClawStateDatabaseForTest();
     }
@@ -336,15 +231,7 @@ describe("local client credential extraction", () => {
   it("preserves local identity when the first PostgreSQL connection fails", async () => {
     const root = dirs.make("client-postgres-unavailable-");
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
-    const material = generateStoredDeviceIdentity(17);
-    const identity = {
-      identity_key: "primary",
-      device_id: material.deviceId,
-      public_key_pem: material.publicKeyPem,
-      private_key_pem: material.privateKeyPem,
-      created_at_ms: 17,
-      updated_at_ms: 19,
-    };
+    const identity = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(17), 19);
     runClientCredentialOperation(env, { kind: "identity.create", identity });
     const reservation = await reserveTestPortListener({
       offsets: [0],
@@ -390,472 +277,293 @@ describe("local client credential extraction", () => {
     }
   });
 
-  it("keeps source-free recovery on its recorded file and refuses an unrelated replacement", async () => {
-    const root = dirs.make("client-fresh-recovery-");
-    const env = { ...process.env, OPENCLAW_STATE_DIR: root };
-    const otherEnv = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("client-unrelated-state-") };
-    const sharedPath = path.join(root, "state", "openclaw.sqlite");
-    const material = generateStoredDeviceIdentity(17);
-    const identity = {
-      identity_key: "primary",
-      device_id: material.deviceId,
-      public_key_pem: material.publicKeyPem,
-      private_key_pem: material.privateKeyPem,
-      created_at_ms: 17,
-      updated_at_ms: 19,
-    };
-    runClientCredentialOperation(env, { kind: "identity.create", identity });
-    try {
-      openOpenClawStateDatabase({ env });
-      await closeOpenClawStateDatabaseAsync();
-      {
-        using local = openClientCredentialCustody(env, { migration: true })!;
-        const stored = readClientCredentialReceipt(local.database)!;
-        expect(stored.receipt.source).toBeNull();
-        writeClientCredentialReceipt(local.database, stored.receipt, "copied");
-      }
-      repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true });
-      expect(
-        runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
-      ).toEqual({ kind: "identity", identity });
-
-      openOpenClawStateDatabase({ env: otherEnv });
-      await closeOpenClawStateDatabaseAsync();
-      fs.renameSync(sharedPath, `${sharedPath}.original`);
-      fs.copyFileSync(
-        path.join(otherEnv.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
-        sharedPath,
-      );
-      const localPath = resolveClientCredentialStorePath(env);
-      const before = fs.readFileSync(localPath);
-      expect(() =>
-        runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
-      ).toThrow("migration is incomplete or stale");
-      const repair = repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true });
-      expect(repair.changes).toEqual([]);
-      expect(repair.warnings).toEqual([
-        expect.stringContaining("Local credentials do not match the shared database"),
-      ]);
-      expect(fs.readFileSync(localPath)).toEqual(before);
-      expect(() =>
-        runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
-      ).toThrow("migration is incomplete or stale");
-    } finally {
-      await closeOpenClawStateDatabaseAsync();
-    }
-  });
-
-  it("preserves exact identity and scopes, strips only socket material, then retires source tables", async () => {
-    const f = await fixture();
-    try {
-      f.maintenance.run(() =>
-        runSqliteImmediateTransactionSync(f.source, () =>
-          prepareClientCredentialMigration(f.source, {
-            path: f.sourcePath,
-            env: f.env,
-            fromVersion: 25,
-            capture: f.maintenance.capture,
-          }),
-        ),
-      );
-      const target = openClientCredentialCustody(f.env, {
-        createIfMissing: false,
-        migration: true,
-      })!;
+  it.each(["copied", "complete"] as const)(
+    "enriches a legacy %s bootstrap receipt only on its recorded file",
+    async (phase) => {
+      const root = dirs.make("client-fresh-recovery-");
+      const env = { ...process.env, OPENCLAW_STATE_DIR: root };
+      const otherEnv = { ...process.env, OPENCLAW_STATE_DIR: dirs.make("client-unrelated-state-") };
+      const sharedPath = path.join(root, "state", "openclaw.sqlite");
+      const identity = storedDeviceIdentityToRow("primary", generateStoredDeviceIdentity(17), 19);
+      runClientCredentialOperation(env, { kind: "identity.create", identity });
       try {
-        expect(target.database.prepare("SELECT * FROM device_identities").get()).toEqual({
-          identity_key: "primary",
-          device_id: f.identity.deviceId,
-          public_key_pem: f.identity.publicKeyPem,
-          private_key_pem: f.identity.privateKeyPem,
-          created_at_ms: 12,
-          updated_at_ms: 99,
-        });
+        openOpenClawStateDatabase({ env });
+        await closeOpenClawStateDatabaseAsync();
+        {
+          using local = openMigrationCredentials(env);
+          const stored = readClientCredentialReceipt(local.database)!;
+          // Older bootstraps persisted only a file binding, including after completion.
+          stored.receipt.source = null;
+          writeClientCredentialReceipt(local.database, stored.receipt, phase);
+        }
+        repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true });
         expect(
-          target.database.prepare("SELECT token,role,scopes_json FROM device_auth_tokens").get(),
-        ).toEqual({
-          token: "token-original",
-          role: "v2.gateway.operator",
-          scopes_json: '["operator.read"]',
-        });
-        expect(
-          target.database
-            .prepare("SELECT socket_path,socket_token FROM native_exec_socket_credentials")
-            .get(),
-        ).toEqual({ socket_path: "/socket", socket_token: "socket-token" });
-        expect(readClientCredentialReceipt(target.database)?.phase).toBe("complete");
+          runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
+        ).toEqual({ kind: "identity", identity });
+        {
+          using local = openMigrationCredentials(env);
+          const stored = readClientCredentialReceipt(local.database)!;
+          expect(stored).toMatchObject({
+            phase: "complete",
+            receipt: { source: { kind: "canonical", engine: "sqlite" } },
+          });
+          // An unproven older receipt must still reject replacement before enrichment.
+          stored.receipt.source = null;
+          writeClientCredentialReceipt(local.database, stored.receipt, phase);
+        }
+
+        openOpenClawStateDatabase({ env: otherEnv });
+        await closeOpenClawStateDatabaseAsync();
+        fs.renameSync(sharedPath, `${sharedPath}.original`);
+        fs.copyFileSync(
+          path.join(otherEnv.OPENCLAW_STATE_DIR, "state", "openclaw.sqlite"),
+          sharedPath,
+        );
+        const localPath = resolveClientCredentialStorePath(env);
+        const before = fs.readFileSync(localPath);
+        expect(() =>
+          runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
+        ).toThrow("migration is incomplete or stale");
+        const repair = repairOpenClawStateDatabaseSchema({ env, versionMigrationOnly: true });
+        expect(repair.changes).toEqual([]);
+        expect(repair.warnings).toEqual([
+          expect.stringContaining("Local credentials do not match the shared database"),
+        ]);
+        expect(fs.readFileSync(localPath)).toEqual(before);
+        expect(() =>
+          runClientCredentialOperation(env, { kind: "identity.read", identity_key: "primary" }),
+        ).toThrow("migration is incomplete or stale");
       } finally {
-        target.close();
+        await closeOpenClawStateDatabaseAsync();
       }
-      expect(
-        f.source.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
-      ).toBeUndefined();
-      const row = f.source
-        .prepare(
-          "SELECT raw_json,socket_path,has_socket_token,updated_at_ms FROM exec_approvals_config",
-        )
-        .get()!;
-      expect(JSON.parse(String(row.raw_json))).toEqual({
+    },
+  );
+
+  it("migrates large credential stores without losing identities, tokens, or gateway scopes", async () => {
+    // Each table exceeds SQLite's 32766-parameter limit when copied in one INSERT.
+    const rowCount = 7_000;
+    await using f = await fixture(false, rowCount);
+    const snapshots = [
+      "SELECT * FROM device_identities ORDER BY identity_key",
+      "SELECT * FROM device_auth_tokens ORDER BY device_id, role",
+      "SELECT * FROM gateway_origin_device_tokens ORDER BY gateway_scope, device_id, role",
+    ].map((query) => ({ query, rows: f.source.prepare(query).all() }));
+    f.migrate();
+    using target = openMigrationCredentials(f.env);
+    for (const snapshot of snapshots) {
+      expect(snapshot.rows).toHaveLength(rowCount);
+      expect(target.database.prepare(snapshot.query).all()).toEqual(snapshot.rows);
+    }
+    expect(readClientCredentialReceipt(target.database)?.phase).toBe("complete");
+    expect(f.source.prepare("SELECT value FROM unaffected").get()).toEqual({ value: "preserve" });
+    expect(
+      f.source.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
+    ).toBeUndefined();
+    expect(
+      target.database
+        .prepare("SELECT socket_path,socket_token FROM native_exec_socket_credentials")
+        .get(),
+    ).toEqual({ socket_path: "/socket", socket_token: "socket-token" });
+    const policy = f.source
+      .prepare(
+        "SELECT raw_json,socket_path,has_socket_token,updated_at_ms FROM exec_approvals_config",
+      )
+      .get()!;
+    expect({ ...policy, raw_json: JSON.parse(String(policy.raw_json)) }).toEqual({
+      raw_json: {
         version: 1,
         socket: { future: "keep" },
         defaults: { security: "deny" },
         agents: {},
-      });
-      expect(row).toMatchObject({ socket_path: null, has_socket_token: 0, updated_at_ms: 55 });
-      expect(f.source.prepare("SELECT value FROM unaffected").get()).toEqual({ value: "preserve" });
-    } finally {
-      f.source.close();
-      await f.maintenance.close();
-    }
+      },
+      socket_path: null,
+      has_socket_token: 0,
+      updated_at_ms: 55,
+    });
   });
 
   it("leaves copied on source rollback and rebuilds an orphan without merging newer cached tokens", async () => {
-    const f = await fixture();
+    await using f = await fixture();
     const legacyPath = path.join(f.env.OPENCLAW_STATE_DIR, "identity", "node-device-auth.json");
     const {
       token: legacyToken,
       raw: legacyJson,
       legacyImport,
     } = createLegacyNodeAuthFixture(f.identity.deviceId);
+    expect(() =>
+      f.migrate(() => {
+        throw new Error("interrupt before shared commit");
+      }),
+    ).toThrow("interrupt before shared commit");
+    const target = openMigrationCredentials(f.env);
     try {
-      expect(() =>
-        f.maintenance.run(() =>
-          runSqliteImmediateTransactionSync(f.source, () => {
-            prepareClientCredentialMigration(f.source, {
-              path: f.sourcePath,
-              env: f.env,
-              fromVersion: 25,
-              capture: f.maintenance.capture,
-            });
-            throw new Error("interrupt before shared commit");
-          }),
-        ),
-      ).toThrow("interrupt before shared commit");
-      const target = openClientCredentialCustody(f.env, {
-        createIfMissing: false,
-        migration: true,
-      })!;
-      try {
-        expect(readClientCredentialReceipt(target.database)?.phase).toBe("copied");
-        runSqliteImmediateTransactionSync(target.database, () =>
-          target.database.exec(
-            "UPDATE device_auth_tokens SET token='orphan-token'; UPDATE client_credential_migration SET phase='complete';",
-          ),
-        );
-        fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
-        fs.writeFileSync(legacyPath, legacyJson);
-        expect(importClientCredentialLegacy(target, legacyImport)).toBe(true);
-        expect(
-          target.run({
-            kind: "token.remove",
-            key: legacyToken,
-            observedToken: legacyToken.token,
-          }),
-        ).toEqual({ kind: "changed", changed: true });
-      } finally {
-        target.close();
-      }
-      expect(f.source.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
-        token: "token-original",
-      });
-      expect(f.source.prepare("SELECT identity_key FROM device_identities").all()).toEqual([
-        { identity_key: "primary" },
-      ]);
-      f.maintenance.run(() =>
-        runSqliteImmediateTransactionSync(f.source, () =>
-          prepareClientCredentialMigration(f.source, {
-            path: f.sourcePath,
-            env: f.env,
-            fromVersion: 25,
-            capture: f.maintenance.capture,
-          }),
+      expect(readClientCredentialReceipt(target.database)?.phase).toBe("copied");
+      runSqliteImmediateTransactionSync(target.database, () =>
+        target.database.exec(
+          "UPDATE device_auth_tokens SET token='orphan-token'; UPDATE client_credential_migration SET phase='complete';",
         ),
       );
-      const current = openClientCredentialCustody(f.env, {
-        createIfMissing: false,
-        migration: true,
-      })!;
-      try {
-        expect(current.database.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
-          token: "token-original",
-        });
-        const imported = importClientCredentialLegacy(current, legacyImport);
-        expect(current.run({ kind: "token.read", key: legacyToken })).toEqual({
-          kind: "token",
-          token: null,
-        });
-        expect(imported).toBe(false);
-        expect(fs.readFileSync(legacyPath, "utf8")).toBe(legacyJson);
-      } finally {
-        current.close();
-      }
+      fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
+      fs.writeFileSync(legacyPath, legacyJson);
+      expect(importClientCredentialLegacy(target, legacyImport)).toBe(true);
+      expect(
+        target.run({
+          kind: "token.remove",
+          key: legacyToken,
+          observedToken: legacyToken.token,
+        }),
+      ).toEqual({ kind: "changed", changed: true });
     } finally {
-      f.source.close();
-      await f.maintenance.close();
+      target.close();
+    }
+    expect(f.source.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
+      token: "token-original",
+    });
+    expect(f.source.prepare("SELECT identity_key FROM device_identities").all()).toEqual([
+      { identity_key: "primary" },
+    ]);
+    f.migrate();
+    const current = openMigrationCredentials(f.env);
+    try {
+      expect(current.database.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
+        token: "token-original",
+      });
+      expect(importClientCredentialLegacy(current, legacyImport)).toBe(false);
+      expect(
+        importClientCredentialLegacy(current, {
+          ...legacyImport,
+          sha256: "b".repeat(64),
+        }),
+      ).toBe(false);
+      expect(current.run({ kind: "token.read", key: legacyToken })).toEqual({
+        kind: "token",
+        token: null,
+      });
+      expect(fs.readFileSync(legacyPath, "utf8")).toBe(legacyJson);
+    } finally {
+      current.close();
     }
   });
 
   it("copies invalid canonical identity bytes exactly and keeps ordinary reads fail-closed", async () => {
-    const f = await fixture();
-    try {
-      const differentIdentity = generateStoredDeviceIdentity(21);
-      f.source
-        .prepare("UPDATE device_identities SET private_key_pem=?")
-        .run(differentIdentity.privateKeyPem);
-      const sourceRow = f.source.prepare("SELECT * FROM device_identities").get();
-      f.maintenance.run(() =>
-        runSqliteImmediateTransactionSync(f.source, () =>
-          prepareClientCredentialMigration(f.source, {
-            path: f.sourcePath,
-            env: f.env,
-            fromVersion: 25,
-            capture: f.maintenance.capture,
-          }),
-        ),
-      );
-      {
-        using local = openClientCredentialCustody(f.env, {
-          createIfMissing: false,
-          migration: true,
-        })!;
-        expect(local.database.prepare("SELECT * FROM device_identities").get()).toEqual(sourceRow);
-        expect(readClientCredentialReceipt(local.database)).toMatchObject({
-          phase: "complete",
-          receipt: { legacyImports: { "identity:primary": { sha256: null } } },
-        });
-      }
-      expect(
-        f.source.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
-      ).toBeUndefined();
-      expect(() =>
-        runClientCredentialOperation(f.env, { kind: "identity.read", identity_key: "primary" }),
-      ).toThrow(/invalid persisted device identity/);
-    } finally {
-      f.source.close();
-      await f.maintenance.close();
+    await using f = await fixture();
+    const differentIdentity = generateStoredDeviceIdentity(21);
+    f.source
+      .prepare("UPDATE device_identities SET private_key_pem=?")
+      .run(differentIdentity.privateKeyPem);
+    const sourceRow = f.source.prepare("SELECT * FROM device_identities").get();
+    f.migrate();
+    {
+      using local = openMigrationCredentials(f.env);
+      expect(local.database.prepare("SELECT * FROM device_identities").get()).toEqual(sourceRow);
+      expect(readClientCredentialReceipt(local.database)).toMatchObject({
+        phase: "complete",
+        receipt: { legacyImports: { "identity:primary": { sha256: null } } },
+      });
     }
+    expect(
+      f.source.prepare("SELECT name FROM sqlite_schema WHERE name='device_identities'").get(),
+    ).toBeUndefined();
+    expect(() =>
+      runClientCredentialOperation(f.env, { kind: "identity.read", identity_key: "primary" }),
+    ).toThrow(/invalid persisted device identity/);
   });
 
   it("retains shared credentials and socket material when token scope validation fails", async () => {
-    const f = await fixture();
-    try {
-      f.source.prepare("UPDATE device_auth_tokens SET scopes_json='{}'").run();
-      expect(() =>
-        f.maintenance.run(() =>
-          runSqliteImmediateTransactionSync(f.source, () =>
-            prepareClientCredentialMigration(f.source, {
-              path: f.sourcePath,
-              env: f.env,
-              fromVersion: 25,
-              capture: f.maintenance.capture,
-            }),
-          ),
-        ),
-      ).toThrow("invalid token record");
-      expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
-      expect(f.source.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
-        token: "token-original",
-      });
-      expect(f.source.prepare("SELECT raw_json FROM exec_approvals_config").get()).toEqual({
-        raw_json: JSON.stringify({
-          version: 1,
-          socket: { path: "/socket", token: "socket-token", future: "keep" },
-          defaults: { security: "deny" },
-          agents: {},
-        }),
-      });
-    } finally {
-      f.source.close();
-      await f.maintenance.close();
-    }
+    await using f = await fixture();
+    f.source.prepare("UPDATE device_auth_tokens SET scopes_json='{}'").run();
+    expect(() => f.migrate()).toThrow("invalid token record");
+    expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(false);
+    expect(f.source.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
+      token: "token-original",
+    });
+    expect(f.source.prepare("SELECT raw_json FROM exec_approvals_config").get()).toEqual({
+      raw_json: JSON.stringify({
+        version: 1,
+        socket: { path: "/socket", token: "socket-token", future: "keep" },
+        defaults: { security: "deny" },
+        agents: {},
+      }),
+    });
   });
 
-  it("finishes an interrupted local publication only against the already-retired source", async () => {
-    const f = await fixture();
-    try {
-      f.maintenance.run(() =>
-        runSqliteImmediateTransactionSync(f.source, () =>
-          prepareClientCredentialMigration(f.source, {
-            path: f.sourcePath,
-            env: f.env,
-            fromVersion: 25,
-            capture: f.maintenance.capture,
-          }),
-        ),
-      );
-      const target = openClientCredentialCustody(f.env, {
-        createIfMissing: false,
-        migration: true,
-      })!;
-      try {
+  it.each([false, true])(
+    "finishes interrupted publication after source retirement (deferred header=%s)",
+    async (deferredHeader) => {
+      await using f = await fixture();
+      f.migrate();
+      {
+        using target = openMigrationCredentials(f.env);
         runSqliteImmediateTransactionSync(target.database, () =>
           target.database.prepare("UPDATE client_credential_migration SET phase='copied'").run(),
         );
-      } finally {
-        target.close();
       }
       f.source.exec(
-        `UPDATE schema_meta SET schema_version=${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION}; PRAGMA user_version=${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION};`,
+        deferredHeader
+          ? `CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY,value_json TEXT); INSERT INTO config_machine_state VALUES ('state.schema.contentVersion','${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION}');`
+          : `UPDATE schema_meta SET schema_version=${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION}; PRAGMA user_version=${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION};`,
       );
+      expect(f.source.prepare("PRAGMA user_version").get()).toEqual({
+        user_version: deferredHeader ? 25 : CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
+      });
       recoverClientCredentialStore(f.source, { path: f.sourcePath, env: f.env });
-      const current = openClientCredentialCustody(f.env, {
-        createIfMissing: false,
-        migration: true,
-      })!;
-      try {
-        expect(readClientCredentialReceipt(current.database)?.phase).toBe("complete");
-      } finally {
-        current.close();
-      }
+      using recovered = openMigrationCredentials(f.env);
+      expect(readClientCredentialReceipt(recovered.database)?.phase).toBe("complete");
       expect(fs.existsSync(resolveClientCredentialStorePath(f.env))).toBe(true);
-    } finally {
-      f.source.close();
-      await f.maintenance.close();
-    }
-  });
-
-  it("resumes after committed retirement while an older updater defers the published header", async () => {
-    const f = await fixture();
-    try {
-      f.maintenance.run(() =>
-        runSqliteImmediateTransactionSync(f.source, () =>
-          prepareClientCredentialMigration(f.source, {
-            path: f.sourcePath,
-            env: f.env,
-            fromVersion: 25,
-            capture: f.maintenance.capture,
-          }),
-        ),
-      );
-      const target = openClientCredentialCustody(f.env, {
-        createIfMissing: false,
-        migration: true,
-      })!;
-      try {
-        runSqliteImmediateTransactionSync(target.database, () =>
-          target.database.prepare("UPDATE client_credential_migration SET phase='copied'").run(),
-        );
-      } finally {
-        target.close();
-      }
-      f.source.exec(
-        `CREATE TABLE config_machine_state(state_key TEXT PRIMARY KEY,value_json TEXT); INSERT INTO config_machine_state VALUES ('state.schema.contentVersion','${CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION}');`,
-      );
-      expect(f.source.prepare("PRAGMA user_version").get()).toEqual({ user_version: 25 });
-      recoverClientCredentialStore(f.source, { path: f.sourcePath, env: f.env });
-      const recovered = openClientCredentialCustody(f.env, {
-        createIfMissing: false,
-        migration: true,
-      })!;
-      try {
-        expect(readClientCredentialReceipt(recovered.database)?.phase).toBe("complete");
-      } finally {
-        recovered.close();
-      }
-    } finally {
-      f.source.close();
-      await f.maintenance.close();
-    }
-  });
+    },
+  );
 });
 
 it("checks the Swift receipt fixture against actual canonical migration output", async () => {
-  const f = await fixture(true);
-  try {
-    f.maintenance.run(() =>
-      runSqliteImmediateTransactionSync(f.source, () =>
-        prepareClientCredentialMigration(f.source, {
-          path: f.sourcePath,
-          env: f.env,
-          fromVersion: 25,
-          capture: f.maintenance.capture,
-        }),
-      ),
-    );
-    using target = openClientCredentialCustody(f.env, { createIfMissing: false, migration: true })!;
-    const actual = readClientCredentialReceipt(target.database)!;
-    expect(actual.receipt.source!.generation).toBe(f.maintenance.capture.generation);
-    expect(actual.receipt.source!.generation).toMatch(/^[a-f0-9]{64}$/u);
-    // Physical backup bytes vary across SQLite builds; keep the logical source hash exact.
-    actual.receipt.source!.generation = "0".repeat(64);
-    actual.receipt.sharedFile = { path: "/fixture/state/openclaw.sqlite", dev: "1", ino: "2" };
-    actual.receipt.source!.identity = "/fixture/state/openclaw.sqlite:123";
-    const freshRoot = dirs.make("client-fresh-receipt-");
-    const freshEnv = { ...process.env, OPENCLAW_STATE_DIR: freshRoot };
-    const freshPath = path.join(freshRoot, "state", "openclaw.sqlite");
-    fs.mkdirSync(path.dirname(freshPath), { recursive: true });
-    using fresh = openNodeSqliteDatabase(freshPath);
-    runSqliteImmediateTransactionSync(fresh, () =>
-      bindFreshClientCredentialStore(fresh, { path: freshPath, env: freshEnv }),
-    );
-    using freshOwner = openClientCredentialCustody(freshEnv, {
-      createIfMissing: false,
-      migration: true,
-    })!;
-    const freshStored = readClientCredentialReceipt(freshOwner.database)!;
-    freshStored.receipt.sharedFile = { path: "/fixture/state/openclaw.sqlite", dev: "1", ino: "2" };
-    const fixtureReceipt = (name: string, stored: typeof actual, rootPath?: string) => ({
-      name,
-      phase: stored.phase,
-      source_store: serializeClientCredentialReceipt(stored.receipt, rootPath),
-    });
-    const envelope = {
-      format: 1,
-      cases: [
-        fixtureReceipt("canonical-sqlite", actual),
-        fixtureReceipt("fresh-canonical-binding", freshStored),
-        fixtureReceipt("canonical-relative-binding", actual, "/fixture"),
-      ],
-    };
-    const fixturePath = path.resolve(
-      "apps/shared/OpenClawKit/Tests/OpenClawNativeStateTests/Fixtures/ClientCredentials/receipts.json",
-    );
-    await expect(`${JSON.stringify(envelope, null, 2)}\n`).toMatchFileSnapshot(fixturePath);
-  } finally {
-    f.source.close();
-    await f.maintenance.close();
-  }
+  await using f = await fixture(true);
+  f.migrate();
+  using target = openMigrationCredentials(f.env);
+  const actual = readClientCredentialReceipt(target.database)!;
+  expect(actual.receipt.source!.generation).toBe(f.maintenance.capture.generation);
+  expect(actual.receipt.source!.generation).toMatch(/^[a-f0-9]{64}$/u);
+  // Physical backup bytes vary across SQLite builds; keep the logical source hash exact.
+  actual.receipt.source!.generation = "0".repeat(64);
+  actual.receipt.sharedFile = { path: "/fixture/state/openclaw.sqlite", dev: "1", ino: "2" };
+  actual.receipt.source!.identity = "/fixture/state/openclaw.sqlite:123";
+  const freshRoot = dirs.make("client-fresh-receipt-");
+  const freshEnv = { ...process.env, OPENCLAW_STATE_DIR: freshRoot };
+  const freshPath = path.join(freshRoot, "state", "openclaw.sqlite");
+  fs.mkdirSync(path.dirname(freshPath), { recursive: true });
+  using fresh = openNodeSqliteDatabase(freshPath);
+  runSqliteImmediateTransactionSync(fresh, () => {
+    bindFreshClientCredentialStore(fresh, { path: freshPath, env: freshEnv });
+    executeCanonicalStateSchema(fresh, { includeVersionLazyAdditiveTables: true });
+    writeCurrentStateSchemaMetadata(fresh, 123);
+  });
+  using freshOwner = openMigrationCredentials(freshEnv);
+  const freshStored = readClientCredentialReceipt(freshOwner.database)!;
+  expect(freshStored.receipt.source?.identity).toBe(`${freshPath}:123`);
+  freshStored.receipt.sharedFile = { path: "/fixture/state/openclaw.sqlite", dev: "1", ino: "2" };
+  freshStored.receipt.source!.identity = "/fixture/state/openclaw.sqlite:123";
+  const fixtureReceipt = (name: string, stored: typeof actual, rootPath?: string) => ({
+    name,
+    phase: stored.phase,
+    source_store: serializeClientCredentialReceipt(stored.receipt, rootPath),
+  });
+  const envelope = {
+    format: 1,
+    cases: [
+      fixtureReceipt("canonical-sqlite", actual),
+      fixtureReceipt("fresh-canonical-binding", freshStored),
+      fixtureReceipt("canonical-relative-binding", actual, "/fixture"),
+    ],
+  };
+  const fixturePath = path.resolve(
+    "apps/shared/OpenClawKit/Tests/OpenClawNativeStateTests/Fixtures/ClientCredentials/receipts.json",
+  );
+  await expect(`${JSON.stringify(envelope, null, 2)}\n`).toMatchFileSnapshot(fixturePath);
 });
 
 it("promotes an unchanged independent native source without losing refreshed local tokens or claims", async () => {
   const f = nativeFixture();
   const snapshot = readIndependentClientCredentialSource(f.sourcePath);
-  {
-    using local = openClientCredentialCustody(f.env, { createIfMissing: true, migration: true })!;
-    runSqliteImmediateTransactionSync(local.database, () => {
-      local.database
-        .prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)")
-        .run(
-          "primary",
-          f.identity.deviceId,
-          f.identity.publicKeyPem,
-          f.identity.privateKeyPem,
-          7,
-          8,
-        );
-      local.database
-        .prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)")
-        .run(f.identity.deviceId, "operator", "refreshed-after-import", "[]", 20);
-      writeClientCredentialReceipt(
-        local.database,
-        {
-          format: 1,
-          source: {
-            kind: "independent",
-            engine: "native-v0",
-            identity: snapshot.identity,
-            generation: "0",
-            sha256: snapshot.sha256,
-            destinationVersion: 1,
-          },
-          sharedFile: snapshot.file,
-          legacyImports: { "auth:primary": { sha256: "b".repeat(64) } },
-        },
-        "complete",
-      );
-    });
-  }
-  const maintenance = await captureFixture(f.sourcePath);
+  seedIndependent(f, snapshot, { token: "refreshed-after-import", claimed: true });
+  const maintenance = await captureClientCredentialMigrationFixture(f.sourcePath);
   using source = openNodeSqliteDatabase(f.sourcePath);
   try {
     maintenance.run(() =>
@@ -868,7 +576,7 @@ it("promotes an unchanged independent native source without losing refreshed loc
         }),
       ),
     );
-    using local = openClientCredentialCustody(f.env, { migration: true })!;
+    using local = openMigrationCredentials(f.env);
     expect(local.database.prepare("SELECT token FROM device_auth_tokens").get()).toEqual({
       token: "refreshed-after-import",
     });
@@ -887,7 +595,7 @@ it("promotes an unchanged independent native source without losing refreshed loc
   }
 });
 
-it("keeps revoked JSON credentials consumed when an independent native source changes", async () => {
+it("rebuilds large changed native sources without reimporting revoked JSON credentials", async () => {
   const f = nativeFixture();
   {
     using source = openNodeSqliteDatabase(f.sourcePath);
@@ -903,38 +611,7 @@ it("keeps revoked JSON credentials consumed when an independent native source ch
   });
   fs.mkdirSync(path.dirname(legacyPath), { recursive: true });
   fs.writeFileSync(legacyPath, raw);
-  {
-    using local = openClientCredentialCustody(f.env, { createIfMissing: true, migration: true })!;
-    runSqliteImmediateTransactionSync(local.database, () => {
-      local.database
-        .prepare("INSERT INTO device_identities VALUES (?,?,?,?,?,?)")
-        .run(
-          "primary",
-          f.identity.deviceId,
-          f.identity.publicKeyPem,
-          f.identity.privateKeyPem,
-          7,
-          8,
-        );
-      writeClientCredentialReceipt(
-        local.database,
-        {
-          format: 1,
-          source: {
-            kind: "independent",
-            engine: "native-v0",
-            identity: snapshot.identity,
-            generation: "0",
-            sha256: snapshot.sha256,
-            destinationVersion: 1,
-          },
-          sharedFile: snapshot.file,
-          legacyImports: {},
-        },
-        "complete",
-      );
-    });
-  }
+  seedIndependent(f, snapshot);
   const importLegacy = () =>
     migrateLegacyDeviceAuth({
       env: f.env,
@@ -950,34 +627,60 @@ it("keeps revoked JSON credentials consumed when an independent native source ch
       expectedToken: "revoked-json-token",
     }),
   ).toEqual({ kind: "changed", changed: true });
+  const restoredTokens = Array.from({ length: 7_000 }, (_, index) => ({
+    device_id: f.identity.deviceId,
+    role: `restored-role-${String(index).padStart(4, "0")}`,
+    token: `restored-token-${index}`,
+    scopes_json: '[ "operator.read" ]',
+    updated_at_ms: 20 + index,
+  }));
   {
     using source = openNodeSqliteDatabase(f.sourcePath);
-    source.prepare("UPDATE device_identities SET updated_at_ms=9").run();
-  }
-  expect(readIndependentClientCredentialSource(f.sourcePath).sha256).not.toBe(snapshot.sha256);
-  const maintenance = await captureFixture(f.sourcePath);
-  try {
-    {
-      using source = openNodeSqliteDatabase(f.sourcePath);
-      maintenance.run(() =>
-        runSqliteImmediateTransactionSync(source, () => {
-          prepareClientCredentialMigration(source, {
-            path: f.sourcePath,
-            env: f.env,
-            fromVersion: 0,
-            capture: maintenance.capture,
-          });
-          executeCanonicalStateSchema(source, { includeVersionLazyAdditiveTables: true });
-          writeCurrentStateSchemaMetadata(source, 42);
-        }),
+    runSqliteImmediateTransactionSync(source, () => {
+      source.prepare("UPDATE device_identities SET updated_at_ms=9").run();
+      source.exec(
+        CLIENT_CREDENTIAL_SCHEMA_SQL.slice(
+          CLIENT_CREDENTIAL_SCHEMA_SQL.indexOf("CREATE TABLE device_auth_tokens"),
+          CLIENT_CREDENTIAL_SCHEMA_SQL.indexOf("CREATE TABLE gateway_origin_device_tokens"),
+        ),
       );
-    }
+      const insert = source.prepare("INSERT INTO device_auth_tokens VALUES (?,?,?,?,?)");
+      for (const token of restoredTokens) {
+        insert.run(
+          token.device_id,
+          token.role,
+          token.token,
+          token.scopes_json,
+          token.updated_at_ms,
+        );
+      }
+    });
+  }
+  const restoredSnapshot = readIndependentClientCredentialSource(f.sourcePath);
+  expect(restoredSnapshot.sha256).not.toBe(snapshot.sha256);
+  expect(runClientCredentialOperation(f.env, { kind: "token.read", key })).toEqual({
+    kind: "token",
+    token: null,
+  });
+  {
+    using local = openMigrationCredentials(f.env);
+    expect(local.database.prepare("SELECT * FROM device_auth_tokens ORDER BY role").all()).toEqual(
+      restoredTokens,
+    );
+    expect(readClientCredentialReceipt(local.database)).toMatchObject({
+      phase: "complete",
+      receipt: { source: { kind: "independent", sha256: restoredSnapshot.sha256 } },
+    });
+  }
+  const maintenance = await captureClientCredentialMigrationFixture(f.sourcePath);
+  try {
+    upgradeNative(f, maintenance);
     expect((await importLegacy()).warnings).toEqual([]);
     expect(runClientCredentialOperation(f.env, { kind: "token.read", key })).toEqual({
       kind: "token",
       token: null,
     });
-    using local = openClientCredentialCustody(f.env, { migration: true })!;
+    using local = openMigrationCredentials(f.env);
     expect(readClientCredentialReceipt(local.database)?.receipt.legacyImports).toEqual({
       "auth:primary": { sha256: createHash("sha256").update(raw).digest("hex") },
       "auth:node": { sha256: null },
@@ -994,29 +697,17 @@ it("keeps revoked JSON credentials consumed when an independent native source ch
 });
 
 it("decrypts a pre-cutover public-session token with the exactly migrated identity", async () => {
-  const f = await fixture();
+  await using f = await fixture();
   // Minted by the v1 codec with the fixture's RFC 8032 private seed before storage cutover.
   const token =
     "v1.BwcHBwcHBwcHBwcHwqVwqlDFAwNPJ4TDoOKwRBzmmVH2zD4hlWSM9INXdYUuW35wvupzTDJq6OCFmLkD2varXqKRCJOHZq6zmCs_5a138mgvyTNU00swEQPLnTdZ5VEr2n-115k4EmS30yAm0EtylQ6rpbzjqNtSCCySwtnlYtDQrzcc-uV3cucEmEgsYpLSIf4qFVHiP0Ohc6JxVSv1xofWUQBR29jEQWdv9PyiJix1YE7n4vNCcEZA";
-  try {
-    f.maintenance.run(() =>
-      runSqliteImmediateTransactionSync(f.source, () =>
-        prepareClientCredentialMigration(f.source, {
-          path: f.sourcePath,
-          env: f.env,
-          fromVersion: 25,
-          capture: f.maintenance.capture,
-        }),
-      ),
-    );
-    await expect(resolvePublicSessionShareToken(token, { env: f.env })).resolves.toEqual({
+  f.migrate();
+  await withEnvAsync({ OPENCLAW_STATE_DIR: f.env.OPENCLAW_STATE_DIR }, async () => {
+    await expect(resolvePublicSessionShareToken(token)).resolves.toEqual({
       agentId: "synthetic",
       sessionKey: "agent:synthetic:public",
       sessionId: "migration-proof",
       shareId: "a".repeat(48),
     });
-  } finally {
-    f.source.close();
-    await f.maintenance.close();
-  }
+  });
 });

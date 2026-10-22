@@ -1,15 +1,18 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal } from "solid-js";
+import { createSignal } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import type {
   ControlUiBootstrapConfig,
   ControlUiEnvironment,
 } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import "../components/app-topbar-solid.tsx";
-import { SidebarAgentCard } from "../components/sidebar-agent-card.tsx";
+import { renderSidebarAgentCard } from "../components/app-sidebar-render.tsx";
+import { AppSidebarOwner, type AppSidebarElement } from "../components/app-sidebar.tsx";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
+import { createContext, createGateway, createSessions } from "../test-helpers/app-sidebar.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { createApplicationConfigCapability } from "./config.ts";
@@ -62,22 +65,32 @@ it("renders a matching stripe, favicon, avatar ring, and sidebar/topbar pills on
   const favicon = icon("/favicon.svg", "image/svg+xml");
   bindControlUiDocumentHead({ themeColors: [], favicons: [favicon] });
 
+  const config = setupConfig({ environment: edge, seamColor: "#123456" });
   const [cardEnvironment, setCardEnvironment] = createSignal<ControlUiEnvironment | null>(null);
-  const { container: sidebar } = mountSolid(() =>
-    createComponent(SidebarAgentCard, {
-      agentId: "main",
-      agentName: "OpenClaw",
-      avatarUrl: null,
-      avatarAuthReady: false,
-      avatarText: "O",
-      menuOpen: false,
-      menuUnread: false,
-      switcherAvailable: false,
-      get environment() {
-        return cardEnvironment();
+  const context = {
+    ...createContext(
+      createGateway(createTestGatewayClient(async () => ({}))),
+      createSessions("main", []),
+      {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [{ id: "main", name: "OpenClaw" }],
       },
-    }),
+    ),
+    get config() {
+      cardEnvironment();
+      return config;
+    },
+  };
+  const sidebarProps = document.createElement("openclaw-app-sidebar") as AppSidebarElement;
+  sidebarProps.sidebarAgentsMode = "chip";
+  const host = new AppSidebarOwner(
+    { dashboards: null, loadMoreDashboards() {} },
+    context,
+    sidebarProps,
   );
+  const { container: sidebar } = mountSolid(() => renderSidebarAgentCard(host));
   const topbar = document.createElement("openclaw-app-topbar") as EnvironmentElement;
   document.body.append(topbar);
   await topbar.updateComplete;
@@ -86,7 +99,6 @@ it("renders a matching stripe, favicon, avatar ring, and sidebar/topbar pills on
   expect(document.querySelector(".control-ui-environment-pill")).toBeNull();
   expect(favicon.getAttribute("href")).toBe("/favicon.svg");
 
-  const config = setupConfig({ environment: edge, seamColor: "#123456" });
   await refresh(config);
   setCardEnvironment(config.current.environment);
   topbar.environment = config.current.environment;

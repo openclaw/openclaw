@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { sanitizeForLog } from "../../packages/terminal-core/src/ansi.js";
 import type { OpenClawConfig } from "../config/types.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
+import { dedupeByKey } from "../shared/dedupe-by-key.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
@@ -124,25 +125,17 @@ function dedupePluginDiagnostics(
   diagnostics: PluginDiagnostic[],
   discoveryDiagnostics: ReadonlySet<PluginDiagnostic>,
 ): PluginDiagnostic[] {
-  const seen = new Set<string>();
-  const deduped: PluginDiagnostic[] = [];
-  for (const diagnostic of diagnostics) {
-    // Discovery diagnostics belong to package roots; generated compatibility warnings belong to ids.
-    const key = JSON.stringify([
+  // Discovery diagnostics belong to package roots; generated compatibility warnings belong to ids.
+  return dedupeByKey(diagnostics, (diagnostic) =>
+    JSON.stringify([
       diagnostic.level,
       diagnostic.pluginId ?? "",
       diagnostic.message,
       diagnostic.level === "error" || discoveryDiagnostics.has(diagnostic)
         ? (diagnostic.source ?? "")
         : "",
-    ]);
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    deduped.push(diagnostic);
-  }
-  return deduped;
+    ]),
+  );
 }
 
 function isStaleForeignBundledPin(params: {

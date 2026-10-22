@@ -16,6 +16,10 @@ function attachment(fields: Record<string, unknown>, type = "attachment") {
   return { type, attachment: fields };
 }
 
+const media = (url: string, kind: string, label: string, mimeType?: string) =>
+  attachment({ url, kind, label, ...(mimeType ? { mimeType } : {}) });
+const text = (value: string) => ({ type: "text", text: value });
+
 function assistant(content: unknown, fields: Record<string, unknown> = {}) {
   return normalizeMessage({ role: "assistant", content, ...fields });
 }
@@ -23,6 +27,47 @@ function assistant(content: unknown, fields: Record<string, unknown> = {}) {
 function user(fields: Record<string, unknown>) {
   return normalizeMessage({ role: "user", ...fields });
 }
+
+const audioSource = (source: Record<string, unknown>) => ({
+  type: "audio",
+  label: "clip.mp3",
+  source: { media_type: "audio/mpeg", ...source },
+});
+const voice = {
+  url: "/media/voice",
+  artifactId: "audio-artifact",
+  mimeType: "audio/x-caf",
+  playback: "transcode",
+  sizeBytes: 4096,
+  durationMs: 2345,
+  isVoiceNote: true,
+};
+const canonicalCanvas = canvas(
+  {
+    url: "/__openclaw__/canvas/documents/cv_widget/index.html",
+    sandbox: "scripts",
+    boardWidgetName: "saved-widget",
+  },
+  "original tool result",
+);
+const dimensions = { sizeBytes: Infinity, durationMs: Infinity, width: Infinity, height: Infinity };
+const image = attachment({
+  url: "~/Pictures/test image.png",
+  kind: "image",
+  label: "test image.png",
+  mimeType: "image/png",
+  width: 1280,
+  height: 720,
+});
+const failures = [
+  media("/media/deploy.yaml", "document", "deploy.yaml", "application/yaml"),
+  ...[
+    ["unsupported-format", "settings.toml", "application/toml"],
+    ["delivery-failed", "bundle.7z", "application/x-7z-compressed"],
+  ].map(([code, label, mimeType]) =>
+    attachment({ code, kind: "document", label, mimeType }, "attachment_error"),
+  ),
+];
 
 describe("message-normalizer", () => {
   afterEach(() => vi.useRealTimers());
@@ -42,10 +87,71 @@ describe("message-normalizer", () => {
     expect(isStandaloneToolMessageForDisplay(message)).toBe(standalone);
   });
 
-  it("keeps Responses text after malformed content blocks", () => {
-    expect(assistant([null, { type: "output_text", text: "Visible answer" }]).content).toEqual([
-      { type: "text", text: "Visible answer" },
-    ]);
+  it.each([
+    [
+      "Responses text after malformed blocks",
+      [null, { type: "output_text", text: "Visible answer" }],
+      [text("Visible answer")],
+    ],
+    [
+      "base64 audio",
+      [audioSource({ type: "base64", data: "//uQAA==" })],
+      [media("data:audio/mpeg;base64,//uQAA==", "audio", "clip.mp3", "audio/mpeg")],
+    ],
+    [
+      "URL audio",
+      [audioSource({ type: "url", url: "/tmp/clip.mp3" })],
+      [media("/tmp/clip.mp3", "audio", "clip.mp3", "audio/mpeg")],
+    ],
+    [
+      "managed voice metadata",
+      [{ type: "audio", fileName: "voice.caf", ...voice }],
+      [attachment({ ...voice, kind: "audio", label: "voice.caf" })],
+    ],
+    [
+      "embed shortcodes",
+      'Here.\n[embed ref="cv_status" title="Status" height="320" /]',
+      [
+        text("Here."),
+        canvas({
+          viewId: "cv_status",
+          url: "/__openclaw__/canvas/documents/cv_status/index.html",
+          title: "Status",
+          preferredHeight: 320,
+        }),
+      ],
+    ],
+    [
+      "canonical canvas metadata over shortcode copies",
+      [text('Ready.\n[embed ref="cv_widget" title="Widget" /]'), canonicalCanvas],
+      [text("Ready."), canonicalCanvas],
+    ],
+    [
+      "finite dimensions only",
+      [
+        canvas({ url: "/canvas/one", preferredHeight: Infinity }),
+        { type: "video", url: "/media/clip", ...dimensions },
+        attachment({ kind: "document", url: "/media/document", label: "Document", ...dimensions }),
+      ],
+      [
+        canvas({ url: "/canvas/one" }),
+        media("/media/clip", "video", "Video"),
+        media("/media/document", "document", "Document"),
+      ],
+    ],
+    [
+      "MEDIA paths without filename leakage",
+      "Before\nMEDIA:/tmp/Shopping report.pdf\nAfter",
+      [
+        text("Before"),
+        media("/tmp/Shopping report.pdf", "document", "Shopping report.pdf", "application/pdf"),
+        text("After"),
+      ],
+    ],
+    ["image dimensions", [image], [image]],
+    ["named failures beside delivered attachments", failures, failures],
+  ])("normalizes %s", (_name, input, expected) => {
+    expect(assistant(structuredClone(input)).content).toEqual(expected);
   });
 
   it("normalizes mixed text, thinking, and tool content without a standalone tool envelope", () => {
@@ -77,8 +183,8 @@ describe("message-normalizer", () => {
     expect(normalizeMessage(message)).toBe(initial);
     const replacement = normalizeMessage({ ...message, content: "finished answer" });
     expect(replacement).not.toBe(initial);
-    expect(replacement.content).toEqual([{ type: "text", text: "finished answer" }]);
-    expect(initial.content).toEqual([{ type: "text", text: "answer" }]);
+    expect(replacement.content).toEqual([text("finished answer")]);
+    expect(initial.content).toEqual([text("answer")]);
   });
 
   it("does not cache a missing timestamp's clock fallback", () => {
@@ -93,45 +199,17 @@ describe("message-normalizer", () => {
   });
 
   it("keeps user directives literal", () => {
-    const text = "MEDIA:/tmp/example.png\n[[reply_to_current]]";
-    const result = user({ text });
-    expect(result.content).toEqual([{ type: "text", text }]);
+    const literal = "MEDIA:/tmp/example.png\n[[reply_to_current]]";
+    const result = user({ text: literal });
+    expect(result.content).toEqual([text(literal)]);
     expect([result.replyTarget, result.audioAsVoice]).toEqual([undefined, undefined]);
   });
 
   it("accepts assistant Responses input blocks but rejects user output blocks", () => {
-    expect(assistant([{ type: "input_text", text: "Answer" }]).content).toEqual([
-      { type: "text", text: "Answer" },
-    ]);
+    expect(assistant([{ type: "input_text", text: "Answer" }]).content).toEqual([text("Answer")]);
     expect(user({ content: [{ type: "output_text", text: "Answer" }] }).content).not.toContainEqual(
-      { type: "text", text: "Answer" },
+      text("Answer"),
     );
-  });
-
-  it.each([
-    { source: { type: "base64", data: "//uQAA==" }, url: "data:audio/mpeg;base64,//uQAA==" },
-    { source: { type: "url", url: "/tmp/clip.mp3" }, url: "/tmp/clip.mp3" },
-  ])("normalizes structured $source.type audio", ({ source, url }) => {
-    expect(
-      assistant([
-        { type: "audio", label: "clip.mp3", source: { ...source, media_type: "audio/mpeg" } },
-      ]).content,
-    ).toEqual([attachment({ url, kind: "audio", label: "clip.mp3", mimeType: "audio/mpeg" })]);
-  });
-
-  it("preserves managed audio playback, voice, and artifact metadata", () => {
-    const metadata = {
-      url: "/media/voice",
-      artifactId: "audio-artifact",
-      mimeType: "audio/x-caf",
-      playback: "transcode",
-      sizeBytes: 4096,
-      durationMs: 2345,
-      isVoiceNote: true,
-    };
-    expect(assistant([{ type: "audio", fileName: "voice.caf", ...metadata }]).content).toEqual([
-      attachment({ ...metadata, kind: "audio", label: "voice.caf" }),
-    ]);
   });
 
   it("does not turn non-assistant structured audio into attachments", () => {
@@ -144,37 +222,6 @@ describe("message-normalizer", () => {
     ).toEqual([]);
   });
 
-  it("expands embed shortcodes into canvas previews", () => {
-    expect(
-      assistant('Here.\n[embed ref="cv_status" title="Status" height="320" /]').content,
-    ).toEqual([
-      { type: "text", text: "Here." },
-      canvas({
-        viewId: "cv_status",
-        url: "/__openclaw__/canvas/documents/cv_status/index.html",
-        title: "Status",
-        preferredHeight: 320,
-      }),
-    ]);
-  });
-
-  it("keeps canonical canvas metadata instead of its shortcode copy", () => {
-    const canonical = canvas(
-      {
-        url: "/__openclaw__/canvas/documents/cv_widget/index.html",
-        sandbox: "scripts",
-        boardWidgetName: "saved-widget",
-      },
-      "original tool result",
-    );
-    expect(
-      assistant([
-        { type: "text", text: 'Ready.\n[embed ref="cv_widget" title="Widget" /]' },
-        canonical,
-      ]).content,
-    ).toEqual([{ type: "text", text: "Ready." }, canonical]);
-  });
-
   it("extracts ordered MEDIA attachments with persisted delivery facts", () => {
     const result = assistant(
       "Intro\nMEDIA:https://example.com/image.png\nOutro\nMEDIA:https://example.com/voice.ogg",
@@ -183,93 +230,14 @@ describe("message-normalizer", () => {
     expect(result.replyTarget).toEqual({ kind: "id", id: "thread-123" });
     expect(result.audioAsVoice).toBe(true);
     expect(result.content).toEqual([
-      { type: "text", text: "Intro" },
+      text("Intro"),
+      media("https://example.com/image.png", "image", "image.png", "image/png"),
+      text("Outro"),
       attachment({
-        url: "https://example.com/image.png",
-        kind: "image",
-        label: "image.png",
-        mimeType: "image/png",
-      }),
-      { type: "text", text: "Outro" },
-      attachment({
-        url: "https://example.com/voice.ogg",
-        kind: "audio",
-        label: "voice.ogg",
-        mimeType: "audio/ogg",
+        ...media("https://example.com/voice.ogg", "audio", "voice.ogg", "audio/ogg").attachment,
         isVoiceNote: true,
       }),
     ]);
-  });
-
-  it("omits non-finite canvas and media dimensions", () => {
-    const dimensions = {
-      sizeBytes: Infinity,
-      durationMs: Infinity,
-      width: Infinity,
-      height: Infinity,
-    };
-    expect(
-      assistant([
-        canvas({ url: "/canvas/one", preferredHeight: Infinity }),
-        { type: "video", url: "/media/clip", ...dimensions },
-        attachment({
-          kind: "document",
-          url: "/media/document",
-          label: "Document",
-          ...dimensions,
-        }),
-      ]).content,
-    ).toEqual([
-      canvas({ url: "/canvas/one" }),
-      attachment({ kind: "video", url: "/media/clip", label: "Video" }),
-      attachment({ kind: "document", url: "/media/document", label: "Document" }),
-    ]);
-  });
-
-  it("classifies MEDIA paths without leaking filename text", () => {
-    const url = "/tmp/Shopping report.pdf";
-    expect(assistant(`Before\nMEDIA:${url}\nAfter`).content).toEqual([
-      { type: "text", text: "Before" },
-      attachment({
-        url,
-        label: "Shopping report.pdf",
-        kind: "document",
-        mimeType: "application/pdf",
-      }),
-      { type: "text", text: "After" },
-    ]);
-  });
-
-  it("preserves structured image attachment dimensions", () => {
-    const content = [
-      attachment({
-        url: "~/Pictures/test image.png",
-        kind: "image",
-        label: "test image.png",
-        mimeType: "image/png",
-        width: 1280,
-        height: 720,
-      }),
-    ];
-    expect(assistant(structuredClone(content)).content).toEqual(content);
-  });
-
-  it("preserves named failures beside delivered attachments", () => {
-    const content = [
-      attachment({
-        url: "/media/deploy.yaml",
-        kind: "document",
-        label: "deploy.yaml",
-        mimeType: "application/yaml",
-      }),
-      ...[
-        ["unsupported-format", "settings.toml", "application/toml"],
-        ["delivery-failed", "bundle.7z", "application/x-7z-compressed"],
-      ].map(([code, label, mimeType]) =>
-        attachment({ code, kind: "document", label, mimeType }, "attachment_error"),
-      ),
-    ];
-    expect(assistant(structuredClone(content)).content).toEqual(content);
   });
 
   it("keeps a fact-only reply target with empty content", () => {
@@ -283,9 +251,7 @@ describe("message-normalizer", () => {
       openclawDelivery: { replyToCurrent: true, replyToId: "  " },
     });
     expect(result.replyTarget).toEqual({ kind: "current" });
-    expect(result.content).toEqual([
-      attachment({ kind: "audio", url: "/media/voice.ogg", label: "Audio" }),
-    ]);
+    expect(result.content).toEqual([media("/media/voice.ogg", "audio", "Audio")]);
   });
 
   it("prefers trimmed transcript reply metadata over delivery facts", () => {
@@ -349,6 +315,6 @@ describe("message-normalizer", () => {
   ])("normalizes forwarded source attribution %j", (source, expected) => {
     const result = assistant("Forwarded report", { senderSession: source });
     expect(result.senderSession).toStrictEqual(expected);
-    expect(result.content).toEqual([{ type: "text", text: "Forwarded report" }]);
+    expect(result.content).toEqual([text("Forwarded report")]);
   });
 });

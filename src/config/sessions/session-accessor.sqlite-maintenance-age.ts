@@ -16,6 +16,12 @@ import {
 } from "./store-maintenance.js";
 import type { SessionEntry } from "./types.js";
 
+export type SessionMaintenanceAgeContinuation = {
+  at: number;
+  after?: { updatedAt: number; sessionKey: string };
+  modelRunPrune: boolean;
+};
+
 export type SessionEntryMaintenanceAgeFact = {
   maintenance: ResolvedSessionMaintenanceConfig;
   entryCount?: number;
@@ -38,6 +44,23 @@ export type SessionEntryMaintenanceAgeChange = {
   entry: MaintenanceActivity;
   previousEntry?: MaintenanceActivity;
 };
+
+export function restartSessionMaintenanceAgeScan(
+  continuation: SessionMaintenanceAgeContinuation | undefined,
+  changes: ReadonlyMap<string, SessionEntryMaintenanceAgeChange>,
+): SessionMaintenanceAgeContinuation | undefined {
+  const after = continuation?.after;
+  if (
+    after &&
+    [...changes.values()].some(
+      ({ entry }) => entry.archivedAt === undefined && entry.updatedAt <= after.updatedAt,
+    )
+  ) {
+    // A late historical write can sort behind the cursor. Keep the initial age policy.
+    return { at: continuation.at, modelRunPrune: continuation.modelRunPrune };
+  }
+  return undefined;
+}
 const changeObservers = new Map<
   string | symbol,
   Set<(change: SessionEntryMaintenanceAgeChange) => void>

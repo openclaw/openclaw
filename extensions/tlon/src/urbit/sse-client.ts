@@ -513,35 +513,16 @@ export class UrbitSSEClient {
     this.stopReceiving();
 
     try {
-      const unsubscribes = this.subscriptions.map((sub) => ({
-        id: sub.id,
-        action: "unsubscribe",
-        subscription: sub.id,
-      }));
-
-      {
-        const { release } = await putUrbitChannel(this.channelRequestContext(), {
-          body: unsubscribes,
-          timeoutMs: 30_000,
-          auditContext: "tlon-urbit-unsubscribe",
-        });
-        await release();
-      }
-
-      {
-        const { release } = await urbitFetch({
-          baseUrl: this.url,
-          path: `/~/channel/${this.channelId}`,
-          init: {
-            method: "DELETE",
-            headers: {
-              Cookie: this.cookie,
-            },
-          },
-          ssrfPolicy: this.ssrfPolicy,
-          timeoutMs: 30_000,
-          auditContext: "tlon-urbit-channel-close",
-        });
+      const { response, release } = await putUrbitChannel(this.channelRequestContext(), {
+        body: [{ action: "delete" }],
+        timeoutMs: 30_000,
+        auditContext: "tlon-urbit-channel-close",
+      });
+      try {
+        if (!response.ok) {
+          throw new UrbitHttpError({ operation: "Channel close", status: response.status });
+        }
+      } finally {
         await release();
       }
     } catch (error) {

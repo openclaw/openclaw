@@ -29,11 +29,14 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import * as sessionMailbox from "../../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { sessionMutationHandlers } from "./sessions-mutations.js";
+import {
+  createSessionMutationCatalog,
+  startSessionMutationRequest,
+} from "./sessions-mutations.native-consent.test-support.js";
 import { createSessionMutationTestContext } from "./sessions-mutations.owner.test-support.js";
 import { setupSessionMutationState } from "./sessions-mutations.state.test-support.js";
 import * as catalogPreparation from "./sessions-patch-catalog-preparation.js";
-import type { GatewayRequestContext, RespondFn } from "./types.js";
+import type { GatewayRequestContext } from "./types.js";
 
 // mock-isolation: Provider discovery is outside this synthetic session/queue preference boundary.
 vi.mock("../../plugins/provider-thinking.js", () => ({
@@ -127,32 +130,23 @@ async function seedSession(thinkingLevel = "low", overrides: Partial<SessionEntr
 
 async function patchSession(patch: Record<string, unknown>, config = cfg) {
   const params = { key: sessionKey, ...patch };
-  const responses: Parameters<RespondFn>[] = [];
   const context = {
     ...createSessionMutationTestContext(config),
-    loadGatewayModelCatalogSnapshot: async () => ({
-      agentId: "main",
-      agentDir: "/fixture/agent",
-      workspaceDir: "/fixture/workspace",
-      config,
-      catalogComplete: true,
-      entries: catalog,
-      routeVariants: catalog,
-    }),
+    loadGatewayModelCatalogSnapshot: async () =>
+      createSessionMutationCatalog(
+        config,
+        { agentDir: () => "/fixture/agent", workspaceDir: "/fixture/workspace" },
+        catalog,
+      ),
     getSessionEventSubscriberConnIds: () => new Set(),
     dedupe: new Map(),
   } satisfies GatewayRequestContext;
-  await expectDefined(
-    sessionMutationHandlers["sessions.patch"],
-    "patch handler",
-  )({
+  const { responses, running } = startSessionMutationRequest("sessions.patch", params, {
     req: { type: "req", id: "selection-patch", method: "sessions.patch", params },
-    params,
     client: null,
     context,
-    isWebchatConnect: () => true,
-    respond: (...response) => responses.push(response),
   });
+  await running;
   expect(responses).toHaveLength(1);
   return expectDefined(responses[0], "patch response");
 }

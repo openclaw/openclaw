@@ -5,7 +5,6 @@ import type {
   SageBatchResponse,
   SageContent,
   SageQuestion,
-  SageRequest,
   SageResponse,
 } from "./sage-wire.js";
 
@@ -21,12 +20,6 @@ function object(value: unknown, field: string): Record<string, unknown> {
   check(value !== null && typeof value === "object" && !Array.isArray(value), field);
   // SAFETY: The check above excludes null, primitives and arrays; properties remain unknown.
   return value as Record<string, unknown>;
-}
-function keys(value: Record<string, unknown>, allowed: string[], field: string) {
-  check(
-    Object.keys(value).every((key) => allowed.includes(key)),
-    field,
-  );
 }
 function string(value: unknown, field: string): asserts value is string {
   check(typeof value === "string", field);
@@ -49,171 +42,15 @@ function unique(values: unknown[], field: string) {
 function assertSageNullableString(value: unknown, field: string) {
   check(value == null || readStringValue(value) !== undefined, field);
 }
-function grounding(value: unknown) {
-  if (value == null) {
-    return;
-  }
-  const g = object(value, "grounding");
-  keys(
-    g,
-    ["trigger", "confidence_floor", "max_results", "max_context_tokens", "return_sources"],
-    "grounding fields",
-  );
-  if (g.trigger !== undefined) {
-    check(
-      typeof g.trigger === "string" && ["never", "low_confidence", "always"].includes(g.trigger),
-      "grounding trigger",
-    );
-  }
-  if (g.confidence_floor !== undefined) {
-    number(g.confidence_floor, 0, 1, "grounding confidence_floor");
-  }
-  if (g.max_results !== undefined) {
-    integer(g.max_results, 1, 20, "grounding max_results");
-  }
-  if (g.max_context_tokens !== undefined) {
-    integer(g.max_context_tokens, 1, 8000, "grounding max_context_tokens");
-  }
-  if (g.return_sources !== undefined) {
-    check(typeof g.return_sources === "boolean", "grounding return_sources");
-  }
-}
-async function content(value: unknown, probe?: SageImageProbe, inList = false): Promise<void> {
-  if (typeof value === "string") {
-    return;
-  }
-  const c = object(value, "content");
-  if (c.kind === "text") {
-    keys(c, ["kind", "value"], "text fields");
-    string(c.value, "text value");
-    return;
-  }
-  if (c.kind === "list") {
-    keys(c, ["kind", "value"], "list fields");
-    const items = array(c.value, 2, 120, "list length");
-    const ids = [];
-    for (const item of items) {
-      const i = object(item, "list item");
-      keys(i, ["id", "content"], "list item fields");
-      string(i.id, "list item id");
-      ids.push(i.id);
-      await content(i.content, probe, true);
-    }
-    unique(ids, "duplicate list ids");
-    return;
-  }
-  check(c.kind === "image" && !inList, "image placement");
-  keys(c, ["kind", "media", "text"], "image fields");
-  string(c.media, "image media");
-  assertSageNullableString(c.text, "image text");
-  // Bound before decoding; canonical inline bytes only, never remote URLs.
-  check(c.media.length <= 4 * Math.ceil((4 * 1024 * 1024) / 3) + 23, "image byte limit");
-  check(
-    /^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/]*={0,2}$/.test(c.media),
-    "image data URI",
-  );
-  check(sanitizeInlineImageDataUrl(c.media) === c.media, "image encoding or MIME");
-  const bytes = Buffer.from(c.media.slice(c.media.indexOf(",") + 1), "base64");
-  check(bytes.length > 0 && bytes.length <= 4 * 1024 * 1024, "image byte limit");
-  check(probe, "image probe required");
+export async function validateSageImage(media: string, probe: SageImageProbe): Promise<void> {
+  // Decision admission already owns canonical encoding and byte limits.
+  check(sanitizeInlineImageDataUrl(media) === media, "image encoding or MIME");
+  const bytes = Buffer.from(media.slice(media.indexOf(",") + 1), "base64");
   const dimensions = await probe(bytes);
   check(dimensions, "image dimensions");
   integer(dimensions.width, 1, 8192, "image width");
   integer(dimensions.height, 1, 8192, "image height");
   check(dimensions.width * dimensions.height <= 4096 ** 2, "image area");
-}
-function question(value: unknown, c: unknown, batch: boolean, topGrounding?: unknown) {
-  const q = object(value, "question");
-  string(q.id, "question id");
-  const base = ["kind", "id", "instructions", ...(batch ? ["grounding"] : [])];
-  const image = typeof c === "object" && c !== null && "kind" in c && c.kind === "image";
-  const g = batch ? q.grounding : topGrounding;
-  grounding(g);
-  check(!image || g == null, "image with grounding");
-  if (q.kind === "tags") {
-    assertSageNullableString(q.instructions, "instructions");
-  } else {
-    string(q.instructions, "instructions");
-  }
-  switch (q.kind) {
-    case "yesno":
-      keys(q, base, "yesno fields");
-      break;
-    case "sort":
-      keys(q, base, "sort fields");
-      check(g == null, "sort with grounding");
-      check(
-        typeof c === "object" && c !== null && "kind" in c && c.kind === "list",
-        "sort requires list",
-      );
-      break;
-    case "choice": {
-      keys(q, [...base, "options"], "choice fields");
-      const options = array(q.options, 2, image ? 20 : 120, "choice option count").map((v) => {
-        const o = object(v, "choice option");
-        keys(o, ["option", "description"], "option fields");
-        string(o.option, "option");
-        assertSageNullableString(o.description, "option description");
-        return o.option;
-      });
-      unique(options, "duplicate options");
-      break;
-    }
-    case "scale": {
-      keys(q, [...base, "levels"], "scale fields");
-      const levels = array(q.levels, 2, 26, "scale level count").map((v) => {
-        const l = object(v, "scale level");
-        keys(l, ["level", "description"], "level fields");
-        integer(l.level, Number.MIN_SAFE_INTEGER, Number.MAX_SAFE_INTEGER, "scale level");
-        assertSageNullableString(l.description, "level description");
-        return l.level;
-      });
-      unique(levels, "duplicate levels");
-      break;
-    }
-    case "tags": {
-      keys(q, [...base, "tags"], "tags fields");
-      const tags = array(q.tags, 1, 120, "tag count").map((v) => {
-        const t = object(v, "tag");
-        keys(t, ["id", "name", "threshold"], "tag fields");
-        string(t.id, "tag id");
-        assertSageNullableString(t.name, "tag name");
-        if (t.threshold != null) {
-          number(t.threshold, 0, 1, "tag threshold");
-        }
-        return t.id;
-      });
-      unique(tags, "duplicate tags");
-      break;
-    }
-    default:
-      check(false, "question kind");
-  }
-}
-function reasoning(value: unknown) {
-  check(value === undefined || value === "auto" || value === "on" || value === "off", "reasoning");
-}
-export async function validateSageRequest(
-  value: SageRequest | SageBatchRequest,
-  probe?: SageImageProbe,
-): Promise<void> {
-  const r = object(value, "request");
-  reasoning(r.reasoning);
-  if ("requests" in r) {
-    keys(r, ["requests", "reasoning"], "batch fields");
-    for (const item of array(r.requests, 1, Infinity, "batch requests")) {
-      const group = object(item, "batch group");
-      keys(group, ["content", "questions"], "group fields");
-      await content(group.content, probe);
-      for (const q of array(group.questions, 1, Infinity, "batch questions")) {
-        question(q, group.content, true);
-      }
-    }
-  } else {
-    keys(r, ["content", "question", "reasoning", "grounding"], "request fields");
-    await content(r.content, probe);
-    question(r.question, r.content, false, r.grounding);
-  }
 }
 function metadata(value: unknown) {
   const m = object(value, "metadata");

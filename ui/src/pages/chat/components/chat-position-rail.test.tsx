@@ -8,6 +8,7 @@ import { createTestTranscript, stubAnimationFrames } from "../chat-view.test-hel
 import { mountTestTranscript } from "../test-helpers/chat-transcript-native.tsx";
 import { adjustTextareaHeight } from "./chat-composer-dom.ts";
 import { ChatPositionRail } from "./chat-position-rail-solid.tsx";
+import { ChatPositionRailView, type PositionRailViewParams } from "./chat-position-rail-view.tsx";
 import { message, stubRailVisibility } from "./chat-position-rail.test-support.ts";
 import { getTranscriptState, type ChatThreadProps } from "./chat-thread-interactions.ts";
 import { ChatThread } from "./chat-thread-view.tsx";
@@ -44,6 +45,53 @@ function mountThread(container: HTMLElement, transcript: ChatTranscript) {
 describe("conversation position rail", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it("does not recompute settled marker labels for live preview deltas", () => {
+    let roleReads = 0;
+    const marker = {
+      id: "answer",
+      anchorId: "answer",
+      get role(): "assistant" {
+        roleReads++;
+        return "assistant";
+      },
+      message: message("answer", "assistant", "Initial answer", 1),
+    };
+    const initial: PositionRailViewParams = {
+      markers: [marker],
+      renderedIndexes: [0],
+      activeId: marker.id,
+      visibleIds: new Set([marker.id]),
+      rovingId: marker.id,
+      previewId: null,
+      hoveredId: null,
+      bindMarker: vi.fn(),
+      bindScroller: vi.fn(),
+      bindPreview: vi.fn(),
+      onScroll: vi.fn(),
+      stopScrollInput: vi.fn(),
+      onPointerLeave: vi.fn(),
+      onMarkerHover: vi.fn(),
+      onMarkerFocus: vi.fn(),
+      onMarkerBlur: vi.fn(),
+      onMarkerKeyDown: vi.fn(),
+      onMarkerSelect: vi.fn(),
+    };
+    const [params, setParams] = createSignal(initial);
+    const view = mountSolid(() => <ChatPositionRailView {...params()} />);
+    expect(roleReads).toBeGreaterThan(0);
+    roleReads = 0;
+    for (const text of ["First", "Second", "Final"]) {
+      setParams({
+        ...initial,
+        liveMarkers: [{ ...marker, message: message("answer", "assistant", text, 1) }],
+      });
+      roleReads = 0;
+      flush();
+      expect(roleReads).toBe(0);
+    }
+    view.unmount();
+  });
 
   it.each(["mounted", "off-window", "focused"] as const)(
     "publishes current position and keyboard entry together for a %s observer target",
@@ -543,19 +591,20 @@ describe("conversation position rail", () => {
       }
       await settleFrames();
       expect(observed.has(original)).toBe(true);
+      const layoutWrites = vi.spyOn(marks.style, "setProperty");
       const query = vi.spyOn(root, "querySelectorAll");
       const targetScans = () =>
         query.mock.calls.filter(([selector]) => selector === ".chat-bubble[data-entry-id]").length;
-
       for (const word of ["one", "two", "three"]) {
+        layoutWrites.mockClear();
         props.stream = `Live **${word}**`;
         rerender();
         await settleFrames();
         expect(container.querySelector(".chat-bubble strong")?.textContent).toBe(word);
         expect(container.querySelector('.chat-bubble[data-entry-id="question"]')).toBe(original);
+        expect(layoutWrites).not.toHaveBeenCalled();
       }
       expect(targetScans()).toBe(0);
-
       const elements = transcript.renderSession(
         props.sessionKey,
         (session) => session.messageElements,
@@ -948,6 +997,7 @@ describe("conversation position rail", () => {
       rerender();
       await settleFrames();
       expect(streamBubble.querySelector("strong")?.textContent).toBe("updated");
+      expect(provisional.getAttribute("aria-description")).toContain("Draft updated response");
       expect(query.mock.calls.filter(([selector]) => selector.includes(".chat-bubble"))).toEqual(
         [],
       );

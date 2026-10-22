@@ -157,7 +157,10 @@ struct ExecApprovalsStateIsolationTrait: TestTrait, TestScoping {
             .appendingPathComponent("openclaw-approvals-state-\(UUID().uuidString)", isDirectory: true)
         try FileManager().createDirectory(at: stateDirectory, withIntermediateDirectories: true)
         defer { try? FileManager().removeItem(at: stateDirectory) }
-        try await ExecApprovalsStore.withStateDirectory(stateDirectory, operation: function)
+        // Native policy calls also read the process-wide CLI selection and environment.
+        try await TestIsolation.withIsolatedState {
+            try await ExecApprovalsStore.withStateDirectory(stateDirectory, operation: function)
+        }
     }
 }
 

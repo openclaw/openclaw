@@ -208,64 +208,53 @@ export function shouldExcludeProviderFromDefaultHighSignalLiveSweep(params: {
   return true;
 }
 
-function selectPrioritizedLiveItems<T>(
-  items: T[],
-  maxItems: number,
-  refOf: (item: T) => ModelRef,
-  providerOf: (item: T) => string,
-  priority: readonly string[],
-): T[] {
-  if (maxItems <= 0 || items.length <= maxItems) {
-    return items;
-  }
-  const remaining = [...items];
-  const selected: T[] = [];
-  for (const ref of priority) {
-    const index = remaining.findIndex((item) => canonicalLiveModelRef(refOf(item)) === ref);
-    if (index >= 0) {
-      selected.push(...remaining.splice(index, 1));
+function createLiveItemSelector(priority: readonly string[]) {
+  return function selectPrioritizedLiveItems<T>(
+    items: T[],
+    maxItems: number,
+    refOf: (item: T) => ModelRef,
+    providerOf: (item: T) => string,
+  ): T[] {
+    if (maxItems <= 0 || items.length <= maxItems) {
+      return items;
     }
-    if (selected.length >= maxItems) {
-      return selected;
-    }
-  }
-  const grouped = new Map<string, T[]>();
-  for (const item of remaining) {
-    const provider = providerOf(item);
-    const group = grouped.get(provider);
-    if (group) {
-      group.push(item);
-    } else {
-      grouped.set(provider, [item]);
-    }
-  }
-  while (selected.length < maxItems && grouped.size > 0) {
-    for (const [provider, group] of grouped) {
-      const item = group.shift();
-      if (item) {
-        selected.push(item);
-      }
-      if (group.length === 0) {
-        grouped.delete(provider);
+    const remaining = [...items];
+    const selected: T[] = [];
+    for (const ref of priority) {
+      const index = remaining.findIndex((item) => canonicalLiveModelRef(refOf(item)) === ref);
+      if (index >= 0) {
+        selected.push(...remaining.splice(index, 1));
       }
       if (selected.length >= maxItems) {
-        break;
+        return selected;
       }
     }
-  }
-  return selected;
-}
-
-type LiveItemSelector = <T>(
-  items: T[],
-  maxItems: number,
-  refOf: (item: T) => ModelRef,
-  providerOf: (item: T) => string,
-) => T[];
-
-function createLiveItemSelector(priority: readonly string[]): LiveItemSelector {
-  return (items, maxItems, refOf, providerOf) =>
-    selectPrioritizedLiveItems(items, maxItems, refOf, providerOf, priority);
+    const grouped = new Map<string, T[]>();
+    for (const item of remaining) {
+      const provider = providerOf(item);
+      const group = grouped.get(provider);
+      if (group) {
+        group.push(item);
+      } else {
+        grouped.set(provider, [item]);
+      }
+    }
+    while (selected.length < maxItems && grouped.size > 0) {
+      for (const [provider, group] of grouped) {
+        const item = group.shift();
+        if (item) {
+          selected.push(item);
+        }
+        if (group.length === 0) {
+          grouped.delete(provider);
+        }
+        if (selected.length >= maxItems) {
+          break;
+        }
+      }
+    }
+    return selected;
+  };
 }
 
 export const selectHighSignalLiveItems = createLiveItemSelector(HIGH_SIGNAL_LIVE_MODEL_PRIORITY);

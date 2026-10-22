@@ -245,14 +245,6 @@ export class RequestClient {
       clearTimeout(timeout);
     }
   }
-
-  clearQueue(): void {
-    this.scheduler.clearQueue();
-  }
-
-  get queueSize(): number {
-    return this.scheduler.queueSize;
-  }
 }
 
 function normalizeRequestClientOptions(

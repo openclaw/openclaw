@@ -19,10 +19,7 @@ export type McpEventRequestMethod =
 
 /** Preserve protocol dispositions without exposing remote diagnostic bodies or credentials. */
 class McpEventRequestError extends Error {
-  constructor(
-    readonly code: number,
-    readonly reason?: string,
-  ) {
+  constructor(code: number, reason?: string) {
     super("MCP Events request failed (code " + code + (reason ? ", reason " + reason : "") + ")");
     this.name = "McpEventRequestError";
   }

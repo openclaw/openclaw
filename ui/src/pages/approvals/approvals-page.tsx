@@ -1,5 +1,15 @@
 import type { JSX } from "@solidjs/web";
-import { For, createSignal, onCleanup } from "solid-js";
+import {
+  For,
+  Loading,
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  isPending,
+  latest,
+  onSettled,
+} from "solid-js";
 import {
   validateApprovalHistoryResult,
   type ApprovalHistoryResult,
@@ -27,11 +37,15 @@ import {
   LearnMoreLink,
 } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
+import { registerApprovalsEnglish } from "../../i18n/locales/en-approvals.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+import { ApprovalErrorNotice } from "./approval-error-notice.tsx";
+
+registerEnglishCatalog(registerApprovalsEnglish);
 
 const APPROVAL_HISTORY_PAGE_SIZE = 50;
 
@@ -167,6 +181,57 @@ export function ApprovalsPage() {
     revision();
     return state;
   };
+  type ReadReceipt = { generation: number; completion: Promise<void> };
+  const [historyReceipt, setHistoryReceipt] = createSignal<ReadReceipt | null>(null);
+  const [grantsReceipt, setGrantsReceipt] = createSignal<ReadReceipt | null>(null);
+  const requestGeneration = createMemo(() => view().requestGeneration);
+  let presentationLifetime = Promise.withResolvers<void>();
+  // Observe admitted work, leaving rows and request authority with the plain owner.
+  const historyRead = createMemo(() => {
+    const generation = requestGeneration();
+    const receipt = historyReceipt();
+    return receipt?.generation === generation ? receipt.completion : undefined;
+  });
+  const grantsRead = createMemo(() => {
+    const generation = requestGeneration();
+    const receipt = grantsReceipt();
+    return receipt?.generation === generation ? receipt.completion : undefined;
+  });
+  const historyLoadingKey = createMemo(() => (view().items.length === 0 ? historyReceipt() : null));
+  const readHistory = () => {
+    // Suspend the first read; retained owner rows must stay live during refresh.
+    if (view().items.length === 0) {
+      historyRead();
+    } else {
+      latest(historyRead);
+    }
+    return null;
+  };
+  const readGrants = () => {
+    if (view().grantsLoaded) {
+      latest(grantsRead);
+    } else {
+      grantsRead();
+    }
+    return null;
+  };
+  const loadingMore = () => isPending(historyRead) && view().loadKind === "more";
+  const revokePresentation = createMemo(() => {
+    const generation = requestGeneration();
+    const [saving, setSaving] = createOptimistic(false);
+    return { generation, saving, setSaving };
+  });
+  const presentRevoke = action(function* (
+    presentation: ReturnType<typeof revokePresentation>,
+    completion: Promise<void>,
+    retired: Promise<void>,
+  ) {
+    if (!disposed && presentation.generation === state.requestGeneration) {
+      presentation.setSaving(true);
+    }
+    yield Promise.race([completion, retired]);
+  });
+  const revokeSaving = () => revokePresentation().saving();
   let stopEvents: (() => void) | undefined;
   useGatewayPage({
     getGateway: () => context.gateway,
@@ -195,7 +260,7 @@ export function ApprovalsPage() {
       applyGatewaySnapshot(snapshot);
     },
   });
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
     stopEvents?.();
     resetHistory(false);
@@ -203,6 +268,9 @@ export function ApprovalsPage() {
   });
 
   function resetHistory(clearData: boolean) {
+    // Retire pending presentation before replacing its request scope.
+    presentationLifetime.resolve();
+    presentationLifetime = Promise.withResolvers<void>();
     state.requestGeneration += 1;
     state.loadKind = null;
     state.historyRefreshPending = false;
@@ -277,34 +345,43 @@ export function ApprovalsPage() {
     state.error = null;
     publish();
     const isCurrent = () => isCurrentRequest(client, gateway, generation);
-    try {
-      const result = await client.request<ApprovalHistoryResult>("approval.history", {
-        ...(cursor ? { cursor } : {}),
-        limit: APPROVAL_HISTORY_PAGE_SIZE,
-      });
-      if (!validateApprovalHistoryResult(result)) {
-        throw new Error(t("approvalHistory.invalidResponse"));
-      }
-      if (!isCurrent()) {
-        return;
-      }
-      state.items = reset ? result.items : [...state.items, ...result.items];
-      state.nextCursor = result.nextCursor ?? null;
-      state.hasLoaded = true;
-      if (reset) {
-        void loadGrants(client, isCurrent);
-      }
-    } catch (error) {
-      if (isCurrent()) {
-        state.error = formatUiError(error);
+    const completion = applyPage(client);
+    setHistoryReceipt({
+      generation,
+      completion: Promise.race([completion, presentationLifetime.promise]),
+    });
+    return completion;
+
+    async function applyPage(admittedClient: GatewayBrowserClient) {
+      try {
+        const result = await admittedClient.request<ApprovalHistoryResult>("approval.history", {
+          ...(cursor ? { cursor } : {}),
+          limit: APPROVAL_HISTORY_PAGE_SIZE,
+        });
+        if (!validateApprovalHistoryResult(result)) {
+          throw new Error(t("approvalHistory.invalidResponse"));
+        }
+        if (!isCurrent()) {
+          return;
+        }
+        state.items = reset ? result.items : [...state.items, ...result.items];
+        state.nextCursor = result.nextCursor ?? null;
         state.hasLoaded = true;
-      }
-    } finally {
-      if (isCurrent()) {
-        state.loadKind = null;
-        publish();
-        if (state.historyRefreshPending) {
-          void loadPage(true);
+        if (reset) {
+          void loadGrants(admittedClient, isCurrent);
+        }
+      } catch (error) {
+        if (isCurrent()) {
+          state.error = formatUiError(error);
+          state.hasLoaded = true;
+        }
+      } finally {
+        if (isCurrent()) {
+          state.loadKind = null;
+          publish();
+          if (state.historyRefreshPending) {
+            void loadPage(true);
+          }
         }
       }
     }
@@ -313,22 +390,31 @@ export function ApprovalsPage() {
   async function loadGrants(client: GatewayBrowserClient, isCurrent: () => boolean): Promise<void> {
     const generation = ++state.grantsGeneration;
     const canPublish = () => isCurrent() && state.grantsGeneration === generation;
-    try {
-      const result = await client.request<ExecApprovalGrantsListResult>(
-        "exec.approval.grants.list",
-        {},
-      );
-      if (!canPublish()) {
-        return;
-      }
-      state.grants = result.grants;
-      state.grantsLoaded = true;
-      state.grantsError = null;
-      publish();
-    } catch (error) {
-      if (canPublish()) {
-        state.grantsError = formatUiError(error);
+    const completion = applyGrants();
+    setGrantsReceipt({
+      generation: state.requestGeneration,
+      completion: Promise.race([completion, presentationLifetime.promise]),
+    });
+    return completion;
+
+    async function applyGrants() {
+      try {
+        const result = await client.request<ExecApprovalGrantsListResult>(
+          "exec.approval.grants.list",
+          {},
+        );
+        if (!canPublish()) {
+          return;
+        }
+        state.grants = result.grants;
+        state.grantsLoaded = true;
+        state.grantsError = null;
         publish();
+      } catch (error) {
+        if (canPublish()) {
+          state.grantsError = formatUiError(error);
+          publish();
+        }
       }
     }
   }
@@ -364,29 +450,35 @@ export function ApprovalsPage() {
       return;
     }
     const isCurrent = () => isCurrentRequest(client, gateway, generation);
+    const presentation = revokePresentation();
+    const retired = presentationLifetime.promise;
     state.revokingGrantId = grantId;
-    publish();
-    try {
-      await client.request("exec.approval.grants.revoke", { grantId });
-      if (!isCurrent()) {
-        return;
-      }
-      state.grantsGeneration += 1;
-      const nowMs = Date.now();
-      state.grants = state.grants.map((grant) =>
-        grant.grantId === grantId ? { ...grant, revokedAtMs: nowMs } : grant,
-      );
-      state.grantsError = null;
-      publish();
-    } catch (error) {
-      if (isCurrent()) {
-        state.grantsError = formatUiError(error);
+    const completion = applyRevoke(client);
+    await presentRevoke(presentation, completion, retired);
+
+    async function applyRevoke(admittedClient: GatewayBrowserClient) {
+      try {
+        await admittedClient.request("exec.approval.grants.revoke", { grantId });
+        if (!isCurrent()) {
+          return;
+        }
+        state.grantsGeneration += 1;
+        const nowMs = Date.now();
+        state.grants = state.grants.map((grant) =>
+          grant.grantId === grantId ? { ...grant, revokedAtMs: nowMs } : grant,
+        );
+        state.grantsError = null;
         publish();
-      }
-    } finally {
-      if (isCurrent()) {
-        state.revokingGrantId = null;
-        publish();
+      } catch (error) {
+        if (isCurrent()) {
+          state.grantsError = formatUiError(error);
+          publish();
+        }
+      } finally {
+        if (isCurrent()) {
+          state.revokingGrantId = null;
+          publish();
+        }
       }
     }
   }
@@ -394,7 +486,7 @@ export function ApprovalsPage() {
   function GrantRow(props: { grant: ExecApprovalStandingGrant }) {
     const revokeLabel = () =>
       t(
-        view().revokingGrantId === props.grant.grantId
+        revokeSaving() && view().revokingGrantId === props.grant.grantId
           ? "standingGrants.revoking"
           : "standingGrants.revoke",
       );
@@ -415,7 +507,7 @@ export function ApprovalsPage() {
             <button
               class="btn btn--sm"
               aria-label={`${revokeLabel()}: ${props.grant.cronJobName ?? props.grant.cronJobId} — ${props.grant.command}`}
-              disabled={!view().connected || view().revokingGrantId !== null}
+              disabled={revokeSaving() || !view().connected}
               onClick={() => void revokeGrant(props.grant.grantId)}
             >
               {revokeLabel()}
@@ -484,30 +576,19 @@ export function ApprovalsPage() {
               {t("common.disabled")} · <code>{APPROVAL_HISTORY_REQUIRED_SCOPE}</code>
             </div>
           ) : null}
-          {view().approvalsAccess && view().error ? (
-            <div class="callout danger" role="alert">
-              {view().error}
-              <button
-                class="btn btn--sm"
-                disabled={!view().connected}
-                onClick={() => void loadPage(true)}
-              >
-                {t("common.retry")}
-              </button>
-            </div>
+          {view().approvalsAccess ? (
+            <ApprovalErrorNotice
+              error={view().error}
+              onRetry={() => void loadPage(true)}
+              retryDisabled={!view().connected}
+            />
           ) : null}
           {view().approvalsAccess ? (
             <>
               <SettingsSection
                 title={<span id="standing-grants-title">{t("standingGrants.title")}</span>}
                 description={t("standingGrants.description")}
-                notice={
-                  view().grantsError ? (
-                    <div class="callout danger" role="alert">
-                      {view().grantsError}
-                    </div>
-                  ) : null
-                }
+                notice={<ApprovalErrorNotice error={view().grantsError} />}
               >
                 <div class="data-table-container">
                   <table
@@ -527,20 +608,25 @@ export function ApprovalsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {view().grants.length === 0 ? (
-                        <EmptyRow
-                          columns={5}
-                          label={t(
-                            view().grantsLoaded
-                              ? "standingGrants.empty"
-                              : "approvalHistory.unknown",
-                          )}
-                        />
-                      ) : (
-                        <For each={view().grants} keyed={(grant) => grant.grantId}>
-                          {(grant) => <GrantRow grant={grant()} />}
-                        </For>
-                      )}
+                      <Loading
+                        fallback={<EmptyRow columns={5} label={t("approvalHistory.unknown")} />}
+                      >
+                        {readGrants()}
+                        {view().grants.length === 0 ? (
+                          <EmptyRow
+                            columns={5}
+                            label={t(
+                              view().grantsLoaded
+                                ? "standingGrants.empty"
+                                : "approvalHistory.unknown",
+                            )}
+                          />
+                        ) : (
+                          <For each={view().grants} keyed={(grant) => grant.grantId}>
+                            {(grant) => <GrantRow grant={grant()} />}
+                          </For>
+                        )}
+                      </Loading>
                     </tbody>
                   </table>
                 </div>
@@ -548,75 +634,73 @@ export function ApprovalsPage() {
               <SettingsSection
                 title={<span id="approval-history-title">{t("standingGrants.historyTitle")}</span>}
               >
-                {view().loadKind === "reset" && view().items.length === 0 ? (
-                  <SettingsLoadingSkeleton label={t("approvalHistory.loading")} />
-                ) : (
-                  <>
-                    <div class="data-table-container">
-                      <table
-                        class="data-table approval-history-table settings-table--stacked"
-                        role="table"
-                        aria-labelledby="approval-history-title"
-                        aria-busy={view().loadKind !== null ? "true" : "false"}
-                      >
-                        <thead>
-                          <tr>
-                            <For
-                              each={[
-                                "resolved",
-                                "kind",
-                                "request",
-                                "decision",
-                                "reason",
-                                "source",
-                                "resolver",
-                              ]}
-                            >
-                              {(column) => (
-                                <th scope="col">{t(`approvalHistory.columns.${column}`)}</th>
-                              )}
-                            </For>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {view().items.length === 0 ? (
-                            <EmptyRow
-                              columns={7}
-                              label={t(
-                                view().error || !view().hasLoaded
-                                  ? "approvalHistory.unknown"
-                                  : "approvalHistory.empty",
-                              )}
-                            />
-                          ) : (
-                            <For each={view().items} keyed={(item) => item.id}>
-                              {(item) => <HistoryRow item={item()} />}
-                            </For>
-                          )}
-                        </tbody>
-                      </table>
-                    </div>
-                    <div class="data-table-pagination">
-                      <div class="data-table-pagination__info">
-                        {t("approvalHistory.retention")}
-                      </div>
-                      <div class="data-table-pagination__controls">
-                        {view().nextCursor ? (
-                          <button
-                            disabled={!view().connected || view().loadKind === "more"}
-                            onClick={() => void loadPage(false)}
+                <Loading
+                  on={historyLoadingKey()}
+                  fallback={<SettingsLoadingSkeleton label={t("approvalHistory.loading")} />}
+                >
+                  {readHistory()}
+                  <div class="data-table-container">
+                    <table
+                      class="data-table approval-history-table settings-table--stacked"
+                      role="table"
+                      aria-labelledby="approval-history-title"
+                      aria-busy={isPending(historyRead) ? "true" : "false"}
+                    >
+                      <thead>
+                        <tr>
+                          <For
+                            each={[
+                              "resolved",
+                              "kind",
+                              "request",
+                              "decision",
+                              "reason",
+                              "source",
+                              "resolver",
+                            ]}
                           >
-                            {t(
-                              view().loadKind === "more"
-                                ? "approvalHistory.loadingMore"
-                                : "approvalHistory.loadMore",
+                            {(column) => (
+                              <th scope="col">{t(`approvalHistory.columns.${column}`)}</th>
                             )}
-                          </button>
-                        ) : null}
-                      </div>
+                          </For>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {view().items.length === 0 ? (
+                          <EmptyRow
+                            columns={7}
+                            label={t(
+                              view().error || !view().hasLoaded
+                                ? "approvalHistory.unknown"
+                                : "approvalHistory.empty",
+                            )}
+                          />
+                        ) : (
+                          <For each={view().items} keyed={(item) => item.id}>
+                            {(item) => <HistoryRow item={item()} />}
+                          </For>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div class="data-table-pagination">
+                    <div class="data-table-pagination__info">{t("approvalHistory.retention")}</div>
+                    <div class="data-table-pagination__controls">
+                      {view().nextCursor ? (
+                        <button
+                          disabled={!view().connected || loadingMore()}
+                          onClick={() => void loadPage(false)}
+                        >
+                          {t(
+                            loadingMore()
+                              ? "approvalHistory.loadingMore"
+                              : "approvalHistory.loadMore",
+                          )}
+                        </button>
+                      ) : null}
                     </div>
-                  </>
-                )}
+                  </div>
+                </Loading>
               </SettingsSection>
             </>
           ) : null}

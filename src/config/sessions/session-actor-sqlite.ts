@@ -1,7 +1,10 @@
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
-import { hasSqliteWorkerOutcomeUnknown } from "../../infra/sqlite-worker-contract.js";
+import {
+  hasSqliteWorkerOutcomeUnknown,
+  wrapSqliteWorkerError,
+} from "../../infra/sqlite-worker-contract.js";
 import type {
   SqliteWorkerAdmissionRequest,
   SqliteWorkerOperationAdmission,
@@ -102,7 +105,7 @@ export function createSqliteSessionActorExecutor(
   } & SessionActorExecutorGuards,
 ): SessionActorExecutor {
   const { target } = params;
-  let fenced = false;
+  let fenced: Extract<SessionActorOutcome<never>, { kind: "unknown" }>["error"] | undefined;
   const authorize = (
     authority: SessionActorAuthority,
     observe?: (
@@ -185,7 +188,7 @@ export function createSqliteSessionActorExecutor(
           if (!snapshot) {
             throw new SessionActorReadInvalidatedError();
           }
-          fenced = false;
+          fenced = undefined;
           params.assertReadable();
           authority.assertCurrent();
           authority.authorize("commit", snapshot);
@@ -245,7 +248,7 @@ export function createSqliteSessionActorExecutor(
         kind: "unknown",
         target,
         commandId: captured.commandId,
-        error: errorFacts(error),
+        error: { ...errorFacts(error), cause: error },
       };
     };
     const preserveFailure = (error: unknown, origin?: "response"): Outcome => {
@@ -271,7 +274,9 @@ export function createSqliteSessionActorExecutor(
           running = (async (): Promise<Outcome> => {
             if (fenced) {
               return unknown(
-                new Error("Session actor requires reconciliation before another command"),
+                new Error("Session actor requires reconciliation before another command", {
+                  cause: fenced.cause,
+                }),
               );
             }
             const pending = params.replica.beginCommand();
@@ -279,6 +284,24 @@ export function createSqliteSessionActorExecutor(
               (value) => ({ ok: true as const, value }),
               (error: unknown) => ({ ok: false as const, error }),
             );
+            const unconfirmed = (message: string, settlementFailure?: unknown) => {
+              const facts = reply.ok ? { message } : errorFacts(reply.error);
+              return unknown(
+                Object.assign(
+                  wrapSqliteWorkerError(
+                    facts.message,
+                    undefined,
+                    reply.ok
+                      ? reply.value.kind !== "committed"
+                        ? reply.value.error
+                        : undefined
+                      : reply.error,
+                    settlementFailure,
+                  ),
+                  facts,
+                ),
+              );
+            };
             let result: Outcome;
             if (native) {
               const settled = await native.retained.settled;
@@ -319,6 +342,7 @@ export function createSqliteSessionActorExecutor(
                       previousEntry,
                       true,
                       entry,
+                      entry,
                     );
                     if (entry) {
                       // Actor delivery settlement can release the last durable recovery claim.
@@ -358,23 +382,26 @@ export function createSqliteSessionActorExecutor(
                       ? reply.value
                       : { kind: "rolled-back", error: errorFacts(failure) };
               } else {
-                result = unknown(
-                  reply.ok ? new Error("Unconfirmed actor settlement") : reply.error,
+                result = unconfirmed(
+                  "Unconfirmed actor settlement",
+                  settled.kind !== "completed" ? settled.error : undefined,
                 );
               }
-            } else if (reply.ok && reply.value.kind === "rolled-back") {
+            } else if (!reply.ok) {
+              // Actor mutations require host admission after hydration. A worker
+              // lost before that grant cannot have applied this command.
+              result = { kind: "rolled-back", error: errorFacts(reply.error) };
+            } else if (reply.value.kind === "rolled-back") {
               result = reply.value;
             } else {
-              result = unknown(
-                reply.ok ? new Error("Actor command omitted native settlement") : reply.error,
-              );
+              result = unconfirmed("Actor command omitted native settlement");
             }
             if (result.kind !== "committed") {
               conversation?.settle(undefined, result.kind === "unknown");
             }
             if (result.kind === "unknown") {
-              // Fence before returning the physical FIFO permit to a queued command.
-              fenced = true;
+              // Fence the FIFO with the initiating failure, not a later reconciliation refusal.
+              fenced ??= result.error;
             }
             if (result.kind === "stale-version") {
               try {
@@ -472,7 +499,7 @@ export function createSqliteSessionActorExecutor(
       }
     }
     if (outcome.kind === "unknown") {
-      fenced = true;
+      fenced ??= outcome.error;
       params.replica.invalidate();
     }
     return outcome;

@@ -2,7 +2,7 @@ import { mkdir, realpath } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { Value } from "typebox/value";
-import { afterAll, afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WorkerConnectRequestFrameSchema } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { makeTextToolResult } from "../../../test/helpers/text-tool-result.js";
@@ -29,7 +29,6 @@ import { saveMediaBuffer } from "../../media/store.js";
 import { runCommandWithTimeout, type SpawnResult } from "../../process/exec.js";
 import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
-import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import {
   buildWorkerConnectParams,
   type WorkerLaunchDescriptor,
@@ -39,6 +38,8 @@ import { verifyAgentRuntimeIdentityToken } from "../agent-runtime-identity-token
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
 import {
   completeTurn,
+  createLauncher,
+  installLauncherTest,
   environmentForTunnel,
   launchDescriptor,
   localResult,
@@ -52,8 +53,6 @@ import {
   OWNER_EPOCH,
   SESSION_ID,
   browserEnvironment,
-  cleanupWorkerTurnLauncherTest,
-  createWorkerSessionTurnPlacementProvider,
   openSessionManager,
   placements,
   root,
@@ -61,11 +60,8 @@ import {
   sessionTarget,
   setWorkerTurnAdmissionCleanup,
   setWorkerTurnSessionTarget,
-  setupWorkerTurnLauncherTest,
   turn,
 } from "./worker-turn-launcher.test-support.js";
-
-afterAll(closeStateDatabaseForTest);
 
 function wireUser(text: string, timestamp: number) {
   return { role: "user", content: [{ type: "text", text }], timestamp };
@@ -86,8 +82,7 @@ async function verifyIdentity(assignment: WorkerLaunchDescriptor["assignment"]) 
 }
 
 describe("worker turn launcher remote handoff", () => {
-  beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
+  installLauncherTest();
   afterEach(() => setActiveNodeContexts([]));
 
   it("settles a delegated worker reply and conflict without borrowing its parent transcript", async () => {
@@ -224,9 +219,8 @@ describe("worker turn launcher remote handoff", () => {
       await resumePreparation.promise;
       return { kind: "local" as const, path: root };
     });
-    const provider = createWorkerSessionTurnPlacementProvider({
+    const provider = createLauncher({
       environments,
-      placements,
       resolveWorkspace,
       reconcileActivePlacement: async () => {},
     });
@@ -463,7 +457,7 @@ describe("worker turn launcher remote handoff", () => {
       get: vi.fn(() => browserEnvironment()),
       startTunnel: vi.fn(async () => tunnel),
     });
-    const provider = createWorkerSessionTurnPlacementProvider({ environments, placements });
+    const provider = createLauncher({ environments });
 
     await provider.executeTurn(
       runIdentity("run-persisted-user"),

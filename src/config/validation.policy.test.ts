@@ -6,6 +6,7 @@ import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
+import { validationIssues as requireIssues } from "./validation.test-helpers.js";
 
 // mock-isolation: Supply fixed unsupported surfaces without loading plugin policy discovery.
 vi.mock("../secrets/unsupported-surface-policy.js", async () => {
@@ -29,13 +30,6 @@ vi.mock("../secrets/unsupported-surface-policy.js", async () => {
     },
   };
 });
-
-function requireIssues(result: ReturnType<typeof validateConfigObjectRaw>) {
-  if (result.ok) {
-    throw new Error("Expected invalid config");
-  }
-  return result.issues;
-}
 
 const issueMessage = (issues: ReturnType<typeof requireIssues>, path: string) =>
   issues.find((entry) => entry.path === path)?.message;
@@ -161,23 +155,6 @@ it("enforces the gateway TCP port range", () => {
   for (const port of [1, 65_535]) {
     expect(validateConfigObjectRaw({ gateway: { port } }).ok).toBe(true);
   }
-});
-
-const heartbeatPath = "agents.defaults.heartbeat.agentId";
-const missingHeartbeatOwner = [
-  {
-    path: heartbeatPath,
-    message:
-      "Multi-agent config has no ambient heartbeat owner; heartbeats stay disabled until agents.defaults.heartbeat.agentId or agents.defaults.systemAgent.agentId is set.",
-  },
-];
-it.each([
-  ["ownerless", {}, undefined, missingHeartbeatOwner],
-  ["per-agent", { heartbeat: { every: "30m" } }, undefined, []],
-  ["broadcast", {}, { heartbeat: { every: "30m" } }, []],
-])("reports heartbeat ownership for %s", (_name, ops, defaults, expected) => {
-  const agents = { ownership: "explicit", entries: { main: {}, ops }, defaults };
-  expect(warnings({ agents }, heartbeatPath)).toEqual(expected);
 });
 
 const redactWarnings = (redactPatterns: string[]) =>

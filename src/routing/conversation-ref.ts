@@ -1,4 +1,4 @@
-import crypto from "node:crypto";
+import { sha256HexPrefixCore } from "@openclaw/normalization-core/node-crypto";
 
 /** Canonicalizes an adapter target into the peer id used by inbound routing. */
 export function normalizeConversationPeerId(channel: string, value: string): string {
@@ -19,19 +19,16 @@ export function buildConversationRef(params: {
   parentConversationRef?: string;
   threadId?: string;
 }): string {
-  const hash = crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify([
-        params.channel,
-        params.accountId,
-        params.kind,
-        params.peerId,
-        params.parentConversationRef ?? "",
-        params.threadId ?? "",
-      ]),
-    )
-    .digest("hex")
-    .slice(0, 32);
+  const hash = sha256HexPrefixCore(
+    JSON.stringify([
+      params.channel,
+      params.accountId,
+      params.kind,
+      params.peerId,
+      params.parentConversationRef ?? "",
+      params.threadId ?? "",
+    ]),
+    32,
+  );
   return `conv_${hash}`;
 }

@@ -126,8 +126,6 @@ export function createSessionActivitySummaries(deps: {
   getConfig: () => OpenClawConfig;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
   onChanged: (target: ActivitySummaryTarget & { storePath: string }) => void;
-  prepareModel?: typeof defaultPrepareModel;
-  completeModel?: typeof defaultCompleteModel;
 }): SessionActivitySummaryService {
   const states = new Map<string, Tracked>();
   const queue: Tracked[] = [];
@@ -379,14 +377,14 @@ export function createSessionActivitySummaries(deps: {
             assertCurrentEntry(state, state.entry);
           };
           const execute = async () => {
-            const prepared = await (deps.prepareModel ?? defaultPrepareModel)({
+            const prepared = await defaultPrepareModel({
               cfg: deps.getConfig(),
               agentId: state.agentId,
               modelRef: ref,
               useUtilityModel: true,
             });
             assertRequestCurrent();
-            const result = await (deps.completeModel ?? defaultCompleteModel)({
+            const result = await defaultCompleteModel({
               ...prepared,
               purpose: "session-activity-summary",
               config: deps.getConfig(),
@@ -658,7 +656,7 @@ export function createSessionActivitySummaries(deps: {
         event.target?.sessionKey ?? event.sessionKey,
         event.target?.agentId ?? event.agentId,
       );
-      if (!target || getAgentRunContext(event.runId ?? "")?.isHeartbeat) {
+      if (!target) {
         return;
       }
       const sessionId = event.target?.sessionId ?? event.sessionId;
@@ -673,7 +671,6 @@ export function createSessionActivitySummaries(deps: {
       const runContext = getAgentRunContext(event.runId);
       if (
         event.stream !== "lifecycle" ||
-        runContext?.isHeartbeat ||
         !isDefinitiveRunLifecycle({ phase: event.data.phase, data: event.data })
       ) {
         return;

@@ -1,5 +1,5 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { createComponent, createEffect, createRoot, flush } from "solid-js";
+import { createEffect, createRoot, flush } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
 import type { RequestFrame } from "../../../../packages/gateway-protocol/src/schema/frames.js";
@@ -32,16 +32,14 @@ import {
   sessionsResult,
 } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { createChatPageSessions, createChatPageStateContext } from "./chat-page.test-support.ts";
+import { createChatPageSessions } from "./chat-page-sessions.test-support.ts";
 import { removeQueuedMessage, keepVolatileQueuedMessage } from "./chat-queue.ts";
 import { chatRunPresentation } from "./chat-run-presentation.ts";
-import { projectChatRun } from "./chat-run-projection.ts";
 import { requestChatSend } from "./chat-send-request.ts";
+import { createChatPageStateContext } from "./chat-state-context.test-support.ts";
 import { createChatState } from "./chat-state-controller.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -55,9 +53,11 @@ import {
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
-import { createSessionEventState, renderedTranscript } from "./chat-state.test-support.ts";
-import { ChatImageLightbox } from "./components/chat-image-lightbox-view.tsx";
-import { AssistantAttachments } from "./components/chat-message-attachments-solid.tsx";
+import {
+  createSessionEventState,
+  emitGatewayEvent,
+  renderedTranscript,
+} from "./chat-state.test-support.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import {
@@ -70,14 +70,6 @@ import { buildToolStreamIdentity } from "./tool-stream-identity.ts";
 import { createHost as createToolStreamHost } from "./tool-stream.test-helpers.ts";
 
 const historyBudget = { limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 };
-
-function emitGatewayEvent(
-  state: ChatPageHost,
-  event: Parameters<typeof handlePageGatewayEvent>[1]["event"],
-  payload: Parameters<typeof handlePageGatewayEvent>[1]["payload"],
-) {
-  handlePageGatewayEvent(state, { type: "event", event, payload });
-}
 
 beforeEach(() => {
   vi.spyOn(assistantIdentity, "loadLocalAssistantIdentity").mockReturnValue({
@@ -2194,22 +2186,21 @@ describe("chat state render lifecycle", () => {
       return nextFrame;
     });
     vi.spyOn(globalThis, "cancelAnimationFrame").mockImplementation((id) => frames.delete(id));
-    const state: Pick<ChatPageHost, "chatStream" | "chatRunId" | "chatMessages" | "chatMessage"> = {
-      chatStream: null,
-      chatRunId: "run",
-      chatMessages: [],
-      chatMessage: "",
-    };
     const rendered: Array<{ stream: string | null; run: string | null }> = [];
-    const dispose = createRoot((stop) => {
-      projectChatRun(state);
+    const { state, dispose } = createRoot((stop) => {
+      const createdState = createPageState(
+        createChatPageStateContext(),
+        { afterCommit: () => () => {} },
+        { dispatchEvent: () => true },
+      );
+      createdState.chatRunId = "run";
       createEffect(
-        () => ({ stream: state.chatStream, run: state.chatRunId }),
+        () => ({ stream: createdState.chatStream, run: createdState.chatRunId }),
         (value) => {
           rendered.push(value);
         },
       );
-      return stop;
+      return { state: createdState, dispose: stop };
     });
     onTestFinished(dispose);
     flush();
@@ -2604,8 +2595,6 @@ describe("chat state render lifecycle", () => {
 
     handlePageGatewayEvent(state, lifecycleEvent("waiting-approval", state.sessionKey));
     expect(state.waitingApprovalStatuses.get("approval-1")).toEqual({
-      approvalId: "approval-1",
-      toolCallId: "tool-approval-1",
       runId: "engine-run-1",
     });
 
@@ -3119,72 +3108,6 @@ describe("session pull request refresh", () => {
   });
 });
 
-describe("image lightbox lifecycle", () => {
-  it("accepts only matching base64 video at the page boundary", () => {
-    const state = createPageState(
-      createChatPageStateContext(),
-      { afterCommit: () => () => {} },
-      { dispatchEvent: () => true },
-    );
-
-    const source = "data:video/mp4;base64,AAAA";
-    const mounted = mountSolid(() =>
-      createComponent(AssistantAttachments, {
-        attachments: [
-          {
-            type: "attachment",
-            attachment: { kind: "video", label: "Clip", mimeType: "video/mp4", url: source },
-          },
-        ],
-        options: { onOpenImage: state.handleOpenImage },
-      }),
-    );
-    const { container } = mounted;
-    const player = container.querySelector("openclaw-chat-video-player") as HTMLElement & {
-      onExpand: (src: string) => void;
-    };
-    player.onExpand(source);
-    expect(state.imageLightbox?.src).toBe("data:video/mp4;base64,AAAA");
-
-    state.handleOpenImage({ kind: "video", src: "data:audio/mp3;base64,AAAA", title: "Audio" });
-    expect(state.imageLightbox).toBeNull();
-    mounted.unmount();
-  });
-
-  it("clears the mounted preview when beginning a deferred image open", () => {
-    onTestFinished(installDialogPolyfill());
-    const state = createPageState(
-      createChatPageStateContext(),
-      { afterCommit: () => () => {} },
-      { dispatchEvent: () => true },
-    );
-    const release = vi.fn();
-    state.imageLightbox = {
-      src: "blob:managed-image",
-      title: "Generated image",
-      release,
-    };
-    const mounted = mountSolid(() =>
-      createComponent(ChatImageLightbox, {
-        get item() {
-          return state.imageLightbox;
-        },
-        onClose: state.handleCloseImage,
-      }),
-    );
-    onTestFinished(mounted.unmount);
-    expect(mounted.container.querySelector("openclaw-image-lightbox")).not.toBeNull();
-
-    const requestVersion = state.beginImageOpen();
-
-    expect(requestVersion).toBe(1);
-    expect(state.imageLightbox).toBeNull();
-    expect(release).toHaveBeenCalledOnce();
-    flush();
-    expect(mounted.container.querySelector("openclaw-image-lightbox")).toBeNull();
-  });
-});
-
 describe("loadPageAssistantIdentity", () => {
   it("memoizes identity by agent while fetching a cross-agent switch", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
@@ -3348,7 +3271,7 @@ describe("refreshChatMetadata", () => {
       method === "models.list" ? catalog.promise : commands.promise,
     );
     const state = createMetadataState(request);
-    const automatic = refreshChatMetadata(state, { automatic: true });
+    const automatic = refreshChatMetadata(state);
     try {
       expect(state.chatModelsLoading).toBe(true);
       invalidateModelCatalogCache(state.client!, {
@@ -3370,7 +3293,7 @@ describe("refreshChatMetadata", () => {
     }
   });
 
-  it("shares a failed automatic attempt until explicit refresh recovers it", async () => {
+  it("shares a failed automatic catalog attempt until the picker recovers it", async () => {
     const models = [{ id: "fresh", name: "Fresh", provider: "test" }];
     let failing = true;
     const request = vi.fn(async (method: string) => {
@@ -3386,16 +3309,13 @@ describe("refreshChatMetadata", () => {
         (method) => request.mock.calls.filter(([called]) => called === method).length,
       );
     try {
-      await Promise.all([
-        refreshChatMetadata(first, { automatic: true }),
-        refreshChatMetadata(follower, { automatic: true }),
-      ]);
-      await refreshChatMetadata(follower, { automatic: true });
+      await Promise.all([refreshChatMetadata(first), refreshChatMetadata(follower)]);
+      await refreshChatMetadata(follower);
       expect(counts()).toEqual([1, 1]);
       expect(follower.chatModelCatalogError).toContain("Shared automatic failure");
       failing = false;
-      await refreshChatMetadata(first);
-      await refreshChatMetadata(follower, { automatic: true });
+      await refreshChatModelCatalogOnDemand(first);
+      await refreshChatMetadata(follower);
       expect(counts()).toEqual([2, 2]);
       expect(follower.chatModelCatalog).toEqual(models);
       expect(follower.chatModelCatalogError).toBeNull();
@@ -3441,7 +3361,7 @@ describe("refreshChatMetadata", () => {
           ? beginModelCatalogRead(first.client!, { agentId: "other", refresh: true })
           : undefined;
       try {
-        await refreshChatMetadata(first, { automatic: true });
+        await refreshChatMetadata(first);
         expect(first.chatModelCatalog).toEqual(change === "snapshot-after-failure" ? [] : before);
         if (change.startsWith("snapshot")) {
           publishModelCatalogResult(beginModelCatalogRead(first.client!, scope), scope, {
@@ -3449,7 +3369,7 @@ describe("refreshChatMetadata", () => {
           });
           const follower = createMetadataState(request, { client: first.client });
           states.push(follower);
-          await refreshChatMetadata(follower, { automatic: true });
+          await refreshChatMetadata(follower);
           expect(follower.chatModelCatalog).toEqual(after);
           expect(follower.chatModelCatalogError).toBeNull();
         } else {
@@ -3480,7 +3400,7 @@ describe("refreshChatMetadata", () => {
             method === "models.list" ? { models: after } : { commands: [] },
           );
           first.chatMetadataIsPresented = () => true;
-          await refreshChatMetadata(first, { automatic: true });
+          await refreshChatMetadata(first);
           expect(first.chatModelCatalog).toEqual(after);
         }
         expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(
@@ -3504,7 +3424,7 @@ describe("refreshChatMetadata", () => {
     const state = createMetadataState(request);
     const states = [state, createMetadataState(request, { client: state.client })];
     try {
-      await Promise.all(states.map((pane) => refreshChatMetadata(pane, { automatic: true })));
+      await Promise.all(states.map((pane) => refreshChatMetadata(pane)));
       for (const pane of states) {
         expect(pane.chatModelsLoading).toBe(false);
         expect(pane.chatModelCatalog).toEqual(models);
@@ -3535,7 +3455,7 @@ describe("refreshChatMetadata", () => {
       agentId: "work",
       sessionKey: state.sessionKey,
     });
-    const automatic = refreshChatMetadata(state, { automatic: true });
+    const automatic = refreshChatMetadata(state);
     try {
       catalog.resolve({ models });
       await picker;
@@ -3790,7 +3710,7 @@ describe("refreshChatMetadata", () => {
           expect(state.chatModelCatalog).toEqual(acceptedModels);
           if (empty) {
             follower = createMetadataState(request, { client: state.client });
-            void refreshChatMetadata(follower, { automatic: true });
+            void refreshChatMetadata(follower);
             expect(follower.chatModelsLoading).toBe(false);
             expect(follower.chatModelCatalog).toEqual([]);
           }
@@ -3799,7 +3719,7 @@ describe("refreshChatMetadata", () => {
               [],
             );
             state.chatMetadataIsPresented = () => true;
-            void refreshChatMetadata(state, { automatic: true });
+            void refreshChatMetadata(state);
           }
         } else {
           currentCatalog.resolve({ models: [discovered] });
@@ -3937,11 +3857,11 @@ describe("refreshChatMetadata", () => {
         models: ChatPageHost["chatModelCatalog"];
       }>();
       const request = vi.fn(async (method: string, params?: unknown) => {
-        if (transition === "session") {
+        if (transition === "session" && method === "models.list") {
           expect(params).toEqual({
             agentId: "work",
             sessionKey: "agent:work:main",
-            ...(method === "models.list" ? { view: "configured" } : {}),
+            view: "configured",
           });
         }
         return await metadata.promise;
@@ -3995,7 +3915,9 @@ describe("refreshChatMetadata", () => {
     await refreshChatMetadata(state);
     expect(request.mock.calls.filter(([method]) => method === "models.list")).toHaveLength(3);
     expect(state.chatModelCatalog[0]?.id).toBe("other-model");
-    expect(request.mock.calls.at(-1)?.slice(0, 2)).toEqual([
+    expect(
+      request.mock.calls.findLast(([method]) => method === "models.list")?.slice(0, 2),
+    ).toEqual([
       "models.list",
       {
         view: "configured",
@@ -4109,7 +4031,7 @@ describe("refreshChatMetadata", () => {
 
     await refreshChatMetadata(state);
 
-    expect(request.mock.calls.map(([method]) => method)).toEqual(["chat.metadata", "models.list"]);
+    expect(request.mock.calls.map(([method]) => method)).toEqual(["models.list", "chat.metadata"]);
     expect(SLASH_COMMANDS.some((command) => command.name === "help")).toBe(true);
     expect(SLASH_COMMANDS.some((command) => command.name === "remote-command")).toBe(false);
   });

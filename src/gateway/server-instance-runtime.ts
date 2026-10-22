@@ -367,6 +367,20 @@ export function createGatewayInstanceRuntime(
           controllerInput: dispatchOptions.controllerInput,
           replyExpectation: dispatchOptions.replyExpectation,
           assertAdmissionCurrent: assertRecoveryCurrent,
+          assertCancellationCurrent: () => {
+            assertDispatchAvailable("agent");
+            assertRecoveryTarget();
+            dispatchOptions.signal?.throwIfAborted();
+            if (options.getContext() !== context) {
+              throw new Error("Gateway recovery context changed.");
+            }
+            dispatchOptions.assertAdmissionCurrent?.();
+            if (restored?.operator) {
+              restored.operator.assertPolicyCurrent();
+            } else {
+              operatorAuthority?.assertCurrent();
+            }
+          },
           executionSource: dispatchOptions.executionSource,
           prepareDispatchCurrent: dispatchOptions.prepareDispatchCurrent,
           expectFinal: dispatchOptions.expectFinal,

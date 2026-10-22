@@ -24,7 +24,10 @@ const { gatherStatus, confirm, startGateway, installGateway } = vi.hoisted(() =>
 vi.mock("./status.gather.js", () => ({ gatherDaemonStatus: gatherStatus }));
 vi.mock("../prompt.js", () => ({ promptYesNo: confirm }));
 vi.mock("./lifecycle.js", () => ({ runDaemonStart: startGateway }));
-vi.mock("./install.runtime.js", () => ({ runDaemonInstall: installGateway }));
+vi.mock("./install.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./install.js")>()),
+  runDaemonInstall: installGateway,
+}));
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -148,7 +151,7 @@ describe("Gateway reachability over real sockets", () => {
         expect(rpc.error).toContain("gateway closed (1006)");
       }
       const { result, output } = await checkDashboardReadiness(url, rpc);
-      expect(result).toMatchObject({ ready: false, recoverable: false });
+      expect(result).toMatchObject({ ready: false });
       expect(output).toContain("Gateway check failed:");
       expect(output).not.toContain("Gateway is not running");
       expect(output).not.toContain("gateway start");

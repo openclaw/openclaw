@@ -47,6 +47,7 @@ export function assertExecApprovalsMutationAllowed(params: {
   db: EngineConnection;
   current: ExecApprovalsFile;
   next: ExecApprovalsFile;
+  agentId?: string;
 }): void {
   const current = normalizeExecApprovalsInternal(params.current);
   const next = normalizeExecApprovalsInternal(params.next);
@@ -54,6 +55,9 @@ export function assertExecApprovalsMutationAllowed(params: {
     ...new Set([...Object.keys(current.agents ?? {}), ...Object.keys(next.agents ?? {})]),
   ].filter((agentId) => !isDeepStrictEqual(current.agents?.[agentId], next.agents?.[agentId]));
   const agentIds = new Set(changed.map(normalizeAgentId));
+  if (params.agentId) {
+    agentIds.add(normalizeAgentId(params.agentId));
+  }
   if (agentIds.size === 0) {
     return;
   }

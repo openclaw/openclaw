@@ -5,6 +5,10 @@ import { normalizeUsage, type UsageLike } from "../../usage.js";
 import { hasOutboundDeliveryEvidence } from "../delivery-evidence.js";
 import { log } from "../logger.js";
 import { createEmbeddedRunReplayState, observeReplayMetadata } from "../replay-state.js";
+import {
+  isTranscriptConflictReplaySafe,
+  ReplaySafeTranscriptConflictError,
+} from "../transcript-conflict.js";
 import type { createUsageAccumulator } from "../usage-accumulator.js";
 import {
   mergeAttemptRunStatsIntoAccumulator,
@@ -168,6 +172,14 @@ export async function normalizeEmbeddedRunAttempt(input: {
   mergeUsageIntoAccumulator(input.usageAccumulator, attemptUsage);
   mergeAttemptRunStatsIntoAccumulator(input.usageAccumulator, attempt);
   if (isSqliteTranscriptMutationConflict(promptError)) {
+    // Never rebase this answer onto a newer user turn. The completion owner may
+    // readmit its original input only when the entire failed run had no effects.
+    if (
+      promptError instanceof Error &&
+      isTranscriptConflictReplaySafe(input.replayState, attempt)
+    ) {
+      throw new ReplaySafeTranscriptConflictError(promptError);
+    }
     throw promptError;
   }
   // A real mid-turn truncation rewrites the context after earlier usage observations.
@@ -215,7 +227,6 @@ export async function normalizeEmbeddedRunAttempt(input: {
         lastRunPromptUsage,
       }),
       replayInvalid: input.replayState.replayInvalid ? true : undefined,
-      livenessState: "blocked",
     });
     // Escalating provider failures throw above; only returned results carry a terminal stop.
     result.meta.modelFallbackStopReason = "idle_timeout_circuit_breaker";

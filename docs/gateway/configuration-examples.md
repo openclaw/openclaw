@@ -257,14 +257,6 @@ This example leaves `agents.defaults.timeoutSeconds` unset, so each model attemp
       mediaMaxMb: 5,
       typingIntervalSeconds: 5,
       maxConcurrent: 3,
-      heartbeat: {
-        every: "30m",
-        model: "anthropic/claude-sonnet-4-6",
-        target: "whatsapp",
-        directPolicy: "allow", // allow (default) | block
-        to: "+15555550123",
-        prompt: "HEARTBEAT",
-      },
       sandbox: {
         mode: "non-main",
         scope: "session", // preferred over legacy perSession: true
@@ -495,6 +487,33 @@ example `~/.agents/skills/manager -> ~/path/to/skills`.
 
 ## Common patterns
 
+### Periodic monitoring
+
+Store recurring checks as ordinary automation jobs, separately from agent
+configuration. This job checks every 30 minutes during the user's active window
+and delivers useful results to the configured WhatsApp recipient:
+
+```bash
+openclaw automations add \
+  --name "Project monitor" \
+  --agent main \
+  --every 30m \
+  --session isolated \
+  --message "Check for newly blocked work. Report only changes that need attention; otherwise reply NO_REPLY." \
+  --model anthropic/claude-sonnet-4-6 \
+  --active-hours-start 08:00 \
+  --active-hours-end 22:00 \
+  --active-hours-timezone user \
+  --idle-only \
+  --announce --channel whatsapp --to "+15555550123"
+```
+
+Use `automations edit <job-id>` to change the job, or `automations disable
+<job-id>` to stop it. Existing heartbeat configuration migrates through
+`openclaw doctor --fix`; it is no longer an active configuration surface.
+See [Monitoring policies](/automation/cron-jobs/schedules#monitoring-policies)
+and [Heartbeat migration](/gateway/heartbeat).
+
 ### Shared skill baseline with one override
 
 ```json5
@@ -504,7 +523,6 @@ example `~/.agents/skills/manager -> ~/path/to/skills`.
     defaults: {
       workspace: "~/.openclaw/workspace",
       skills: ["github", "weather"],
-      heartbeat: { agentId: "main" },
       systemAgent: { agentId: "main" },
     },
     entries: {

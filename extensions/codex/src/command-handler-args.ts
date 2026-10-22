@@ -1,7 +1,10 @@
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginCommandResult } from "openclaw/plugin-sdk/plugin-entry";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  readNonBlankString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CodexComputerUseConfig } from "./app-server/config.js";
 import {
   buildCodexCommandPickerPresentation,
@@ -189,7 +192,7 @@ export function parseBindArgs(args: readonly string[]): ParsedBindArgs {
   const { parsed, values } = parseConnectionArgs(args, "bind");
   return {
     ...parsed,
-    cwd: normalizeOptionalString(values.get("cwd")),
+    cwd: readNonBlankString(values.get("cwd")),
     model: normalizeOptionalString(values.get("model")),
     provider: normalizeOptionalString(values.get("provider")),
   };

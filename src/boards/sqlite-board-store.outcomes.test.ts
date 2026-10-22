@@ -2,21 +2,9 @@ import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import type { BoardWidgetPutResult } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { composeSessionSourceAssertion } from "../config/sessions/session-source-authority.js";
-import {
-  failSqliteWorkerSlot,
-  receiveSqliteWorkerReply,
-  settleSqliteWorkerJob,
-  withSqliteWorkerCleanupFailure,
-} from "../infra/sqlite-worker-broker-reply.js";
-import type { Actor } from "../infra/sqlite-worker-broker.types.js";
-import {
-  isSqliteWorkerError,
-  SqliteWorkerError,
-  type SqliteWorkerStore,
-} from "../infra/sqlite-worker-contract.js";
-import { SqliteWorkerSlotCustody } from "../infra/sqlite-worker-request-custody.js";
+import { withSqliteWorkerCleanupFailure } from "../infra/sqlite-worker-broker-reply.js";
+import { SqliteWorkerError, type SqliteWorkerStore } from "../infra/sqlite-worker-contract.js";
 import { sessionChanges, type SessionRowChange } from "../sessions/session-row-changes.js";
-import { createDeferredCore } from "../shared/deferred.js";
 import { BoardValidationError } from "./board-layout.js";
 import {
   boardFixture,
@@ -83,97 +71,34 @@ function fixture() {
   return { store, params, change, expectPublication };
 }
 
-async function failureOutcome(retire: boolean | "cleanup") {
-  if (retire === "cleanup") {
+function failureOutcome(kind: "native" | "transported" | "cleanup") {
+  const error = new SqliteWorkerError("Native Board outcome is unknown", "outcome-unknown");
+  if (kind === "cleanup") {
     return ["Native cleanup failed", "Later cleanup failed"].reduce<Error>(
-      (error, message) => withSqliteWorkerCleanupFailure(error, new Error(message)),
-      new SqliteWorkerError("Native Board outcome is unknown", "outcome-unknown"),
+      (failure, message) => withSqliteWorkerCleanupFailure(failure, new Error(message)),
+      error,
     );
   }
-  const rejected = createDeferredCore<unknown>();
-  const events: string[] = [];
-  const custody = new SqliteWorkerSlotCustody();
-  const requestCustody = custody.createRequest();
-  requestCustody.activate();
-  requestCustody.accept();
-  const slot: Parameters<typeof receiveSqliteWorkerReply>[0] &
-    Parameters<typeof failSqliteWorkerSlot>[0] = {
-    custody,
-    actors: new Set<Actor>(),
-    current: {
-      custody: requestCustody,
-      observation: { started() {}, completed() {} },
-      request: { type: "execute", id: 1, actor: 1, input: new Uint8Array() },
-      bytes: 0,
-      result: rejected.promise,
-      settleNative: (settlement) => events.push(`settled:${settlement.kind}`),
-      resolve: () => rejected.reject(new Error("Failure reply unexpectedly resolved")),
-      reject: (error) => {
-        events.push("rejected");
-        rejected.resolve(error);
-      },
-      detach() {},
-    },
-    queue: [],
-    worker: {
-      postMessage() {
-        throw new Error("A failure reply must not request another result frame");
-      },
-    },
-  };
-  receiveSqliteWorkerReply(
-    slot,
-    {
-      id: 1,
-      ok: false,
-      ...(retire ? { retire: true } : {}),
-      error: {
-        name: "SqliteWorkerError",
-        code: "outcome-unknown",
-        message: "Execution failed",
-      },
-    },
-    {
-      fail(reason, currentError, openOutcome, completed) {
-        failSqliteWorkerSlot(slot, reason, {
-          currentError,
-          openOutcome,
-          completed,
-          retire: async () => void events.push("retired"),
-          finish: settleSqliteWorkerJob,
-        });
-      },
-      finish: settleSqliteWorkerJob,
-      dispatch: () => events.push("dispatch"),
-    },
-  );
-  const error = await rejected.promise;
-  if (retire) {
-    expect(isSqliteWorkerError(error, "outcome-unknown")).toBe(true);
-  }
-  expect(error).toMatchObject({ name: "SqliteWorkerError", code: "outcome-unknown" });
-  expect(events).toEqual(
-    retire
-      ? ["retired", "settled:unknown", "rejected"]
-      : ["settled:completed", "rejected", "dispatch"],
-  );
-  return error;
+  // Broker retirement/settlement is owned by sqlite-worker-request-custody and
+  // sqlite-worker-broker-reply.cleanup tests. Here only the delivered error matters.
+  return kind === "native"
+    ? error
+    : Object.assign(new Error(error.message), { name: error.name, code: error.code });
 }
 
-it.each([
-  ["retired settlement", true],
-  ["non-retiring result serialization", false],
-  ["nested cleanup aggregate", "cleanup"],
-] as const)("invalidates the original Board without replay after %s failure", async (_, kind) => {
-  const { store, params, change, expectPublication } = fixture();
-  const error = await failureOutcome(kind);
-  boundary.execute.mockImplementation(async () => {
-    params.sessionKey = "agent:main:replacement";
-    throw error;
-  });
-  await expect(store.putWidget(params)).rejects.toBe(error);
-  expectPublication([change]);
-});
+it.each(["native", "transported", "cleanup"] as const)(
+  "invalidates the original Board without replay after %s failure",
+  async (kind) => {
+    const { store, params, change, expectPublication } = fixture();
+    const error = failureOutcome(kind);
+    boundary.execute.mockImplementation(async () => {
+      params.sessionKey = "agent:main:replacement";
+      throw error;
+    });
+    await expect(store.putWidget(params)).rejects.toBe(error);
+    expectPublication([change]);
+  },
+);
 
 it("relays a committed Board outcome after revocation without failing on client cleanup", async () => {
   const { store, params, change, expectPublication } = fixture();

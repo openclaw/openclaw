@@ -1,5 +1,6 @@
 import { createServer, IncomingMessage, request, ServerResponse } from "node:http";
 import { Socket } from "node:net";
+import { buffer } from "node:stream/consumers";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { reserveTestPortListener } from "../test-utils/port-claims.js";
 import {
@@ -18,6 +19,10 @@ const writers = {
   committed: writeJsonWithoutCharset,
 };
 type Writer = keyof typeof writers;
+const contentType = (writer: Writer) =>
+  writer === "bare" || writer === "committed"
+    ? "application/json"
+    : "application/json; charset=utf-8";
 
 describe("HTTP JSON representation", () => {
   let listener: Awaited<ReturnType<typeof reserveTestPortListener>>;
@@ -48,50 +53,35 @@ describe("HTTP JSON representation", () => {
     async (writer) => {
       for (const method of ["GET", "HEAD"]) {
         const response = await new Promise<{
-          status: number | undefined;
-          headers: import("node:http").IncomingHttpHeaders;
+          res: IncomingMessage;
           body: Buffer;
         }>((resolve, reject) => {
           const req = request(
-            {
-              host: "127.0.0.1",
-              port: listener.claim.port,
-              path: `/${writer}`,
-              method,
-              agent: false,
-            },
+            `http://127.0.0.1:${listener.claim.port}/${writer}`,
+            { method, agent: false },
             (res) => {
-              const chunks: Buffer[] = [];
-              res.on("data", (chunk: Buffer) => chunks.push(chunk));
-              res.once("error", reject);
-              res.once("end", () =>
-                resolve({
-                  status: res.statusCode,
-                  headers: res.headers,
-                  body: Buffer.concat(chunks),
-                }),
-              );
+              buffer(res).then((body) => resolve({ res, body }), reject);
             },
           );
           req.once("error", reject);
           req.end();
         });
-        expect(response.status).toBe(202);
-        expect(response.headers["content-type"]).toBe(
-          writer === "bare" || writer === "committed"
-            ? "application/json"
-            : "application/json; charset=utf-8",
-        );
-        expect(response.headers["cache-control"]).toBe(
+        expect(response.res.statusCode).toBe(202);
+        expect(
+          [
+            "content-type",
+            "cache-control",
+            "x-content-type-options",
+            "transfer-encoding",
+            "content-length",
+          ].map((key) => response.res.headers[key]),
+        ).toEqual([
+          contentType(writer),
           writer === "private" ? "no-store" : "private, no-cache",
-        );
-        expect(response.headers["x-content-type-options"]).toBe("nosniff");
-        expect(response.headers["transfer-encoding"]).toBe(
+          "nosniff",
           writer === "committed" && method === "GET" ? "chunked" : undefined,
-        );
-        expect(response.headers["content-length"]).toBe(
           (method === "GET" && writer !== "committed") || writer === "framed" ? "21" : undefined,
-        );
+        ]);
         expect(response.body.toString("utf8")).toBe(method === "GET" ? '{"text":"🦞 café"}' : "");
       }
     },
@@ -106,11 +96,7 @@ describe("HTTP JSON representation", () => {
       expect(res.headersSent).toBe(writer === "committed");
       expect(res.statusCode).toBe(writer === "framed" ? 200 : 202);
       expect(res.getHeader("Content-Type")).toBe(
-        writer === "framed"
-          ? undefined
-          : writer === "bare" || writer === "committed"
-            ? "application/json"
-            : "application/json; charset=utf-8",
+        writer === "framed" ? undefined : contentType(writer),
       );
       expect(res.getHeader("Cache-Control")).toBe(writer === "private" ? "no-store" : undefined);
       res.destroy();

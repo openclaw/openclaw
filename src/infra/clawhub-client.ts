@@ -35,6 +35,7 @@ export type ClawHubRequestParams = ClawHubFetchOptions & {
   url?: string;
   method?: "GET" | "POST";
   json?: unknown;
+  form?: FormData;
   search?: Record<string, string | undefined>;
   skipAuth?: boolean;
   retryTransientReads?: boolean;
@@ -207,6 +208,9 @@ function buildUrl(params: Pick<ClawHubRequestParams, "baseUrl" | "path" | "searc
 type ClawHubResponse = Awaited<ReturnType<typeof requestClawHub>>;
 
 async function requestClawHub(params: ClawHubRequestParams) {
+  if (params.json !== undefined && params.form !== undefined) {
+    throw new Error("ClawHub requests cannot contain both JSON and multipart bodies");
+  }
   const url = buildUrl(params);
   const token = params.skipAuth
     ? undefined
@@ -226,6 +230,8 @@ async function requestClawHub(params: ClawHubRequestParams) {
   }
   if (params.json !== undefined) {
     init.body = JSON.stringify(params.json);
+  } else if (params.form !== undefined) {
+    init.body = params.form;
   }
   const request = async () => {
     const controller = new AbortController();

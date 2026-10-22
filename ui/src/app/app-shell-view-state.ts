@@ -2,23 +2,19 @@ import { isSettingsNavigationRoute, isSettingsTakeover } from "../app-navigation
 import { isSessionRouteId } from "../app-route-paths.ts";
 import { APP_ROUTE_IDS } from "../app-routes.ts";
 import type { GatewayStatusProps } from "../components/gateway-status.ts";
-import type {
-  SettingsSidebarFallbackProps,
-  SettingsSidebarLoader,
-} from "../components/settings-sidebar-lazy.tsx";
-import { isGatewayConnectionAttemptPending, resolveGatewayStatus } from "../lib/gateway-status.ts";
+import type { SettingsSidebarFallbackProps } from "../components/settings-sidebar-lazy.tsx";
+import { resolveGatewayStatus } from "../lib/gateway-status.ts";
 import { readSessionMethodAccess } from "../lib/session-method-access.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
-import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.ts";
+import { isClawsAvailable } from "../pages/claws/availability.ts";
+import { pluginTabKey, pluginTabRefFromSearch } from "../pages/plugin/route.tsx";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import type { DevicePairSetupLoader } from "./app-shell-device-pair-setup.tsx";
 import type { OutboxStoreRuntime } from "./app-shell-gateway.ts";
 import type { ShellLazyOverlayHost } from "./app-shell-lazy-view.tsx";
 import type { ShellViewCallbacks } from "./app-shell-view-callbacks.ts";
 import type { ApplicationRuntime } from "./bootstrap.ts";
 import { canGoBackInNativeEmbed } from "./browser.ts";
-import type { ApplicationNavigationOptions } from "./context.ts";
 import type { ControlUiReadinessOutlet } from "./control-ui-readiness.ts";
 import { gatewayPresentationScope } from "./gateway-presentation-scope.ts";
 import type { OptionalCustomElement } from "./lazy-custom-element.ts";
@@ -46,9 +42,7 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly connectionRecovery: boolean;
   routeOutlet?: ControlUiReadinessOutlet;
   terminalPanel?: HTMLElement & { readonly available?: boolean };
-  readonly devicePairSetup: DevicePairSetupLoader;
   readonly shellRevision: () => number;
-  readonly settingsSidebar: SettingsSidebarLoader;
   readonly runtime: ApplicationRuntime | undefined;
   readonly activeSessionKey: string;
   readonly custodianMinimizeRequestId: number;
@@ -66,15 +60,11 @@ export interface ShellViewHost extends ShellLazyOverlayHost, ShellNavigationElem
   readonly storedOutboxes: ReturnType<OutboxStoreRuntime["read"]> | undefined;
   readonly viewCallbacks: ShellViewCallbacks;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
-  newSessionRouteAgentId(): string;
-  exitSettings(): void;
   readonly handleNativeNewSession: () => void;
   handleSettingsSearchQueryChange(query: string): Promise<void>;
   nativeNavCollapsed(): boolean;
   readonly openPalette: () => void;
-  readonly navigate: (routeId: string, options?: ApplicationNavigationOptions) => void;
   refreshControlUi: () => Promise<boolean>;
-  recoverNotFoundRoute: () => boolean;
   invalidate(): void;
   resizeNavigation(splitRatio: number): void;
   readonly toggleNavigationSurface: (trigger?: HTMLElement) => void;
@@ -179,7 +169,7 @@ export function readShellView(host: ShellViewHost) {
   const shellWidth = Math.max(globalThis.innerWidth || 0, NAV_WIDTH_MAX);
   // A route query is navigation input, not an owner record. Let it override the
   // live selection only after the roster proves that agent exists.
-  const requestedRouteAgentId = host.newSessionRouteAgentId();
+  const requestedRouteAgentId = host.shellNavigation.newSessionRouteAgentId();
   const routeAgentId = requestedRouteAgentId ? normalizeAgentId(requestedRouteAgentId) : null;
   const routeAgentIsKnown =
     routeAgentId !== null &&
@@ -212,7 +202,10 @@ export function readShellView(host: ShellViewHost) {
     activeRouteId: activeRoute,
     router: runtime.router,
     activePluginTabId: activePluginRef ? pluginTabKey(activePluginRef) : "",
-    enabledRouteIds: APP_ROUTE_IDS,
+    enabledRouteIds:
+      isClawsAvailable(context.runtimeConfig.state) === true
+        ? APP_ROUTE_IDS
+        : APP_ROUTE_IDS.filter((routeId) => routeId !== "claws"),
     sessionKey: host.activeSessionKey,
     connected: gatewayConnected,
     connectionStatus,
@@ -237,7 +230,7 @@ export function readShellView(host: ShellViewHost) {
     onOpenNewSession: callbacks.requestOpenNewSession,
     onUpdateSidebarEntries: callbacks.updateSidebarEntries,
     onPairMobile: callbacks.openDevicePairSetup,
-    onNavigate: host.navigate,
+    onNavigate: host.shellNavigation.navigate,
     onPreloadRoute: callbacks.preloadRoute,
   };
   const embedNavigation =
@@ -252,7 +245,6 @@ export function readShellView(host: ShellViewHost) {
       ? (host.storedOutboxes?.total ?? 0) + (gatewaySnapshot.deferredIntentCount ?? 0)
       : 0,
     onRetry: callbacks.retryGateway,
-    retryPending: isGatewayConnectionAttemptPending(gatewaySnapshot),
   };
   const mobileGatewayStatus =
     mobileNavLayout && !navDrawerOpen && !nativeEmbed ? gatewayStatus : null;
@@ -265,7 +257,7 @@ export function readShellView(host: ShellViewHost) {
     updateRun: overlaySnapshot.updateRun,
     refreshRequired: controlUiRefreshRequired,
     onRefresh: host.refreshControlUi,
-    onNavigate: host.navigate,
+    onNavigate: host.shellNavigation.navigate,
   };
   const settingsSidebarProps: SettingsSidebarFallbackProps = {
     presentation: nativeEmbed ? (embedSettingsRoot ? "embed-list" : "embed-page") : "sidebar",
@@ -273,13 +265,13 @@ export function readShellView(host: ShellViewHost) {
     connectionStatus,
     onExit: () => {
       if (!nativeEmbed) {
-        host.exitSettings();
+        host.shellNavigation.exitSettings();
       } else if (canGoBackInNativeEmbed()) {
         window.history.back();
       } else if (activeRoute === "memory-import") {
         context.replace("memory");
       } else {
-        host.navigate("settings");
+        host.shellNavigation.navigate("settings");
       }
     },
     canAdmin: operatorAccess.canAdmin,
@@ -339,6 +331,5 @@ export function readShellView(host: ShellViewHost) {
     connectionRecovery: host.connectionRecovery,
     floatingUpdateCard,
     settingsSidebarProps,
-    navigationSnapshot,
   };
 }

@@ -64,6 +64,20 @@ describe("runMessageAction core send routing", () => {
       .mockImplementation(async (params: { payload: unknown }) => params.payload);
   });
 
+  it("tells a routeless caller how to recover from a targetless send", async () => {
+    const sendText = registerSlackTextPlugin();
+    await expect(
+      runMessageAction({
+        cfg: slackConfig,
+        action: "send",
+        params: { message: "progress" },
+      }),
+    ).rejects.toThrow(
+      "This turn has no current conversation; pass an explicit target, or reply in normal text.",
+    );
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
   it.each([
     { name: "agent opt-in", global: false, agent: true, allowed: true },
     { name: "agent restriction", global: true, agent: false, allowed: false },

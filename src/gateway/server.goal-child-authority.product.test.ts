@@ -123,10 +123,10 @@ function textReply(response: ServerResponse, text: string) {
   });
 }
 
-function forbiddenSpawn(scenario: Scenario, response: ServerResponse) {
+function spawn(scenario: Scenario, response: ServerResponse, agentId: "main" | "forbidden") {
   writeToolCall(response, "sessions_spawn", {
-    task: scenario.forbiddenTask,
-    agentId: "forbidden",
+    task: agentId === "main" ? scenario.childTask : scenario.forbiddenTask,
+    agentId,
     runtime: "subagent",
     context: "isolated",
     cleanup: "keep",
@@ -163,14 +163,7 @@ async function answer(scenario: Scenario, body: string, response: ServerResponse
   scenario.parentCalls++;
   switch (scenario.parentCalls) {
     case 1:
-      writeToolCall(response, "sessions_spawn", {
-        task: scenario.childTask,
-        agentId: "main",
-        runtime: "subagent",
-        context: "isolated",
-        cleanup: "keep",
-        completionTarget: "parent",
-      });
+      spawn(scenario, response, "main");
       return;
     case 2: {
       const receipt = latestToolOutput(body).find(
@@ -188,21 +181,20 @@ async function answer(scenario: Scenario, body: string, response: ServerResponse
       return;
     }
     case 3:
-      expect(body, "child finding reaches a real requester model turn").toContain(
-        scenario.childResult,
-      );
+    case 5:
+      if (scenario.parentCalls === 3) {
+        expect(body).toContain(scenario.childResult);
+      } else {
+        expect(body).toContain("Advance the active goal");
+        expect(body).toContain(scenario.requesterFinal);
+      }
       // Ordinary subagent policy permits every agent. Only the main-only HUMAN role
       // can deny this, including inside the privileged requester-settle command.
-      forbiddenSpawn(scenario, response);
+      spawn(scenario, response, "forbidden");
       return;
     case 4:
       expectRoleDenial(scenario, body);
       textReply(response, scenario.requesterFinal);
-      return;
-    case 5:
-      expect(body).toContain("Advance the active goal");
-      expect(body).toContain(scenario.requesterFinal);
-      forbiddenSpawn(scenario, response);
       return;
     case 6:
       expectRoleDenial(scenario, body);
@@ -261,8 +253,8 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
     if (message?.role !== "assistant") {
       return;
     }
+    const rendered = JSON.stringify(message);
     for (const scenario of scenarios) {
-      const rendered = JSON.stringify(message);
       if (
         ![scenario.requesterFinal, scenario.nudgeFinal, scenario.completeFinal].some((text) =>
           rendered.includes(text),
@@ -298,10 +290,7 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
           response.writeHead(200, { "content-type": "application/json" });
           response.end(
             JSON.stringify({
-              data: [
-                { id: "authority-proof", object: "model" },
-                { id: "forbidden-effect", object: "model" },
-              ],
+              data: ["authority-proof", "forbidden-effect"].map((id) => ({ id, object: "model" })),
             }),
           );
           return;
@@ -321,12 +310,8 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
         await answer(owner, body, response);
       })().catch((error: unknown) => {
         providerErrors.push(error);
-        if (owner) {
-          owner.failed.reject(error);
-        } else {
-          for (const scenario of scenarios) {
-            scenario.failed.reject(error);
-          }
+        for (const scenario of owner ? [owner] : scenarios) {
+          scenario.failed.reject(error);
         }
         // Reject the test immediately but let the real request finish, rather than
         // turning an assertion failure into provider retry/backoff during teardown.
@@ -358,7 +343,6 @@ describe("Goal child handoff retains scoped human authority at real effects", ()
         defaults: {
           workspace: state.workspaceDir,
           skipBootstrap: true,
-          heartbeat: { every: "0m" },
           model: { primary: provider.modelRef },
           models: {
             [provider.modelRef]: {

@@ -25,7 +25,6 @@ export async function resolveMatrixPreflightAudioTranscript(params: {
   originatingTo: string;
   messageThreadId?: string;
   sessionKey: string;
-  abortSignal?: AbortSignal;
 }): Promise<string | undefined> {
   return await matrixPreflightAudio.resolve({
     request: {
@@ -42,6 +41,5 @@ export async function resolveMatrixPreflightAudioTranscript(params: {
       },
       cfg: params.cfg,
     },
-    abortSignal: params.abortSignal,
   });
 }

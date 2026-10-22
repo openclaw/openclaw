@@ -1,6 +1,6 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
-import * as codexRuntimePlugin from "../commands/codex-runtime-plugin-install.js";
+import * as codexRuntimePlugin from "../commands/runtime-plugin-install.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as records from "../plugins/installed-plugin-index-records.js";

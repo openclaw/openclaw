@@ -1,30 +1,29 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { Show } from "solid-js";
+import { omit, Show } from "solid-js";
 import type { ThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
 import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { PluginThemeArtwork } from "./plugin-theme-artwork.tsx";
 import { Icon } from "./solid/icon.tsx";
 import "./theme-brand-icon.css";
 
-export const ThemeBrandIcon = defineSolidBridge<{ branding?: ThemeBranding }>(
-  "openclaw-theme-brand-icon",
-  (props) => {
-    const artwork = () => {
-      const branding = props.branding ?? currentThemeBranding();
-      return branding.artwork?.icons?.[branding.brandIcon];
-    };
-    return (
+export function ThemeBrandIcon(
+  props: { branding?: ThemeBranding } & SolidJSX.HTMLAttributes<HTMLElement>,
+) {
+  const artwork = () => {
+    const branding = props.branding ?? currentThemeBranding();
+    return branding.artwork?.icons?.[branding.brandIcon];
+  };
+  return (
+    <openclaw-theme-brand-icon {...omit(props, "branding", "children")}>
       <Show when={artwork()} fallback={<Icon name="mark" />}>
         {(icon) => (
           <PluginThemeArtwork url={icon().url} class="brand-icon" fallback={<Icon name="mark" />} />
         )}
       </Show>
-    );
-  },
-  { properties: { branding: { default: undefined, attribute: false } } },
-);
+    </openclaw-theme-brand-icon>
+  );
+}
 
 export function ThemeBrandingIcon(props: { branding?: ThemeBranding; claw?: SolidJSX.Element }) {
   const publishedBranding = projectSource(null, {
@@ -40,22 +39,4 @@ export function ThemeBrandingIcon(props: { branding?: ThemeBranding; claw?: Soli
       </Show>
     </Show>
   );
-}
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-theme-brand-icon": SolidBridgeElement<{ branding?: ThemeBranding }>;
-  }
-}
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-theme-brand-icon": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-theme-brand-icon"]
-      > & {
-        "prop:branding"?: ThemeBranding;
-      };
-    }
-  }
 }

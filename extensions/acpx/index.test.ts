@@ -45,11 +45,13 @@ vi.mock("acpx/runtime", async (importActual) => {
   return { inspectAgentModels: vi.fn(inspect) };
 });
 
-vi.mock("./register.runtime.js", () => ({
+// mock-isolation: native catalog inspection must not start the lazy runtime service.
+vi.mock("./src/service.js", () => ({
   createAcpxRuntimeService: createAcpxRuntimeServiceMock,
 }));
 
-vi.mock("openclaw/plugin-sdk/acp-runtime-backend", () => ({
+vi.mock("openclaw/plugin-sdk/acp-runtime-backend", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/acp-runtime-backend")>()),
   tryDispatchAcpReplyHook: tryDispatchAcpReplyHookMock,
 }));
 
@@ -103,7 +105,6 @@ function expectedAgents(enabled: boolean) {
 
 describe("acpx plugin", () => {
   let receipts: FixtureReceiptChannel;
-  let getRuntime: ReturnType<typeof vi.fn<() => never>>;
   beforeAll(async () => {
     receipts = await openFixtureReceiptChannel();
   });
@@ -112,37 +113,29 @@ describe("acpx plugin", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     nativePrograms.clear();
-    getRuntime = vi.fn(() => {
+    createAcpxRuntimeServiceMock.mockImplementation(() => {
       throw new Error("Catalog inspection must not start the runtime");
     });
-    createAcpxRuntimeServiceMock.mockReturnValue({ id: "acpx-service", getRuntime });
   });
 
   it("registers the runtime service and reply_dispatch hook", () => {
-    const service = { id: "acpx-service", start: vi.fn() };
-    createAcpxRuntimeServiceMock.mockReturnValue(service);
-    const openKeyedStore = vi.fn();
-
     const api = createTestPluginApi({
       pluginConfig: { stateDir: "/tmp/acpx" },
-      runtime: { state: { openKeyedStoreV2: openKeyedStore } } as never,
+      runtime: createPluginRuntimeMock(),
       registerService: vi.fn(),
       on: vi.fn(),
     });
 
     plugin.register(api);
 
-    expect(createAcpxRuntimeServiceMock).toHaveBeenCalledWith({
-      pluginConfig: api.pluginConfig,
-      getAllowedAgents: expect.any(Function),
-      openKeyedStore: expect.any(Function),
-    });
-    const params = createAcpxRuntimeServiceMock.mock.calls[0]?.[0] as {
-      openKeyedStore: typeof openKeyedStore;
-    };
-    params.openKeyedStore({ namespace: "test", maxEntries: 1 });
-    expect(openKeyedStore).toHaveBeenCalledWith({ namespace: "test", maxEntries: 1 });
-    expect(api.registerService).toHaveBeenCalledWith(service);
+    expect(createAcpxRuntimeServiceMock).not.toHaveBeenCalled();
+    expect(api.registerService).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "acpx-runtime",
+        start: expect.any(Function),
+        stop: expect.any(Function),
+      }),
+    );
     expect(api.on).toHaveBeenCalledWith("reply_dispatch", tryDispatchAcpReplyHookMock, {
       eligibleDispatchKinds: ["acp"],
     });
@@ -237,7 +230,7 @@ describe("acpx plugin", () => {
     handler = replacement[1];
     expect(await read()).toEqual(disabled);
     expect(config.acp?.allowedAgents).toEqual(["codex"]);
-    expect(getRuntime).not.toHaveBeenCalled();
+    expect(createAcpxRuntimeServiceMock).not.toHaveBeenCalled();
   });
 
   it.for(["enabled", "disposed"] as const)(
@@ -331,7 +324,7 @@ export { sendReceipt };`,
           await fs.readFile(path.join(peerDirectory, `${sessionId}.json`), "utf8"),
         ) as { history: string[]; mcpServers: unknown[] };
         expect([nativeSession.history, nativeSession.mcpServers]).toEqual([[], []]);
-        expect(getRuntime).not.toHaveBeenCalled();
+        expect(createAcpxRuntimeServiceMock).not.toHaveBeenCalled();
         await expect(fs.access(runtimeDirectory)).rejects.toMatchObject({ code: "ENOENT" });
       } finally {
         await harness.dispose?.();

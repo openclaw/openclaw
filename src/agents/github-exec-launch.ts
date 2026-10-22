@@ -1,12 +1,8 @@
 import { fileURLToPath } from "node:url";
-import { quoteCliArg } from "../cli/quote-cli-arg.js";
+import { quoteCliArg, quotePowerShellArg } from "../cli/quote-cli-arg.js";
 import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { resolveRuntimeWorkerArgv } from "../infra/runtime-worker-url.js";
 import { GITHUB_PUBLIC_HOST, resolveConfiguredGitHubHost } from "./github-host.js";
-
-function quotePowerShellLiteral(value: string): string {
-  return `'${value.replaceAll("'", "''")}'`;
-}
 
 /** Carry only a selected profile path through supervision; resolve its token in the child. */
 export function buildGitHubExecLaunchArgv(
@@ -29,7 +25,7 @@ export function buildGitHubExecLaunchArgv(
       ? [
           externalShell.shell,
           ...externalShell.args,
-          `$ErrorActionPreference = 'Stop'; & ${argv.map(quotePowerShellLiteral).join(" ")}; exit $LASTEXITCODE`,
+          `$ErrorActionPreference = 'Stop'; & ${argv.map(quotePowerShellArg).join(" ")}; exit $LASTEXITCODE`,
         ]
       : argv;
     // getShellConfig owns a fresh PowerShell -Command process on Windows. Keep it as
@@ -38,18 +34,18 @@ export function buildGitHubExecLaunchArgv(
     if (command === undefined) {
       throw new Error("Managed GitHub execution requires a shell command.");
     }
-    const resolverDir = quotePowerShellLiteral(fileURLToPath(new URL(".", workerUrl)));
+    const resolverDir = quotePowerShellArg(fileURLToPath(new URL(".", workerUrl)));
     const bootstrap = [
       `Push-Location -LiteralPath ${resolverDir} -ErrorAction Stop;`,
-      `try { $env:GH_TOKEN = & ${launcher.map(quotePowerShellLiteral).join(" ")};`,
+      `try { $env:GH_TOKEN = & ${launcher.map(quotePowerShellArg).join(" ")};`,
       "if (-not $? -or $LASTEXITCODE -ne 0 -or [string]::IsNullOrEmpty($env:GH_TOKEN)) { exit 1 }",
       "} finally { Pop-Location };",
-      `$env:GH_HOST = ${quotePowerShellLiteral(host)};`,
+      `$env:GH_HOST = ${quotePowerShellArg(host)};`,
       publicToken
         ? "$env:GH_ENTERPRISE_TOKEN = '';"
         : "$env:GH_ENTERPRISE_TOKEN = $env:GH_TOKEN; $env:GH_TOKEN = '';",
       "$env:GITHUB_TOKEN = ''; $env:GITHUB_ENTERPRISE_TOKEN = ''; $LASTEXITCODE = $null;",
-      `& ([scriptblock]::Create(${quotePowerShellLiteral(command)}))`,
+      `& ([scriptblock]::Create(${quotePowerShellArg(command)}))`,
     ].join(" ");
     return [...shellArgv.slice(0, -1), bootstrap];
   }

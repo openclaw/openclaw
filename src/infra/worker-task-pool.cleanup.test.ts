@@ -1,8 +1,9 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
-import { afterEach, expect, it, vi, type MockInstance } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
 import { WorkerTaskPool, type WorkerTaskResponse } from "./worker-task-pool.js";
+import { expectCalls } from "./worker-task-pool.owned.test-support.js";
 import type { PoolFixtureInput, PoolFixtureResult } from "./worker-task-pool.test-support.js";
 
 const cleanup = vi.hoisted(() => vi.fn<() => Promise<void>>());
@@ -17,12 +18,6 @@ afterEach(() => {
   vi.doMock("./temp-artifact-cleanup.js", () => ({ removeTemporaryArtifacts: cleanup }));
   vi.resetModules();
 });
-
-function expectCalls(count: number, ...mocks: MockInstance[]) {
-  for (const mock of mocks) {
-    expect(mock).toHaveBeenCalledTimes(count);
-  }
-}
 
 type TaskMessage = { taskId: number; input: string; responseId?: number };
 const defaultReply = ({ taskId }: TaskMessage) => ({ status: "ok", taskId, value: 42 });

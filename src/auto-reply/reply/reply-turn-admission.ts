@@ -62,7 +62,6 @@ import {
 import {
   bindReplyAdmissionRelease,
   releaseReplyRecoveryOwner,
-  yieldHeartbeatToReplyTurn,
 } from "./reply-turn-admission-lifecycle.js";
 import { resolveReplyTurnController } from "./reply-turn-admission-target.js";
 import { createReplyTurnAdmissionWaiter } from "./reply-turn-admission-wait.js";
@@ -199,9 +198,6 @@ export async function admitReplyTurn(
         expectedSessionId = expectedSessionId ? storelessRotation.sessionId : undefined;
       }
       if (isReplyRunSuccessorAdmissionBlocked(controllerKey)) {
-        if (params.kind === "heartbeat") {
-          return { status: "skipped", reason: "active-run" };
-        }
         const successorAdmission = await waits.barrier({
           phase: "successor-barrier",
           timeoutMs: params.kind === "visible" ? null : waitTimeoutMs,
@@ -223,9 +219,6 @@ export async function admitReplyTurn(
         claim: params.mailboxClaim,
       });
       if (!turnAdmission.admitted && turnAdmission.reason === "followup-barrier") {
-        if (params.kind === "heartbeat") {
-          return { status: "skipped", reason: "active-run" };
-        }
         // Pin the physical database before waiting on retained delivery custody.
         // This is a read claim, not turn admission or permission to write.
         if (params.storePath && !admittedDatabaseClaim) {
@@ -261,7 +254,7 @@ export async function admitReplyTurn(
         continue;
       }
       if (!turnAdmission.admitted && turnAdmission.reason === "waiting-inputs") {
-        if (params.kind === "heartbeat" || params.waitForActive === false) {
+        if (params.waitForActive === false) {
           return { status: "skipped", reason: "active-run" };
         }
         if (params.kind !== "visible" && waitTimeoutMs !== undefined) {
@@ -424,17 +417,10 @@ export async function admitReplyTurn(
             admittedSessionEntry &&
             ((hasMainSessionRecoveryClaim(admittedSessionEntry) &&
               admittedSessionEntry.abortedLastRun === true) ||
-              (params.kind !== "heartbeat" &&
-                admittedSessionEntry.restartRecoveryRuns !== undefined &&
+              (admittedSessionEntry.restartRecoveryRuns !== undefined &&
                 (admittedSessionEntry.mainRestartRecovery !== undefined || !controller.active)) ||
               admittedSessionEntry.mainRestartRecovery?.tombstone !== undefined) &&
             isMainRestartRecoveryCandidate(admittedSessionEntry, params.sessionKey);
-          if (shouldClaimRecoveryOwner && params.kind === "heartbeat") {
-            // The interrupted turn's resend is owed work before its mailbox input
-            // exists (startup delay and scan); a heartbeat claim would take it over.
-            admission?.release();
-            return { status: "skipped", reason: "active-run" };
-          }
           const gatewayContext = resolveGatewayContext?.();
           const recoveryRuntime = gatewayContext?.recoveryRuntime;
           if (
@@ -649,15 +635,9 @@ export async function admitReplyTurn(
           continue;
         }
         if (error instanceof ReplyRunSuccessorAdmissionBlockedError) {
-          if (params.kind === "heartbeat") {
-            return { status: "skipped", reason: "active-run" };
-          }
           continue;
         }
         if (error instanceof ReplyRunFollowupAdmissionBlockedError) {
-          if (params.kind === "heartbeat") {
-            return { status: "skipped", reason: "active-run" };
-          }
           const followupAdmission = await waitForReplyRunFollowupAdmission(
             controllerKey,
             waitTimeoutMs ?? REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS,
@@ -676,12 +656,11 @@ export async function admitReplyTurn(
           throw error;
         }
         const activeOperation = controller.active;
-        yieldHeartbeatToReplyTurn(activeOperation, params);
         if (params.kind === "visible" && expireVisibleStaleOperation(activeOperation)) {
           continue;
         }
         // Visible and queued turns may wait for active runs when waitForActive is set.
-        if (params.kind === "heartbeat" || params.waitForActive === false) {
+        if (params.waitForActive === false) {
           return { status: "skipped", reason: "active-run", activeOperation };
         }
         const activeWaitTimeoutMs =

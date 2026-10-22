@@ -5,26 +5,24 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { WebSocket } from "../../packages/gateway-client/src/websocket.test-support.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { writeConfigFile } from "../config/config.js";
 import { issueDevicePairSetupBootstrapToken } from "../infra/device-bootstrap.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { upsertPresence, type SystemPresence } from "../infra/system-presence.js";
 import { NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE } from "../shared/device-bootstrap-profile.js";
 import {
   connectReq,
+  BROWSER_ORIGIN as origin,
+  configureBrowserAuth,
   CONTROL_UI_CLIENT,
   installGatewayTestHooks,
   openWs,
   onceMessage,
-  testState,
   withGatewayServer,
 } from "./server.auth.test-helpers.js";
 import { connectWatchNode } from "./watch-node-http.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-const origin = "https://control.example.com";
 
 type ObservedFrame = {
   event?: string;
@@ -35,24 +33,9 @@ type ObservedFrame = {
   };
 };
 
-beforeEach(async () => {
-  const auth = {
-    mode: "trusted-proxy" as const,
-    trustedProxy: {
-      userHeader: "x-forwarded-user",
-      requiredHeaders: ["x-forwarded-proto"],
-      allowLoopback: true,
-    },
-  };
-  testState.gatewayAuth = auth;
-  const controlUi = { allowedOrigins: [origin] };
-  testState.gatewayControlUi = controlUi;
-  await writeConfigFile({
-    gateway: { auth, trustedProxies: ["127.0.0.1"], controlUi },
-  });
-});
+beforeEach(() => configureBrowserAuth());
 
-async function openBrowser(port: number, instanceId: string) {
+async function openBrowser(port: number, instanceId: string, caps: string[] = []) {
   const identityPath = path.join(tempDirs.make("hello-browser-"), "client", "credentials.sqlite");
   const socket = await openWs(port, {
     origin,
@@ -72,6 +55,7 @@ async function openBrowser(port: number, instanceId: string) {
         deviceIdentityPath: identityPath,
         client: { ...CONTROL_UI_CLIENT, instanceId },
         scopes: ["operator.read"],
+        caps,
         browserOrigin: origin,
       }),
   };
@@ -121,25 +105,43 @@ test("publishes an HTTP node replacing an undelivered WebSocket presence row", a
   });
 });
 
-test("sends hello before connect presence and promptly notifies established readers", async () => {
-  await withGatewayServer(async ({ port }) => {
-    const reader = await openBrowser(port, "established-reader");
-    const joining = await openBrowser(port, "joining-browser");
-    expect((await reader.connect()).ok).toBe(true);
-    const notified = waitForPresence(
-      reader.socket,
-      (entry) => entry.instanceId === "joining-browser" && entry.reason === "connect",
-    );
-    const [result] = await Promise.all([joining.connect(), notified]);
-    expect(result.ok, JSON.stringify(result.error)).toBe(true);
-    const firstFrame = joining.frames.find((frame) => frame.event !== "connect.challenge");
-    expect(firstFrame?.payload?.type ?? firstFrame?.event).toBe("hello-ok");
-    expect(firstFrame?.payload?.snapshot?.presence?.map((entry) => entry.instanceId)).toContain(
-      "joining-browser",
-    );
-    expect(presenceReasons(reader.frames, "joining-browser")).toContain("connect");
-  });
-});
+test.each([false, true])(
+  "sends hello before the roster with self-only presence=%s",
+  async (selfOnly) => {
+    await withGatewayServer(async ({ port }) => {
+      const reader = await openBrowser(port, "established-reader");
+      const joining = await openBrowser(
+        port,
+        "joining-browser",
+        selfOnly ? ["hello-presence-self"] : [],
+      );
+      expect((await reader.connect()).ok).toBe(true);
+      const notified = waitForPresence(
+        reader.socket,
+        (entry) => entry.instanceId === "joining-browser" && entry.reason === "connect",
+      );
+      const roster = waitForPresence(
+        joining.socket,
+        (entry) => entry.instanceId === "established-reader",
+      );
+      const [result] = await Promise.all([joining.connect(), notified, roster]);
+      expect(result.ok, JSON.stringify(result.error)).toBe(true);
+      const firstFrame = joining.frames.find((frame) => frame.event !== "connect.challenge");
+      expect(firstFrame?.payload?.type ?? firstFrame?.event).toBe("hello-ok");
+      expect(firstFrame?.payload?.snapshot?.presence?.map((entry) => entry.instanceId)).toContain(
+        "joining-browser",
+      );
+      const helloPresence = firstFrame?.payload?.snapshot?.presence ?? [];
+      if (selfOnly) {
+        expect(helloPresence).toHaveLength(1);
+        expect(helloPresence[0]?.user).toMatchObject({ id: expect.any(String) });
+      } else {
+        expect(helloPresence.map((entry) => entry.instanceId)).toContain("established-reader");
+      }
+      expect(presenceReasons(reader.frames, "joining-browser")).toContain("connect");
+    });
+  },
+);
 
 test.each(["write-error", "closed-before-callback"] as const)(
   "does not publish connect presence after hello %s and retains disconnect cleanup",

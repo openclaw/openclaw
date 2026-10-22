@@ -12,6 +12,7 @@ import * as registry from "./registry.js";
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 const oldId = "a".repeat(64);
 const newId = "b".repeat(64);
+const success = (stdout = "") => ({ code: 0, stdout, stderr: "" });
 const entry = {
   containerName: "retire-owned",
   backendId: "docker",
@@ -46,15 +47,20 @@ afterEach(async () => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
 });
-const quiesce = (assertCurrent = () => {}) =>
+const quiesce = (assertCurrent = () => {}, env?: NodeJS.ProcessEnv) =>
   quiesceLocalWorkspace({
+    env,
     workspaceDir: entry.workspaceDir,
     retained: [],
     persist: () => {},
     assertCurrent,
   });
 
-async function setup(kind: "container" | "browser", running = true) {
+async function setup(
+  kind: "container" | "browser",
+  running = true,
+  prepareScope?: () => Promise<NodeJS.ProcessEnv>,
+) {
   const browser = kind === "browser";
   const update = browser ? registry.updateBrowserRegistry : registry.updateRegistry;
   const remove = browser ? registry.removeBrowserRegistryEntry : registry.removeRegistryEntry;
@@ -73,24 +79,23 @@ async function setup(kind: "container" | "browser", running = true) {
       if (!physical.has(target)) {
         return { code: 1, stdout: "", stderr: "no such container" };
       }
-      return {
-        code: 0,
-        stdout: args.includes("{{.Id}}")
+      return success(
+        args.includes("{{.Id}}")
           ? target
           : args.includes("{{.State.Paused}}")
             ? "false"
             : target + " " + running + " false",
-        stderr: "",
-      };
+      );
     }
     if (args[0] === "rm") {
       physical.delete(target);
       await hooks.afterRemove();
     }
-    return { code: 0, stdout: "", stderr: "" };
+    return success();
   });
   const authority = new AbortController();
-  const custody = await quiesce(() => authority.signal.throwIfAborted());
+  const selectedEnv = await prepareScope?.();
+  const custody = await quiesce(() => authority.signal.throwIfAborted(), selectedEnv);
   const replacePhysical = () => {
     physical.delete(oldId);
     physical.add(newId);
@@ -174,7 +179,11 @@ it.each(["before", "during", "rebound"] as const)(
     } else {
       vi.mocked(bridgeApi.stopBrowserBridgeServer).mockImplementationOnce(replace);
     }
-    await expect(h.custody.retire()).resolves.toBeUndefined();
+    if (when === "rebound") {
+      await expect(h.custody.retire()).rejects.toThrow("custody retained");
+    } else {
+      await expect(h.custody.retire()).resolves.toBeUndefined();
+    }
     expect(BROWSER_BRIDGES.get(entry.sessionKey)).toBe(
       when === "rebound" ? undefined : replacement,
     );
@@ -183,7 +192,34 @@ it.each(["before", "during", "rebound"] as const)(
     expect(vi.mocked(bridgeApi.stopBrowserBridgeServer).mock.calls).toEqual(
       when === "before" ? [] : [[h.capturedBridge.bridge.server]],
     );
-    expect(await h.rows()).toEqual([]);
+    expect(await h.rows()).toEqual(when === "rebound" ? [expect.objectContaining(entry)] : []);
     expect(h.removals()).toEqual([oldId]);
+  },
+);
+
+it.each(["container", "browser"] as const)(
+  "retires %s registry custody in its captured database while preserving an identical ambient row",
+  async (kind) => {
+    const selectedEnv = { ...process.env };
+    const ambientRoot = path.join(dirs.make("openclaw-retirement-ambient-"), "state");
+    const h = await setup(kind, false, async () => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", ambientRoot);
+      await (kind === "container"
+        ? registry.updateRegistry(entry)
+        : registry.updateBrowserRegistry(entry));
+      return selectedEnv;
+    });
+    const read = kind === "container" ? registry.readRegistry : registry.readBrowserRegistry;
+    const ambientEnv = { ...process.env };
+    const ambientBefore = await read({ env: ambientEnv });
+    expect((await read({ env: selectedEnv })).entries).toEqual([expect.objectContaining(entry)]);
+    expect(ambientBefore.entries).toEqual([expect.objectContaining(entry)]);
+
+    await h.custody.retire();
+
+    expect(h.physical.size).toBe(0);
+    expect(h.removals()).toEqual([oldId]);
+    expect(await read({ env: ambientEnv })).toEqual(ambientBefore);
+    expect((await read({ env: selectedEnv })).entries).toEqual([]);
   },
 );

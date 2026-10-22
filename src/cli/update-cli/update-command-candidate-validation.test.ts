@@ -15,6 +15,7 @@ it.each([undefined, 2_000])(
   async (timeoutMs) => {
     let now = Date.now();
     vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const budget = timeoutMs ?? 30 * 60_000;
     let signal: AbortSignal | undefined;
     vi.mocked(validateUpdateCandidateCanary).mockImplementationOnce(async (params) => {

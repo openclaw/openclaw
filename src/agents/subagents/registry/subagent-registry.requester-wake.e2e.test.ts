@@ -19,7 +19,6 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
-import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { deliverAgentCommandResult } from "../../command/delivery.js";
 import type { EmbeddedAgentRunResult } from "../../embedded-agent-runner/types.js";
@@ -46,8 +45,6 @@ import type {
   SessionStoreEntry,
 } from "./subagent-registry.lifecycle-fixture.test-support.js";
 import { createLifecycleWaits } from "./subagent-registry.lifecycle-waits.test-support.js";
-import { registerRequesterSelfYieldFollowupTests } from "./subagent-registry.requester-self-yield.test-support.js";
-import { registerRequesterStartupAdmissionTests } from "./subagent-registry.requester-wake-admission.test-support.js";
 import {
   createRequesterYieldTool,
   registerRequesterWakeReceiptBoundaryTests,
@@ -352,7 +349,7 @@ describe("requester settle wake product flow", () => {
     }
   };
 
-  const { prepareChildSession, spawnVisibleChild } = createRequesterWakeSessionFixture({
+  const { prepareChildSession, spawnVisibleChild, settleTurn } = createRequesterWakeSessionFixture({
     requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
     getSessionStore: () => sessionStore,
     getSessionStorePath: () => sessionStorePath,
@@ -386,32 +383,22 @@ describe("requester settle wake product flow", () => {
     });
   };
 
-  registerRequesterStartupAdmissionTests({
+  const requesterFixture = {
     requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
     prepareChildSession,
+    spawnVisibleChild,
+    settleTurn,
     getFixture: () => ({ testState, sessionStore, sessionStorePath }),
     createGatewayContext,
-    flushOwnedWork,
-    getRequesterWakeCalls,
-    wakeRequester,
-  });
-
-  registerRequesterSelfYieldFollowupTests({
-    requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
-    prepareChildSession,
-    createGatewayContext,
-    getLifecycleHandler: () => lifecycleHandler!,
-    callGatewayMock,
-    getAgentCalls,
+    getLifecycleHandler: () => lifecycleHandler,
     emitCompleted,
     flushOwnedWork,
-    flushAsync,
-    wakeRequester,
     waitForDeliveredCleanup,
-    setReleaseAgentCallGate: (release) => {
-      releaseAgentCallGate = release;
-    },
-  });
+    waitForAgentCallCount,
+    getRequesterWakeCalls,
+    getAgentCalls,
+    wakeRequester,
+  };
 
   it.each([
     ...["alpha", "beta"].flatMap((firstCompleted) =>
@@ -601,16 +588,7 @@ describe("requester settle wake product flow", () => {
   );
 
   registerRequesterWakeReceiptBoundaryTests({
-    requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
-    prepareChildSession,
-    spawnVisibleChild,
-    emitCompleted,
-    flushOwnedWork,
-    waitForDeliveredCleanup,
-    waitForAgentCallCount,
-    getRequesterWakeCalls,
-    createGatewayContext,
-    statePath: (...parts) => testState.statePath(...parts),
+    ...requesterFixture,
     sendMessageMock,
     setEmptyReply: (value) => {
       emptyGatedAgentReply = value;
@@ -649,8 +627,6 @@ describe("requester settle wake product flow", () => {
       await registry.activateSubagentRegistry(() => context);
       const alpha = visibleChild("serial-alpha");
       const beta = visibleChild("serial-beta");
-      const { withLocalSessionPlacementTurnSettlement } =
-        await import("../../session-placement-admission.js");
       const yieldTurn = async (requesterTurnRunId: string, accepted: (typeof alpha)[]) => {
         const result = await createRequesterYieldTool(
           MAIN_REQUESTER_SESSION_KEY,
@@ -753,23 +729,7 @@ describe("requester settle wake product flow", () => {
             admission.close();
           }
         }
-        return await withLocalSessionPlacementTurnSettlement(
-          {
-            sessionId: "sess-main",
-            sessionKey: MAIN_REQUESTER_SESSION_KEY,
-            agentId: "main",
-            runId: requesterTurnRunId,
-          },
-          async () => ({
-            payloads: [],
-            acceptedSessionSpawns: accepted,
-            meta: {
-              durationMs: 1,
-              yielded: accepted.length > 0,
-              executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
-            },
-          }),
-        );
+        return settleTurn(requesterTurnRunId, accepted, accepted.length > 0);
       };
       const ordinaryGatewayCall = callGatewayMock.getMockImplementation()!;
       let firstWakeReturned = false;
@@ -953,26 +913,11 @@ describe("requester settle wake product flow", () => {
     },
   );
 
-  it("re-evaluates a waiting wave when a yielded cohort settles during that evaluation", async () => {
+  it("retires a delivered wave while a yielded cohort settles during its evaluation", async () => {
     vi.setSystemTime(100_000);
     const context = createGatewayContext();
     await registry.initSubagentRegistry();
     await registry.activateSubagentRegistry(() => context);
-    const { withLocalSessionPlacementTurnSettlement } =
-      await import("../../session-placement-admission.js");
-    const settleTurn = async (runId: string, accepted: AcceptedSessionSpawn[], yielded: boolean) =>
-      await withLocalSessionPlacementTurnSettlement(
-        { sessionId: "sess-main", sessionKey: MAIN_REQUESTER_SESSION_KEY, agentId: "main", runId },
-        async () => ({
-          payloads: [],
-          acceptedSessionSpawns: accepted,
-          meta: {
-            durationMs: 1,
-            yielded,
-            executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
-          },
-        }),
-      );
     const wave = ["wave-a", "wave-b"].map(visibleChild);
     const cohort = visibleChild("cohort");
     for (const child of wave) {
@@ -1009,7 +954,7 @@ describe("requester settle wake product flow", () => {
     try {
       emitCompleted(wave[0]!.runId, wave[0]!.childSessionKey, "wave alpha findings");
       await alphaPending.promise;
-      // Hold the grouped evaluation after it reads the still-running cohort.
+      // Hold the grouped evaluation after its delivered wave retires.
       emitCompleted(wave[1]!.runId, wave[1]!.childSessionKey, "wave beta findings");
       await waitForDeliveredCleanup(wave[1]!.runId, { allowPendingRequesterSettleWake: true });
       // Members share one evaluation slot; either member may own the grouped read.
@@ -1029,22 +974,19 @@ describe("requester settle wake product flow", () => {
     await flushOwnedWork();
     expect(
       getRequesterWakeCalls().map((request) => request.params?.inputProvenance?.sourceSessionKey),
-    ).toEqual([cohort.childSessionKey, expect.any(String)]);
-    const waveWake = String(getRequesterWakeCalls()[1]?.params?.message);
-    expect(waveWake).toContain("wave alpha findings");
-    expect(waveWake).toContain("wave beta findings");
+    ).toEqual([cohort.childSessionKey]);
+    for (const child of wave) {
+      expect(registry.getSubagentRunByRunId(child.runId)?.requesterSettleWake).toBeUndefined();
+    }
   });
 
   registerRequesterWakeSettlementBoundaryTests({
-    requesterSessionKey: MAIN_REQUESTER_SESSION_KEY,
-    spawnVisibleChild,
-    emitCompleted,
-    flushOwnedWork,
-    waitForDeliveredCleanup,
-    getRequesterWakeCalls,
-    getAgentCalls,
-    getGatewayContext: createGatewayContext,
-    getLifecycleHandler: () => lifecycleHandler,
+    ...requesterFixture,
+    callGatewayMock,
+    flushAsync,
+    setReleaseAgentCallGate: (release) => {
+      releaseAgentCallGate = release;
+    },
     useGlobalSessionScope: () => {
       const cfg = loadConfigMock();
       loadConfigMock.mockReturnValue({ ...cfg, session: { ...cfg.session, scope: "global" } });

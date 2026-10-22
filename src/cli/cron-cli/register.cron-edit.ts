@@ -4,7 +4,6 @@ import {
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { isSystemMonitorDeclaration } from "../../cron/system-owned-declaration.js";
 import type { CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
@@ -15,7 +14,11 @@ import { parseDurationMs } from "../parse-duration.js";
 import { CronCliError } from "./cron-cli-error.js";
 import { isUnknownCronGetMethodError, listCronJobsFromGateway } from "./list-jobs.js";
 import { createCronOutputCommand } from "./output-mode.js";
-import { registerCronMutationOptions } from "./register.cron-options.js";
+import {
+  parseCronDeliveryPolicyOptions,
+  registerCronMutationOptions,
+  resolveCronExecutionPolicyOptions,
+} from "./register.cron-options.js";
 import {
   applyExistingCronSchedulePatch,
   applyExistingStreamSchedulePatch,
@@ -92,6 +95,8 @@ export function registerCronEditCommand(cron: Command) {
       .option("--clear-agent", "Unset agent and use default", false)
       .option("--clear-session-key", "Unset session key", false)
       .option("--clear-pacing", "Remove dynamic-cadence bounds", false)
+      .option("--clear-active-hours", "Remove the entire execution window", false)
+      .option("--clear-idle-only", "Remove the per-job idle-only policy", false)
       .option("--clear-trigger", "Remove the condition trigger", false)
       .option(
         "--clear-thinking",
@@ -110,6 +115,8 @@ export function registerCronEditCommand(cron: Command) {
       .option("--clear-to", "Unset the delivery destination", false)
       .option("--clear-thread-id", "Unset the Telegram forum topic thread id", false)
       .option("--clear-account", "Unset the per-job delivery account override", false)
+      .option("--clear-delivery-target", "Remove dynamic owner targeting", false)
+      .option("--clear-direct-policy", "Remove the per-job direct-message policy", false)
       .option("--no-best-effort-deliver", "Fail job when delivery fails")
       .option("--failure-alert", "Enable failure alerts for this job")
       .option("--no-failure-alert", "Disable failure alerts for this job")
@@ -139,7 +146,10 @@ export function registerCronEditCommand(cron: Command) {
           if (typeof opts.command === "string" && !readNonBlankString(opts.command)) {
             throw new CronCliError("--command must not be blank");
           }
-          const commandCwd = parseCronStringOption(opts.commandCwd, "--command-cwd");
+          if (typeof opts.commandCwd === "string" && !normalizeOptionalString(opts.commandCwd)) {
+            throw new CronCliError("--command-cwd must not be blank");
+          }
+          const commandCwd = readNonBlankString(opts.commandCwd);
           let existingJobPromise: Promise<CronJobForEdit> | undefined;
           let expectedConfigRevision: string | undefined;
           const readExistingCronJob = async (): Promise<CronJobForEdit> => {
@@ -179,7 +189,7 @@ export function registerCronEditCommand(cron: Command) {
             hasExplicitChatDelivery
           ) {
             throw new CronCliError(
-              "--channel, --to, --account, and --thread-id require a non-main agentTurn or command job with delivery.",
+              "--channel, --to, --account, and --thread-id require an agentTurn job or a non-main command or script job with delivery.",
             );
           }
           const webhookUrl =
@@ -210,7 +220,10 @@ export function registerCronEditCommand(cron: Command) {
           const triggerScript = triggerScriptPath
             ? await readCronTriggerScript(triggerScriptPath)
             : undefined;
-          const patch: Record<string, unknown> = {};
+          const patch: Record<string, unknown> = await resolveCronExecutionPolicyOptions(
+            opts,
+            readExistingCronJob,
+          );
           if (typeof opts.name === "string") {
             patch.name = opts.name;
           }
@@ -338,6 +351,8 @@ export function registerCronEditCommand(cron: Command) {
             patch.schedule = applyExistingStreamSchedulePatch(existing.schedule, scheduleRequest);
           }
 
+          const deliveryPolicy = parseCronDeliveryPolicyOptions(opts);
+          const hasDeliveryPolicy = Object.keys(deliveryPolicy).length > 0;
           const hasSystemEventPatch = typeof opts.systemEvent === "string";
           const scriptPath = readNonBlankString(opts.script);
           const commandShell = readNonBlankString(opts.command);
@@ -383,6 +398,8 @@ export function registerCronEditCommand(cron: Command) {
           const hasDeliveryModeFlag =
             opts.announce || typeof opts.deliver === "boolean" || hasWebhookDelivery;
           const threadId = parseCronThreadIdOption(opts.threadId);
+          const hasDeliveryThreadId = typeof threadId === "number";
+          const hasDeliveryRecipient = Boolean(normalizeOptionalString(opts.to));
           const deliveryFields = (
             [
               ["channel", "channel", opts.channel, opts.clearChannel],
@@ -428,7 +445,9 @@ export function registerCronEditCommand(cron: Command) {
             Boolean(opts.clearFallbacks) ||
             Boolean(thinking) ||
             Boolean(opts.clearThinking) ||
-            typeof opts.lightContext === "boolean";
+            typeof opts.lightContext === "boolean" ||
+            typeof opts.skipIfScratchEmpty === "boolean" ||
+            typeof opts.includeReasoning === "boolean";
           const hasScriptSpecificPayloadField =
             Boolean(scriptPath) ||
             scriptTimeoutSeconds !== undefined ||
@@ -457,15 +476,22 @@ export function registerCronEditCommand(cron: Command) {
             if (hasTimeoutSeconds) {
               assertCronTimeoutSupported(payloadKind);
             }
-            if (isSystemMonitorDeclaration(existingJob.declarationKey)) {
-              throw new CronCliError(
-                hasTimeoutSeconds
-                  ? `--timeout-seconds is not supported for ${payloadKind} jobs.`
-                  : "System-owned cron jobs cannot be edited by cron clients.",
-              );
-            }
           } else if (requestedPayloadKinds.length > 1) {
             throw new CronCliError("Choose at most one payload change");
+          }
+          for (const [key, flag] of [
+            ["skipIfScratchEmpty", "skip-if-scratch-empty"],
+            ["includeReasoning", "include-reasoning"],
+          ] as const) {
+            if (
+              typeof opts[key] === "boolean" &&
+              typeof opts.message !== "string" &&
+              (await readExistingCronJob()).payload.kind !== "agentTurn"
+            ) {
+              throw new CronCliError(
+                `--${flag}/--no-${flag} require an agentTurn job or --message`,
+              );
+            }
           }
           let payload: Record<string, unknown> | undefined;
           if (payloadKind === "systemEvent") {
@@ -488,6 +514,18 @@ export function registerCronEditCommand(cron: Command) {
               "lightContext",
               opts.lightContext,
               typeof opts.lightContext === "boolean",
+            );
+            assignIf(
+              payload,
+              "skipIfScratchEmpty",
+              opts.skipIfScratchEmpty,
+              typeof opts.skipIfScratchEmpty === "boolean",
+            );
+            assignIf(
+              payload,
+              "includeReasoning",
+              opts.includeReasoning,
+              typeof opts.includeReasoning === "boolean",
             );
           } else if (payloadKind === "command") {
             payload = { kind: "command" };
@@ -523,8 +561,8 @@ export function registerCronEditCommand(cron: Command) {
             patch.payload = payload;
           }
 
-          if (hasDeliveryModeFlag || hasDeliveryTarget || hasBestEffort) {
-            const delivery: Record<string, unknown> = {};
+          if (hasDeliveryModeFlag || hasDeliveryTarget || hasBestEffort || hasDeliveryPolicy) {
+            const delivery: Record<string, unknown> = { ...deliveryPolicy };
             if (hasDeliveryModeFlag) {
               delivery.mode = hasWebhookDelivery
                 ? "webhook"
@@ -548,6 +586,46 @@ export function registerCronEditCommand(cron: Command) {
             }
             if (typeof opts.bestEffortDeliver === "boolean") {
               delivery.bestEffort = opts.bestEffortDeliver;
+            }
+            if (
+              hasDeliveryPolicy ||
+              hasDeliveryRecipient ||
+              hasDeliveryThreadId ||
+              hasWebhookDelivery
+            ) {
+              const existing = await readExistingCronJob();
+              if (deliveryPolicy.target === "owner") {
+                // Owner lookup must never inherit a group/topic or primary webhook URL.
+                // Preserve channel/account constraints and an explicitly disabled mode.
+                delivery.to = null;
+                delivery.threadId = null;
+                if (delivery.mode === undefined && existing.delivery?.mode === "webhook") {
+                  delivery.mode = "announce";
+                }
+              } else if (
+                existing.delivery?.target === "owner" &&
+                (hasDeliveryRecipient || hasDeliveryThreadId || hasWebhookDelivery)
+              ) {
+                delivery.target = null;
+              }
+              const mode = delivery.mode ?? existing.delivery?.mode;
+              if (deliveryPolicy.target === "owner" || deliveryPolicy.directPolicy != null) {
+                const resolvedSessionTarget = sessionTarget ?? existing.sessionTarget;
+                if (
+                  hasSystemEventPatch ||
+                  (resolvedSessionTarget === "main" &&
+                    (payloadKind ?? existing.payload.kind) !== "agentTurn")
+                ) {
+                  throw new CronCliError(
+                    "--delivery-target/--direct-policy require an agentTurn job or a non-main job with chat delivery",
+                  );
+                }
+                if (mode === "webhook") {
+                  throw new CronCliError(
+                    "--direct-policy requires chat delivery; use --announce or --no-deliver",
+                  );
+                }
+              }
             }
             patch.delivery = delivery;
           }
@@ -590,10 +668,11 @@ export function registerCronEditCommand(cron: Command) {
               );
             }
             if (typeof opts.failureAlertChannel === "string") {
-              failureAlert.channel = normalizeOptionalLowercaseString(opts.failureAlertChannel);
+              failureAlert.channel =
+                normalizeOptionalLowercaseString(opts.failureAlertChannel) ?? null;
             }
             if (typeof opts.failureAlertTo === "string") {
-              failureAlert.to = normalizeOptionalString(opts.failureAlertTo);
+              failureAlert.to = normalizeOptionalString(opts.failureAlertTo) ?? null;
             }
             if (typeof opts.failureAlertCooldown === "string") {
               let cooldownMs: number;
@@ -617,7 +696,7 @@ export function registerCronEditCommand(cron: Command) {
               failureAlert.mode = mode;
             }
             if (typeof opts.failureAlertAccountId === "string") {
-              failureAlert.accountId = normalizeOptionalString(opts.failureAlertAccountId);
+              failureAlert.accountId = normalizeOptionalString(opts.failureAlertAccountId) ?? null;
             }
             patch.failureAlert = failureAlert;
           }

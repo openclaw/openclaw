@@ -55,6 +55,30 @@ describe("deferred logical-turn lifecycle", () => {
   const sessionId = "deferred-lifecycle-session";
   const sessionKey = "agent:main:deferred-lifecycle";
   const handles: EmbeddedAgentQueueHandle[] = [];
+  const managerFor = (
+    runId: string,
+    overrides: Partial<Parameters<typeof createDeferredEmbeddedRunLifecycleManager>[0]> = {},
+  ) => createDeferredEmbeddedRunLifecycleManager({ runId, sessionId, sessionKey, ...overrides });
+  const ownerFor = (
+    runId: string,
+    overrides: Partial<Parameters<typeof createEmbeddedAttemptDeferredLifecycleOwner>[0]>,
+  ) =>
+    createEmbeddedAttemptDeferredLifecycleOwner({
+      runId,
+      sessionId,
+      diagnosticOwner:
+        overrides.diagnosticOwner ?? createDiagnosticEmbeddedRunOwner({ runId, sessionId }),
+      isCurrent: () => true,
+      onRetryWaitCompleted: () => {},
+      trajectoryRecorder: null,
+      clearActiveRun: () => {},
+      ...overrides,
+    });
+  const idleOwner = () => ({
+    beginRetryWait: () => undefined,
+    complete: async () => {},
+    discard: () => {},
+  });
 
   afterEach(() => {
     for (const handle of handles) {
@@ -65,12 +89,7 @@ describe("deferred logical-turn lifecycle", () => {
 
   it("classifies omitted cancellation when the caller signal stays live", () => {
     const caller = new AbortController();
-    const manager = createDeferredEmbeddedRunLifecycleManager({
-      runId: "cancelled-logical-run",
-      sessionId,
-      sessionKey,
-      abortSignal: caller.signal,
-    });
+    const manager = managerFor("cancelled-logical-run", { abortSignal: caller.signal });
 
     manager.abort(undefined);
 
@@ -86,11 +105,7 @@ describe("deferred logical-turn lifecycle", () => {
     { reason: "restart" as const, matchesReason: isAgentRunRestartAbortReason },
     { reason: "superseded" as const, matchesReason: isAgentRunSupersededAbortReason },
   ])("keeps the first $reason reason after another abort", ({ reason, matchesReason }) => {
-    const manager = createDeferredEmbeddedRunLifecycleManager({
-      runId: "interrupted-logical-run",
-      sessionId,
-      sessionKey,
-    });
+    const manager = managerFor("interrupted-logical-run");
 
     manager.abort(reason);
     manager.abort("user_abort");
@@ -100,12 +115,7 @@ describe("deferred logical-turn lifecycle", () => {
 
   it("preserves an earlier caller timeout when a user abort arrives later", () => {
     const caller = new AbortController();
-    const manager = createDeferredEmbeddedRunLifecycleManager({
-      runId: "timed-out-logical-run",
-      sessionId,
-      sessionKey,
-      abortSignal: caller.signal,
-    });
+    const manager = managerFor("timed-out-logical-run", { abortSignal: caller.signal });
     const timeout = new DOMException("Run deadline reached", "TimeoutError");
 
     caller.abort(timeout);
@@ -126,12 +136,7 @@ describe("deferred logical-turn lifecycle", () => {
     const clearEmbedded = vi.fn(() =>
       detachActiveEmbeddedRun(sessionId, embeddedHandle, sessionKey),
     );
-    const manager = createDeferredEmbeddedRunLifecycleManager({
-      runId: "logical-run",
-      sessionId,
-      sessionKey,
-      replyOperation: operation,
-    });
+    const manager = managerFor("logical-run", { replyOperation: operation });
     manager.adopt({
       beginRetryWait: () => undefined,
       complete: async () => clearEmbedded(),
@@ -155,12 +160,7 @@ describe("deferred logical-turn lifecycle", () => {
     try {
       vi.setSystemTime(1_000_000);
       const operation = createReplyOperation({ sessionId, sessionKey, resetTriggered: false });
-      const manager = createDeferredEmbeddedRunLifecycleManager({
-        replyOperation: operation,
-        runId: "long-cli-run",
-        sessionId,
-        sessionKey,
-      });
+      const manager = managerFor("long-cli-run", { replyOperation: operation });
       // Embedded preparation and fallback can run long before the CLI takes over.
       vi.setSystemTime(1_000_000 + 5 * 60_000);
 
@@ -179,12 +179,7 @@ describe("deferred logical-turn lifecycle", () => {
     setDiagnosticsEnabledForProcess(true);
     try {
       await withSessionTurn({ sessionId, sessionKey }, async (operation) => {
-        const manager = createDeferredEmbeddedRunLifecycleManager({
-          runId: "cli-owned-turn",
-          sessionId,
-          sessionKey,
-          replyOperation: operation,
-        });
+        const manager = managerFor("cli-owned-turn", { replyOperation: operation });
         try {
           const diagnosticOwner = manager.handoffToCli();
           const native = getActiveNativeAttempt(sessionId);
@@ -252,28 +247,17 @@ describe("deferred logical-turn lifecycle", () => {
     const recordEvent = vi.fn();
     const flush = vi.fn(async () => undefined);
     const clearActiveRun = vi.fn();
-    const discarded = createEmbeddedAttemptDeferredLifecycleOwner({
-      runId: "logical-run",
-      sessionId,
-      diagnosticOwner: createDiagnosticEmbeddedRunOwner({ runId: "logical-run", sessionId }),
-      isCurrent: () => true,
-      onRetryWaitCompleted: () => {},
-      trajectoryRecorder: { recordEvent, flush, describeFlushState: () => undefined },
-      clearActiveRun,
-    });
+    const makeOwner = () =>
+      ownerFor("logical-run", {
+        trajectoryRecorder: { recordEvent, flush, describeFlushState: () => undefined },
+        clearActiveRun,
+      });
+    const discarded = makeOwner();
     discarded.recordSessionEnd({ status: "error" });
     await discarded.discard();
     expect(recordEvent).not.toHaveBeenCalled();
 
-    const accepted = createEmbeddedAttemptDeferredLifecycleOwner({
-      runId: "logical-run",
-      sessionId,
-      diagnosticOwner: createDiagnosticEmbeddedRunOwner({ runId: "logical-run", sessionId }),
-      isCurrent: () => true,
-      onRetryWaitCompleted: () => {},
-      trajectoryRecorder: { recordEvent, flush, describeFlushState: () => undefined },
-      clearActiveRun,
-    });
+    const accepted = makeOwner();
     accepted.recordSessionEnd({ status: "success" });
     await accepted.complete();
 
@@ -292,12 +276,7 @@ describe("deferred logical-turn lifecycle", () => {
       runId: "replaced-candidate",
       sessionId,
     });
-    const discarded = createEmbeddedAttemptDeferredLifecycleOwner({
-      runId: "replaced-candidate",
-      sessionId,
-      diagnosticOwner: createDiagnosticEmbeddedRunOwner({ runId: "replaced-candidate", sessionId }),
-      isCurrent: () => true,
-      onRetryWaitCompleted: () => {},
+    const discarded = ownerFor("replaced-candidate", {
       trajectoryRecorder: {
         recordEvent,
         describeFlushState: () => "pendingRows=1",
@@ -310,11 +289,7 @@ describe("deferred logical-turn lifecycle", () => {
     });
     discarded.recordSessionEnd({ status: "success" });
     manager.adopt(discarded);
-    manager.adopt({
-      beginRetryWait: () => undefined,
-      complete: async () => {},
-      discard: () => {},
-    });
+    manager.adopt(idleOwner());
     expect(clearActiveRun).toHaveBeenCalledOnce();
     expect(recordEvent).not.toHaveBeenCalled();
     await entered.promise;
@@ -338,11 +313,8 @@ describe("deferred logical-turn lifecycle", () => {
     markDiagnosticEmbeddedRunStarted({ ...ref, owner: diagnosticOwner });
     const flushed = createDeferredCore();
     const recordEvent = vi.fn();
-    const owner = createEmbeddedAttemptDeferredLifecycleOwner({
-      ...ref,
+    const owner = ownerFor(ref.runId, {
       diagnosticOwner,
-      isCurrent: () => true,
-      onRetryWaitCompleted: () => {},
       trajectoryRecorder: {
         recordEvent,
         describeFlushState: () => "pendingRows=1",
@@ -377,12 +349,10 @@ describe("deferred logical-turn lifecycle", () => {
       const onRetryWaitCompleted = vi.fn();
       const manager = createDeferredEmbeddedRunLifecycleManager(ref);
       manager.adopt(
-        createEmbeddedAttemptDeferredLifecycleOwner({
-          ...ref,
+        ownerFor(ref.runId, {
           diagnosticOwner,
           isCurrent: () => current,
           onRetryWaitCompleted,
-          trajectoryRecorder: null,
           clearActiveRun: () => closeDiagnosticEmbeddedRunOwner(diagnosticOwner),
         }),
       );
@@ -400,11 +370,7 @@ describe("deferred logical-turn lifecycle", () => {
         } else if (reason === "complete") {
           await manager.complete();
         } else if (reason === "replace") {
-          manager.adopt({
-            beginRetryWait: () => undefined,
-            complete: async () => {},
-            discard: () => {},
-          });
+          manager.adopt(idleOwner());
         } else if (reason === "close") {
           closeDiagnosticEmbeddedRunOwner(diagnosticOwner);
         } else {
@@ -434,12 +400,8 @@ describe("deferred logical-turn lifecycle", () => {
     markDiagnosticEmbeddedRunStarted({ ...ref, owner: diagnosticOwner });
     const manager = createDeferredEmbeddedRunLifecycleManager(ref);
     manager.adopt(
-      createEmbeddedAttemptDeferredLifecycleOwner({
-        ...ref,
+      ownerFor(ref.runId, {
         diagnosticOwner,
-        isCurrent: () => true,
-        onRetryWaitCompleted: () => {},
-        trajectoryRecorder: null,
         clearActiveRun: () => closeDiagnosticEmbeddedRunOwner(diagnosticOwner),
       }),
     );

@@ -265,9 +265,6 @@ export async function invokeNodeWorkerSupervisorCommand(params: {
         bundles = await bundleInstaller.retain({
           gatewayNamespace: input.gatewayNamespace,
           bundleHashes: input.bundleHashes,
-          ...(input.acknowledgedBundleGeneration !== undefined
-            ? { acknowledgedGeneration: input.acknowledgedBundleGeneration }
-            : {}),
         });
       }
       const hasMore = retained.hasMore || bundles?.hasMore === true;

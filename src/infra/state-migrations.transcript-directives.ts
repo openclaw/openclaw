@@ -270,24 +270,6 @@ function planTranscriptSession(params: {
   });
 }
 
-function assertTranscriptSessionSourceUnchanged(
-  database: DatabaseSync,
-  scope: HistoricalTranscriptRepairScope,
-  sessionId: string,
-  planned: readonly TranscriptRowPlan[],
-): void {
-  const current = readTranscriptSessionRows(database, scope, sessionId);
-  if (
-    current.length !== planned.length ||
-    current.some(
-      (row, index) =>
-        row.seq !== planned[index]?.seq || row.event_json !== planned[index]?.eventJson,
-    )
-  ) {
-    throw new Error(`Transcript source changed before migration commit for ${sessionId}`);
-  }
-}
-
 function transcriptSessionsNeedMigration(
   database: EngineConnection,
   pathname: string,
@@ -383,7 +365,6 @@ async function migrateTranscriptSessions(params: {
       params.database,
       () => {
         assertAgentDatabaseMaintenanceAuthority();
-        assertTranscriptSessionSourceUnchanged(params.database, scope, sessionId, planned);
         if (directivesChanged) {
           params.backupBeforeDirectiveRewrite();
         }

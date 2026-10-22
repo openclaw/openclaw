@@ -182,6 +182,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         openSettings: { AppNavigationActions.openSettings() })
     private var terminationCleanupTask: Task<Void, Never>?
     private var terminationDeadlineTask: Task<Void, Never>?
+    private var credentialStartupTask: Task<Void, Never>?
+    private var credentialsReady = false
+    private var pendingOpenURLs: [URL] = []
+    private var pendingDashboardOpen = false
     private var terminationCleanupFinished = false
     private var profileInstanceLock: AppInstanceLock?
     private let credentialLogger = Logger(subsystem: "ai.openclaw", category: "credentials")
@@ -265,20 +269,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applicationWillFinishLaunching(_: Notification) {
-        // URL/reopen callbacks can create the dashboard before didFinishLaunching.
+        // Configure presentation before URL/reopen callbacks arrive; defer their
+        // credential consumers until startup admission completes.
         DashboardManager.shared.configure(updater: self.updaterController)
     }
 
     func applicationDockMenu(_: NSApplication) -> NSMenu? {
-        self.dockMenu.menu(
+        guard self.credentialsReady else { return nil }
+        return self.dockMenu.menu(
             entries: DashboardManager.shared.gatewayEntries,
             selectedTarget: AppNavigationActions.selectedGatewayTarget)
     }
 
     func application(_: NSApplication, open urls: [URL]) {
         guard !AppLaunchRuntimePlan.current.isElevationHost else { return }
+        guard self.terminationCleanupTask == nil else { return }
+        guard self.credentialsReady else {
+            self.pendingOpenURLs.append(contentsOf: urls)
+            return
+        }
+        self.handleOpenURLs(urls)
+    }
+
+    private func handleOpenURLs(_ urls: [URL]) {
         Task { @MainActor in
             for url in urls {
+                guard self.credentialsReady else { return }
                 await DeepLinkHandler.shared.handle(url: url)
             }
         }
@@ -287,6 +303,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldHandleReopen(_: NSApplication, hasVisibleWindows _: Bool) -> Bool {
         // Reopening is explicit user intent even after a background-only launch.
         guard !AppLaunchRuntimePlan.current.isElevationHost else { return false }
+        guard self.terminationCleanupTask == nil else { return false }
+        guard self.credentialsReady else {
+            self.pendingDashboardOpen = true
+            return false
+        }
         self.openDashboardAction()
         return false
     }
@@ -305,36 +326,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         #endif
         let launchPlan = AppLaunchRuntimePlan.current
+        let startUpdater: Bool
         if !AppProfile.current.isActive, !launchPlan.isElevationHost {
             switch ApplicationRelocator.handleLaunch() {
             case .terminating:
                 return
-            case let .continueLaunch(startUpdater):
-                if startUpdater, launchPlan.allowsUpdater {
+            case let .continueLaunch(shouldStartUpdater):
+                startUpdater = shouldStartUpdater && launchPlan.allowsUpdater
+            }
+        } else {
+            startUpdater = false
+        }
+        TerminationSignalWatcher.shared.start()
+        self.credentialStartupTask = Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.credentialStartupTask = nil }
+            do {
+                let root = DeviceIdentityStore.stateDirectoryURL
+                let executionRoot = OpenClawPaths.stateDirURL
+                if BundledRuntime.isBundledApp {
+                    try await ClientCredentialStartup.prepare(
+                        executionRoot: executionRoot,
+                        configURL: OpenClawPaths.configURL)
+                }
+                try Task.checkCancellation()
+                // Independent native identities retain their native import owner.
+                // The shared execution root is prepared by its matching CLI first.
+                try DeviceCredentialAccess.prepareAppRoots(identityRoot: root, executionRoot: executionRoot)
+                guard await MacControlServer.shared.startAndWait() else {
+                    throw GatewayHostingError(message: "The local credential control server could not start.")
+                }
+                try Task.checkCancellation()
+                if startUpdater {
                     if OpenClawConfigFile.gatewayUpdateChannel() == nil {
                         self.updaterController.startAfterResolvingGatewayUpdateChannel()
                     } else {
                         self.updaterController.start()
                     }
                 }
-            }
-        }
-        do {
-            let root = DeviceIdentityStore.stateDirectoryURL
-            let executionRoot = OpenClawPaths.stateDirURL
-            try DeviceCredentialAccess.prepareAppRoots(identityRoot: root, executionRoot: executionRoot)
-        } catch {
-            DeviceCredentialAccess.close()
-            self.showCredentialStartupFailure()
-            return
-        }
-        Task { @MainActor [weak self] in
-            guard await MacControlServer.shared.startAndWait() else {
+                self.finishLaunchingWithCredentials(launchPlan: launchPlan)
+                self.credentialsReady = true
+                if self.pendingDashboardOpen {
+                    self.pendingDashboardOpen = false
+                    self.openDashboardAction()
+                }
+                let pendingURLs = self.pendingOpenURLs
+                self.pendingOpenURLs.removeAll()
+                self.handleOpenURLs(pendingURLs)
+            } catch {
+                self.pendingOpenURLs.removeAll()
+                self.pendingDashboardOpen = false
                 DeviceCredentialAccess.close()
-                self?.showCredentialStartupFailure()
-                return
+                guard !Task.isCancelled else { return }
+                self.credentialLogger
+                    .error("Credential startup failed: \(error.localizedDescription, privacy: .public)")
+                self.showCredentialStartupFailure()
             }
-            self?.finishLaunchingWithCredentials(launchPlan: launchPlan)
         }
     }
 
@@ -398,7 +445,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 CLIInstallPrompter.shared.checkAndPromptIfNeeded()
             }
         }
-        TerminationSignalWatcher.shared.start()
         MacNodeModeCoordinator.shared.start()
         if launchPlan.allowsInteractiveServices {
             GatewayBrowserSignInCoordinator.shared.start()
@@ -474,13 +520,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard self.terminationCleanupTask == nil else {
             return .terminateLater
         }
+        self.credentialsReady = false
+        self.pendingOpenURLs.removeAll()
+        self.pendingDashboardOpen = false
         // AppKit will not tear down onboarding while its sheet remains attached.
         // Retire it before terminateLater starts the asynchronous cleanup loop.
         OnboardingController.shared.close()
         let cleanupDeadline = AppTerminationTiming.cleanupDeadlineSeconds(
             hasAppHostedGateway: GatewayProcessManager.shared.hasAppHostedGateway,
             operationTimeout: GatewayProcessManager.shared.gatewayOperationShutdownTimeout)
+        let credentialStartup = self.credentialStartupTask
+        credentialStartup?.cancel()
         self.terminationCleanupTask = Task { @MainActor [weak self] in
+            // Settle the migration child before releasing credentials; a late
+            // startup completion must not reacquire custody during shutdown.
+            await credentialStartup?.value
             async let hostedGatewayCleanup: Void = GatewayProcessManager.shared.shutdownAppHostedGateway()
             async let processCleanupResult: Void = Self.cleanUpProcesses()
             async let bridgeCleanupResult: Void = PeekabooBridgeHostCoordinator.shared.shutdown()

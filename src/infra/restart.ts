@@ -51,9 +51,7 @@ let restartAuthorizedCount = 0;
 let restartAuthorizedUntil = 0;
 let externalRestartAllowed = false;
 let preRestartCheck: (() => number) | null = null;
-let restartCycleToken = 0;
-let emittedRestartToken = 0;
-let consumedRestartToken = 0;
+let unhandledRestartSignal = false;
 let emittedRestartReason: string | undefined;
 let emittedRestartIntent: GatewayRestartIntent | undefined;
 // null marks "never emitted": a 0 sentinel would collide with the monotonic
@@ -74,10 +72,6 @@ const activeDeferralPolls = new Set<ReturnType<typeof setInterval>>();
 function shouldPreferRestartReason(next?: string, current?: string): boolean {
   const isUpdateRestart = (reason?: string) => reason === "update.run" || reason === "update.auto";
   return isUpdateRestart(next) && !isUpdateRestart(current);
-}
-
-function hasUnconsumedRestartSignal(): boolean {
-  return emittedRestartToken > consumedRestartToken;
 }
 
 function clearPendingScheduledRestart(): void {
@@ -148,9 +142,7 @@ export function resetGatewayRestartStateForInProcessRestart(): void {
   restartTransientGeneration += 1;
   restartAuthorizedCount = 0;
   restartAuthorizedUntil = 0;
-  restartCycleToken = 0;
-  emittedRestartToken = 0;
-  consumedRestartToken = 0;
+  unhandledRestartSignal = false;
   emittedRestartReason = undefined;
   emittedRestartIntent = undefined;
   lastRestartEmittedAt = null;
@@ -171,15 +163,14 @@ export function setPreRestartDeferralCheck(fn: () => number): void {
 
 /** Emit one authorized restart per cycle; refuse unavailable or duplicate delivery. */
 function emitGatewayRestart(reasonOverride?: string, intent?: GatewayRestartIntent): boolean {
-  if (hasUnconsumedRestartSignal()) {
+  if (unhandledRestartSignal) {
     clearActiveDeferralPolls();
     clearPendingScheduledRestart();
     return false;
   }
   clearActiveDeferralPolls();
   clearPendingScheduledRestart();
-  const cycleToken = ++restartCycleToken;
-  emittedRestartToken = cycleToken;
+  unhandledRestartSignal = true;
   emittedRestartReason = reasonOverride ?? intent?.reason ?? pendingRestartReason;
   emittedRestartIntent = intent;
   authorizeGatewayRestart();
@@ -226,7 +217,7 @@ function emitGatewayRestartWithSignalAdmission(
   if (!signalAdmission) {
     // Orphan fence: pending without a lease and without a delivered signal.
     // Reopen before acquiring so a lost lease cannot block all future emissions.
-    if (!hasUnconsumedRestartSignal()) {
+    if (!unhandledRestartSignal) {
       rollbackGatewayRestartSignalFence();
     }
     signalAdmission = beginGatewayRestartSignalAdmission();
@@ -236,7 +227,7 @@ function emitGatewayRestartWithSignalAdmission(
     }
     pendingRestartSignalAdmission = signalAdmission;
   }
-  const hadUnconsumedRestartSignal = hasUnconsumedRestartSignal();
+  const hadUnconsumedRestartSignal = unhandledRestartSignal;
   const emitted = emitGatewayRestart(reasonOverride, intent);
   if (!emitted && !hadUnconsumedRestartSignal) {
     rollbackGatewayRestartSignalAdmission();
@@ -249,7 +240,7 @@ export function requestGatewayRestartWithSignalAdmission(
   reasonOverride?: string,
   intent?: GatewayRestartIntent,
 ): GatewayRestartEmitResult {
-  const hadUnconsumedRestartSignal = hasUnconsumedRestartSignal();
+  const hadUnconsumedRestartSignal = unhandledRestartSignal;
   if (emitGatewayRestartWithSignalAdmission(reasonOverride, intent)) {
     return { status: "emitted" };
   }
@@ -293,15 +284,15 @@ export function consumeGatewayRestartAuthorization(): boolean {
 }
 
 export function peekGatewayRestartReason(): string | undefined {
-  return hasUnconsumedRestartSignal() ? emittedRestartReason : undefined;
+  return unhandledRestartSignal ? emittedRestartReason : undefined;
 }
 
 /**
  * Reads and clears only the in-memory intent for the current emitted SIGUSR2 cycle.
- * The restart reason and cycle token are advanced by markGatewayRestartHandled().
+ * The restart reason and pending signal are cleared by markGatewayRestartHandled().
  */
 export function consumeGatewayRestartIntent(): GatewayRestartIntent | null {
-  if (!hasUnconsumedRestartSignal()) {
+  if (!unhandledRestartSignal) {
     return null;
   }
   const intent = emittedRestartIntent ?? null;
@@ -315,8 +306,8 @@ export function consumeGatewayRestartIntent(): GatewayRestartIntent | null {
  * consumeGatewayRestartAuthorization().
  */
 export function markGatewayRestartHandled(): void {
-  if (hasUnconsumedRestartSignal()) {
-    consumedRestartToken = emittedRestartToken;
+  if (unhandledRestartSignal) {
+    unhandledRestartSignal = false;
     emittedRestartReason = undefined;
     emittedRestartIntent = undefined;
   }
@@ -327,7 +318,7 @@ export function markGatewayRestartHandled(): void {
 }
 
 function rollBackGatewayRestartEmission(): false {
-  emittedRestartToken = consumedRestartToken;
+  unhandledRestartSignal = false;
   emittedRestartReason = undefined;
   emittedRestartIntent = undefined;
   consumeGatewayRestartAuthorization();
@@ -567,7 +558,7 @@ async function emitPreparedGatewayRestart(
           return false;
         }
         // SIGUSR2 already queued: coalesce. Run loop owns reopen-or-drain.
-        if (hasUnconsumedRestartSignal()) {
+        if (unhandledRestartSignal) {
           return false;
         }
         // Single live lease, multiple attempts may share it (deferred prepare →
@@ -590,7 +581,7 @@ async function emitPreparedGatewayRestart(
           // A concurrent emitter may queue SIGUSR2 on this shared lease while we
           // await beforeEmit. Cancel/finally must not reopen over an in-flight
           // signal — the run loop owns reopen-or-drain from here.
-          if (keepFenceForRunLoop || hasUnconsumedRestartSignal()) {
+          if (keepFenceForRunLoop || unhandledRestartSignal) {
             return;
           }
           // Adopters share the lease with a still-active prepare/deferral owner.
@@ -624,7 +615,7 @@ async function emitPreparedGatewayRestart(
           if (
             emitResult &&
             (emitResult.status === "emitted" ||
-              (emitResult.status === "coalesced" && hasUnconsumedRestartSignal()))
+              (emitResult.status === "coalesced" && unhandledRestartSignal))
           ) {
             // Delivered or already-in-flight signal: run loop owns reopen-or-drain.
             keepFenceForRunLoop = true;
@@ -925,7 +916,7 @@ export function scheduleGatewayRestart(opts?: {
   let nextPendingReason = reason;
   let nextPendingSuccessorOwner = opts?.successorOwner;
 
-  if (hasUnconsumedRestartSignal()) {
+  if (unhandledRestartSignal) {
     if (shouldPreferRestartReason(reason, emittedRestartReason)) {
       emittedRestartReason = reason;
       if (emittedRestartIntent) {

@@ -318,19 +318,6 @@ export function renderSanitizedUserFacingText(
 
 export const GENERIC_EXTERNAL_RUN_FAILURE_TEXT =
   "⚠️ OpenClaw couldn't finish this request. Check the conversation before trying again. For details, open Settings → Logs in the Control UI or run `openclaw logs --follow`.";
-// A failed background turn can have partial effects; it does not establish chat health.
-const HEARTBEAT_FAILURE_LEAD = "⚠️ The background check did not complete.";
-const HEARTBEAT_FAILURE_LOG_HINT = "Troubleshooting: run `openclaw logs --follow` in a terminal.";
-export const HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT = `${HEARTBEAT_FAILURE_LEAD}\n\n${HEARTBEAT_FAILURE_LOG_HINT}`;
-
-/** `reason` is the failure-reply owner's already sanitized and capped detail. */
-export function renderHeartbeatRunFailureCopy(reason?: string): string {
-  if (!reason) {
-    return HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT;
-  }
-  const terminator = /[.!?]$/u.test(reason) ? "" : ".";
-  return `${HEARTBEAT_FAILURE_LEAD}\n\nDetails: ${reason}${terminator}\n${HEARTBEAT_FAILURE_LOG_HINT}`;
-}
 
 export const PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE =
   "⚠️ The model provider rejected the conversation state. Please try again, or use /new to start a fresh session.";
@@ -382,7 +369,6 @@ export function resolveProviderRequestFailureCopy(params: {
   classification: FailoverClassification | null;
   facet: ProviderRequestFacet | null;
   status?: number;
-  technicalMessage: string;
 }) {
   const code = resolveProviderRequestFailureCode(params);
   if (!code) {
@@ -391,7 +377,6 @@ export function resolveProviderRequestFailureCopy(params: {
   return {
     code,
     userMessage: PROVIDER_REQUEST_COPY[code],
-    technicalMessage: params.technicalMessage,
   };
 }
 
@@ -688,21 +673,4 @@ export function renderAuthProfileFailoverCopy(params: AuthProfileFailureCopyPara
 
 export function renderControlUiAgentFailureCopy(): string {
   return `⚠️ OpenClaw couldn't finish this reply. Check the conversation before trying again. ${ERROR_DETAILS_HINT}`;
-}
-
-export function replaceGenericExternalRunFailureText(text: string): {
-  text: string;
-  replaced: boolean;
-} {
-  const start = text.indexOf(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
-  if (start < 0 || text.slice(start + GENERIC_EXTERNAL_RUN_FAILURE_TEXT.length).trim()) {
-    return { text, replaced: false };
-  }
-  const prefix = text.slice(0, start).trimEnd();
-  return {
-    text: prefix
-      ? `${prefix} ${HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT}`
-      : HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT,
-    replaced: true,
-  };
 }

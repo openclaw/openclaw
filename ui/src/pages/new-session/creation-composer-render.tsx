@@ -5,7 +5,9 @@ import type { HumanMention } from "../../lib/chat/chat-types.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
+import { createComposerQuestions } from "../chat/components/chat-composer-questions.ts";
 import { getChatComposerState } from "../chat/components/chat-composer-state.ts";
+import type { ChatComposerProps } from "../chat/components/chat-composer-types.ts";
 import { ChatComposer, resetChatComposerState } from "../chat/components/chat-composer.tsx";
 import type { CreationComposer as CreationComposerOwner } from "./creation-composer.ts";
 
@@ -13,7 +15,7 @@ import type { CreationComposer as CreationComposerOwner } from "./creation-compo
 function prepareCreationComposer(
   composer: CreationComposerOwner,
   onOpenImage: (item: ImageLightboxItem) => void,
-): Parameters<typeof ChatComposer>[0] {
+): ChatComposerProps {
   const { context, attachmentDraft } = composer;
   const reads = attachmentDraft.reads;
   const signal = reads.readSignal;
@@ -75,6 +77,7 @@ function prepareCreationComposer(
 
 export function CreationComposer(props: {
   composer: CreationComposerOwner | undefined;
+  mobileComposer?: boolean;
   onOpenImage: (item: ImageLightboxItem) => void;
 }) {
   const owner = createMemo(() => {
@@ -93,10 +96,11 @@ export function CreationComposer(props: {
           owner()?.read();
           return prepareCreationComposer(composer, props.onOpenImage);
         });
-        const error = createMemo(() => {
+        const questions = createComposerQuestions("creation-" + composer.id, prepared);
+        const error = () => {
           owner()?.read();
           return composer.error;
-        });
+        };
         return (
           <section
             ref={footerControl}
@@ -108,7 +112,11 @@ export function CreationComposer(props: {
                 {error()}
               </div>
             </Show>
-            <ChatComposer {...prepared()} />
+            <ChatComposer
+              {...prepared()}
+              questions={questions}
+              mobileComposer={props.mobileComposer}
+            />
           </section>
         );
       }}

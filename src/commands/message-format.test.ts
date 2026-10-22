@@ -4,9 +4,11 @@ import type { MessageActionResult } from "../infra/outbound/message-action-contr
 import { formatMessageCliText } from "./message-format.js";
 
 const getChannelPluginMock = vi.hoisted(() =>
-  vi.fn((channel: string) =>
-    channel === "directchat" ? { meta: { label: "Direct Chat" } } : undefined,
-  ),
+  vi.fn((channel: string) => {
+    const labels: Record<string, string> = { directchat: "Direct Chat", alpha: "Alpha" };
+    const label = labels[channel];
+    return label ? { meta: { label } } : undefined;
+  }),
 );
 
 vi.mock("../channels/plugins/index.js", () => ({
@@ -56,6 +58,15 @@ function textJoined(lines: string[]): string {
 }
 
 describe("formatMessageCliText displayLimit", () => {
+  it("keeps a whitespace-only primary message instead of selecting its fallback", () => {
+    const result = readResultPayload({
+      messages: [{ id: "message-id", content: "  ", text: "Wrong fallback" }],
+    });
+    const output = textJoined(formatMessageCliText(result));
+    expect(output).toContain("message-id");
+    expect(output).not.toContain("Wrong fallback");
+  });
+
   it("renders the message inside a Slack pin envelope", () => {
     const message = { ts: "1712345678.123456", user: "message-author", text: "Pinned checklist" };
     const result = {
@@ -232,6 +243,49 @@ describe("renderPaginationHint", () => {
 });
 
 describe("formatMessageCliText send results", () => {
+  it.each([
+    {
+      via: "direct",
+      channel: "alpha",
+      result: undefined,
+      expected: "✅ Sent via Alpha. Message ID: unknown",
+    },
+    {
+      via: "direct",
+      channel: "alpha",
+      result: { channel: "alpha", messageId: "m1", target: { kind: "chat", id: "c1" } },
+      expected: "✅ Sent via Alpha. Message ID: m1 (chat c1)",
+    },
+    {
+      via: "gateway",
+      channel: "directchat",
+      result: { messageId: "m1" },
+      expected: "✅ Sent via gateway (directchat). Message ID: m1",
+    },
+    {
+      via: "gateway",
+      channel: "",
+      result: undefined,
+      expected: "✅ Sent via gateway. Message ID: unknown",
+    },
+  ] as const)(
+    "formats core $via send results for '$channel'",
+    ({ via, channel, result, expected }) => {
+      expect(
+        formatMessageCliText({
+          kind: "send",
+          action: "send",
+          channel: "alpha",
+          to: "c1",
+          handledBy: "core",
+          payload: {},
+          dryRun: false,
+          sendResult: { channel, to: "c1", via, mediaUrl: null, result },
+        }),
+      ).toEqual([expected]);
+    },
+  );
+
   it("prefers and trims a direct plugin payload message ID", () => {
     const result = {
       kind: "send",

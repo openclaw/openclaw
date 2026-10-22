@@ -5,6 +5,11 @@ import { CustomEditor } from "./components/custom-editor.js";
 import { editorTheme } from "./theme/theme.js";
 import { createTuiCommandHandlersHarness } from "./tui-command-handlers-test-support.js";
 import { expectUnused, expectCall } from "./tui-handler-test-support.js";
+import {
+  clearPendingSubmit,
+  clearPendingSubmitDraft,
+  type TuiPendingSubmit,
+} from "./tui-submit-state.js";
 import { createSubmitHarness } from "./tui-submit-test-helpers.js";
 import {
   createEditorSubmitHandler,
@@ -47,6 +52,57 @@ function bufferSubmit(
   });
   return burst;
 }
+
+describe("submit admission and ownership", () => {
+  it.each([
+    ["idle", true, null, "hello", { status: "allowed" }],
+    ["disconnected", false, null, "hello", { status: "blocked", reason: "disconnected" }],
+    [
+      "sending",
+      true,
+      { phase: "sending", runId: "run-local", draftText: "hello" },
+      "another",
+      { status: "blocked", reason: "pending" },
+    ],
+    [
+      "stop accepted run",
+      true,
+      { phase: "accepted", runId: "run-accepted", draftText: null },
+      "please stop",
+      { status: "allowed" },
+    ],
+  ] as const)(
+    "resolves admission while %s",
+    (_name, isConnected, pendingSubmit, message, expected) => {
+      const h = createTuiCommandHandlersHarness({
+        isConnected,
+        pendingSubmit,
+        historyLoaded: true,
+      });
+      expect(h.resolveMessageAdmission(message)).toEqual(expected);
+    },
+  );
+
+  it.each([
+    ["sending", clearPendingSubmitDraft, "run-sending", "run-sending"],
+    ["accepted", clearPendingSubmit, "run-current", "run-other"],
+  ] as const)("preserves %s pending ownership", (phase, clear, owner, runId) => {
+    const state: { pendingSubmit: TuiPendingSubmit | null } = {
+      pendingSubmit: { phase, runId: owner, draftText: "hello" },
+    };
+    expect(clear(state, runId)).toBe(false);
+    expect(state.pendingSubmit).toEqual({ phase, runId: owner, draftText: "hello" });
+  });
+
+  it.each([
+    [false, "not connected to gateway — message not sent"],
+    [true, "local runtime not ready — message not sent"],
+  ] as const)("reports disconnected runtime (local=%s)", async (local, message) => {
+    const h = createTuiCommandHandlersHarness({ isConnected: false, opts: { local } });
+    await h.sendMessage("hello");
+    expect(h.addSystem).toHaveBeenCalledWith(message);
+  });
+});
 
 describe("createEditorSubmitHandler", () => {
   it.each([
@@ -134,33 +190,29 @@ describe("createEditorSubmitHandler", () => {
     expectUnused(sendMessage, onBlockedMessageSubmit);
   });
 
-  it("reports rejected message handlers", async () => {
+  it.each(["message", "command"] as const)("reports %s handler failures", async (action) => {
     const harness = createSubmitHarness();
-    harness.sendMessage.mockRejectedValueOnce(new Error("gateway unavailable"));
-    harness.onSubmit("hello");
+    if (action === "message") {
+      harness.sendMessage.mockRejectedValueOnce(new Error("gateway unavailable"));
+    } else {
+      harness.handleCommand.mockImplementationOnce(() => {
+        throw new Error("command exploded");
+      });
+    }
+    expect(() => harness.onSubmit(action === "message" ? "hello" : "/broken")).not.toThrow();
     await Promise.resolve();
-    expect(harness.onSubmitError).toHaveBeenCalledWith("message", expect.any(Error));
-  });
-
-  it("reports synchronous submit handler failures", () => {
-    const harness = createSubmitHarness();
-    harness.handleCommand.mockImplementationOnce(() => {
-      throw new Error("command exploded");
-    });
-    expect(() => harness.onSubmit("/broken")).not.toThrow();
-    expect(harness.onSubmitError).toHaveBeenCalledWith("command", expect.any(Error));
+    expect(harness.onSubmitError).toHaveBeenCalledWith(action, expect.any(Error));
   });
 });
 
 describe("createSubmitBurstCoalescer", () => {
   it("coalesces rapid single-line submits into one multiline submit when enabled", () => {
     const submit = vi.fn();
-    let now = 1_000;
-    const submitBurst = bufferSubmit(submit, { now: () => now });
+    const submitBurst = bufferSubmit(submit);
     submitBurst("Line 1");
-    now += 10;
+    vi.advanceTimersByTime(10);
     submitBurst("Line 2");
-    now += 10;
+    vi.advanceTimersByTime(10);
     submitBurst("Line 3");
     expect(submit).not.toHaveBeenCalled();
     vi.advanceTimersByTime(50);

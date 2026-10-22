@@ -1,5 +1,5 @@
 import type { RequestListener } from "node:http";
-import { type FetchFunction, type WebClientOptions, WebClient } from "@slack/web-api";
+import { WebClient } from "@slack/web-api";
 import { waitUntilAbort } from "openclaw/plugin-sdk/channel-outbound";
 import {
   createLazyRuntimeModule,
@@ -25,10 +25,11 @@ import {
   resolveSlackMonitorDispatchers,
   resolveSlackWebClientOptions,
 } from "../client-options.js";
-import { createSlackStartupAuthClient, createSlackWebClient } from "../client.js";
+import { createSlackStartupAuthClient } from "../client.js";
 import { formatSlackError } from "../errors.js";
 import { normalizeSlackWebhookPath } from "../http/paths.js";
 import { registerSlackInstallationState } from "../installation-identity-state.js";
+import { getSlackRuntime } from "../runtime.js";
 import { setSlackDefaultSendIdentity } from "../send.js";
 import {
   formatSlackBotTokenIdentityWarning,
@@ -66,6 +67,10 @@ import {
   startSlackSocketAndWaitForDisconnect,
 } from "./provider-support.js";
 import {
+  createSlackWorkspaceClientResolver,
+  withSlackPresenceLifecycleSignal,
+} from "./provider-workspace-client.js";
+import {
   formatSlackSocketModeSharedConnectionWarning,
   isNonRecoverableSlackAuthError,
   registerSlackSocketModeConnectionDiagnostics,
@@ -79,17 +84,6 @@ const getSlackBoltInterop = createLazyRuntimeSurface(
   () => import("@slack/bolt"),
   resolveSlackBoltInterop,
 );
-
-function withSlackPresenceLifecycleSignal(
-  fetchImpl: FetchFunction,
-  lifecycleSignal: AbortSignal,
-): FetchFunction {
-  return async (input, init) =>
-    await fetchImpl(input, {
-      ...init,
-      signal: init?.signal ? AbortSignal.any([init.signal, lifecycleSignal]) : lifecycleSignal,
-    });
-}
 
 const loadSlackRelaySource = createLazyRuntimeModule(() => import("./relay-source.js"));
 
@@ -522,6 +516,7 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
     });
     presenceMonitor = createSlackPresenceMonitor({
       scheduler,
+      system: getSlackRuntime().system,
       accountId: account.accountId,
       accountConfig: slackCfg.presenceEvents,
       resolveClient: (workspaceTeamId) => resolveClient(workspaceTeamId).users,
@@ -802,33 +797,6 @@ export async function monitorSlackProvider(opts: MonitorSlackOpts) {
     await gracefulStopSlackApp(app, socketClient);
     await slackDispatchers.close();
   }
-}
-
-function createSlackWorkspaceClientResolver(params: {
-  appClient: WebClient;
-  token: string;
-  clientOptions: WebClientOptions;
-  installationIdentity: SlackInstallationIdentity;
-}): (teamId?: string) => WebClient {
-  if (params.installationIdentity.kind !== "enterprise") {
-    return () => params.appClient;
-  }
-  const clients = new Map<string, WebClient>();
-  return (teamId?: string) => {
-    if (!teamId || !/^T[A-Z0-9]+$/.test(teamId)) {
-      throw new Error("Slack Enterprise Grid workspace client requires a valid teamId");
-    }
-    const cached = clients.get(teamId);
-    if (cached) {
-      return cached;
-    }
-    const client = createSlackWebClient(params.token, {
-      ...params.clientOptions,
-      teamId,
-    });
-    clients.set(teamId, client);
-    return client;
-  };
 }
 
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

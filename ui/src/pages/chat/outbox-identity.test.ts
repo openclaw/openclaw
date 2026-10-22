@@ -7,6 +7,7 @@ import {
   readChatOutboxRecovery as readRecovery,
   restoreChatOutboxRecovery as restoreRecovery,
 } from "../../lib/chat/outbox-recovery.ts";
+import { listStoredChatOutboxes as listOutboxes } from "../../lib/chat/outbox-store-projection.ts";
 import {
   captureChatOutboxAdmission as captureAdmission,
   storageTargetForComposer,
@@ -21,12 +22,13 @@ import {
   updateQueuedMessage as updateQueued,
 } from "./chat-queue.ts";
 import {
-  admitStoredChatComposerQueueItem as admitQueueItem,
-  listStoredChatOutboxes as listOutboxes,
   loadChatComposerState as loadComposer,
   persistChatComposerState as persistComposer,
+} from "./composer-draft-storage.ts";
+import {
+  admitStoredChatComposerQueueItemResult as admitQueueItem,
   updateStoredChatComposerQueueItems as updateQueueItems,
-} from "./composer-persistence.ts";
+} from "./composer-queue-persistence.ts";
 
 const gatewayUrl = "ws://outbox.test";
 const globalScope = "global\u0000agent:selected";
@@ -63,7 +65,7 @@ function queueItem(overrides: Partial<ChatQueueItem> = {}): ChatQueueItem {
 }
 
 function admit(host: typeof state, item: ChatQueueItem) {
-  expect(admitQueueItem(host, captureAdmission(host, host.sessionKey), item)).toBe(true);
+  expect(admitQueueItem(host, captureAdmission(host, host.sessionKey), item)).toBe("admitted");
 }
 
 function expectedOutbox(item: ChatQueueItem, sessionKey = state.sessionKey, agentId = "default") {
@@ -383,7 +385,7 @@ it("pins admission despite notification-driven default changes", () => {
   });
   try {
     const item = queueItem({ id: "captured-admission" });
-    const admitted = admitQueueItem(host, captureAdmission(host, "main"), item);
+    const admitted = admitQueueItem(host, captureAdmission(host, "main"), item) === "admitted";
     expect(listOutboxes(host)).toEqual([expectedOutbox(item)]);
     expect(admitted).toBe(true);
   } finally {
