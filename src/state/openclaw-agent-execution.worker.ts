@@ -8,6 +8,7 @@ import {
   assertTransactionUsable,
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
+import { registerSqliteWalBlockedReaderRecovery } from "../infra/sqlite-wal-blocked-reader-recovery.js";
 import {
   SQLITE_WORKER_OPERATION_CLEANUP,
   SQLITE_WORKER_PREPARE_ADMITTED,
@@ -167,6 +168,7 @@ function openAgentDatabaseBackend(
   let database: OpenClawAgentDatabase | undefined;
   let shared: ReturnType<typeof openOpenClawStateDatabase> | undefined;
   let sharedBorrow: ReturnType<typeof retainOpenClawStateDatabase> | undefined;
+  let sharedWalRecoveryArmed = false;
   let releaseBorrow: (() => void) | undefined;
   let identity: AgentDatabaseFileExecutionIdentity | undefined;
   let openingFailure: { error: unknown } | undefined;
@@ -181,6 +183,18 @@ function openAgentDatabaseBackend(
         initializationAgentPaths: [input.databasePath],
       });
       sharedBorrow = retainOpenClawStateDatabase(shared);
+      // A sustained WAL block observed on this thread means an abandoned native
+      // reader lives on this worker's own handle. The thread-local recovery close
+      // cannot retire a handle this worker still retains, so release the retain;
+      // the final reference retires the pinned connection and the next open reopens.
+      if (!sharedWalRecoveryArmed) {
+        sharedWalRecoveryArmed = true;
+        registerSqliteWalBlockedReaderRecovery(() => {
+          sharedBorrow?.release();
+          sharedBorrow = undefined;
+          shared = undefined;
+        });
+      }
     }
     return shared;
   };

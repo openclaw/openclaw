@@ -5,6 +5,7 @@ import { refreshSqlitePlannerStatistics } from "../infra/sqlite-planner-statisti
 import { assertNoActiveSqliteReaders } from "../infra/sqlite-reader-lifecycle.js";
 import { SQLITE_WORKER_SOURCE_FENCE } from "../infra/sqlite-source-fence-contract.js";
 import { assertTransactionUsable } from "../infra/sqlite-transaction.js";
+import { registerSqliteWalBlockedReaderRecovery } from "../infra/sqlite-wal-blocked-reader-recovery.js";
 import {
   SQLITE_WORKER_PREPARE_COMMAND,
   SQLITE_WORKER_OPERATION_CLEANUP,
@@ -134,6 +135,14 @@ function createSharedStateWorkerBackend(
   let nativeDatabase = initialDatabase;
   let updateRunWriter: ExistingOpenClawStateWriter | undefined;
   let borrow = nativeDatabase ? retainOpenClawStateDatabase(nativeDatabase) : undefined;
+  // The thread-local recovery close cannot retire a handle this worker still
+  // retains; release the retain so the pinned connection can be recycled and
+  // retainedDatabase() reopens a fresh one on the next command.
+  registerSqliteWalBlockedReaderRecovery(() => {
+    borrow?.release();
+    borrow = undefined;
+    nativeDatabase = undefined;
+  });
   let closed = false;
   let secretSchemaAdmitted = false;
   let publicationSourceReader:

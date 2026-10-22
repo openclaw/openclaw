@@ -1,5 +1,6 @@
 import { statSync, type BigIntStats } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
+import { isMainThread, threadId } from "node:worker_threads";
 import {
   bindFreshClientCredentialStore,
   prepareClientCredentialMigration,
@@ -23,6 +24,7 @@ import { quarantineOrphanedSqliteSidecars } from "../infra/sqlite-files.js";
 import { isTerminalSqliteIntegrityError } from "../infra/sqlite-integrity.js";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-lifecycle-errors.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { registerSqliteWalBlockedReaderRecovery } from "../infra/sqlite-wal-blocked-reader-recovery.js";
 import { prepareSqliteDatabaseDirectory } from "../infra/sqlite-wal-filesystem.js";
 import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import {
@@ -38,6 +40,7 @@ import {
 import { withStateDatabaseSchemaMaintenance } from "../infra/state-database-maintenance.js";
 import { runUpdateSqliteMigration } from "../infra/update-doctor-migration-attribution.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
@@ -67,6 +70,33 @@ import { assertOpenClawStateWriteAllowed } from "./openclaw-state-ownership.js";
 import { advanceStateSchemaContentVersion } from "./openclaw-state-schema-publication.js";
 
 const stateDbLog = createSubsystemLogger("state/db");
+
+/**
+ * Shared-state WAL maintenance owners also live on worker threads (state worker,
+ * agent execution workers). The checkpoint listener and blocked-reader recovery
+ * registries are per-thread global singletons, so a sustained block observed on a
+ * worker thread never reaches the pool-owning main thread, and those threads own
+ * no pool to rotate. Arm a thread-local recovery that recycles this thread's own
+ * cached state handles; closing the pinning connection releases the WAL read mark
+ * and the next PASSIVE tick folds the journal.
+ */
+export function armOpenClawStateDatabaseWalRecovery(recover: () => void): boolean {
+  const state = resolveGlobalSingleton(
+    Symbol.for("openclaw.openclawStateDatabaseWalRecoveryArmed"),
+    () => ({ armed: false }),
+  );
+  if (state.armed) {
+    return false;
+  }
+  state.armed = true;
+  registerSqliteWalBlockedReaderRecovery(() => {
+    stateDbLog.warn("Recycling thread-local shared-state readers after sustained WAL block", {
+      threadId,
+    });
+    recover();
+  });
+  return true;
+}
 
 function assertStateDatabaseIntegrityBeforeMutation(
   database: DatabaseSync,
@@ -292,6 +322,13 @@ function openNativeStateDatabase(
           );
           ensureOpenClawStatePermissions(params.pathname, params.env);
           assertSameFile();
+          if (!isMainThread) {
+            armOpenClawStateDatabaseWalRecovery(() => {
+              // Reference counting defers handles with active borrowers; the next
+              // open on this thread reopens a fresh connection.
+              openClawStateDatabaseCache.closeOpenClawStateDatabase({ checkpointMode: "PASSIVE" });
+            });
+          }
           sqlite = { db, path: params.pathname, walMaintenance: maintenance };
         },
       });
