@@ -231,7 +231,7 @@ it("keeps removal confirmation outside mutation presentation", async () => {
   expect(request).toHaveBeenCalledTimes(1);
 });
 
-it("releases retired saving presentation before a replaced connection write settles", async () => {
+it("releases retired saving presentation and preserves a same-key successor draft", async () => {
   const { library, request, connection, read } = await openSkill();
   const pending = createDeferred<SkillsLibraryReceipt>();
   request.mockReturnValueOnce(pending.promise);
@@ -245,10 +245,29 @@ it("releases retired saving presentation before a replaced connection write sett
     expect(library.saving()).toBe(false);
     expect(mounted.container.querySelector(".skill-reader-dialog")).toBeNull();
   });
+  const successor = {
+    ...read,
+    entry: { ...read.entry, revision: "c".repeat(64) },
+    content: "# Same skill on the current connection",
+  };
+  connection.publish({ ...connection.gateway.snapshot, phase: "connected" });
+  request.mockResolvedValueOnce(successor);
+  await library.open(read.entry.skillId);
+  await waitForFast(() => {
+    expect(library.saving()).toBe(false);
+    expect(mounted.container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+      successor.content,
+    );
+  });
   pending.resolve(savedReceipt(read));
   await operation;
-  expect(library.state).toMatchObject({ list: null, draft: null, busy: false, error: null });
-  expect(request).toHaveBeenCalledTimes(2);
+  expect(library.state).toMatchObject({
+    list: null,
+    draft: { entry: successor.entry, content: successor.content },
+    busy: false,
+    error: null,
+  });
+  expect(request).toHaveBeenCalledTimes(3);
 });
 
 it.each(["files", "clawhub"])(
