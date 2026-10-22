@@ -213,21 +213,6 @@ describe("Fetch continuation in selected mode", () => {
       }
     },
   );
-  it("rejects Fetch.enable completion after access revocation", async () => {
-    const rig = await setupConfiguration("Fetch.enable");
-    const held = await holdNativeCompletion(rig);
-    await runtime(rig.harness, "toggleTabAccess", {
-      tabId: 101,
-      accessMode: "selected",
-      grant: false,
-    });
-    held.complete();
-    const response = await rig.owner.response(held.id);
-    expect(response.error).toBeDefined();
-    expect(response).not.toHaveProperty("result");
-    expect(await rig.owner.request("Page.getFrameTree", {}, rig.session)).toHaveProperty("error");
-    expect(nativeCalls(rig)).toHaveLength(1);
-  });
   it("rejects disable with an unresolved streamed response without retiring its owner", async () => {
     const rig = await setup(bodyRead);
     const held = await holdNativeCompletion(rig);
@@ -244,36 +229,44 @@ describe("Fetch continuation in selected mode", () => {
     ).toHaveLength(0);
     await assertReceiptAndContinuity(rig, response);
   });
-  it("keeps streamed body data document-sensitive", async () => {
-    const rig = await setup(bodyRead);
+  it.each([
+    ["configuration", "access"],
+    ["streamed body", "document"],
+    ["continuation", "attachment"],
+    ["continuation", "connection"],
+  ] as const)("rejects %s completion after %s revocation", async (operation, revocation) => {
+    const rig =
+      operation === "configuration"
+        ? await setupConfiguration("Fetch.enable")
+        : await setup(operation === "streamed body" ? bodyRead : continueRequest);
     const held = await holdNativeCompletion(rig);
-    commitAllowed(rig);
+    switch (revocation) {
+      case "access":
+        await runtime(rig.harness, "toggleTabAccess", {
+          tabId: 101,
+          accessMode: "selected",
+          grant: false,
+        });
+        break;
+      case "document":
+        commitAllowed(rig);
+        break;
+      case "attachment":
+        rig.harness.debuggerDetachListener?.({ tabId: 101 }, "target_closed");
+        break;
+      case "connection":
+        rig.harness.socket.close();
+        break;
+    }
     held.complete();
     const response = await rig.owner.response(held.id);
     expect(response.error).toBeDefined();
     expect(response).not.toHaveProperty("result");
+    if (revocation !== "document") {
+      const successor = await rig.owner.request("Page.getFrameTree", {}, rig.session);
+      expect(successor).toHaveProperty("error");
+      expect(successor.error).toBeDefined();
+    }
     expect(nativeCalls(rig)).toHaveLength(1);
   });
-  it.each(["attachment", "connection"] as const)(
-    "rejects completion after genuine %s revocation",
-    async (revocation) => {
-      const rig = await setup();
-      const held = await holdNativeCompletion(rig);
-      switch (revocation) {
-        case "attachment":
-          rig.harness.debuggerDetachListener?.({ tabId: 101 }, "target_closed");
-          break;
-        case "connection":
-          rig.harness.socket.close();
-          break;
-      }
-      held.complete();
-      const response = await rig.owner.response(held.id);
-      const successor = await rig.owner.request("Page.getFrameTree", {}, rig.session);
-      expect(response.error).toBeDefined();
-      expect(response).not.toHaveProperty("result");
-      expect(successor.error).toBeDefined();
-      expect(nativeCalls(rig)).toHaveLength(1);
-    },
-  );
 });

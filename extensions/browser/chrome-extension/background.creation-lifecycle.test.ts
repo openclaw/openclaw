@@ -17,11 +17,14 @@ const url = "https://example.com/destination";
 const accessMode = "selected";
 const navigation = { frameId: "main", loaderId: "destination" };
 const navigationEvent = { frame: { id: "main", loaderId: "destination", url } };
-async function setup(mode: "all" | "selected" = "all") {
-  const harness = await loadConfiguredBackground(mode, [
+async function setup(
+  mode: "all" | "selected" = "all",
+  tabs: Parameters<typeof loadConfiguredBackground>[1] = [
     { id: 100, url: "https://example.com/unrelated", groupId: 7 },
     { id: 99, url: "about:blank", groupId: 7 },
-  ]);
+  ],
+) {
+  const harness = await loadConfiguredBackground(mode, tabs);
   const { frames, request } = await connectRelay(harness);
   const group = harness.tabsGroup.getMockImplementation()!;
   harness.tabsGroup.mockImplementation(async (properties) => {
@@ -55,6 +58,79 @@ afterEach(async () => {
   await cleanupBackgroundHarnesses();
   vi.unstubAllGlobals();
 });
+
+type Harness = Awaited<ReturnType<typeof setup>>;
+async function dispatchConfiguration(
+  mode: "all" | "selected",
+  duringCommand: (h: Harness) => void | Promise<unknown>,
+  method = "Network.setCacheDisabled",
+  params: Record<string, unknown> = { cacheDisabled: true },
+) {
+  const h = await setup(mode, [
+    { id: 7, url: "https://example.com/source", groupId: 7, windowId: 1 },
+  ]);
+  expectType(await h.request({ type: "attach", tabId: 7 }));
+  const native = h.debuggerSendCommand.getMockImplementation()!;
+  h.debuggerSendCommand.mockImplementation(async (source, command, args) => {
+    if (command !== method) {
+      return await native(source, command, args);
+    }
+    await duringCommand(h);
+    return {};
+  });
+  return await h.request(cdp(method, params, 7));
+}
+function expectConfigurationError(response: Record<string, unknown>, message?: string) {
+  expect(response).toMatchObject({ type: "error", ...(message ? { message } : {}) });
+  expect(response.result).toBeUndefined();
+}
+function commitDocument(h: Harness) {
+  h.updateTab(7, { url, pendingUrl: undefined });
+  h.debuggerEventListener?.({ tabId: 7 }, "Page.frameNavigated", {
+    frame: { id: "root", loaderId: "destination", url },
+  });
+  h.debuggerEventListener?.({ tabId: 7 }, "Page.lifecycleEvent", {
+    name: "load",
+    frameId: "root",
+    loaderId: "destination",
+  });
+}
+
+describe.each(["all", "selected"] as const)("network configuration in %s mode", (mode) => {
+  it.each([
+    { method: "Network.setCacheDisabled", params: { cacheDisabled: true } },
+    { method: "Network.setExtraHTTPHeaders", params: { headers: { "X-Test": "synthetic" } } },
+    { method: "Network.setBypassServiceWorker", params: { bypass: true } },
+  ])(
+    "delivers $method after an allowed document commit during dispatch",
+    async ({ method, params }) => {
+      expectResult(await dispatchConfiguration(mode, commitDocument, method, params), {});
+    },
+  );
+  it("rejects a cache-setting receipt after genuine access revocation", async () => {
+    expectConfigurationError(
+      await dispatchConfiguration(mode, (h) =>
+        runtime(h, "toggleTabAccess", { tabId: 7, accessMode: mode, grant: false }),
+      ),
+    );
+  });
+});
+it("rejects a cache-setting receipt after debugger detach", async () => {
+  expectConfigurationError(
+    await dispatchConfiguration("selected", (h) =>
+      h.debuggerDetachListener?.({ tabId: 7 }, "canceled_by_user"),
+    ),
+  );
+});
+it.each(["Network.getResponseBody", "Fetch.getResponseBody"])(
+  "rejects document-sensitive %s after an allowed document commit",
+  async (method) => {
+    expectConfigurationError(
+      await dispatchConfiguration("selected", commitDocument, method, { requestId: "synthetic" }),
+      "tab 7 access was revoked",
+    );
+  },
+);
 
 describe("physical tab creation authority", () => {
   it.each(["initial blank", "committed then blank", "removed"] as const)(
