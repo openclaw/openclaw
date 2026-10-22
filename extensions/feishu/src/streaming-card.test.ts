@@ -3,7 +3,11 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
+import {
+  createOversizedJsonResponse,
+  readRequestBody,
+  stripDispatcher,
+} from "./http.test-support.js";
 import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { createStreamingSession, type StreamingFetchDeps } from "./streaming-card.test-support.js";
 
@@ -440,22 +444,15 @@ describe("FeishuStreamingSession", () => {
   });
 
   it("rejects oversized streaming tenant-token JSON before buffering the full body", async () => {
-    let streamState:
-      | {
-          bytesPulled: () => number;
-          canceled: () => boolean;
-        }
-      | undefined;
-    const deps = await createStreamingFetch(({ url, res }) => {
+    const streamState = createOversizedJsonResponse(
+      FEISHU_JSON_MAX_BYTES * 2,
+      '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
+    );
+    const deps = createMemoryFetch((url) => {
       if (url.pathname.includes("/auth/")) {
-        streamState = writeOversizedJson(
-          res,
-          FEISHU_JSON_MAX_BYTES * 2,
-          '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
-        );
-        return;
+        return streamState.response;
       }
-      writeJson(res, { code: 0, msg: "ok", data: { card_id: "card_oversized_token" } });
+      return Response.json({ code: 0, msg: "ok", data: { card_id: "card_oversized_token" } });
     });
 
     const session = createStreamingSession(
@@ -541,27 +538,20 @@ describe("FeishuStreamingSession", () => {
   });
 
   it("rejects oversized streaming card-create JSON before buffering the full body", async () => {
-    let streamState:
-      | {
-          bytesPulled: () => number;
-          canceled: () => boolean;
-        }
-      | undefined;
-    const deps = await createStreamingFetch(({ url, res }) => {
+    const streamState = createOversizedJsonResponse(
+      FEISHU_JSON_MAX_BYTES * 2,
+      '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
+    );
+    const deps = createMemoryFetch((url) => {
       if (url.pathname.includes("/auth/")) {
-        writeJson(res, {
+        return Response.json({
           code: 0,
           msg: "ok",
           tenant_access_token: "token",
           expire: 7200,
         });
-        return;
       }
-      streamState = writeOversizedJson(
-        res,
-        FEISHU_JSON_MAX_BYTES * 2,
-        '{"code":0,"msg":"ok","tenant_access_token":"token","padding":"',
-      );
+      return streamState.response;
     });
 
     const session = createStreamingSession(

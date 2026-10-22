@@ -5,7 +5,11 @@ import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { beginAppRegistration, pollAppRegistration, printQrCode } from "./app-registration.js";
-import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
+import {
+  createOversizedJsonResponse,
+  readRequestBody,
+  stripDispatcher,
+} from "./http.test-support.js";
 
 const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
 
@@ -182,24 +186,19 @@ describe("Feishu app registration", () => {
   });
 
   it("rejects Feishu API responses that exceed the 16 MiB JSON body cap", async () => {
-    let streamState: ReturnType<typeof writeOversizedJson> | undefined;
-    await withRegistrationServer(
-      (_req, res) => {
-        streamState = writeOversizedJson(
-          res,
-          FEISHU_JSON_MAX_BYTES * 2,
-          '{"device_code":"dev","padding":"',
-        );
-      },
-      async () => {
-        await expect(beginAppRegistration("feishu")).rejects.toThrow(
-          /feishu\.api: JSON response exceeds \d+ bytes/,
-        );
-      },
+    const streamState = createOversizedJsonResponse(
+      FEISHU_JSON_MAX_BYTES * 2,
+      '{"device_code":"dev","padding":"',
+    );
+    mockRegistrationFetch({
+      fetchImpl: withFetchPreconnect(async () => streamState.response),
+    });
+    await expect(beginAppRegistration("feishu")).rejects.toThrow(
+      /feishu\.api: JSON response exceeds \d+ bytes/,
     );
 
-    expect(streamState?.canceled()).toBe(true);
-    expect(streamState?.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
+    expect(streamState.canceled()).toBe(true);
+    expect(streamState.bytesPulled()).toBeLessThan(FEISHU_JSON_MAX_BYTES * 2);
   });
 
   it("sends bound reads through the real SSRF guard before local socket redirect", async () => {
