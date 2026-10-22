@@ -23,6 +23,7 @@ import { installMarkdownGitHubRefs } from "./markdown-github-refs.ts";
 import { installMarkdownHexColors } from "./markdown-hex-colors.ts";
 import { installMarkdownHumanMentions } from "./markdown-human-mentions.ts";
 import { hasMarkdownLinkBoundaries } from "./markdown-link-boundary.ts";
+import { installMarkdownMath } from "./markdown-math.ts";
 import type { MarkdownRenderEnv } from "./markdown-render-options.ts";
 import { installMarkdownSessionLinks } from "./markdown-session-links.ts";
 import { installMarkdownTables } from "./markdown-tables.ts";
@@ -139,6 +140,7 @@ export function createMarkdownParser(): MarkdownItParser {
   installMarkdownAudioTranscript(markdownParser);
   installAssistantTranscriptRoleMarkdown(markdownParser);
   installMarkdownDetails(markdownParser);
+  installMarkdownMath(markdownParser);
   installMarkdownTables(markdownParser);
 
   // Bare filenames such as README.md are not web destinations.

@@ -1454,6 +1454,8 @@
   "ui/src/components/markdown-icon.ts",
   "ui/src/components/markdown-json.ts",
   "ui/src/components/markdown-link-boundary.ts",
+  "ui/src/components/markdown-math-element.ts",
+  "ui/src/components/markdown-math.ts",
   "ui/src/components/markdown-parser.ts",
   "ui/src/components/markdown-raw-content.ts",
   "ui/src/components/markdown-render-options.ts",

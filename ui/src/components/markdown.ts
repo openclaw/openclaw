@@ -4,7 +4,7 @@ import { pruneMapToMaxSize } from "../../../src/infra/map-size.ts";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
 import { resolveControlUiPaths } from "../app/browser.ts";
-import { i18n, t } from "../i18n/index.ts";
+import { i18n } from "../i18n/index.ts";
 import { truncateText } from "../lib/format.ts";
 import { parseGitHubLinkTarget } from "./github-link-target.ts";
 import { createAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
@@ -35,7 +35,11 @@ import {
   streamingMarkdownStableHtml,
   streamingMarkdownState,
 } from "./markdown-streaming.ts";
-import { isMarkdownBlockArtText, normalizeMarkdownLineBreaks } from "./markdown-text.ts";
+import {
+  appendMarkdownTruncationNotice,
+  isMarkdownBlockArtText,
+  normalizeMarkdownLineBreaks,
+} from "./markdown-text.ts";
 
 const allowedTags = [
   "a",
@@ -58,6 +62,7 @@ const allowedTags = [
   "li",
   "ol",
   "openclaw-person-reference",
+  "openclaw-markdown-math",
   "p",
   "pre",
   "s",
@@ -539,20 +544,6 @@ function markdownSanitizer(options = sanitizeOptions) {
   });
   sanitizers.set(options, sanitizer);
   return sanitizer;
-}
-
-function appendMarkdownTruncationNotice(truncated: {
-  text: string;
-  truncated: boolean;
-  total: number;
-}): string {
-  const notice = truncated.truncated
-    ? `\n\n${t("chat.markdown.truncated", {
-        total: String(truncated.total),
-        shown: String(truncated.text.length),
-      })}`
-    : "";
-  return `${truncated.text}${notice}`;
 }
 
 const markdownParser = createMarkdownParser();
