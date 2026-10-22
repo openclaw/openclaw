@@ -154,7 +154,7 @@ export class ShellOwner
   didConsiderNativeRouteRestore = false;
   pendingNativeNewSession = false;
   readonly settingsPreloadTimers = new Map<EventTarget, ReturnType<typeof globalThis.setTimeout>>();
-  private readonly shellNavigation = new ShellNavigationOwner(this);
+  readonly shellNavigation = new ShellNavigationOwner(this);
   private readonly shellChrome = new ShellChromeOwner(this);
   private readonly shellGateway = new ShellGatewayOwner(this);
   readonly viewCallbacks = createShellViewCallbacks(this);
@@ -301,7 +301,9 @@ export class ShellOwner
         context.gateway.subscribeEvents(this.handleGatewayEvent),
         this.shellGateway.observeSessions(context.sessions, () => this.syncDocumentTitle()),
         // Recovery can retire the selected session before the next shell commit.
-        context.placementStartup.subscribe(() => this.recoverDeletedActiveSession()),
+        context.placementStartup.subscribe(() =>
+          this.shellNavigation.recoverDeletedActiveSession(),
+        ),
       );
       let active = true;
       let disconnectFavicon: (() => void) | undefined;
@@ -413,7 +415,6 @@ export class ShellOwner
     this.settingsPreloadTimers.clear();
   }
 
-  readonly selectChatSession = this.shellNavigation.selectChatSession.bind(this.shellNavigation);
   private readonly handleGatewayEvent = this.shellGateway.handleGatewayEvent.bind(
     this.shellGateway,
   );
@@ -434,28 +435,11 @@ export class ShellOwner
     }
   }
 
-  readonly chatNavigationOptions = this.shellNavigation.chatNavigationOptions.bind(
-    this.shellNavigation,
-  );
-
-  readonly navigate = this.shellNavigation.navigate;
-
-  readonly recoverNotFoundRoute = this.shellNavigation.recoverNotFoundRoute.bind(
-    this.shellNavigation,
-  );
-  readonly recoverDeletedActiveSession = this.shellNavigation.recoverDeletedActiveSession.bind(
-    this.shellNavigation,
-  );
-
-  readonly exitSettings = this.shellNavigation.exitSettings.bind(this.shellNavigation);
-
   readonly toggleNavigationSurface = this.shellChrome.toggleNavigationSurface;
 
   readonly closeNavDrawer = this.shellChrome.closeNavDrawer;
 
   readonly resizeNavigation = this.shellChrome.resizeNavigation;
-
-  readonly openNewSession = this.shellNavigation.openNewSession.bind(this.shellNavigation);
 
   readonly handleNativeNewSession = this.shellChrome.handleNativeNewSession;
   get pendingDebugOverlayMode() {
@@ -580,10 +564,6 @@ export class ShellOwner
     // Shipped Mac app builds without web chrome still consume this bridge.
     postNativeNavState(navState);
   }
-
-  readonly newSessionRouteAgentId = this.shellNavigation.newSessionRouteAgentId.bind(
-    this.shellNavigation,
-  );
 
   ensureAgentsList(
     snapshot: ApplicationContext["gateway"]["snapshot"],

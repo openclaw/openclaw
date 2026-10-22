@@ -58,8 +58,6 @@ export interface ShellLazyOverlayHost extends DebugOverlayFrameHost, ShellNewSes
   closePendingPalette(): void;
   readonly lazyCustomElements: LazyCustomElementRequests;
   handleCommandPaletteSlashCommand(command: string): void;
-  navigate(routeId: string, options?: ApplicationNavigationOptions): void;
-  selectChatSession(sessionKey: string, agentId?: string | null): void;
 }
 
 /** Shell-level optional dialogs share lazy-load recovery, not route ownership. */
@@ -126,9 +124,11 @@ export function ShellLazyOverlays(props: {
           prop:desktopAvailable={props.desktopPanelAvailable}
           prop:custodianAvailable={props.custodianPanelAvailable}
           prop:onNavigate={(routeId: RouteId, options?: ApplicationNavigationOptions) =>
-            props.host.navigate(routeId, options)
+            props.host.shellNavigation.navigate(routeId, options)
           }
-          prop:onSelectSession={(sessionKey: string) => props.host.selectChatSession(sessionKey)}
+          prop:onSelectSession={(sessionKey: string) =>
+            props.host.shellNavigation.selectChatSession(sessionKey)
+          }
           prop:onSlashCommand={(command: string) =>
             props.host.handleCommandPaletteSlashCommand(command)
           }

@@ -23,7 +23,6 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../components/panel-toggle-contract.ts";
 import { focusWithoutTooltip } from "../components/tooltip.ts";
-import type { BoardFace } from "../lib/board/settings.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
@@ -99,12 +98,6 @@ export interface ShellChromeHost
   commandPaletteTarget: CommandPaletteTargetDetail | undefined;
   invalidate(): void;
   closeNavDrawer(options?: { restoreFocus?: boolean }): void;
-  exitSettings(): void;
-  navigate(routeId: string, options?: ApplicationNavigationOptions): void;
-  chatNavigationOptions(
-    face: BoardFace,
-    options?: ApplicationNavigationOptions,
-  ): ApplicationNavigationOptions | undefined;
 }
 
 export class ShellChromeOwner {
@@ -329,7 +322,7 @@ export class ShellChromeOwner {
     if (typeof search === "string" && search.startsWith("?") && !search.includes("#")) {
       options.search = search;
     }
-    this.host.navigate(routeId, options);
+    this.host.shellNavigation.navigate(routeId, options);
   };
 
   readonly handleNativeHistoryState = (event: Event): void => {
@@ -398,7 +391,7 @@ export class ShellChromeOwner {
       !this.shouldIgnoreSettingsEscape(event)
     ) {
       event.preventDefault();
-      host.exitSettings();
+      host.shellNavigation.exitSettings();
     }
   };
 
@@ -484,7 +477,7 @@ export class ShellChromeOwner {
     }
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.appearanceSettings, event)) {
       event.preventDefault();
-      host.navigate("appearance");
+      host.shellNavigation.navigate("appearance");
       return;
     }
     if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar, event)) {

@@ -386,7 +386,9 @@ describe("application shell pairing access", () => {
     replacement.context.navigation.update = update;
     replacement.context.overlays.subscribe = vi.fn(() => stopOverlays);
     shell.runtime = { ...shell.runtime!, context: replacement.context };
-    const openNewSession = vi.spyOn(shell, "openNewSession").mockImplementation(() => undefined);
+    const openNewSession = vi
+      .spyOn(shell.shellNavigation, "openNewSession")
+      .mockImplementation(() => undefined);
 
     onPairMobile?.();
     onRetryConnect?.();
