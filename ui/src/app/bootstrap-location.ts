@@ -191,29 +191,24 @@ export async function resolveInitialApplicationLocation(params: {
   }
   const client = await waitForGatewayClient(params.gateway, params.signal);
   const hello = params.gateway.snapshot.hello;
-  let agentsList = params.agentsList();
-  let sessionKey = params.sessionKey.trim() || params.gateway.snapshot.sessionKey;
-
-  agentsList = (await params.ensureAgentsList?.()) ?? agentsList;
+  const agentsList = (await params.ensureAgentsList?.()) ?? params.agentsList();
   params.signal.throwIfAborted();
   if (params.gateway.snapshot.client !== client || params.gateway.snapshot.hello !== hello) {
     return resolveInitialApplicationLocation(params);
   }
-  const defaults = { agentsList, hello: params.gateway.snapshot.hello };
+  const defaults = { agentsList, hello };
+  const mainKey = resolveUiConfiguredMainKey(defaults);
   const defaultAgentId = resolveUiDefaultAgentId(defaults);
+  let sessionKey = params.sessionKey.trim() || params.gateway.snapshot.sessionKey;
   let agentId =
     parseAgentSessionKey(sessionKey)?.agentId ??
     resolvePersistedAgentId(params.selectedAgentId, agentsList) ??
     defaultAgentId;
   if (agentsList && !resolvePersistedAgentId(agentId, agentsList)) {
     agentId = resolvePersistedAgentId(params.selectedAgentId, agentsList) ?? defaultAgentId;
-    sessionKey = buildAgentMainSessionKey({
-      agentId,
-      mainKey: resolveUiConfiguredMainKey(defaults),
-    });
+    sessionKey = buildAgentMainSessionKey({ agentId, mainKey });
   }
 
-  const mainKey = resolveUiConfiguredMainKey(defaults);
   const identity = resolveUiConversationIdentity(defaults, sessionKey, agentId);
   sessionKey = identity.sessionKey;
   agentId = identity.agentId ?? agentId;

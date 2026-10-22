@@ -27,9 +27,7 @@ describe("googlechat message actions", () => {
     ({ googlechatMessageActions } = await import("./message-tool-api.js"));
   });
 
-  beforeEach(() => {
-    vi.clearAllMocks();
-  });
+  beforeEach(() => vi.clearAllMocks());
 
   afterAll(() => {
     vi.doUnmock("./accounts.js");

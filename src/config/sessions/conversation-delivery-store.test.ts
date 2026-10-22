@@ -65,7 +65,7 @@ it("preserves input conflicts without waiting for reader retirement that needs t
   const historyRetiring = createDeferred();
   const writerSettled = createDeferred();
   const releaseHistory = createDeferred();
-  const retirement = vi.spyOn(historyLane.pool, "rotate").mockImplementation(() => {
+  using _ = vi.spyOn(historyLane.pool, "rotate").mockImplementation(() => {
     historyRetiring.resolve();
     return Promise.race([writerSettled.promise, releaseHistory.promise]);
   });
@@ -90,7 +90,6 @@ it("preserves input conflicts without waiting for reader retirement that needs t
   } finally {
     releaseHistory.resolve();
     await Promise.allSettled([reading, following]);
-    retirement.mockRestore();
   }
 });
 
