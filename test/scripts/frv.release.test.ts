@@ -11,6 +11,7 @@ import {
   readReleaseJobListing,
   releaseExecutionPlanSha256,
 } from "../../scripts/full-release-validation-policy.mjs";
+import { validateParentManifest } from "../../scripts/release-ci-summary.mjs";
 import {
   SHA,
   TARGET_SHA,
@@ -75,26 +76,30 @@ describe("FRV protected gh evidence reads", () => {
     ]);
   });
 
-  it.each([
-    [502, [100, 50, 30]],
-    [404, [100]],
-  ] as const)(
-    "preserves HTTP %s after the permitted page-size fallbacks",
-    async (status, sizes) => {
-      const error = Object.assign(new Error("Command failed"), {
-        stderr: `gh: ${status === 502 ? "Server Error" : "Not Found"} (HTTP ${status})`,
-      });
-      const pageSizes: number[] = [];
-      await expect(
-        readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
-          pageSizes.push(perPage);
-          expect(smallerPageFallback).toBe(perPage !== 30);
-          throw error;
-        }),
-      ).rejects.toBe(error);
-      expect(pageSizes).toEqual(sizes);
-    },
-  );
+  it("fails closed when every job listing page size returns a 5xx", async () => {
+    const serverError = Object.assign(new Error("Command failed"), {
+      stderr: "gh: Server Error (HTTP 502)",
+    });
+    const pageSizes: number[] = [];
+    await expect(
+      readReleaseJobListing(async (perPage, { smallerPageFallback }) => {
+        pageSizes.push(perPage);
+        expect(smallerPageFallback).toBe(perPage !== 30);
+        throw serverError;
+      }),
+    ).rejects.toBe(serverError);
+    expect(pageSizes).toEqual([100, 50, 30]);
+    const notFound = Object.assign(new Error("Command failed"), {
+      stderr: "gh: Not Found (HTTP 404)",
+    });
+    await expect(
+      readReleaseJobListing(async (perPage) => {
+        pageSizes.push(perPage);
+        throw notFound;
+      }),
+    ).rejects.toBe(notFound);
+    expect(pageSizes).toEqual([100, 50, 30, 100]);
+  });
 
   it("reads the mutable release tip freshly even when watcher reads are cached", () => {
     const result = runProtectedFrv(
@@ -287,36 +292,6 @@ const PUBLISH_REF = `release-publish/${PUBLISH_SHA.slice(0, 12)}-88`;
 const DIAGNOSTIC_FILE = "release-postpublish-diagnostics.json";
 const PUBLISH_PATH = ".github/workflows/openclaw-release-publish.yml";
 const FRV_PATH = ".github/workflows/full-release-validation.yml";
-const endpoint = (path: string) => `repos/${REPOSITORY}/${path}`;
-
-function observeRun(
-  responses: Record<string, unknown>,
-  run: { id: number; workflow_id: number; path: string; run_attempt: number },
-  includeAttempt = false,
-) {
-  responses[endpoint(`actions/runs/${run.id}`)] = run;
-  responses[endpoint(`actions/workflows/${run.workflow_id}`)] = {
-    id: run.workflow_id,
-    path: run.path.split("@")[0],
-  };
-  if (includeAttempt) {
-    responses[endpoint(`actions/runs/${run.id}/attempts/${run.run_attempt}`)] = run;
-  }
-}
-
-function publicationStep(name: string, conclusion = "success", number = 1) {
-  return { number, name, status: "completed", conclusion };
-}
-
-function publicationJob(
-  name: string,
-  id: number,
-  conclusion = "success",
-  steps: ReturnType<typeof publicationStep>[] = [],
-  runId = 88,
-) {
-  return { ...job(name, conclusion), id, run_id: runId, run_attempt: 1, steps };
-}
 
 function publicationFixture() {
   const executionPlan = executionPlanArtifact();
@@ -439,9 +414,20 @@ function publicationFixture() {
     stepOutcomes: { coreStart: "success", completion: "failure" },
   };
   const publisherJobs = [
-    publicationJob("Publish plugins, then OpenClaw", 8801, "failure", [
-      publicationStep("Upload postpublish diagnostics"),
-    ]),
+    {
+      ...job("Publish plugins, then OpenClaw", "failure"),
+      id: 8801,
+      run_id: 88,
+      run_attempt: 1,
+      steps: [
+        {
+          number: 1,
+          name: "Upload postpublish diagnostics",
+          status: "completed",
+          conclusion: "success",
+        },
+      ],
+    },
   ];
   return { executionPlan, manifest, diagnostic, publisher, root, publisherJobs };
 }
@@ -479,6 +465,7 @@ async function runPublicationCli(
     fixture.executionPlan.sha256 = releaseExecutionPlanSha256(fixture.executionPlan);
   }
   const responses: Record<string, unknown> = {};
+  const endpoint = (path: string) => `repos/${REPOSITORY}/${path}`;
   const artifactLists = new Map<number, unknown[]>();
   async function artifact(
     id: number,
@@ -539,7 +526,17 @@ async function runPublicationCli(
     fixture.diagnostic,
   );
   for (const run of [fixture.root, fixture.publisher]) {
-    observeRun(responses, run, true);
+    responses[endpoint(`actions/runs/${run.id}`)] = run;
+    responses[endpoint(`actions/runs/${run.id}/attempts/${run.run_attempt}`)] = run;
+    responses[endpoint(`actions/workflows/${run.workflow_id}`)] = {
+      id: run.workflow_id,
+      path: run.id === 77 ? FRV_PATH : PUBLISH_PATH,
+    };
+    const artifacts = artifactLists.get(run.id) ?? [];
+    responses[endpoint(`actions/runs/${run.id}/artifacts?per_page=100&page=1`)] = {
+      total_count: artifacts.length,
+      artifacts,
+    };
   }
   responses[endpoint("actions/runs/88/attempts/1/jobs?per_page=100&page=1")] = {
     total_count: fixture.publisherJobs.length,
@@ -547,7 +544,11 @@ async function runPublicationCli(
   };
   for (const entry of requiredChildren()) {
     const run = { ...runFor(entry, 1, "success"), workflow_id: Number(entry.runId) + 1000 };
-    observeRun(responses, run);
+    responses[endpoint(`actions/runs/${entry.runId}`)] = run;
+    responses[endpoint(`actions/workflows/${run.workflow_id}`)] = {
+      id: run.workflow_id,
+      path: run.path,
+    };
     responses[endpoint(`actions/runs/${entry.runId}/attempts/1/jobs?per_page=100&page=1`)] = {
       total_count: 1,
       jobs: [{ ...job("test"), id: Number(entry.runId) * 10, run_id: run.id, run_attempt: 1 }],
@@ -724,26 +725,39 @@ describe("publication status real CLI", () => {
       fixture.diagnostic.stages.binding.state = "failure";
       fixture.diagnostic.stages.assets.state = "failure";
       fixture.publisher.conclusion = "success";
-      fixture.publisherJobs.push(publicationJob("Finalize GitHub release", 8802, "skipped"));
+      fixture.publisherJobs.push({
+        ...job("Finalize GitHub release", "skipped"),
+        id: 8802,
+        run_id: 88,
+        run_attempt: 1,
+        steps: [],
+      });
     } else if (kind === "unattempted verification") {
       fixture.diagnostic.verification = "unattempted";
       fixture.diagnostic.stages.coreNpm.state = "unattempted";
       fixture.diagnostic.stages.coreNpm.publication = "unknown";
     }
+    validateParentManifest(fixture.manifest, {
+      runId: "77",
+      runAttempt: 2,
+      workflowRef: SOURCE_REF,
+      workflowSha: SHA,
+    });
     const result = await runPublicationCli(fixture);
     const value = JSON.parse(result.stdout);
     const publication = value.publication;
     expect(result.status, result.stderr + result.stdout).toBe(
       kind === "truncated packages" ? 1 : 0,
     );
-    expect(publication).toMatchObject({
-      relationship: { status: "verified", originalPlanAttempt: 1, validationAttempt: 2 },
-      publisher: {
-        runId: "88",
-        runAttempt: 1,
-        conclusion: kind === "successful verification" ? "success" : "failure",
-      },
-      surfaces: { activation: { operation: { state: "unknown" } } },
+    expect(publication.relationship).toMatchObject({
+      status: "verified",
+      originalPlanAttempt: 1,
+      validationAttempt: 2,
+    });
+    expect(publication.publisher).toMatchObject({
+      runId: "88",
+      runAttempt: 1,
+      conclusion: kind === "successful verification" ? "success" : "failure",
     });
     expect(publication.release).toEqual({
       version: "2026.9.9",
@@ -751,6 +765,7 @@ describe("publication status real CLI", () => {
       distTag: "latest",
       sourceSha: TARGET_SHA,
     });
+    expect(publication.surfaces.activation.operation.state).toBe("unknown");
     expect(value.children).toHaveLength(4);
     expect(result.calls.length).toBeGreaterThan(0);
     if (kind === "truncated packages") {
@@ -815,37 +830,107 @@ describe("publication status real CLI", () => {
   });
 
   it.each([
-    ["foreign repository", "repository", { full_name: "other/repository" }],
-    ["foreign event", "publisher", { event: "push" }],
-    ["foreign path", "publisher", { path: ".github/workflows/other.yml" }],
-    ["foreign path suffix", "publisher", { path: `${PUBLISH_PATH}@main` }],
-    ["wrong producer run", "context", { parentRunId: "89" }],
-    ["wrong producer attempt", "context", { parentRunAttempt: "2" }],
-    ["wrong tooling", "context", { toolingSha: SHA }],
-    ["wrong full ref", "context", { suppliedToolingRef: "refs/heads/main" }],
-    ["wrong validation root", "evidence", { runId: "78" }],
-    ["future validation attempt", "evidence", { runAttempt: "3" }],
-    ["wrong candidate", "context", { requestedSourceSha: PUBLISH_SHA }],
-    ["wrong source attempt", "manifest", { sourceParentRunAttempt: 2 }],
-    ["wrong plan checksum", "manifest", { executionPlanSha256: "0".repeat(64) }],
-    ["wrong manifest tooling", "manifest", { workflowSha: PUBLISH_SHA }],
-    ["unsuccessful upload", "upload", { conclusion: "failure" }],
-  ] as const)("refuses %s", async (_name, target, fields) => {
-    const fixture = publicationFixture();
-    const targets = {
-      publisher: fixture.publisher,
-      repository: fixture.publisher.repository,
-      context: fixture.diagnostic.context,
-      evidence: fixture.diagnostic.context.validationEvidence,
-      manifest: fixture.manifest,
-      upload: fixture.publisherJobs[0]!.steps[0]!,
-    };
-    Object.assign(targets[target], fields);
-    const result = await runPublicationCli(fixture);
-    expect(result.status, result.stdout).toBe(1);
-    expect(JSON.parse(result.stdout).publication.collection.complete).toBe(false);
-    expect(result.calls.every((call) => call[0] === "api" && call.includes("GET"))).toBe(true);
-  });
+    [
+      "foreign repository",
+      (fixture: ReturnType<typeof publicationFixture>) => {
+        fixture.publisher.repository.full_name = "other/repository";
+      },
+    ],
+    [
+      "foreign event",
+      (fixture) => {
+        fixture.publisher.event = "push";
+      },
+    ],
+    [
+      "foreign path",
+      (fixture) => {
+        fixture.publisher.path = ".github/workflows/other.yml";
+      },
+    ],
+    [
+      "foreign path suffix",
+      (fixture) => {
+        fixture.publisher.path = `${PUBLISH_PATH}@main`;
+      },
+    ],
+    [
+      "wrong producer run",
+      (fixture) => {
+        fixture.diagnostic.context.parentRunId = "89";
+      },
+    ],
+    [
+      "wrong producer attempt",
+      (fixture) => {
+        fixture.diagnostic.context.parentRunAttempt = "2";
+      },
+    ],
+    [
+      "wrong tooling",
+      (fixture) => {
+        fixture.diagnostic.context.toolingSha = SHA;
+      },
+    ],
+    [
+      "wrong full ref",
+      (fixture) => {
+        fixture.diagnostic.context.suppliedToolingRef = "refs/heads/main";
+      },
+    ],
+    [
+      "wrong validation root",
+      (fixture) => {
+        fixture.diagnostic.context.validationEvidence.runId = "78";
+      },
+    ],
+    [
+      "future validation attempt",
+      (fixture) => {
+        fixture.diagnostic.context.validationEvidence.runAttempt = "3";
+      },
+    ],
+    [
+      "wrong candidate",
+      (fixture) => {
+        fixture.diagnostic.context.requestedSourceSha = PUBLISH_SHA;
+      },
+    ],
+    [
+      "wrong source attempt",
+      (fixture) => {
+        fixture.manifest.sourceParentRunAttempt = 2;
+      },
+    ],
+    [
+      "wrong plan checksum",
+      (fixture) => {
+        fixture.manifest.executionPlanSha256 = "0".repeat(64);
+      },
+    ],
+    [
+      "wrong manifest tooling",
+      (fixture) => {
+        fixture.manifest.workflowSha = PUBLISH_SHA;
+      },
+    ],
+    [
+      "unsuccessful upload",
+      (fixture) => {
+        fixture.publisherJobs[0]!.steps[0]!.conclusion = "failure";
+      },
+    ],
+  ] satisfies [string, (fixture: ReturnType<typeof publicationFixture>) => void][])(
+    "refuses %s",
+    async (_name, mutate) => {
+      const fixture = publicationFixture();
+      mutate(fixture);
+      const result = await runPublicationCli(fixture);
+      expect(result.status, result.stdout).toBe(1);
+      expect(JSON.parse(result.stdout).publication.collection.complete).toBe(false);
+      expect(result.calls.every((call) => call[0] === "api" && call.includes("GET"))).toBe(true);
+    },
+  );
 
   it.each([
     "workflow-id",
@@ -946,18 +1031,46 @@ describe("publication status real CLI", () => {
   it("keeps Docker-only readback and advisory VCR API step conclusions separate from writer receipts", async () => {
     const fixture = publicationFixture();
     fixture.publisherJobs.push(
-      publicationJob("Verify already-published core npm package", 8802),
-      publicationJob("Publish Docker images / publish", 8803),
-      publicationJob(
-        "Mirror Docker images to Vercel Container Registry / mirror",
-        8804,
-        "failure",
-        [
-          publicationStep("Copy and verify immutable release images"),
-          publicationStep("Run custom-image Sandbox smoke", "failure", 2),
-          publicationStep("Promote and verify channel aliases", "skipped", 3),
+      {
+        ...job("Verify already-published core npm package"),
+        id: 8802,
+        run_id: 88,
+        run_attempt: 1,
+        steps: [],
+      },
+      {
+        ...job("Publish Docker images / publish"),
+        id: 8803,
+        run_id: 88,
+        run_attempt: 1,
+        steps: [],
+      },
+      {
+        ...job("Mirror Docker images to Vercel Container Registry / mirror", "failure"),
+        id: 8804,
+        run_id: 88,
+        run_attempt: 1,
+        steps: [
+          {
+            number: 1,
+            name: "Copy and verify immutable release images",
+            status: "completed",
+            conclusion: "success",
+          },
+          {
+            number: 2,
+            name: "Run custom-image Sandbox smoke",
+            status: "completed",
+            conclusion: "failure",
+          },
+          {
+            number: 3,
+            name: "Promote and verify channel aliases",
+            status: "completed",
+            conclusion: "skipped",
+          },
         ],
-      ),
+      },
     );
     const result = await runPublicationCli(fixture);
     expect(result.status).toBe(0);
@@ -977,7 +1090,7 @@ describe("publication status real CLI", () => {
       const fixture = publicationFixture();
       Reflect.set(fixture.diagnostic.children.openclawNpm!, "suppliedRunId", "909");
       const result = await runPublicationCli(fixture, undefined, (responses) => {
-        observeRun(responses, {
+        responses[`repos/${REPOSITORY}/actions/runs/909`] = {
           ...fixture.publisher,
           id: 909,
           workflow_id: 9090,
@@ -990,7 +1103,11 @@ describe("publication status real CLI", () => {
                 head_branch: "older-tooling",
                 conclusion: "success",
               }),
-        });
+        };
+        responses[`repos/${REPOSITORY}/actions/workflows/9090`] = {
+          id: 9090,
+          path: `.github/workflows/${workflow}.yml`,
+        };
       });
       const publication = JSON.parse(result.stdout).publication;
       expect(result.status).toBe(workflow === "wrong" ? 1 : 0);
@@ -1156,13 +1273,17 @@ describe("publication status real CLI", () => {
           normalClawHubRunAttempt: childRef === null ? null : "1",
         });
         if (childRef !== null) {
-          observeRun(responses, {
+          responses[`repos/${REPOSITORY}/actions/runs/909`] = {
             ...fixture.publisher,
             id: 909,
             workflow_id: 9090,
             head_branch: childRef,
             path: ".github/workflows/plugin-clawhub-release.yml",
-          });
+          };
+          responses[`repos/${REPOSITORY}/actions/workflows/9090`] = {
+            id: 9090,
+            path: ".github/workflows/plugin-clawhub-release.yml",
+          };
         }
       });
       expect(result.status).toBe(childRef === "foreign" ? 1 : 0);
@@ -1188,11 +1309,20 @@ describe("publication status real CLI", () => {
     "observes detached Windows %s without equating acknowledgement and promotion",
     async (state) => {
       const fixture = publicationFixture();
-      fixture.publisherJobs.push(
-        publicationJob("Dispatch Windows assets after publication", 8802, "success", [
-          publicationStep("Upload Windows dispatch evidence"),
-        ]),
-      );
+      fixture.publisherJobs.push({
+        ...job("Dispatch Windows assets after publication"),
+        id: 8802,
+        run_id: 88,
+        run_attempt: 1,
+        steps: [
+          {
+            number: 1,
+            name: "Upload Windows dispatch evidence",
+            status: "completed",
+            conclusion: "success",
+          },
+        ],
+      });
       const native = {
         ...fixture.publisher,
         id: 909,
@@ -1216,7 +1346,8 @@ describe("publication status real CLI", () => {
           "windows-dispatch.json",
           dispatch,
         );
-        observeRun(responses, native);
+        responses[`repos/${REPOSITORY}/actions/runs/909`] = native;
+        responses[`repos/${REPOSITORY}/actions/workflows/9090`] = { id: 9090, path: native.path };
         responses[`repos/${REPOSITORY}/actions/runs/909/artifacts?per_page=100&page=1`] = {
           total_count: 0,
           artifacts: [],
@@ -1231,13 +1362,20 @@ describe("publication status real CLI", () => {
           responses[`repos/${REPOSITORY}/actions/runs/909/attempts/1/jobs?per_page=100&page=1`] = {
             total_count: 1,
             jobs: [
-              publicationJob(
-                "Promote signed Windows installers",
-                9091,
-                "failure",
-                [publicationStep("Upload Windows promotion evidence")],
-                909,
-              ),
+              {
+                ...job("Promote signed Windows installers", "failure"),
+                id: 9091,
+                run_id: 909,
+                run_attempt: 1,
+                steps: [
+                  {
+                    number: 1,
+                    name: "Upload Windows promotion evidence",
+                    status: "completed",
+                    conclusion: "success",
+                  },
+                ],
+              },
             ],
           };
         }
@@ -1273,14 +1411,23 @@ describe("publication status real CLI", () => {
     ["legacy-attempt", "request-attempt-unknown"],
   ])("correlates the Linux builder through its owner admission (%s)", async (kind, operation) => {
     const fixture = publicationFixture();
-    fixture.publisherJobs.push(
-      publicationJob(
+    fixture.publisherJobs.push({
+      ...job(
         "Request Linux assets after publication",
-        8810,
         kind === "unconfirmed" ? "failure" : "success",
-        [publicationStep("Retain Linux request evidence")],
       ),
-    );
+      id: 8810,
+      run_id: 88,
+      run_attempt: 1,
+      steps: [
+        {
+          number: 1,
+          name: "Retain Linux request evidence",
+          status: "completed",
+          conclusion: "success",
+        },
+      ],
+    });
     const request = {
       ...fixture.publisher,
       id: 909,
@@ -1317,7 +1464,9 @@ describe("publication status real CLI", () => {
       if (kind === "unconfirmed") {
         return;
       }
-      observeRun(responses, request, true);
+      responses[`repos/${REPOSITORY}/actions/runs/909`] = request;
+      responses[`repos/${REPOSITORY}/actions/runs/909/attempts/1`] = request;
+      responses[`repos/${REPOSITORY}/actions/workflows/9090`] = { id: 9090, path: request.path };
       responses[
         `repos/${REPOSITORY}/actions/workflows/linux-app-release.yml/runs?event=workflow_run&branch=main&created=%3E%3D2026-08-02T00%3A00%3A00Z&per_page=100&page=1`
       ] = {
@@ -1330,7 +1479,8 @@ describe("publication status real CLI", () => {
       if (kind === "awaiting") {
         return;
       }
-      observeRun(responses, builder);
+      responses[`repos/${REPOSITORY}/actions/runs/910`] = builder;
+      responses[`repos/${REPOSITORY}/actions/workflows/9100`] = { id: 9100, path: builder.path };
       await artifact(
         5,
         builder,
@@ -1354,13 +1504,20 @@ describe("publication status real CLI", () => {
       responses[`repos/${REPOSITORY}/actions/runs/910/attempts/1/jobs?per_page=100&page=1`] = {
         total_count: 1,
         jobs: [
-          publicationJob(
-            "Validate release tag",
-            9101,
-            builder.conclusion,
-            [publicationStep("Retain Linux builder admission")],
-            910,
-          ),
+          {
+            ...job("Validate release tag", builder.conclusion),
+            id: 9101,
+            run_id: 910,
+            run_attempt: 1,
+            steps: [
+              {
+                number: 1,
+                name: "Retain Linux builder admission",
+                status: "completed",
+                conclusion: "success",
+              },
+            ],
+          },
         ],
       };
     });
@@ -1500,16 +1657,18 @@ describe("publication status real CLI", () => {
         ...(json ? ["--json"] : []),
       ];
       const result = await runPublicationCli(fixture, args, (responses) => {
-        const jobs = Array.from({ length: 999 }, (_, i) =>
-          publicationJob(
-            "Mirror Docker images to Vercel Container Registry / mirror",
-            10000 + i,
-            "success",
-            Array.from({ length: steps }, (_step, index) =>
-              publicationStep("Copy and verify immutable release images", "success", index + 1),
-            ),
-          ),
-        );
+        const jobs = Array.from({ length: 999 }, (_, i) => ({
+          ...job("Mirror Docker images to Vercel Container Registry / mirror"),
+          id: 10000 + i,
+          run_id: 88,
+          run_attempt: 1,
+          steps: Array.from({ length: steps }, (_step, index) => ({
+            number: index + 1,
+            name: "Copy and verify immutable release images",
+            status: "completed",
+            conclusion: "success",
+          })),
+        }));
         jobs.unshift(publicationFixture().publisherJobs[0]!);
         for (let page = 1; page <= 10; page++) {
           responses[
@@ -1748,7 +1907,7 @@ describe("publication status real CLI", () => {
     const unsafe = "synthetic-secret /private/fixture/key \u001b[31m";
     Reflect.set(fixture.diagnostic, "rawError", unsafe);
     fixture.publisher.display_title = unsafe;
-    fixture.publisherJobs.push(publicationJob(unsafe, 8899));
+    fixture.publisherJobs.push({ ...job(unsafe), id: 8899, run_id: 88, run_attempt: 1, steps: [] });
     const result = await runPublicationCli(fixture);
     expect(result.status).toBe(0);
     expect(
