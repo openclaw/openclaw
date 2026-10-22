@@ -10,9 +10,7 @@ const fetchChannelPermissionsDiscordMock = vi.fn();
 
 function audit(
   channelIds: string[],
-  cfg: OpenClawConfig = {
-    channels: { discord: { enabled: true, token: "t" } },
-  },
+  cfg: OpenClawConfig = { channels: { discord: { enabled: true, token: "t" } } },
 ) {
   return auditDiscordChannelPermissionsWithFetcher({
     cfg,
@@ -39,19 +37,11 @@ describe("discord audit", () => {
         },
       },
     };
-    const cfg = {
-      channels: {
-        discord: {
-          guilds,
-        },
-      },
-    } as unknown as OpenClawConfig;
-
+    const cfg = { channels: { discord: { guilds } } } as unknown as OpenClawConfig;
     const collected = collectDiscordAuditChannelIdsForAccount({
       guilds: cfg.channels?.discord?.guilds,
     });
-    expect(collected.channelIds).toEqual(["111", "222"]);
-    expect(collected.unresolvedChannels).toBe(1);
+    expect(collected).toEqual({ channelIds: ["111", "222"], unresolvedChannels: 1 });
 
     fetchChannelPermissionsDiscordMock.mockResolvedValueOnce({
       permissions: ["ViewChannel"],
@@ -78,19 +68,12 @@ describe("discord audit", () => {
     const collected = collectDiscordAuditChannelIdsForAccount({
       guilds: cfg.channels?.discord?.guilds,
     });
-    expect(collected.channelIds).toEqual(["111"]);
-    expect(collected.unresolvedChannels).toBe(0);
+    expect(collected).toEqual({ channelIds: ["111"], unresolvedChannels: 0 });
   });
 
   it("includes configured voice auto-join channels in permission audits", () => {
     const collected = collectDiscordAuditChannelIdsForAccount({
-      guilds: {
-        "123": {
-          channels: {
-            "111": { enabled: true },
-          },
-        },
-      },
+      guilds: { "123": { channels: { "111": { enabled: true } } } },
       voice: {
         autoJoin: [
           { guildId: "123", channelId: "222" },
@@ -99,8 +82,7 @@ describe("discord audit", () => {
       },
     });
 
-    expect(collected.channelIds).toEqual(["111", "222"]);
-    expect(collected.unresolvedChannels).toBe(1);
+    expect(collected).toEqual({ channelIds: ["111", "222"], unresolvedChannels: 1 });
   });
 
   const voiceMissing = ["Connect", "Speak", "ReadMessageHistory"];

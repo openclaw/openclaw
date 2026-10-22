@@ -36,10 +36,7 @@ function collectVoiceAssignments(
       channels: {
         discord: {
           voice: root,
-          accounts: {
-            inherited: { enabled: true },
-            [accountId]: { enabled: true, voice: work },
-          },
+          accounts: { inherited: { enabled: true }, [accountId]: { enabled: true, voice: work } },
         },
       },
     },
@@ -67,23 +64,16 @@ describe("Discord secret target registry", () => {
       voice({ openai: "WORK_OPENAI" }),
     );
 
+    const rootPath = "channels.discord.voice.realtime.providers";
+    const workPath = "channels.discord.accounts.Work.voice.realtime.providers";
     expect(
       context.assignments
         .filter((assignment) => assignment.path.includes("voice.realtime"))
-        .map(({ ownerId, path }) => ({ ownerId, path })),
+        .map(({ ownerId, path }) => [ownerId, path]),
     ).toStrictEqual([
-      {
-        ownerId: "discord:voice:realtime:inherited:openai",
-        path: "channels.discord.voice.realtime.providers.openai.apiKey",
-      },
-      {
-        ownerId: "discord:voice:realtime:inherited:mistral",
-        path: "channels.discord.voice.realtime.providers.mistral.apiKey",
-      },
-      {
-        ownerId: "discord:voice:realtime:work:openai",
-        path: "channels.discord.accounts.Work.voice.realtime.providers.openai.apiKey",
-      },
+      ["discord:voice:realtime:inherited:openai", `${rootPath}.openai.apiKey`],
+      ["discord:voice:realtime:inherited:mistral", `${rootPath}.mistral.apiKey`],
+      ["discord:voice:realtime:work:openai", `${workPath}.openai.apiKey`],
     ]);
   });
 

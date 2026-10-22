@@ -38,25 +38,19 @@ describe("resolveDiscordToken", () => {
     });
   });
 
-  it("treats unresolved top-level SecretRefs as configured unavailable without env fallback", () => {
-    vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
-    const cfg = config({ token: secret("DISCORD_BOT_TOKEN") });
-    expect(resolveDiscordToken(cfg)).toEqual({
-      token: "",
-      source: "config",
-      tokenStatus: "configured_unavailable",
-    });
-  });
-
-  it("treats unresolved account SecretRefs as configured unavailable without top-level fallback", () => {
-    const cfg = config({
-      token: "base-token",
-      accounts: { work: { token: secret("DISCORD_WORK_TOKEN") } },
-    });
-    expect(resolveDiscordToken(cfg, { accountId: "work" })).toEqual({
-      token: "",
-      source: "config",
-      tokenStatus: "configured_unavailable",
-    });
-  });
+  it.each([undefined, "work"])(
+    "treats unresolved SecretRefs as unavailable without fallback (account %s)",
+    (accountId) => {
+      vi.stubEnv("DISCORD_BOT_TOKEN", "env-token");
+      const token = secret(accountId ? "DISCORD_WORK_TOKEN" : "DISCORD_BOT_TOKEN");
+      const discord = accountId
+        ? { token: "base-token", accounts: { work: { token } } }
+        : { token };
+      expect(resolveDiscordToken(config(discord), { accountId })).toEqual({
+        token: "",
+        source: "config",
+        tokenStatus: "configured_unavailable",
+      });
+    },
+  );
 });

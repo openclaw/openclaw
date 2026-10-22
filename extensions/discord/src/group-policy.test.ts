@@ -16,11 +16,62 @@ function guildConfig(guild: Record<string, unknown>) {
 
 const denied = { requireMention: true, tools: { deny: ["exec"] } };
 const allowed = { requireMention: false, tools: { allow: ["exec"] } };
+const allow = (name: string) => ({ allow: [name] });
+
+function group(cfg: OpenClawConfig, groupId: string, senderId?: string, accountId?: string) {
+  return { cfg, groupSpace: "guild", groupId, senderId, accountId };
+}
 
 describe("discord group policy", () => {
   afterEach(() => {
     setDiscordPolicyBindings("default", []);
     setDiscordPolicyBindings("work", []);
+  });
+
+  it("prefers channel policy, then guild policy, with sender-specific overrides", () => {
+    const cfg = guildConfig({
+      requireMention: false,
+      tools: allow("message.guild"),
+      toolsBySender: { "id:user:guild-admin": allow("sessions.list") },
+      channels: {
+        "123": {
+          requireMention: true,
+          tools: allow("message.channel"),
+          toolsBySender: { "id:user:channel-admin": { deny: ["exec"] } },
+        },
+      },
+    });
+    expect(requiresMention(group(cfg, "123"))).toBe(true);
+    expect(requiresMention(group(cfg, "missing"))).toBe(false);
+    expect(toolPolicy(group(cfg, "123", "user:channel-admin"))).toEqual({ deny: ["exec"] });
+    expect(toolPolicy(group(cfg, "123", "user:someone"))).toEqual(allow("message.channel"));
+    expect(toolPolicy(group(cfg, "missing", "user:guild-admin"))).toEqual(allow("sessions.list"));
+    expect(toolPolicy(group(cfg, "missing", "user:someone"))).toEqual(allow("message.guild"));
+  });
+
+  it("honors account-scoped guild and channel overrides", () => {
+    const cfg = createCfg({
+      guilds: { guild: { requireMention: true, tools: allow("message.root") } },
+      accounts: {
+        work: {
+          guilds: {
+            guild: {
+              requireMention: false,
+              tools: allow("message.account"),
+              channels: {
+                "123": { requireMention: true, tools: allow("message.account-channel") },
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(requiresMention(group(cfg, "missing", undefined, "work"))).toBe(false);
+    expect(requiresMention(group(cfg, "123", undefined, "work"))).toBe(true);
+    expect(toolPolicy(group(cfg, "missing", undefined, "work"))).toEqual(allow("message.account"));
+    expect(toolPolicy(group(cfg, "123", undefined, "work"))).toEqual(
+      allow("message.account-channel"),
+    );
   });
 
   it.each(["ops", "#ops", "2026"])("binds resolved name key %s to its channel id", (channelKey) => {

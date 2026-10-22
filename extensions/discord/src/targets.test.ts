@@ -3,10 +3,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDiscordDirectoryUserId } from "./directory-cache.js";
 import { clearDiscordDirectoryCacheForTest } from "./directory-cache.test-support.js";
 import * as directoryLive from "./directory-live.js";
-import {
-  resolveDiscordGroupRequireMention,
-  resolveDiscordGroupToolPolicy,
-} from "./group-policy.js";
 import { parseDiscordTarget, resolveDiscordChannelId } from "./target-parsing.js";
 import { resolveDiscordTarget } from "./target-resolver.js";
 
@@ -115,90 +111,5 @@ describe("resolveDiscordTarget", () => {
     });
     expect(resolveDiscordDirectoryUserId({ accountId: "work", handle: "jane" })).toBe("999");
     expect(resolveDiscordDirectoryUserId({ accountId: "default", handle: "jane" })).toBeUndefined();
-  });
-});
-
-const groupContext =
-  (cfg: OpenClawConfig, accountId?: string) => (groupId: string, senderId?: string) => ({
-    cfg,
-    accountId,
-    groupSpace: "guild1",
-    groupId,
-    senderId,
-  });
-
-describe("discord group policy", () => {
-  it("prefers channel policy, then guild policy, with sender-specific overrides", () => {
-    const discordCfg = config({
-      guilds: {
-        guild1: {
-          requireMention: false,
-          tools: { allow: ["message.guild"] },
-          toolsBySender: {
-            "id:user:guild-admin": { allow: ["sessions.list"] },
-          },
-          channels: {
-            "123": {
-              requireMention: true,
-              tools: { allow: ["message.channel"] },
-              toolsBySender: {
-                "id:user:channel-admin": { deny: ["exec"] },
-              },
-            },
-          },
-        },
-      },
-    });
-    const group = groupContext(discordCfg);
-
-    expect(resolveDiscordGroupRequireMention(group("123"))).toBe(true);
-    expect(resolveDiscordGroupRequireMention(group("missing"))).toBe(false);
-    expect(resolveDiscordGroupToolPolicy(group("123", "user:channel-admin"))).toEqual({
-      deny: ["exec"],
-    });
-    expect(resolveDiscordGroupToolPolicy(group("123", "user:someone"))).toEqual({
-      allow: ["message.channel"],
-    });
-    expect(resolveDiscordGroupToolPolicy(group("missing", "user:guild-admin"))).toEqual({
-      allow: ["sessions.list"],
-    });
-    expect(resolveDiscordGroupToolPolicy(group("missing", "user:someone"))).toEqual({
-      allow: ["message.guild"],
-    });
-  });
-
-  it("honors account-scoped guild and channel overrides", () => {
-    const discordCfg = config({
-      guilds: {
-        guild1: {
-          requireMention: true,
-          tools: { allow: ["message.root"] },
-        },
-      },
-      accounts: {
-        work: {
-          guilds: {
-            guild1: {
-              requireMention: false,
-              tools: { allow: ["message.account"] },
-              channels: {
-                "123": {
-                  requireMention: true,
-                  tools: { allow: ["message.account-channel"] },
-                },
-              },
-            },
-          },
-        },
-      },
-    });
-    const group = groupContext(discordCfg, "work");
-
-    expect(resolveDiscordGroupRequireMention(group("missing"))).toBe(false);
-    expect(resolveDiscordGroupRequireMention(group("123"))).toBe(true);
-    expect(resolveDiscordGroupToolPolicy(group("missing"))).toEqual({ allow: ["message.account"] });
-    expect(resolveDiscordGroupToolPolicy(group("123"))).toEqual({
-      allow: ["message.account-channel"],
-    });
   });
 });
