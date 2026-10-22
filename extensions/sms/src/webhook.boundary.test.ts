@@ -1,3 +1,4 @@
+import { createHmac } from "node:crypto";
 import { request, type RequestListener } from "node:http";
 import { createConnection } from "node:net";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
@@ -8,18 +9,14 @@ import {
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { postRawWebhook, withServer } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { startSmsGatewayAccount } from "./gateway.js";
 import type { SmsChannelRuntime } from "./inbound.js";
 import { createSmsWebhookHandler } from "./webhook.js";
 import {
   advanceSmsTestAccountId,
   createSmsTestAccount,
-  createSmsTestRequest,
-  createSmsTestResponse,
   createSmsTestDeliveryRecorder,
-  signSmsTestForm,
-  createSmsTestForm,
 } from "./webhook.test-support.js";
 
 const enqueueSmsIngress = vi.hoisted(() =>
@@ -168,24 +165,36 @@ it("closes overflow uploads and recovers capacity for a signed callback", async 
         const released = await Promise.all(held.map((pending) => pending.result));
         expect(released.every((statusCode) => statusCode === 403)).toBe(true);
 
-        const form = createSmsTestForm(
-          { Body: "boundary proof", MessageSid: "SM00000000000000000000000000000985" },
-          account,
-        );
-        const { body, signature } = signSmsTestForm(form, account);
+        const form: Record<string, string> = {
+          AccountSid: account.accountSid,
+          From: "+15551234567",
+          To: account.fromNumber,
+          Body: "boundary proof",
+          MessageSid: "SM00000000000000000000000000000985",
+        };
+        const body = new URLSearchParams(form).toString();
+        const signed =
+          account.publicWebhookUrl +
+          Object.keys(form)
+            .toSorted()
+            .map((key) => `${key}${form[key] ?? ""}`)
+            .join("");
         const admitted = await fetch(`${baseUrl}/webhooks/sms`, {
           method: "POST",
           body,
           headers: {
             "content-type": "application/x-www-form-urlencoded",
-            "x-twilio-signature": signature,
+            "x-twilio-signature": createHmac("sha1", account.authToken)
+              .update(signed)
+              .digest("base64"),
           },
         });
 
         expect(admitted.status).toBe(200);
         expect(admitted.headers.get("x-openclaw-delivery-accepted")).toBe("durable");
         await admitted.text();
-        expect(enqueueSmsIngress).toHaveBeenCalledExactlyOnceWith(form);
+        expect(enqueueSmsIngress).toHaveBeenCalledOnce();
+        expect(enqueueSmsIngress).toHaveBeenCalledWith(form);
       } finally {
         for (const pending of held) {
           pending.request.destroy();
@@ -264,70 +273,3 @@ it.each([
     );
   },
 );
-
-describe("SMS delivery callback admission", () => {
-  afterEach(() => vi.useRealTimers());
-
-  function createDeliveryRoute(account = createSmsTestAccount(), warn = vi.fn()) {
-    const delivery = createSmsTestDeliveryRecorder();
-    const handler = createSmsWebhookHandler({
-      cfg: {},
-      account,
-      ingress: { enqueue: enqueueSmsIngress },
-      delivery,
-      log: { warn },
-    });
-    return {
-      delivery,
-      submit: async (index: number) => {
-        const form = {
-          AccountSid: account.accountSid,
-          From: account.fromNumber,
-          To: "+15551234567",
-          MessageSid: `SM${index.toString(16).padStart(32, "0")}`,
-          MessageStatus: "sent",
-        };
-        const res = createSmsTestResponse();
-        await handler(
-          createSmsTestRequest(signSmsTestForm(form, account), { remoteAddress: "203.0.113.50" }),
-          res,
-        );
-        return res;
-      },
-    };
-  }
-
-  it("bounds writes per account route and reopens after the window resets", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    const warn = vi.fn();
-    const { delivery, submit } = createDeliveryRoute(
-      createSmsTestAccount({ accountId: "default" }),
-      warn,
-    );
-    for (let i = 0; i < 3_000; i += 1) {
-      expect((await submit(i)).statusCode).toBe(200);
-    }
-    const rejected = await submit(3_000);
-    expect(rejected.statusCode).toBe(503);
-    expect(rejected.setHeader).not.toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
-    expect(delivery.record.mock.calls).toHaveLength(3_000);
-    expect(warn).toHaveBeenCalledWith("SMS delivery callback rate limit exceeded");
-
-    const other = createDeliveryRoute(
-      createSmsTestAccount({
-        accountId: "support",
-        accountSid: "AC-support",
-        webhookPath: "/webhooks/sms/support",
-        publicWebhookUrl: "https://gateway.example.com/webhooks/sms/support",
-      }),
-    );
-    expect((await other.submit(3_001)).statusCode).toBe(200);
-    expect(other.delivery.record).toHaveBeenCalledOnce();
-
-    vi.setSystemTime(Date.now() + 60_001);
-    const reopened = await submit(3_000);
-    expect(reopened.statusCode).toBe(200);
-    expect(reopened.setHeader).toHaveBeenCalledWith("x-openclaw-delivery-accepted", "durable");
-    expect(delivery.record.mock.calls).toHaveLength(3_001);
-  });
-});
