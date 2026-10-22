@@ -1,3 +1,4 @@
+import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost, getAiTransportHost } from "../host.js";
 import { createAssistantOutput } from "../transports/assistant-output.js";
@@ -84,6 +85,30 @@ describe("azure-openai-responses", () => {
     expect(result.errorMessage).toBe(
       "Azure OpenAI API key is required. Set AZURE_OPENAI_API_KEY environment variable or pass it as an argument.",
     );
+  });
+
+  it("preserves the selected Code Mode tools at the shared Responses boundary", async () => {
+    const tools = ["exec", "wait", "computer"].map((name) => ({
+      name,
+      description: name,
+      parameters: Type.Object({}),
+    }));
+    await stream(
+      directModel,
+      { ...context, tools },
+      {
+        apiKey: "synthetic-azure-key",
+        openclawCodeModeToolSurface: true,
+      },
+    ).result();
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.body).toMatchObject({
+      tools: [
+        { type: "function", name: "computer" },
+        { type: "function", name: "exec" },
+        { type: "function", name: "wait" },
+      ],
+    });
   });
 
   it("disables response storage and clamps small output limits", async () => {

@@ -6,8 +6,10 @@ import {
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import * as authSource from "../agents/auth-profiles/source-check.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
-import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
-import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
+import {
+  createOAuthAuthProfileStore,
+  createWebSearchTestProvider,
+} from "../test-utils/web-provider-runtime.test-helpers.js";
 import { runWebSearch } from "./runtime.js";
 
 // mock-isolation: Use fixed discovery policy without opening machine state for provider fixtures.
@@ -62,89 +64,54 @@ describe("web search OAuth and environment auto-detection", () => {
   });
 
   it.each([
-    {
-      name: "environment fallback after OAuth failure",
-      oauth: true,
-      pin: undefined,
-      order: ["grok", "tavily"],
-    },
-    {
-      name: "environment only",
-      oauth: false,
-      pin: undefined,
-      order: ["tavily"],
-    },
-    {
-      name: "explicit environment provider",
-      oauth: true,
-      pin: "tavily",
-      order: ["tavily"],
-    },
+    { name: "OAuth fallback", oauth: true, pin: undefined, order: ["grok", "tavily"] },
+    { name: "environment only", oauth: false, pin: undefined, order: ["tavily"] },
+    { name: "explicit environment provider", oauth: true, pin: "tavily", order: ["tavily"] },
   ])("preserves $name", async ({ oauth, pin, order }) => {
     vi.stubEnv("TAVILY_API_KEY", "tavily-synthetic-key");
     const agentDir = tempDirs.make("openclaw-web-search-order-");
-    replaceRuntimeAuthProfileStoreSnapshots([
-      {
-        agentDir,
-        store: {
-          version: 1,
-          profiles: oauth
-            ? {
-                "xai:default": {
-                  type: "oauth",
-                  provider: "xai",
-                  access: "synthetic-access",
-                  refresh: "synthetic-refresh",
-                  expires: Date.now() + 3_600_000,
-                },
-              }
-            : {},
-        },
-      },
-    ]);
+    const store = oauth
+      ? createOAuthAuthProfileStore({
+          provider: "xai",
+          profileId: "xai:default",
+          access: "synthetic-access",
+          refresh: "synthetic-refresh",
+        })
+      : { version: 1, profiles: {} };
+    replaceRuntimeAuthProfileStoreSnapshots([{ agentDir, store }]);
     const attempts: string[] = [];
-    resolveProviders.mockReturnValue([
-      createWebSearchTestProvider({
-        pluginId: "xai",
-        id: "grok",
-        authProviderId: "xai",
-        credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
-        autoDetectOrder: 30,
-        createTool: () => ({
-          description: "grok",
-          parameters: {},
-          execute: async () => {
-            attempts.push("grok");
-            throw new Error("grok search failed");
-          },
+    resolveProviders.mockReturnValue(
+      [
+        { pluginId: "xai", id: "grok", authProviderId: "xai", autoDetectOrder: 30 },
+        { pluginId: "tavily", id: "tavily", autoDetectOrder: 70 },
+      ].map((entry) =>
+        createWebSearchTestProvider({
+          ...entry,
+          credentialPath: `plugins.entries.${entry.pluginId}.config.webSearch.apiKey`,
+          createTool: () => ({
+            description: entry.id,
+            parameters: {},
+            execute: async () => {
+              attempts.push(entry.id);
+              if (entry.id === "grok") {
+                throw new Error("grok search failed");
+              }
+              return { answer: "environment result" };
+            },
+          }),
         }),
-      }),
-      createWebSearchTestProvider({
-        pluginId: "tavily",
-        id: "tavily",
-        credentialPath: "plugins.entries.tavily.config.webSearch.apiKey",
-        autoDetectOrder: 70,
-        createTool: () => ({
-          description: "tavily",
-          parameters: {},
-          execute: async () => {
-            attempts.push("tavily");
-            return { answer: "environment result" };
-          },
-        }),
-      }),
-    ]);
-    const runtimeWebSearch: RuntimeWebSearchMetadata = {
-      providerSource: pin ? "configured" : "auto-detect",
-      selectedProvider: "tavily",
-      selectedProviderKeySource: "env",
-      diagnostics: [],
-    };
+      ),
+    );
     await expect(
       runWebSearch({
         agentDir,
         config: pin ? { tools: { web: { search: { provider: pin } } } } : {},
-        runtimeWebSearch,
+        runtimeWebSearch: {
+          providerSource: pin ? "configured" : "auto-detect",
+          selectedProvider: "tavily",
+          selectedProviderKeySource: "env",
+          diagnostics: [],
+        },
         args: { query: "OAuth and environment ordering" },
       }),
     ).resolves.toMatchObject({ provider: order.at(-1) });

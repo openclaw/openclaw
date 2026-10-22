@@ -1,14 +1,15 @@
 /* @vitest-environment jsdom */
 
+import { getQueriesForElement } from "@solidjs/testing-library";
 import { createSignal } from "solid-js";
 import { expect, it, vi } from "vitest";
 import { ConfigForm } from "../../components/config-form.render.tsx";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
-import { i18n } from "../../i18n/index.ts";
+import { i18n, t } from "../../i18n/index.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { memorySettingsSchema } from "./memory-schema.ts";
-import { buildMemoryAddonRows, Memory, type MemoryCatalogState } from "./memory.tsx";
+import { Memory, type MemoryCatalogState } from "./memory.tsx";
 
 type MemoryViewProps = Parameters<typeof Memory>[0];
 const addonLabels = [
@@ -16,7 +17,6 @@ const addonLabels = [
   ["memory-wiki", "Memory wiki", "Wiki pages", "disabled"],
 ] as const;
 const emptyOutcomes = () => ({
-  busy: {},
   errors: {},
   notices: {},
   refreshWarnings: {},
@@ -26,24 +26,43 @@ function createProps(overrides: Partial<MemoryViewProps> = {}): MemoryViewProps 
   return {
     activeTab: "settings",
     onTabChange: vi.fn(),
-    engineOptions: [
-      { id: "memory-core", label: "OpenClaw Memory", available: true },
-      { id: "memory-lancedb", label: "Memory LanceDB", available: true },
-    ],
+    catalog: {
+      kind: "ready",
+      mutationAllowed: true,
+      plugins: [
+        {
+          id: "memory-core",
+          name: "OpenClaw Memory",
+          kind: ["memory"],
+          installed: true,
+          enabled: true,
+          state: "enabled",
+        },
+        {
+          id: "memory-lancedb",
+          name: "Memory LanceDB",
+          kind: ["memory"],
+          installed: true,
+          enabled: true,
+          state: "enabled",
+        },
+        ...addonLabels.map(([id, name, description, state]) => ({
+          id,
+          name,
+          description,
+          state,
+          installed: true,
+          enabled: state === "enabled",
+        })),
+      ],
+    },
+    addonOutcomes: emptyOutcomes(),
+    readAddonExpected: () => undefined,
+    readAddonBusy: () => false,
     engineSelection: { kind: "default", pluginId: "memory-core" },
-    engineState: "enabled",
     engineBusy: false,
     engineOutcome: null,
     onEngineChange: vi.fn(),
-    addons: addonLabels.map(([id, label, description, state]) => ({
-      id,
-      label,
-      description,
-      state,
-      busy: false,
-      error: null,
-      notice: null,
-    })),
     canToggleAddons: true,
     onAddonChange: vi.fn(),
     pluginsHref: "/settings/plugins",
@@ -70,36 +89,52 @@ function renderInto(overrides: Partial<MemoryViewProps> = {}): HTMLElement {
   return container;
 }
 
-it("translates declared labels on each read without changing row order", async () => {
-  const rows = () =>
-    buildMemoryAddonRows({ kind: "loading" }, emptyOutcomes()).map((row) => [row.id, row.label]);
-  const english = addonLabels.map(([id, label]) => [id, label]);
+it("names the page with a level-one heading", () => {
+  const container = renderInto();
+  expect(getQueriesForElement(container).getByRole("heading", { level: 1 }).textContent).toBe(
+    "Memory",
+  );
+});
+
+function addonRows(container: HTMLElement) {
+  const section = [...container.querySelectorAll(".settings-section")].find(
+    (item) => item.querySelector("h2")?.textContent === t("memoryPage.addons.title"),
+  );
+  return [...(section?.querySelectorAll(".settings-row") ?? [])].slice(0, 2);
+}
+
+it("translates declared labels without changing row order", async () => {
   try {
     await i18n.setLocale("en");
-    expect(rows()).toEqual(english);
+    const container = renderInto({ catalog: { kind: "loading" } });
+    const labels = () =>
+      addonRows(container).map((row) => row.querySelector(".settings-row__title")?.textContent);
+    expect(labels()).toEqual(["Active memory", "Memory wiki"]);
     await i18n.setLocale("fr");
-    expect(rows()).toEqual([
-      ["active-memory", "Mémoire active"],
-      ["memory-wiki", "Wiki de mémoire"],
-    ]);
+    flush();
+    expect(labels()).toEqual(["Mémoire active", "Wiki de mémoire"]);
     await i18n.setLocale("en");
-    expect(rows()).toEqual(english);
+    flush();
+    expect(labels()).toEqual(["Active memory", "Memory wiki"]);
   } finally {
     await i18n.setLocale("en");
   }
 });
 
 it.each([
-  [{ kind: "loading" }, "loading"],
-  [{ kind: "unavailable" }, "unknown"],
-  [{ kind: "ready", plugins: [], mutationAllowed: false }, "unknown"],
+  [{ kind: "loading" }, "Loading…"],
+  [{ kind: "unavailable" }, "Unknown"],
+  [{ kind: "ready", plugins: [], mutationAllowed: false }, "Unknown"],
 ] satisfies [MemoryCatalogState, string][])(
   "keeps bundled add-ons visible and ordered with a %j catalog",
   (catalog, expectedState) => {
-    const rows = buildMemoryAddonRows(catalog, emptyOutcomes());
-    expect(rows.map((row) => [row.id, row.label, row.description, row.state])).toEqual(
-      addonLabels.map(([id, label]) => [id, label, id, expectedState]),
-    );
+    const container = renderInto({ catalog });
+    const rows = addonRows(container).map((row) => [
+      row.querySelector(".settings-row__title")?.textContent,
+      row.querySelector(".settings-row__desc")?.textContent,
+      row.querySelector(".settings-status")?.textContent?.trim(),
+    ]);
+    expect(rows).toEqual(addonLabels.map(([id, label]) => [label, id, expectedState]));
   },
 );
 
@@ -118,7 +153,17 @@ it("retains engine and add-on controls when their owner publishes new state", ()
     ...current,
     engineSelection: { kind: "pinned", pluginId: "memory-lancedb" },
     engineOutcome: { kind: "warning", message: "Refresh pending" },
-    addons: current.addons.map((item) => ({ ...item, state: "disabled" })),
+    catalog:
+      current.catalog.kind === "ready"
+        ? {
+            ...current.catalog,
+            plugins: current.catalog.plugins.map((item) => ({
+              ...item,
+              enabled: false,
+              state: "disabled",
+            })),
+          }
+        : current.catalog,
   }));
   flush();
 
@@ -137,9 +182,8 @@ it("replaces the memory-import link with an admin-required note", () => {
 
 it("keeps a configured missing engine selected and labels it unavailable", () => {
   const container = renderInto({
-    engineOptions: [{ id: "retired-memory", label: "retired-memory", available: false }],
+    catalog: { kind: "ready", plugins: [], mutationAllowed: true },
     engineSelection: { kind: "pinned", pluginId: "retired-memory" },
-    engineState: "unknown",
   });
 
   const input = container.querySelector<HTMLInputElement>('input[value="retired-memory"]');

@@ -31,6 +31,13 @@ registration/loading, not replicas of any private plugin implementation.
 `--latency-ms` sets the inbound message delay (default 35 ms). `--frame-gap-ms`
 sets the minimum separation between Gateway message deliveries (default 4 ms).
 Concurrent requests remain concurrent; replies share one serialized wire.
+`--sidebar-query-latency-ms ownerFirst=400` (also `involvingMe`, `ownerCounts`, and
+`children`) overrides method latency for that sidebar query shape. Use
+`--omit-hello-self-presence --method-latency-ms users.self=900` to exercise identity
+resolution after hello. `--sidebar-avatars` supplies synthetic avatar resources;
+`--sidebar-expanded` saves a Show more selection before replay. Warm-reload output
+includes per-frame sidebar row keys/order hashes, section headers, avatar sources,
+and retained cached row elements. These are DOM observations, not pixel paint times.
 `--sidebar-view` selects `sessions` (default, with Involving me selected) or `online`.
 Run both because current UI presents these inventories in separate sidebar views.
 Default reloads use one agent chip; explicit churn scenarios use the all-agent roster.

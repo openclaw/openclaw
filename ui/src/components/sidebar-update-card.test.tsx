@@ -370,7 +370,7 @@ describe("SidebarUpdateCard", () => {
     expect(element.props().onUpdate).not.toHaveBeenCalled();
   });
 
-  it("ignores an obsolete refresh result after recovery state is re-established", async () => {
+  it("retains refresh retries across shell updates and ignores obsolete recovery results", async () => {
     const element = await mount(null);
     const first = createDeferred<boolean>();
     const second = createDeferred<boolean>();
@@ -398,9 +398,14 @@ describe("SidebarUpdateCard", () => {
     expect(action?.disabled).toBe(true);
     expect(element.text()).not.toContain(reconnectFailure);
 
+    await element.update({ connected: false });
+    expect(action?.disabled).toBe(true);
     second.resolve(false);
     await vi.waitFor(() => expect(action?.disabled).toBe(false));
     expect(element.text()).toContain(reconnectFailure);
+    await element.update({ connected: true });
+    expect(element.text()).toContain(reconnectFailure);
+    expect(action?.textContent).toContain("Retry now");
     action?.click();
     expect(onRefresh).toHaveBeenCalledTimes(3);
   });

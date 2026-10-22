@@ -133,7 +133,11 @@ export function useSessionMessageCutFixtures() {
     });
     // Leaf selection schedules projection writes; read/close tests need setup ownership settled.
     await waitForSessionTranscriptIndexReconcilesInStateDir(stateDir);
-    return { env, scope };
+    return {
+      env,
+      scope,
+      params: { agentId, env, sessionKey: scope.sessionKey, entryId: "user-2" },
+    };
   }
 
   return { tempDirs, createSession, createSiblingSession };

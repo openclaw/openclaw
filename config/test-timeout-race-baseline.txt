@@ -7,7 +7,7 @@ packages/ai/src/transports/openai-responses-client.continuation.test.ts	2
 packages/gateway-client/src/scope-upgrade.test.ts	2
 packages/memory-host-sdk/src/host/batch-upload.test.ts	3
 packages/memory-host-sdk/src/host/post-json.test.ts	3
-packages/memory-host-sdk/src/host/response-snippet.test.ts	6
+packages/memory-host-sdk/src/host/response-snippet.test.ts	3
 src/agents/agent-bundle-mcp-manager.pending-disposal.test.ts	1
 src/agents/agent-bundle-mcp-tools.materialize.test.ts	1
 src/agents/agent-tool-definition-adapter.test.ts	2
@@ -38,7 +38,6 @@ src/config/sessions/session-cold-storage.test.ts	1
 src/config/sessions/session-history-archive-pruning.admission.test.ts	4
 src/config/sessions/session-history-eviction.writer-fairness.test.ts	2
 src/config/sessions/session-transcript-reconcile.native-exit.test.ts	2
-src/cron/service.wake-now-real-heartbeat.test.ts	2
 src/daemon/schtasks.env-case.real.test.ts	4
 src/gateway/desktop/computer-authority.runtime.test.ts	1
 src/gateway/gateway-active-memory.test.ts	1

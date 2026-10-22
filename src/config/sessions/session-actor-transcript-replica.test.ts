@@ -1,5 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import type { SessionActorTranscriptRow } from "./session-actor-bounded-history.js";
 import { createSessionActorCommittedOutcome } from "./session-actor-receipt.js";
@@ -221,16 +221,12 @@ describe("actor transcript context replica", () => {
     const { hot, prepared } = fixture();
     const retained = seed(undefined, hot, prepared, limits);
     const first = prepared.snapshot.events[1];
-    if (!isRecord(first)) {
-      throw new Error("Expected a message fixture");
-    }
+    assert(isRecord(first), "Expected a message fixture");
     first.id = "mutated-input";
     const read = readContext(retained, hot, limits);
     expect(read?.snapshot.events[1]).toEqual(message("user", null, "user"));
     const returned = read?.snapshot.events[1];
-    if (!isRecord(returned)) {
-      throw new Error("Expected a retained message");
-    }
+    assert(isRecord(returned), "Expected a retained message");
     returned.id = "mutated-output";
     expect(readContext(retained, hot, limits)?.snapshot.events[1]).toEqual(
       message("user", null, "user"),

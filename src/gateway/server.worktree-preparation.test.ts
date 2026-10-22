@@ -74,6 +74,43 @@ it.each([
       expect(await fs.readFile(path.join(spawnedCwd, "src/remaining.txt"), "utf8")).toBe(
         "Complete checkout.\n",
       );
+      if (sandboxRequired) {
+        const githubPullRequest = {
+          url: "https://github.com/example/project/pull/7",
+          host: "github.com",
+          number: 7,
+          base: {
+            repository: "example/project",
+            repositoryId: 1,
+            branch: "main",
+            commit: "a".repeat(40),
+          },
+          head: {
+            repository: "contributor/project",
+            repositoryId: 2,
+            branch: "feature",
+            commit: "b".repeat(40),
+          },
+          preparedHeadCommit: "b".repeat(40),
+        };
+        const reused = await prepareSessionWorktree({
+          cfg,
+          target: {
+            agentId: "main",
+            key: "agent:main:sandbox-worktree",
+            storePath: path.join(state.sessionsDir(), "sessions.sqlite"),
+            sandboxRequired,
+            entry: {
+              sessionId: "workspace-reuse",
+              updatedAt: 1,
+              worktree: { ...worktree, githubPullRequest },
+            },
+          },
+          workspace,
+          runSetupScript: false,
+        });
+        expect(reused.ok && reused.value.worktree?.githubPullRequest).toEqual(githubPullRequest);
+      }
       if (hookEvent) {
         const bootstrap = await resolveBootstrapContextForRun({
           workspaceDir: spawnedCwd,

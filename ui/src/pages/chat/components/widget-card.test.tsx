@@ -148,6 +148,41 @@ afterEach(async () => {
 });
 
 describe("widget-card", () => {
+  it("retains video playback through title changes after the player loads", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        disconnect() {}
+      },
+    );
+    onTestFinished(() => {
+      vi.unstubAllGlobals();
+    });
+    const preview = {
+      ...canvasPreview,
+      title: "Synthetic video",
+      url: "https://youtu.be/AbCdEfGhI_1",
+    };
+    const host = mountWidget(preview, { sessionKey: "agent:main:video" });
+    await waitForSolid(() =>
+      expect(host.querySelector('button[aria-label="Play Synthetic video"]')).not.toBeNull(),
+    );
+    host.querySelector<HTMLButtonElement>('button[aria-label="Play Synthetic video"]')!.click();
+    flush();
+    const frame = host.querySelector("iframe");
+    expect(frame).not.toBeNull();
+
+    mountWidget(
+      { ...preview, title: "Updated video title" },
+      { sessionKey: "agent:main:video" },
+      host,
+    );
+
+    expect(host.querySelector("iframe")).toBe(frame);
+    expect(frame?.title).toBe("YouTube player: Updated video title");
+  });
+
   it("exports the current raw frame after replacing its URL", async () => {
     const exportImage = vi.spyOn(widgetExport, "exportWidget").mockResolvedValue("png");
     onTestFinished(() => exportImage.mockRestore());

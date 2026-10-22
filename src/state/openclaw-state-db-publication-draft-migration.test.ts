@@ -71,6 +71,7 @@ it.each([false, true])(
     expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
       { kind: "github-publication-draft-v28", path: pathname },
       { kind: "local-client-credentials-v29", path: pathname },
+      { kind: "automation-policy-fence-v30", path: pathname },
     ]);
     await withStateMigrationBackupForTest(options, async () => {
       using witness = new DatabaseSync(pathname);

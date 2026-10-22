@@ -30,6 +30,7 @@ export function parseTeamShapeOptions(argv: string[]) {
       "long-transcript-sessions": { type: "string" },
       "worktree-files": { type: "string" },
       "nested-repository": { type: "boolean" },
+      "github-options-connected": { type: "boolean" },
       port: { type: "string" },
       launch: { type: "boolean" },
       help: { type: "boolean" },
@@ -75,6 +76,9 @@ export function parseTeamShapeOptions(argv: string[]) {
   if ((worktreeFiles > 0 || values["nested-repository"]) && projects === 0) {
     throw new Error("--worktree-files and --nested-repository require at least one project");
   }
+  if (values["github-options-connected"] && projects === 0) {
+    throw new Error("--github-options-connected requires at least one project");
+  }
   return {
     stateDir: path.resolve(values["state-dir"] ?? "."),
     sessions,
@@ -89,6 +93,7 @@ export function parseTeamShapeOptions(argv: string[]) {
     longTranscriptSessions,
     worktreeFiles,
     nestedRepository: values["nested-repository"] ?? false,
+    githubOptionsConnected: values["github-options-connected"] ?? false,
     port,
     launch: values.launch ?? false,
     help: values.help ?? false,
@@ -140,7 +145,6 @@ export async function generateTeamShapeFixture(options: ReturnType<typeof parseT
       cron: { enabled: false },
       update: { checkOnStart: false },
       agents: {
-        defaults: { heartbeat: { every: "0m" } },
         entries: { main: { workspace: path.join(stateDir, "workspace") } },
       },
       logging: { file: path.join(stateDir, "gateway.log") },
@@ -200,6 +204,7 @@ async function main() {
   --seed 967 --now <epoch-ms> --transcript-mib 64
   --long-transcript-entries 0 --long-transcript-sessions 4
   --worktree-files 0 --nested-repository
+  --github-options-connected  Register synthetic GitHub origins for dashboard measurements.
   --launch --port 40967    Start an isolated loopback dev Gateway after generation.
 State is synthetic and must not exist. Existing state is never overwritten.
 Transcript MiB is logical text before compression; actual database sizes are reported.

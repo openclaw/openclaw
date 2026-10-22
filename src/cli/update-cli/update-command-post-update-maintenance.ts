@@ -45,7 +45,7 @@ export async function preparePostUpdateService(
             mode: params.result.mode,
             status: params.result.status,
             runId: run.runId,
-            ledger: { env: run.env },
+            ledger: run,
             root: params.result.root ?? params.root,
             timeoutMs: params.updateStepTimeoutMs,
             assertCurrent,
@@ -102,7 +102,7 @@ export async function preparePostUpdateService(
     recordUpdateRunStep(
       params.opts.run.runId,
       { step: "restart", status: "skipped", endedAtMs: Date.now(), detail: "skipped by operator" },
-      { env: params.opts.run.env },
+      params.opts.run,
     );
   }
   return shouldRestart;

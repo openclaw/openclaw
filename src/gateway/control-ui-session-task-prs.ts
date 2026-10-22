@@ -8,12 +8,17 @@ import type { ControlUiSessionTaskPullRequest } from "./control-ui-contract.js";
 import type { EntryRow } from "./session-row-projection-record.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
 
+// Only structural selections are shared. Audience checks remain live for every reader.
+const childrenByRevision = new WeakMap<object, Map<string, EntryRow[]>>();
+
 /** Traverse the row owner's indexed lineage; neither checkout nor transcript is evidence. */
 export function selectTaskPublicationSessions(
   projection: SessionRowProjection,
   root: EntryRow,
   allows: (row: EntryRow) => boolean,
 ): TaskPublicationRead["sessions"] {
+  // Registry publications can defer parent-index updates until row preparation.
+  void projection.state;
   const seen = new Set<string>();
   const pending = [root];
   const sessions: TaskPublicationRead["sessions"] = [];
@@ -34,7 +39,19 @@ export function selectTaskPublicationSessions(
       sessionId: row.entry.sessionId,
       lifecycleRevision: row.entry.lifecycleRevision ?? null,
     });
-    pending.push(...projection.selectEntries({ parentSessionKey: row.key }));
+    const revision = projection.sharingRevision;
+    let children = revision && childrenByRevision.get(revision);
+    if (!children && revision) {
+      children = new Map();
+      childrenByRevision.set(revision, children);
+    }
+    let selected = children?.get(row.key);
+    if (!selected) {
+      selected = projection.selectEntries({ parentSessionKey: row.key });
+      // Acquisition may advance the revision; never label earlier candidates with its successor.
+      children?.set(row.key, selected);
+    }
+    pending.push(...selected);
   }
   return sessions.toSorted(
     (a, b) => a.sessionKey.localeCompare(b.sessionKey) || a.agentId.localeCompare(b.agentId),

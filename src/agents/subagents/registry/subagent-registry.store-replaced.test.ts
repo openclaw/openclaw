@@ -82,6 +82,12 @@ function expectNoSystemEvents(database: ReturnType<typeof openOpenClawStateDatab
   ).toEqual([]);
 }
 
+const retiredDelivery = {
+  status: "suspended",
+  disposition: "intentional_non_delivery",
+  lastError: "store replaced",
+} as const;
+
 const recoveryWarn = vi.hoisted(() => vi.fn());
 vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../../logging/subsystem.js")>();
@@ -258,11 +264,7 @@ it.each([false, true])(
     expectNoSystemEvents(database);
     expect(loadSubagentRegistryFromSqlite().get(subagent.runId)).toMatchObject({
       completion: { resultText: "canonical result" },
-      delivery: {
-        status: "suspended",
-        disposition: "intentional_non_delivery",
-        lastError: "store replaced",
-      },
+      delivery: retiredDelivery,
     });
   },
 );
@@ -320,11 +322,7 @@ it("keeps an observed late-result store retirement after the original selector r
   const saved = loadSubagentRegistryFromSqlite().get(entry.runId);
   expect(saved?.execution).toEqual(executionBefore);
   expect(saved?.completion?.resultText).toBe(input.subagent.completion?.resultText);
-  expect(saved?.delivery).toMatchObject({
-    status: "suspended",
-    disposition: "intentional_non_delivery",
-    lastError: "store replaced",
-  });
+  expect(saved?.delivery).toMatchObject(retiredDelivery);
   expect(saved?.requesterSettleWake).toBeUndefined();
   expect(driver.wake).not.toHaveBeenCalled();
   expectNoSystemEvents(database);
@@ -473,9 +471,7 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
     expectNoSystemEvents(database);
     if (change !== "same") {
       expect(persisted?.delivery).toMatchObject({
-        status: "suspended",
-        disposition: "intentional_non_delivery",
-        lastError: "store replaced",
+        ...retiredDelivery,
         payload: receipt.payload,
       });
       expect(persisted?.requesterSettleWake).toBeUndefined();
@@ -529,6 +525,8 @@ it.each([false, true])(
       );
       const wake = { status: "pending", attemptCount: 0 } as const;
       const delivered = { status: "delivered", deliveredAt: 260, announcedAt: 260 } as const;
+      const terminal = { status: "terminal", endedAt: 250 } as const;
+      const paused = { pauseReason: "sessions_yield", execution: terminal } as const;
       const legacyStates: Partial<SubagentRunRecord>[] = [
         { requesterSettleWake: wake, cleanupCompletedAt: 300, delivery: delivered },
         { requesterSettleWake: wake, cleanupCompletedAt: 300 },
@@ -536,26 +534,19 @@ it.each([false, true])(
           requesterSettleWake: wake,
           delivery: { status: "suspended", disposition: "permanent_failure" },
         },
-        { execution: { status: "terminal", endedAt: 250 } },
+        { execution: terminal },
+        { ...paused, requesterStorePath: "old" },
         {
-          pauseReason: "sessions_yield",
-          execution: { status: "terminal", endedAt: 250 },
-          requesterStorePath: "old",
-        },
-        {
-          pauseReason: "sessions_yield",
-          execution: { status: "terminal", endedAt: 250 },
+          ...paused,
           requesterStorePath: undefined,
           delivery: delivered,
         },
         {
-          pauseReason: "sessions_yield",
-          execution: { status: "terminal", endedAt: 250 },
+          ...paused,
           requesterSettleWake: { ...wake, pauseNotice: { acknowledgment: "Paused" } },
         },
         {
-          pauseReason: "sessions_yield",
-          execution: { status: "terminal", endedAt: 250 },
+          ...paused,
           requesterSettleWake: { ...wake, requesterYieldBatch: true, rearmGeneration: 1 },
         },
         {

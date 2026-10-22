@@ -1,12 +1,23 @@
 import { expect, it } from "vitest";
 import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { runWithSqliteWorkerStateContext as withWorkerState } from "../../infra/sqlite-worker-state-context.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { claimCronRecoveryReceipt } from "../service/run-recovery.test-support.js";
 import { loadCronStore, saveCronStore } from "../store.js";
+import { mutateCronJobsInWorker } from "./guarded-mutation.worker.js";
 import { cronStoreKey } from "./key.js";
+import { loadCronStoreFromDatabase } from "./load.kernel.js";
 import { finalizeCronRunsInWorker } from "./run-finalization.worker.js";
+import { queueJob, scheduled } from "./run-queue.test-support.js";
+import {
+  cancelCronRequestsInWorker,
+  drainCronQueueInWorker,
+  requestCronRunsInWorker,
+} from "./run-queue.worker.js";
 
 it("commits execution, delivery, and history once despite an owner edit and a duplicate terminal result", async () => {
   await withOpenClawTestState({ label: "cron-terminal-result" }, async (fixture) => {
@@ -90,3 +101,109 @@ it("commits execution, delivery, and history once despite an owner edit and a du
     ).toEqual([{ status: "succeeded", ended_at: now + 10 }]);
   });
 });
+
+it.each(["cancel", "disable"] as const)(
+  "retains an unstarted due slot across receipt pruning without replay after %s",
+  async (terminalAction) => {
+    await withOpenClawTestState({ label: "cron-deferred-receipts" }, async (fixture) => {
+      const now = 1_800_000_000_000;
+      const storeKey = fixture.statePath("cron", "jobs.json");
+      const original = queueJob("deferred", now, {
+        schedule: { kind: "every", everyMs: 60_000, anchorMs: now },
+        state: { nextRunAtMs: now, lastRunStatus: "ok", lastRunAtMs: now - 60_000 },
+      });
+      await saveCronStore(storeKey, { version: 1, jobs: [original] });
+      await closeOpenClawStateDatabaseAsync();
+      const database = openOpenClawStateDatabase();
+      withWorkerState({ environment: { OPENCLAW_STATE_DIR: fixture.stateDir } }, () => {
+        const request = scheduled(storeKey, original, now);
+        const claim = () =>
+          requestCronRunsInWorker(database, { storeKey, nowMs: now, requests: [request] });
+        const current = () => loadCronStoreFromDatabase(database.db, storeKey).store.jobs[0]!;
+        // Exercise real retention: the first receipt must disappear, but the slot remains due.
+        for (let index = 0; index < 65; index += 1) {
+          expect(claim().accepted).toHaveLength(1);
+          const run = drainCronQueueInWorker(database, {
+            storeKey,
+            nowMs: now + 1,
+            requests: [],
+            maxConcurrentRuns: 1,
+          }).launches[0]!;
+          expect(run).toBeDefined();
+          const result = finalizeCronRunsInWorker(database, {
+            storeKey,
+            snapshot: {
+              nowMs: now + index + 10,
+              defaultAgentId: "main",
+              outcomes: [
+                {
+                  jobId: original.id,
+                  job: run.job,
+                  runReceipt: run.runReceipt,
+                  status: "skipped",
+                  completionStatus: "failed",
+                  deliveryState: {
+                    status: "not-requested",
+                    failureNotification: { status: "not-requested" },
+                  },
+                  admissionDeferred: true,
+                  executionStarted: false,
+                  startedAt: run.runReceipt.startedAtMs,
+                  endedAt: now + index + 10,
+                },
+              ],
+            },
+          });
+          expect(result.outcome.eventPlans).toEqual([]);
+          expect(current().state).toMatchObject(original.state);
+          expect(current().state.runningAtMs).toBeUndefined();
+        }
+        expect(
+          database.db
+            .prepare("SELECT receipt_id FROM cron_run_receipts WHERE receipt_id = ?")
+            .get(request.receiptId),
+        ).toBeUndefined();
+        expect(database.db.prepare("SELECT COUNT(*) AS count FROM task_runs").get()).toEqual({
+          count: 0,
+        });
+        const retried = claim().accepted[0]!;
+        expect(retried.runReceipt.receiptId).not.toBe(request.receiptId);
+        // The final decision is authoritative even after a backward clock adjustment.
+        if (terminalAction === "cancel") {
+          cancelCronRequestsInWorker(database, {
+            storeKey,
+            receiptIds: [retried.runReceipt.receiptId],
+            nowMs: now + 2,
+            reason: "synthetic cancellation",
+          });
+        } else {
+          mutateCronJobsInWorker(database, {
+            storeKey,
+            jobMutation: {
+              kind: "update",
+              id: original.id,
+              patch: { enabled: false },
+              options: { captured: false },
+            },
+            snapshot: { nowMs: now + 2 },
+          });
+        }
+        expect(
+          database.db
+            .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+            .get(retried.runReceipt.receiptId),
+        ).toEqual({ status: "skipped" });
+        expect(claim().rejected).toEqual([
+          { jobId: original.id, receiptId: request.receiptId, reason: "already-requested" },
+        ]);
+        if (terminalAction === "cancel") {
+          expect(current().state.nextRunAtMs).toBe(now + 60_000);
+        }
+        expect(current().state.queuedAtMs).toBeUndefined();
+        expect(database.db.prepare("SELECT COUNT(*) AS count FROM task_runs").get()).toEqual({
+          count: 1,
+        });
+      });
+    });
+  },
+);

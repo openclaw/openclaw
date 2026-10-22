@@ -31,29 +31,34 @@ export function resolveSessionWorkspaceDiff(
     kind: "session-diff",
     // Checkout retirement replaces this identity; ordinary refreshes retain it.
     owner: workspace,
-    load: (scope) => {
-      // Review and Environment ask the same owner; join only identical in-flight scopes.
-      if (scope.scope === "uncommitted" && uncommittedLoad) {
+    load: (scope, options) => {
+      // Background readers share a request; explicit refresh revalidates native state.
+      if (scope.scope === "uncommitted" && uncommittedLoad && !options?.refresh) {
         return uncommittedLoad;
       }
       const request = client.request<SessionsDiffResult>("sessions.diff", {
         sessionKey,
         ...(agentId ? { agentId } : {}),
         ...scope,
-        poll: true,
+        poll: !options?.refresh,
       });
       if (scope.scope !== "uncommitted") {
         return request;
       }
-      uncommittedLoad = request
+      const load: Promise<SessionsDiffResult> = request
         .then((result) => {
-          content.onResult?.({ owner: workspace, scope, result });
+          if (uncommittedLoad === load) {
+            content.onResult?.({ owner: workspace, scope, result });
+          }
           return result;
         })
         .finally(() => {
-          uncommittedLoad = undefined;
+          if (uncommittedLoad === load) {
+            uncommittedLoad = undefined;
+          }
         });
-      return uncommittedLoad;
+      uncommittedLoad = load;
+      return load;
     },
     requestUncommitted: () => {
       let active = true;

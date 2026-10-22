@@ -223,6 +223,18 @@ async function stageDelegation(controller: Preview) {
 }
 
 describe("Discord draft preview REST lifecycle", () => {
+  it.each([undefined, "progress"] as const)(
+    "uses progress previews with normalized delivery settings (mode=%s)",
+    (mode) => {
+      const { controller } = createContinuationHarness({
+        discordConfig: {
+          streaming: { ...(mode ? { mode } : {}), block: { enabled: true } },
+        },
+      });
+      expect(controller.isProgressMode).toBe(true);
+    },
+  );
+
   it("keeps ambient room events private even with default progress", async () => {
     const { controller, visible } = createContinuationHarness({
       discordConfig: {},
@@ -532,13 +544,12 @@ describe("Discord draft preview REST lifecycle", () => {
     expect(requestPaths).toEqual(["POST /channels/c1/messages", "POST /channels/c1/messages"]);
   });
 
-  it("retries teardown cleanup after two failed preview deletions", async () => {
+  it("removes the preview after two transient delete failures in one cleanup", async () => {
     const firstCreateStarted = createDeferred<void>();
     const finishFirstCreate = createDeferred<void>();
     const { controller, visible, deletedIds, failures, admission, requests } =
       createContinuationHarness({
         queueRequests: true,
-        realTimers: true,
       });
     failures.deletes = 2;
     admission.afterCreate = async () => {
@@ -549,11 +560,9 @@ describe("Discord draft preview REST lifecycle", () => {
     await firstCreateStarted.promise;
     const cleanup = controller.cleanup();
     finishFirstCreate.resolve();
+    await vi.runAllTimersAsync();
     await cleanup;
 
-    expect(deletedIds).toEqual(["1", "1"]);
-    expect([...visible]).toEqual([["1", "prior turn progress"]]);
-    await controller.cleanup();
     expect([...visible]).toEqual([]);
     expect(deletedIds.filter((id) => id === "1")).toHaveLength(3);
     expect(requests).toEqual(["POST", "DELETE", "DELETE", "DELETE"]);

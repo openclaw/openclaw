@@ -5,11 +5,11 @@ import { readCronJobScratchState, writeCronJobScratch } from "./scratch-store.js
 import { cronTestDeps, cronTestJob } from "./service.fixture-builders.test-support.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { run } from "./service/ops-run.js";
-import { createCronServiceState, type CronEvent } from "./service/state.js";
+import { createCronServiceState } from "./service/state.js";
 import { onTimer, runMissedJobs } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
-import type { CronJob } from "./types.js";
+import type { CronEvent, CronJob } from "./types.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-removal-postcommit-",

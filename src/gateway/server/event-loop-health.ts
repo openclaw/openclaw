@@ -16,6 +16,7 @@ import { runWithDiagnosticTraceContext } from "../../infra/diagnostic-trace-cont
 import type { GatewayScheduler } from "../../infra/gateway-scheduler.js";
 import { createMainThreadStallMonitor } from "../../infra/main-thread-stall.js";
 import { getTrackedWorkerCpuSources } from "../../infra/worker-cpu.js";
+import { roundDiagnosticMetric as roundMetric } from "../../logging/diagnostic-metric.js";
 import { createStallFlightRecorder } from "../../logging/diagnostic-stall-flight-recorder.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 
@@ -56,14 +57,6 @@ type GatewayEventLoopHealthMetrics = Pick<
   GatewayEventLoopHealth,
   "intervalMs" | "delayP99Ms" | "delayMaxMs" | "utilization" | "cpuCoreRatio"
 >;
-
-function roundMetric(value: number, digits = 3): number {
-  if (!Number.isFinite(value)) {
-    return 0;
-  }
-  const factor = 10 ** digits;
-  return Math.round(value * factor) / factor;
-}
 
 function nanosecondsToMilliseconds(value: number): number {
   return roundMetric(value / 1_000_000, 1);

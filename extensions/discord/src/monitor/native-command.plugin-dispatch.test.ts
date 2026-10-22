@@ -108,7 +108,6 @@ function dispatchAgentReply(
     },
     channelConfig: null,
     mediaLocalRoots: [],
-    preferFollowUp: true,
     pluginCommandDispatch: { kind: "non-plugin" },
     suppressReplies,
     log: { error: vi.fn() } as never,

@@ -144,6 +144,7 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
   void request.promise.catch(() => {});
   const release = () => gate.resolve();
   const callbacks = new Set<Promise<void>>();
+  const failures: unknown[] = [];
   let requests = 0;
   const installed = page.route(module, (route) => {
     if (held.closing) {
@@ -180,22 +181,39 @@ export async function holdModuleResponse(page: Page, module: RegExp) {
         } catch {
           // Preserve the route failure if diagnostics cannot be written.
         }
+        try {
+          await route.abort("failed");
+        } catch (abortError) {
+          throw new AggregateError(
+            [error, abortError],
+            "Held module fetch failed and its route could not be aborted",
+            { cause: abortError },
+          );
+        }
         throw error;
       }
     })();
-    callbacks.add(callback);
-    const completed = () => callbacks.delete(callback);
-    void callback.then(completed, completed);
-    return callback;
+    const owned: Promise<void> = callback.then(
+      () => {
+        callbacks.delete(owned);
+      },
+      (error: unknown) => {
+        callbacks.delete(owned);
+        failures.push(error);
+      },
+    );
+    callbacks.add(owned);
+    return owned;
   });
   // Register before awaiting installation so teardown also owns a pending route().
   const registrations = held.pages.get(page) ?? [];
   registrations.push({
-    close: () => {
+    close: async () => {
       release();
       request.reject(new Error("Browser context cleanup canceled the held module request"));
       // unrouteAll(wait) can auto-continue a sibling before its held fetch completes.
-      return settleControlUiCleanup([...callbacks]);
+      await settleControlUiCleanup([...callbacks]);
+      throwControlUiCleanupErrors(failures);
     },
     installed,
   });

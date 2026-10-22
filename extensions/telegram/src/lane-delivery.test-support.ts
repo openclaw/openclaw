@@ -74,29 +74,23 @@ export function createHarness(params?: {
 type Harness = ReturnType<typeof createHarness>;
 type DeliveryOptions = Parameters<Harness["deliverLaneText"]>[0];
 
-export async function deliverFinalAnswer(
-  harness: Harness,
-  text: string,
-  promptContextSequence?: DeliveryOptions["promptContextSequence"],
-) {
+export function deliver(harness: Harness, text: string, overrides: Partial<DeliveryOptions> = {}) {
   return harness.deliverLaneText({
     laneName: "answer",
     text,
     payload: { text },
     infoKind: "final",
-    ...(promptContextSequence ? { promptContextSequence } : {}),
+    ...overrides,
   });
 }
 
 export async function deliverProjectedFinalAnswer(harness: Harness, text: string) {
-  return deliverFinalAnswer(
-    harness,
-    text,
-    createTelegramPromptContextProjectionSequence({
+  return deliver(harness, text, {
+    promptContextSequence: createTelegramPromptContextProjectionSequence({
       source: { transcriptMessageId: "assistant-1" },
       record: harness.recordPromptContextPreview,
     }),
-  );
+  });
 }
 
 export function expectPreviewFinalized(

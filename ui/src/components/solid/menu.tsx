@@ -1,19 +1,8 @@
 import { dynamic, type JSX } from "@solidjs/web";
-import {
-  For,
-  Show,
-  createMemo,
-  createSignal,
-  flush,
-  onCleanup,
-  onSettled,
-  untrack,
-  merge,
-} from "solid-js";
+import { For, Show, createMemo, onCleanup, onSettled, untrack, merge } from "solid-js";
 import { acquireNativeOverlaySurface } from "../../lib/native-overlay-occlusion.ts";
 import { createAnchoredOverlay } from "../../lib/reactive/overlay-anchor.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
-import { createTimeout } from "../../lib/reactive/timers.ts";
 import { registerMenuShortcuts } from "../menu-shortcuts.ts";
 import type { OverlayPlacement } from "../overlay-anchor.ts";
 import { createOverlay, type Overlay } from "../overlay-lifecycle.ts";
@@ -64,8 +53,6 @@ export type MenuItem = {
   variant?: "danger";
   /** Lazy branches construct their entries on first open. */
   children?: readonly MenuEntry[] | (() => readonly MenuEntry[]);
-  /** Opt this branch into the parent menu's idle preparation. */
-  prewarm?: boolean;
   content?: JSX.Element;
   trigger?: JSX.Element;
   closeOnSelect?: boolean;
@@ -80,8 +67,8 @@ export type MenuEntry =
       id: string;
       class?: string;
       items: readonly MenuEntry[];
-      /** Custom layout retains the native item bindings and this group's lifetime. */
-      render?: (children: JSX.Element) => JSX.Element;
+      /** Invoke inside an async boundary to render resolved rows with native item bindings. */
+      render?: (renderItems: (items: () => readonly MenuEntry[]) => JSX.Element) => JSX.Element;
     };
 
 export type MenuHandle = {
@@ -142,8 +129,6 @@ export type MenuProps = {
   controls?: MenuControls;
   /** Defer until opened; "while-open" releases transient content after the exit. */
   lazy?: boolean | "while-open";
-  /** Prepare a closed menu in idle slices after its page content has settled. */
-  prewarm?: boolean;
   trigger?: JSX.Element;
   children?: JSX.Element;
   class?: JSX.HTMLAttributes<HTMLDivElement>["class"];
@@ -210,10 +195,6 @@ export function Menu(props: BranchProps): JSX.Element {
   }));
   const direction = () => props.dir ?? (document.documentElement.dir === "rtl" ? "rtl" : "ltr");
   const initialLazy = initialIdentity.lazy;
-  let cancelPrewarm: (() => void) | undefined;
-  let renderedCount = 0;
-  let extendBody: ((count: number) => void) | undefined;
-  const prewarmEnabled = createMemo(() => props.prewarm === true && !props.disabled);
   const overlay = createOverlay(initialIdentity.id, initialIdentity.parent, {
     exclusiveGroup: "menu",
     isValid: () =>
@@ -283,6 +264,13 @@ export function Menu(props: BranchProps): JSX.Element {
         ? "left-start"
         : "right-start"
       : "bottom-start");
+  // Anchor setup reads this from onSettled; JSX must not create a conditional memo there.
+  const childPlacement = (): OverlayPlacement | undefined =>
+    placement() === "left-end" || placement() === "right-end"
+      ? direction() === "rtl"
+        ? "left-end"
+        : "right-end"
+      : undefined;
   const activate = (value: string) => {
     const item = findItem(props.items, value);
     if (!item || item.disabled || item.children) {
@@ -314,19 +302,7 @@ export function Menu(props: BranchProps): JSX.Element {
     binding.items().filter((item) => !item.matches(':disabled, [aria-disabled="true"]'));
   const triggerItemRef = initialIdentity.binding?.itemRef();
   const opened = projectOwner(overlay, (owner) => owner.open, Object.is).read;
-  const control = useOverlayControl(
-    overlay,
-    initialLazy,
-    merge(props, {
-      onBeforeShow(event: Event) {
-        if (initialLazy === true && !event.defaultPrevented) {
-          prepareItems();
-        }
-        props.onBeforeShow?.(event);
-      },
-    }),
-    () => body(),
-  );
+  const control = useOverlayControl(overlay, initialLazy, props, () => body());
   const anchor = createAnchoredOverlay(
     overlay,
     () => trigger,
@@ -436,7 +412,7 @@ export function Menu(props: BranchProps): JSX.Element {
           return current.kind === "group" ? current : undefined;
         };
         const groupMount = createMemo<
-          { id: string; render?: (children: JSX.Element) => JSX.Element } | undefined
+          { id: string; render?: Extract<MenuEntry, { kind: "group" }>["render"] } | undefined
         >((previous) => {
           const current = group();
           if (!current) {
@@ -450,11 +426,10 @@ export function Menu(props: BranchProps): JSX.Element {
         const fallback = (
           <Show when={groupMount()} keyed fallback={content()}>
             {(mount) => {
-              const children = renderEntries(() => group()?.items ?? []);
               return mount.render ? (
-                mount.render(children)
+                mount.render(renderEntries)
               ) : (
-                <div class={group()?.class}>{children}</div>
+                <div class={group()?.class}>{renderEntries(() => group()?.items ?? [])}</div>
               );
             }}
           </Show>
@@ -542,9 +517,9 @@ export function Menu(props: BranchProps): JSX.Element {
                         id={`${initialIdentity.id}-${item().id}`}
                         label={item().label}
                         lazy={initialLazy}
-                        prewarm={props.prewarm && item().prewarm}
                         items={childEntries()}
                         controls={props.controls}
+                        placement={childPlacement()}
                         trigger={
                           item().trigger ?? (
                             <>
@@ -592,69 +567,14 @@ export function Menu(props: BranchProps): JSX.Element {
       }}
     </For>
   );
-  const body = () => {
-    const [limit, setLimit] = createSignal(renderedCount || Infinity);
-    extendBody = setLimit;
-    return (
-      <>
-        {props.children}
-        {renderEntries(() => (limit() === Infinity ? props.items : props.items.slice(0, limit())))}
-      </>
-    );
-  };
-  function prepareItems(count = Infinity) {
-    cancelPrewarm?.();
-    cancelPrewarm = undefined;
-    const partial = renderedCount > 0 && renderedCount !== Infinity;
-    renderedCount = count;
-    if (extendBody) {
-      extendBody(count);
-      // Only a partially prepared menu needs a synchronous native-focus commit.
-      if (partial && count === Infinity) {
-        flush();
-      }
-    } else {
-      control.mountBody();
-    }
-  }
-
-  const Prewarm = () => {
-    const slice = () => {
-      prepareItems(renderedCount + 8);
-      if (renderedCount < props.items.length) {
-        schedulePrewarm();
-      } else {
-        renderedCount = Infinity;
-        extendBody?.(Infinity);
-      }
-    };
-    const fallback = createTimeout(slice, 50);
-    function schedulePrewarm() {
-      if (typeof requestIdleCallback === "function") {
-        const idle = requestIdleCallback(slice, { timeout: 3000 });
-        cancelPrewarm = () => cancelIdleCallback(idle);
-      } else {
-        fallback.schedule();
-        cancelPrewarm = fallback.cancel;
-      }
-    }
-    onSettled(() => {
-      if (renderedCount === Infinity) {
-        return undefined;
-      }
-      let frame = requestAnimationFrame(() => {
-        frame = requestAnimationFrame(schedulePrewarm);
-      });
-      cancelPrewarm = () => cancelAnimationFrame(frame);
-      return () => cancelPrewarm?.();
-    });
-    return undefined;
-  };
+  const body = () => (
+    <>
+      {props.children}
+      {renderEntries(() => props.items)}
+    </>
+  );
   return (
     <div class={props.class} dir={direction()}>
-      <Show when={initialLazy === true && prewarmEnabled()}>
-        <Prewarm />
-      </Show>
       <button
         {...binding.trigger(initialIdentity.binding, props.disabled)}
         {...props.triggerAttributes}

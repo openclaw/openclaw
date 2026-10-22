@@ -250,7 +250,11 @@ it("counts accepted event bytes per socket with bounded names and live operator 
       String(frame).includes('"event":"tick"'),
     )![0];
     const lastFrame = first.socket.send.mock.lastCall![0];
-    expect(events[0]!.bytes).toBe(2 * Buffer.byteLength(firstFrame) + Buffer.byteLength(lastFrame));
+    const firstBytes =
+      typeof firstFrame === "string" ? Buffer.byteLength(firstFrame) : firstFrame.byteLength;
+    const lastBytes =
+      typeof lastFrame === "string" ? Buffer.byteLength(lastFrame) : lastFrame.byteLength;
+    expect(events[0]!.bytes).toBe(2 * firstBytes + lastBytes);
     expect(JSON.stringify(events)).not.toMatch(/private-dynamic-name|private-content|connId/);
     expect(operatorCounts()).toEqual([2]);
     observations.length = 0;
@@ -510,53 +514,80 @@ it.each(["direct", "broadcast", "preauth"])("bounds %s shutdown", async (deliver
   );
 });
 
-it("batches a broadcast burst into one socket write while preserving response order", async () => {
-  const pair = await openSocketPair();
-  const { socket: liveSocket, request, peer } = pair;
-  const writes = vi.spyOn(request.socket, "write");
-  const { clients: liveClients } = attachForTest({
-    attach: attachConnection,
-    socket: liveSocket as unknown as TestSocket,
-    requestSocket: request.socket,
-  });
-  await vi.dynamicImportSettled();
-  const handler = attachMessage.mock.calls[0]![0];
-  registerClient(handler, liveSocket, { connect: readableOperator });
-  writes.mockClear();
-  const received: unknown[] = [];
-  const complete = createDeferred();
-  peer.on("message", (data) => {
-    const frame = JSON.parse(rawDataToString(data));
-    if (frame.event === "connect.challenge") {
-      return;
+it.each([false, true])(
+  "batches a broadcast burst (without vector writes=%s)",
+  async (withoutWritev) => {
+    const pair = await openSocketPair();
+    const { socket: liveSocket, request, peer } = pair;
+    if (withoutWritev) {
+      // oxlint-disable-next-line no-underscore-dangle -- Exercise Writable's serial fallback on either runtime.
+      request.socket._writev = undefined;
     }
-    received.push(frame);
-    if (received.length === 4) {
-      complete.resolve();
-    }
-  });
-  const { broadcast } = createBroadcaster({ clients: liveClients });
-  broadcast("tick", { value: 1 });
-  broadcast("tick", { value: 2 });
-  handler.send({ type: "res", id: "between", ok: true });
-  broadcast("tick", { value: 3 });
-  expect([...liveClients][0]!.socket.bufferedAmount).toBeGreaterThan(0);
-  await complete.promise;
-  expect(received).toEqual([
-    { type: "event", event: "tick", payload: { value: 1 }, seq: 1 },
-    { type: "event", event: "tick", payload: { value: 2 }, seq: 2 },
-    { type: "res", id: "between", ok: true },
-    { type: "event", event: "tick", payload: { value: 3 }, seq: 3 },
-  ]);
-  expect(writes).toHaveBeenCalledTimes(1);
-  expect(writes.mock.calls[0]?.[0]).toBeInstanceOf(Buffer);
-});
+    const nativeWrite = vi.spyOn(request.socket, "_write");
+    // oxlint-disable-next-line no-underscore-dangle -- Count actual Writable submissions, not public write calls.
+    const nativeWritev = request.socket._writev ? vi.spyOn(request.socket, "_writev") : undefined;
+    const writes = vi.spyOn(request.socket, "write");
+    const { clients: liveClients } = attachForTest({
+      attach: attachConnection,
+      socket: liveSocket as unknown as TestSocket,
+      requestSocket: request.socket,
+    });
+    await vi.dynamicImportSettled();
+    const handler = attachMessage.mock.calls[0]![0];
+    registerClient(handler, liveSocket, { connect: readableOperator });
+    writes.mockClear();
+    nativeWrite.mockClear();
+    nativeWritev?.mockClear();
+    const received: unknown[] = [];
+    const complete = createDeferred();
+    peer.on("message", (data) => {
+      const frame = JSON.parse(rawDataToString(data));
+      if (frame.event === "connect.challenge") {
+        return;
+      }
+      received.push(frame);
+      if (received.length === 4) {
+        complete.resolve();
+      }
+    });
+    const { broadcast } = createBroadcaster({ clients: liveClients });
+    broadcast("tick", { value: 1 });
+    broadcast("tick", { value: 2 });
+    handler.send({ type: "res", id: "between", ok: true });
+    broadcast("tick", { value: 3 });
+    expect([...liveClients][0]!.socket.bufferedAmount).toBeGreaterThan(0);
+    await complete.promise;
+    expect(received).toEqual([
+      { type: "event", event: "tick", payload: { value: 1 }, seq: 1 },
+      { type: "event", event: "tick", payload: { value: 2 }, seq: 2 },
+      { type: "res", id: "between", ok: true },
+      { type: "event", event: "tick", payload: { value: 3 }, seq: 3 },
+    ]);
+    const wire = Buffer.concat(writes.mock.calls.map(([chunk]) => Buffer.from(chunk)));
+    const expected = [
+      '{"type":"event","event":"tick","payload":{"value":1},"seq":1}',
+      '{"type":"event","event":"tick","payload":{"value":2},"seq":2}',
+      '{"type":"res","id":"between","ok":true}',
+      '{"type":"event","event":"tick","payload":{"value":3},"seq":3}',
+    ];
+    expect(wire).toEqual(
+      Buffer.concat(
+        expected.flatMap((json) => [Buffer.from([0x81, json.length]), Buffer.from(json)]),
+      ),
+    );
+    expect(nativeWrite.mock.calls.length + (nativeWritev?.mock.calls.length ?? 0)).toBe(1);
+    expect([...liveClients][0]!.socket.bufferedAmount).toBe(0);
+  },
+);
 
 it.each(["closing", "failed-send"] as const)("retires both peers after %s", async (failure) => {
   const pair = await openSocketPair();
   const { socket: liveSocket, peer } = pair;
 
-  const handler = await connectWs({ socket: liveSocket as unknown as TestSocket });
+  const handler = await connectWs({
+    socket: liveSocket as unknown as TestSocket,
+    requestSocket: pair.request.socket,
+  });
 
   handler.setClient(makeClient(liveSocket, "real-closing-client"));
 
@@ -564,7 +595,7 @@ it.each(["closing", "failed-send"] as const)("retires both peers after %s", asyn
     liveSocket.close(1000, "real close race");
     expect(liveSocket.readyState).toBe(Ws.WebSocket.CLOSING);
   } else {
-    vi.spyOn(liveSocket, "send").mockImplementationOnce(() => {
+    vi.spyOn(pair.request.socket, "write").mockImplementationOnce(() => {
       throw new Error("response transport unavailable");
     });
     vi.spyOn(liveSocket, "close").mockImplementationOnce(() => {

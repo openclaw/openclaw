@@ -31,6 +31,7 @@ it("rejects unsafe ports and refuses to overwrite existing state", async () => {
     ["--worktree-files", "500001"],
     ["--projects", "0", "--worktree-files", "1"],
     ["--projects", "0", "--nested-repository"],
+    ["--projects", "0", "--github-options-connected"],
   ]) {
     expect(() => parseTeamShapeOptions(["--state-dir", "/unused", ...args])).toThrow();
   }
@@ -50,7 +51,7 @@ it("adds bounded long histories and an unchanged tracked inventory with a nested
     parseTeamShapeOptions([
       "--state-dir",
       stateDir,
-      ..."--sessions 2 --runs 0 --approvals 0 --cron 0 --projects 1 --transcript-mib 0 --long-transcript-entries 4 --long-transcript-sessions 1 --worktree-files 5 --nested-repository".split(
+      ..."--sessions 2 --runs 0 --approvals 0 --cron 0 --projects 1 --transcript-mib 0 --long-transcript-entries 4 --long-transcript-sessions 1 --worktree-files 5 --nested-repository --github-options-connected".split(
         " ",
       ),
     ]),
@@ -62,6 +63,7 @@ it("adds bounded long histories and an unchanged tracked inventory with a nested
     thinkingSignatureBytes: 2 * 16 * 1024,
     worktreeFiles: 5,
     nestedRepository: true,
+    githubOptionsConnected: true,
   });
   using agent = new DatabaseSync(path.join(stateDir, "agents/main/agent/openclaw-agent.sqlite"), {
     readOnly: true,
@@ -100,6 +102,14 @@ it("adds bounded long histories and an unchanged tracked inventory with a nested
   const worktree = summary.projectWorktrees[0]!.path;
   const git = (...args: string[]) =>
     execFileSync("git", ["-C", worktree, ...args], { env, encoding: "utf8" }).trim();
+  expect(git("remote", "get-url", "origin")).toBe("https://github.com/openclaw-fixture/soak.git");
+  const { resolveRepositoryIdentity } =
+    await import("../../src/agents/worktrees/repository-paths.js");
+  const repository = await resolveRepositoryIdentity(worktree);
+  using state = new DatabaseSync(path.join(stateDir, "state/openclaw.sqlite"), { readOnly: true });
+  expect(state.prepare("SELECT repo_fingerprint FROM worktrees").get()).toEqual({
+    repo_fingerprint: repository.fingerprint,
+  });
   expect(git("ls-files", "inventory").split("\n")).toHaveLength(5);
   expect(git("diff", "--name-only", "main")).toBe("");
   expect(git("status", "--porcelain")).toBe("?? nested-repository/");
@@ -164,6 +174,7 @@ it("creates canonical sessions, retained lifecycle states and isolated supportin
     approvals: 3,
     cronJobs: 2,
     projects: 1,
+    githubOptionsConnected: false,
     logicalTranscriptBytes: 1024 * 1024,
     visibilityCounts: { shared: 14, "read-only": 2, suggest: 2, draft: 2 },
   });

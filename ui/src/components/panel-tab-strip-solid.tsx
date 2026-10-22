@@ -134,7 +134,7 @@ function TabGroupView<T extends SolidPanelTabStripTab>(
     },
   );
   let detachFocus = () => {};
-  onCleanup(() => detachFocus());
+  onSettled(() => () => detachFocus());
   const groupRef = (element: HTMLDivElement) => {
     group = element;
     detachFocus = props.focusOwner.attach({

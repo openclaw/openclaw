@@ -5,7 +5,7 @@ import {
   pluginTabSlugFromPath,
   routePageSpec,
 } from "../../app-route-paths.ts";
-import type { SolidRouteProps } from "../../app-route-types.ts";
+import type { SolidRouteProps } from "../../app-route-types.tsx";
 import type { ApplicationContext } from "../../app/context.ts";
 
 type PluginTabRef = {
@@ -49,7 +49,6 @@ export const page = definePage({
   }),
   component: () =>
     import("./plugin-page.tsx").then((module) => ({
-      header: true,
       renderSolid: (
         props: SolidRouteProps<PluginTabRef & { params: Readonly<Record<string, string>> }>,
       ) =>

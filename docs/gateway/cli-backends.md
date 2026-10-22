@@ -405,6 +405,12 @@ Explicit account selections and empty account orders remain authoritative. API k
 for the `anthropic` provider require an explicit selection; they do not replace
 native subscription login automatically.
 
+Model catalog readiness honors the effective primary model's `@profile` pin,
+including inherited defaults and agent overrides. An explicit session account or
+personal provider default takes precedence. The pin applies only to that primary;
+other models retain their own account selection. An invalid pin remains unavailable
+even when native Claude login is ready.
+
 Fresh plugin completions, including Memory Dreaming, use the same account order.
 An explicit profile on the requested model stays authoritative; an empty account
 order preserves native Claude login.
@@ -630,6 +636,8 @@ For CLIs that emit provider-specific JSONL events, set `jsonlDialect` on that ba
 Some CLI backends run an agent that compacts its own transcript. OpenClaw must not run its safeguard summarizer against them. Doing so fights the backend's own compaction and can hard-fail the turn.
 
 `claude-cli` has no harness endpoint (Claude Code compacts internally), so it declares `ownsNativeCompaction: true`. Automatic OpenClaw compaction defers to Claude Code, while an explicit `/compact` resumes the bound Claude Code session and sends its native `/compact` command. OpenClaw passes the run's effective context budget through Claude Code's documented [`CLAUDE_CODE_AUTO_COMPACT_WINDOW`](https://code.claude.com/docs/en/env-vars), keeping native auto-compaction aligned with configured Anthropic `contextTokens` limits. Native-harness sessions such as Codex keep routing to their harness compaction endpoint instead.
+
+Manual `/compact` omits policy-derived bypass permissions so root-run Gateways can compact. Explicit `--permission-mode` arguments are preserved; ordinary turns continue to follow the configured OpenClaw exec policy.
 
 `google-gemini-cli` also owns automatic compaction and persists its compressed session for resume. OpenClaw defers to Gemini CLI rather than running a second summarizer. Explicit `/compact` is unsupported for this backend because it does not declare a manual compaction capability.
 

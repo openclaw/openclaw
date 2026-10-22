@@ -1,5 +1,6 @@
 import { createMemo, createSignal, createUniqueId, Show, useContext } from "solid-js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
+import { GitDiffValues } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import {
   createMenuControls,
@@ -15,13 +16,19 @@ import { sessionPullRequestStateIcons } from "../../../lib/session-pull-request-
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { showToast } from "../../../lib/toast.ts";
 import {
-  ChecksRow,
+  ChecksRows,
   StatusWarning,
   STATE_LABEL_KEYS,
   type ChatPullRequestsProps,
 } from "./chat-pull-request-shared.tsx";
 import "./chat-ci-details.ts";
 import "./chat-ci-automation-control.ts";
+
+const CHECK_ROLLUP = {
+  failing: ["failed", "chat.pullRequests.checksFailed", "circleX"],
+  pending: ["running", "chat.pullRequests.checksRunning", "loader"],
+  passing: ["passed", "chat.pullRequests.checksPassed", "check"],
+} as const;
 
 export function PullRequestActions(props: {
   label: string;
@@ -81,28 +88,13 @@ export function PullRequestActions(props: {
     if (!current) {
       return undefined;
     }
-    if (current.state === "failing" && current.failed > 0) {
+    const [state, label, icon] = CHECK_ROLLUP[current.state];
+    if (current[state] > 0) {
       return {
-        label: t("chat.pullRequests.checksFailed"),
-        count: current.failed,
-        icon: "circleX",
-        state: "failed",
-      } as const;
-    }
-    if (current.state === "pending" && current.running > 0) {
-      return {
-        label: t("chat.pullRequests.checksRunning"),
-        count: current.running,
-        icon: "loader",
-        state: "running",
-      } as const;
-    }
-    if (current.state === "passing" && current.passed > 0) {
-      return {
-        label: t("chat.pullRequests.checksPassed"),
-        count: current.passed,
-        icon: "check",
-        state: "passed",
+        label: t(label),
+        count: current[state],
+        icon,
+        state,
       } as const;
     }
     if (current.skipped > 0) {
@@ -125,26 +117,7 @@ export function PullRequestActions(props: {
       <div class="chat-pr-menu__checks-heading">
         <span>{t("chat.pullRequests.checksTitle")}</span>
         <div class="chat-pr-menu__checks-totals">
-          <ChecksRow
-            label={t("chat.pullRequests.checksFailed")}
-            count={checks()?.failed ?? 0}
-            modifier="failed"
-          />
-          <ChecksRow
-            label={t("chat.pullRequests.checksRunning")}
-            count={checks()?.running ?? 0}
-            modifier="running"
-          />
-          <ChecksRow
-            label={t("chat.pullRequests.checksPassed")}
-            count={checks()?.passed ?? 0}
-            modifier="passed"
-          />
-          <ChecksRow
-            label={t("chat.pullRequests.checksSkipped")}
-            count={checks()?.skipped ?? 0}
-            modifier="skipped"
-          />
+          <ChecksRows checks={checks()} runningFirst />
         </div>
       </div>
       <openclaw-chat-ci-details
@@ -260,16 +233,11 @@ export function PullRequestActions(props: {
                     <Icon name="diff" />
                     <span>{t("chat.pullRequests.codeChanges")}</span>
                     <span class="chat-pr-menu__value">
-                      <Show when={props.pullRequest.additions !== undefined}>
-                        <span class="chat-pr__additions">
-                          +{props.pullRequest.additions?.toLocaleString("en-US")}
-                        </span>
-                      </Show>
-                      <Show when={props.pullRequest.deletions !== undefined}>
-                        <span class="chat-pr__deletions">
-                          −{props.pullRequest.deletions?.toLocaleString("en-US")}
-                        </span>
-                      </Show>
+                      <GitDiffValues
+                        item={props.pullRequest}
+                        classPrefix="chat-pr"
+                        locale="en-US"
+                      />
                     </span>
                   </div>
                 </Show>

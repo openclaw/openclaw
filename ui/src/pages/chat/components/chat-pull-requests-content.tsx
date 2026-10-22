@@ -9,6 +9,7 @@ import { formatGitHubItemReference } from "../../../components/github-link-targe
 import { SessionGitDiff } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { createMenuControls, Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { createTextOverflow } from "../../../components/solid/text-overflow.ts";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import "../../../components/tooltip.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
@@ -25,7 +26,7 @@ import { GitHubPublicationAction, GitHubPublicationDetails } from "./chat-github
 import { PullRequestActions } from "./chat-pull-request-actions.tsx";
 import { ChatPullRequestChecks } from "./chat-pull-request-checks.tsx";
 import {
-  ChecksRow,
+  ChecksRows,
   StatusWarning,
   STATE_LABEL_KEYS,
   type ChatPullRequestsProps,
@@ -83,26 +84,7 @@ function Checks(props: {
         </Show>
       </div>
       <div class="chat-pr__checks-counts">
-        <ChecksRow
-          label={t("chat.pullRequests.checksFailed")}
-          count={checks()?.failed ?? 0}
-          modifier="failed"
-        />
-        <ChecksRow
-          label={t("chat.pullRequests.checksPassed")}
-          count={checks()?.passed ?? 0}
-          modifier="passed"
-        />
-        <ChecksRow
-          label={t("chat.pullRequests.checksRunning")}
-          count={checks()?.running ?? 0}
-          modifier="running"
-        />
-        <ChecksRow
-          label={t("chat.pullRequests.checksSkipped")}
-          count={checks()?.skipped ?? 0}
-          modifier="skipped"
-        />
+        <ChecksRows checks={checks()} />
         <Show when={!checks()}>{t("chat.pullRequests.automationNoChecks")}</Show>
       </div>
       <openclaw-chat-ci-automation
@@ -161,10 +143,18 @@ function WorkRow(props: {
               <Icon name={published() || !props.branch ? "gitPullRequest" : "gitBranch"} />
             </span>
             <span class="chat-pr__identity">
-              <span class="chat-pr__repo">
+              <span
+                ref={createTextOverflow(() => published()?.repository ?? props.branch?.repo)}
+                class="chat-pr__repo"
+              >
                 {published()?.repository ?? props.branch?.repo ?? t("chat.pullRequests.publishPr")}
               </span>
-              <span class="chat-pr__branch">{published()?.branch ?? props.branch?.branch}</span>
+              <span
+                ref={createTextOverflow(() => published()?.branch ?? props.branch?.branch)}
+                class="chat-pr__branch"
+              >
+                {published()?.branch ?? props.branch?.branch}
+              </span>
             </span>
           </span>
           <span class="chat-pr__meta">
@@ -232,7 +222,9 @@ function WorkRow(props: {
             <span class="chat-pr__icon" aria-hidden="true">
               <Icon name="gitBranch" />
             </span>
-            <span class="chat-pr__branch">{branch().branch}</span>
+            <span ref={createTextOverflow(() => branch().branch)} class="chat-pr__branch">
+              {branch().branch}
+            </span>
           </span>
           <SessionGitDiff classPrefix="chat-pr" item={branch()} onOpen={props.onOpenSessionDiff} />
           <BranchActions
@@ -462,13 +454,21 @@ function PullRequestRow(props: {
         <span class="chat-pr__identity">
           <Show
             when={props.owner.compact}
-            fallback={<span class="chat-pr__branch">{props.pullRequest.branch}</span>}
+            fallback={
+              <span
+                ref={createTextOverflow(() => props.pullRequest.branch)}
+                class="chat-pr__branch"
+              >
+                {props.pullRequest.branch}
+              </span>
+            }
           >
             <HoverMarquee
               class="chat-pr__title"
               content={props.pullRequest.title}
               options={{
                 host: () => (row?.closest(".chat-details[data-desktop]") ? row : undefined),
+                stationaryWithoutHost: true,
               }}
             />
           </Show>

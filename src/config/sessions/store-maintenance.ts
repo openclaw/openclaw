@@ -90,7 +90,7 @@ function resolveMaxDiskBytes(maintenance?: SessionMaintenanceConfig): number | n
     return DEFAULT_SESSION_MAX_DISK_BYTES;
   }
   try {
-    const bytes = parseByteSize(normalized, { defaultUnit: "b" });
+    const bytes = parseByteSize(normalized);
     // A zero or negative budget is not a usable cap; treat it the same as an
     // explicit disable so maintenance does not delete every session artifact.
     if (bytes <= 0) {
@@ -121,7 +121,7 @@ function resolveHighWaterBytes(
     return defaultHighWaterBytes;
   }
   try {
-    const parsed = parseByteSize(normalized, { defaultUnit: "b" });
+    const parsed = parseByteSize(normalized);
     // A zero target cannot stop cleanup while any bytes remain, so use the
     // default instead of evicting every unprotected session and archive.
     return parsed > 0 ? Math.min(parsed, maxDiskBytes) : defaultHighWaterBytes;

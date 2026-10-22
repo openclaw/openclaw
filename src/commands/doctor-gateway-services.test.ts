@@ -163,6 +163,23 @@ describe("maybeRepairGatewayServiceConfig", () => {
     savedEnv.restore();
   });
 
+  it("reports a host-only timeout without offering service repair", async () => {
+    const command = createGatewayCommand("/opt/openclaw/dist/index.js");
+    mocks.readCommand.mockResolvedValue(command);
+    mocks.buildGatewayInstallPlan.mockResolvedValue(command);
+    mocks.auditGatewayServiceConfig.mockResolvedValue(
+      createRecommendedServiceAudit(
+        "systemd-user-manager-stop-timeout",
+        "Host shutdown limits the Gateway drain to 5s",
+        { repair: "host" },
+      ),
+    );
+    const prompter = makeDoctorPrompts();
+    await runRepair(undefined, {}, prompter);
+    expectNoteContaining("Gateway drain to 5s", "Gateway service config");
+    expect(prompter.confirmRuntimeRepair).not.toHaveBeenCalled();
+    expect(mocks.install).not.toHaveBeenCalled();
+  });
   it("reports a passing vendor runtime note without rewriting the service", async () => {
     const command = createGatewayCommand("/opt/openclaw/dist/index.js");
     mocks.readCommand.mockResolvedValue(command);

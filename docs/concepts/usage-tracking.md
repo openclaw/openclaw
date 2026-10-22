@@ -430,7 +430,8 @@ provider-neutral for CLI, app, and Control UI consumers.
   profile). Combines the account credits endpoint with the key quota endpoint,
   so account balance/spend, key budget, and daily/weekly/monthly usage appear
   when the credential can access them. Either endpoint can enrich the snapshot
-  independently.
+  independently. Transport failures include their underlying cause in the usage
+  error shown by `openclaw status --usage --json`.
 - **Venice**: API key via env/config/auth store (`VENICE_API_KEY`). Shows USD and
   DIEM balances plus DIEM epoch allocation usage when reported.
 - **Xiaomi MiMo**: two separate usage surfaces. Pay-as-you-go uses an API key

@@ -273,6 +273,44 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     expect(sessionEntry).toMatchObject({ agentRuntimeOverride: "codex" });
   });
 
+  it.each([
+    ["unquoted", "/model openrouter/free"],
+    ["quoted", '/model "openrouter/free"'],
+  ])("applies %s native model selection before agent continuation", async (_kind, command) => {
+    const storePath = path.join(tempDirs.make("openclaw-native-quoted-model-"), "sessions.json");
+    const modelCatalog: ModelCatalogSnapshot = {
+      entries: [
+        {
+          provider: "openrouter",
+          id: "free",
+          name: "OpenRouter Free",
+          api: "openai-completions",
+          baseUrl: "http://127.0.0.1:11434",
+          reasoning: false,
+          contextWindow: 32768,
+        },
+      ],
+      routeVariants: [],
+    };
+    const { result } = await resolveNativeDirectiveCommand(
+      command,
+      {
+        session: { store: storePath },
+        agents: { defaults: { models: { "openrouter/free": {} } } },
+      },
+      { shouldContinue: true },
+      modelCatalog,
+    );
+
+    expect(result).toMatchObject({
+      handled: true,
+      reply: { text: expect.stringContaining("openrouter/free") },
+    });
+    expect(
+      loadExactSessionEntry({ sessionKey: "agent:main:telegram:123", storePath })?.entry,
+    ).toMatchObject({ providerOverride: "openrouter", modelOverride: "openrouter/free" });
+  });
+
   it("applies native model selections using the admitted catalog without rediscovery", async () => {
     vi.stubEnv("OPENCLAW_TEST_FAST", "0");
     const storePath = path.join(tempDirs.make("openclaw-native-prepared-model-"), "sessions.json");

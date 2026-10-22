@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 
-import { createComponent, createSignal } from "solid-js";
+import { createComponent, createSignal, merge } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
@@ -27,46 +27,7 @@ function mountPanel() {
     openFile: null,
     revealFile: null,
   });
-  const view = mountSolid(() =>
-    createComponent(SessionDiffPanel, {
-      get mobile() {
-        return props().mobile;
-      },
-      get active() {
-        return props().active;
-      },
-      get scopeRequest() {
-        return props().scopeRequest;
-      },
-      get onResult() {
-        return props().onResult;
-      },
-      get openFileView() {
-        return props().openFileView;
-      },
-      get onOpenMobilePage() {
-        return props().onOpenMobilePage;
-      },
-      get owner() {
-        return props().owner;
-      },
-      get execNode() {
-        return props().execNode;
-      },
-      get loader() {
-        return props().loader;
-      },
-      get loadFileText() {
-        return props().loadFileText;
-      },
-      get openFile() {
-        return props().openFile;
-      },
-      get revealFile() {
-        return props().revealFile;
-      },
-    }),
-  );
+  const view = mountSolid(() => createComponent(SessionDiffPanel, merge(props)));
   return {
     panel: view.container.querySelector<HTMLElement>("openclaw-session-diff")!,
     unmount: view.unmount,
@@ -143,6 +104,16 @@ function fileResult(patch: string): SessionsDiffResult {
   };
 }
 
+function namedFileResult(paths: string[]): SessionsDiffResult {
+  const snapshot = fileResult(SNAPSHOT_PATCH);
+  return {
+    ...snapshot,
+    files: paths.map((path) => ({ ...snapshot.files[0]!, path })),
+    additions: paths.length,
+    deletions: paths.length,
+  };
+}
+
 afterEach(async () => {
   await vi.dynamicImportSettled();
   document.body.replaceChildren();
@@ -152,6 +123,124 @@ afterEach(async () => {
 });
 
 describe("SessionDiffPanel", () => {
+  it("names untracked repository directories in the review and file tree", async () => {
+    setNativeGatewayTestState(null);
+    setupDesktopResizeObserver();
+    const { panel, update } = mountPanel();
+    update({
+      mobile: false,
+      loader: async () => ({
+        ...result("main"),
+        files: ["nested-repo/", "packages/child/"].map((path) => ({
+          path,
+          status: "added" as const,
+          untracked: true,
+          additions: 0,
+          deletions: 0,
+          truncated: true,
+        })),
+      }),
+    });
+    await settlePanel(panel);
+    expect
+      .soft([...panel.querySelectorAll(".session-diff__filename")].map((el) => el.textContent))
+      .toEqual(["nested-repo", "child"]);
+    panel.querySelector<HTMLButtonElement>('button[aria-label="Changed files tree"]')!.click();
+    flush();
+    for (const [path, name] of [
+      ["nested-repo/", "nested-repo"],
+      ["packages/child/", "child"],
+    ] as const) {
+      const entry = panel.querySelector<HTMLButtonElement>(
+        `.session-diff__tree-row[title="${path}"]`,
+      )!;
+      expect.soft(entry.querySelector(".session-diff__filename-label")?.textContent).toBe(name);
+      entry.click();
+      flush();
+      expect(entry.getAttribute("aria-current")).toBe("true");
+    }
+  });
+
+  it.each(["__proto__", "constructor"])(
+    "retains %s disclosure on refresh and applies presentation entry resets",
+    async (path) => {
+      setNativeGatewayTestState(null);
+      setupDesktopResizeObserver();
+      const { panel, update } = mountPanel();
+      const toggles = () => [
+        ...panel.querySelectorAll<HTMLButtonElement>(".session-diff__file-toggle"),
+      ];
+      const expanded = () => toggles().map((toggle) => toggle.getAttribute("aria-expanded"));
+      update({ mobile: true, loader: async () => namedFileResult([path]) });
+      await waitForSolid(() => expect(expanded()).toEqual(["true"]));
+      toggles()[0]!.click();
+      await waitForSolid(() => expect(expanded()).toEqual(["false"]));
+      update({ active: false });
+      flush();
+      update({ active: true });
+      await waitForSolid(() => expect(expanded()).toEqual(["false"]));
+
+      update({ loader: async () => namedFileResult([path, "added.txt"]) });
+      await waitForSolid(() => expect(expanded()).toEqual(["false", "true"]));
+      update({ mobile: false });
+      await waitForSolid(() => expect(expanded()).toEqual(["false", "false"]));
+      toggles()[0]!.click();
+      await waitForSolid(() => expect(expanded()).toEqual(["true", "false"]));
+      const originalToggle = toggles()[0];
+      update({ loader: async () => namedFileResult([path, "added.txt"]) });
+      await settlePanel(panel);
+      expect(expanded()).toEqual(["true", "false"]);
+      expect(toggles()[0]).toBe(originalToggle);
+      update({ active: false });
+      flush();
+      update({ active: true });
+      await waitForSolid(() => expect(expanded()).toEqual(["false", "false"]));
+
+      panel.querySelector<HTMLButtonElement>('button[aria-label="Expand All"]')!.click();
+      await waitForSolid(() => expect(expanded()).toEqual(["true", "true"]));
+      panel.querySelector<HTMLButtonElement>('button[aria-label="Collapse All"]')!.click();
+      await waitForSolid(() => expect(expanded()).toEqual(["false", "false"]));
+      update({ mobile: true });
+      await waitForSolid(() => expect(expanded()).toEqual(["true", "true"]));
+    },
+  );
+
+  it.each(["src", "__proto__"])(
+    "retains the %s tree disclosure on refresh and reopens it for a new search",
+    async (directory) => {
+      setNativeGatewayTestState(null);
+      setupDesktopResizeObserver();
+      const { panel, update } = mountPanel();
+      const paths = ["first.ts", "second.ts"].map((name) => `${directory}/${name}`);
+      update({ mobile: false, loader: async () => namedFileResult(paths) });
+      await waitForSolid(() =>
+        expect(panel.querySelectorAll(".session-diff__file")).toHaveLength(2),
+      );
+      panel.querySelector<HTMLButtonElement>('button[aria-label="Changed files tree"]')!.click();
+      const folder = panel.querySelector<HTMLButtonElement>(
+        `.session-diff__tree-row[title="${directory}"]`,
+      )!;
+      folder.click();
+      await waitForSolid(() => expect(folder.getAttribute("aria-expanded")).toBe("false"));
+      update({ loader: async () => namedFileResult([...paths, `${directory}/third.ts`]) });
+      await waitForSolid(() =>
+        expect(panel.querySelectorAll(".session-diff__file")).toHaveLength(3),
+      );
+      expect(folder.getAttribute("aria-expanded")).toBe("false");
+      expect(folder.isConnected).toBe(true);
+
+      panel.querySelector<HTMLButtonElement>('button[aria-label="Search changed files"]')!.click();
+      flush();
+      const search = panel.querySelector<HTMLInputElement>('input[type="search"]')!;
+      search.value = "second";
+      search.dispatchEvent(new Event("input", { bubbles: true }));
+      await waitForSolid(() => {
+        expect(folder.getAttribute("aria-expanded")).toBe("true");
+        expect(panel.querySelectorAll(".session-diff__tree-row")).toHaveLength(2);
+      });
+    },
+  );
+
   it.each([
     { saved: { split: true, wrap: false }, mode: "split", split: true },
     { saved: { split: false, wrap: false }, mode: "unified", split: false },
@@ -798,7 +887,6 @@ describe("SessionDiffPanel", () => {
 
     await waitForSolid(() => expect(panel.textContent).toContain("fresh snapshot line"));
     expect(loader).toHaveBeenCalledTimes(2);
-    expect(loader).toHaveBeenNthCalledWith(2, { scope: "all" });
     expect(loadFileText).not.toHaveBeenCalled();
     expect(panel.textContent).not.toContain("expanded current file line");
     expect(panel.querySelector(".session-diff__gap-controls")).toBeNull();

@@ -457,14 +457,14 @@ describe("chat session sharing menu", () => {
       false,
     );
     expect(part(root, "sharing-permissions")).toBeNull();
-    expect(root.textContent).not.toContain("Message permissions");
+    expect(root.textContent).not.toContain("Session members");
     await openAccess(root);
     expect(item(root, "visibility:read-only")).not.toBeNull();
 
     await select(root, "visibility:read-only");
     await backToOverview(root);
     expect(part(root, "sharing-permissions")).toBeNull();
-    expect(root.textContent).not.toContain("Message permissions");
+    expect(root.textContent).not.toContain("Session members");
 
     expect(onOpen).toHaveBeenCalledOnce();
     expect(onVisibilityChange).toHaveBeenCalledWith("read-only");

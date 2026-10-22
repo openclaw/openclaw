@@ -1,23 +1,26 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { isMainModule } from "./is-main.js";
 
 const detect = (overrides: Partial<Parameters<typeof isMainModule>[0]> = {}) =>
   isMainModule({
     currentFile: "/repo/dist/index.js",
     argv: ["node", "/repo/openclaw.mjs"],
-    cwd: "/repo",
     env: {},
     ...overrides,
   });
 const wrapperEntryPairs = [{ wrapperBasename: "openclaw.mjs", entryBasename: "entry.js" }];
 
 describe("isMainModule", () => {
+  beforeEach(() => {
+    vi.spyOn(process, "cwd").mockReturnValue("/repo");
+  });
+  afterEach(() => vi.restoreAllMocks());
+
   it("returns true when argv[1] matches current file", () => {
     expect(
       isMainModule({
         currentFile: "/repo/dist/index.js",
         argv: ["node", "/repo/dist/index.js"],
-        cwd: "/repo",
         env: {},
       }),
     ).toBe(true);
@@ -31,7 +34,6 @@ describe("isMainModule", () => {
       expect(
         detect({
           argv: ["node", "/repo/dist/index.js"],
-          cwd: undefined,
         }),
       ).toBe(true);
     } finally {
@@ -61,7 +63,6 @@ describe("isMainModule", () => {
       isMainModule({
         currentFile: "/repo/node_modules/openclaw/dist/index.js",
         argv: ["node", "/repo/app.js"],
-        cwd: "/repo",
         env: { pm_exec_path: "/repo/app.js", pm_id: "0" },
       }),
     ).toBe(false);
@@ -72,7 +73,6 @@ describe("isMainModule", () => {
       isMainModule({
         currentFile: "/repo/node_modules/openclaw/dist/index.js",
         argv: ["node", "/repo/dist/index.js"],
-        cwd: "/repo",
         env: {},
       }),
     ).toBe(false);
@@ -83,7 +83,6 @@ describe("isMainModule", () => {
       isMainModule({
         currentFile: "/repo/dist/index.js",
         argv: ["node"],
-        cwd: "/repo",
         env: {},
       }),
     ).toBe(false);

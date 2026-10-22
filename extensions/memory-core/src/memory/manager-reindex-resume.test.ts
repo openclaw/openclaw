@@ -56,6 +56,7 @@ describe("background reindex resumption", () => {
   it.for([
     "idle",
     "watch",
+    "joined",
     "bootstrap",
     "changed",
     "targeted",
@@ -75,7 +76,8 @@ describe("background reindex resumption", () => {
           false,
         );
       }
-      const mixedSources = resume === "idle" || resume === "changed" || resume === "watch";
+      const mixedSources =
+        resume === "idle" || resume === "changed" || resume === "watch" || resume === "joined";
       const memoryPaths = mixedSources ? ["memory/2026-01-12.md", "memory/sibling.md"] : [];
       if (mixedSources) {
         await fs.writeFile(
@@ -130,6 +132,7 @@ describe("background reindex resumption", () => {
       const shadowPaths = new Set<string>();
       const groups: string[][] = [];
       const memoryWrites: string[] = [];
+      let joined: Promise<void> | undefined;
       let injectedFailures = 0;
       // Delegate every write: interruption follows a durably completed source group.
       // oxlint-disable-next-line typescript/unbound-method -- Called with the intercepted owner.
@@ -154,6 +157,10 @@ describe("background reindex resumption", () => {
             groups.push(sessionReplacements.map((item) => item.entry.path));
             if (groups.length === 1) {
               activity.listener?.(true);
+              if (resume === "joined") {
+                joined = manager.sync({ reason: "cli" });
+                void joined.catch(() => undefined);
+              }
             }
           }
         }
@@ -186,7 +193,7 @@ describe("background reindex resumption", () => {
       signal.addEventListener("abort", releaseOnAbort, { once: true });
       try {
         await idle();
-        if (resume === "watch") {
+        if (resume === "watch" || resume === "joined") {
           await (manager as unknown as { memoryWatcherReady: Promise<void> }).memoryWatcherReady;
           // Start through the filesystem observation boundary before the session idle timer.
           observer.observations.at(-1)!.dirty();
@@ -195,6 +202,7 @@ describe("background reindex resumption", () => {
           await vi.advanceTimersByTimeAsync(30_000);
         }
         await idle();
+        await joined;
         expect(groups).toHaveLength(1);
         expect(groups[0]).toHaveLength(8);
         expect(memoryWrites.toSorted()).toEqual(memoryPaths.toSorted());
@@ -202,6 +210,14 @@ describe("background reindex resumption", () => {
         expect(database.prepare("SELECT count(*) AS n FROM memory_index_sources").get()).toEqual({
           n: 0,
         });
+        if (resume === "joined") {
+          expect(joined).toBeDefined();
+          expect(shadows.size).toBe(1);
+          for (const shadow of shadows) {
+            expect(shadow.isOpen).toBe(true);
+            expect(shadow.shadowReleased).toBe(false);
+          }
+        }
 
         if (resume === "close") {
           expect(shadows.size).toBe(1);
@@ -286,6 +302,8 @@ describe("background reindex resumption", () => {
           const hits = await manager.search("resumeproof", { lexicalOnly: true, signal });
           expect(hits.length).toBeGreaterThan(0);
         } else {
+          // No new public sync request: the foreground-idle notification and
+          // session scheduler own resumption from here.
           release();
           await vi.advanceTimersByTimeAsync(30_000);
           await idle();
@@ -294,7 +312,7 @@ describe("background reindex resumption", () => {
         expect(publish).toHaveBeenCalledTimes(1);
         expect(groups.flat().toSorted()).toEqual(expectedPaths.toSorted());
         expect(memoryWrites.toSorted()).toEqual(expectedMemoryWrites.toSorted());
-        if (resume === "idle") {
+        if (resume === "idle" || resume === "joined") {
           expect(groups).toHaveLength(3);
         }
         expect(database.prepare("SELECT count(*) AS n FROM memory_index_sources").get()).toEqual({

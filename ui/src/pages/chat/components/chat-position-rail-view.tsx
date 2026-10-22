@@ -2,15 +2,18 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { For, Show, createMemo, untrack } from "solid-js";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { AgentIdentityAvatar } from "../../../components/solid/identity-avatar.tsx";
+import { registerChatSessionEnglish } from "../../../i18n/locales/en-chat-session.ts";
 import { resolveMessageDisplayMarkdown } from "../../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { elementRef } from "../../../lib/reactive/element-ref.ts";
-import { t } from "../../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { listen } from "../../../lib/reactive/listener.ts";
 import { ChatAuthorAvatar } from "./chat-author-avatar.ts";
 import { MarkdownContent } from "./chat-message-text-view.tsx";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
 import { POSITION_RAIL_MARKER_HEIGHT } from "./chat-transcript-geometry.ts";
+
+registerEnglishCatalog(registerChatSessionEnglish);
 
 const PREVIEW_LENGTH = 140;
 

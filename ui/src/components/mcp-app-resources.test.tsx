@@ -11,10 +11,10 @@ import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import {
-  McpAppResources,
   MCP_APP_RESOURCE_MENTION_EVENT,
   type McpAppResourceMentionDetail,
-} from "./mcp-app-resources.tsx";
+} from "./mcp-app-resource-mention.ts";
+import { McpAppResources } from "./mcp-app-resources.tsx";
 
 function mountResources(
   servers: McpAppDiscoverResult["servers"] = [
@@ -116,6 +116,7 @@ it("only closes the resource picker when a consumer claims the selected resource
     serverName: "parts",
     resource,
   });
+  expect(structuredClone(detail)).toEqual(detail);
   expect(container.querySelector("form")).toBeNull();
 });
 
@@ -260,5 +261,93 @@ it("retires a pending search across an empty intermediate session and return", a
 
   expect(container.querySelector(".mcp-app-resources__result")).toBeNull();
   expect(container.textContent).not.toContain("Retired result");
+  expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false);
+});
+
+it("keeps pending resource searches editable and resumes them after collapse", async () => {
+  const { container, request } = mountResources();
+  const pending = createDeferred<{
+    resources: { type: "resource_link"; uri: string; name: string }[];
+  }>();
+  await waitForSolid(() => expect(container.querySelector("button")).not.toBeNull());
+  request.mockReturnValueOnce(pending.promise);
+  await searchResources(container);
+  flush();
+
+  const input = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  expect(input.disabled).toBe(false);
+  expect(container.querySelector("select")?.disabled).toBe(true);
+  expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
+  const toggle = container.querySelector<HTMLButtonElement>("button")!;
+  toggle.click();
+  flush();
+  expect(container.querySelector("form")).toBeNull();
+  toggle.click();
+  flush();
+  expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
+
+  pending.resolve({
+    resources: [{ type: "resource_link", uri: "file:///parts/gear.txt", name: "Gear" }],
+  });
+  await waitForSolid(() =>
+    expect(container.querySelector(".mcp-app-resources__result")?.textContent).toContain("Gear"),
+  );
+  expect(container.querySelector("select")?.disabled).toBe(false);
+  expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false);
+  expect(request.mock.calls.filter(([method]) => method === "mcp.app.mention")).toHaveLength(1);
+});
+
+it("retains resource errors through edits and collapse but clears them during retry", async () => {
+  const { container, request } = mountResources([
+    { serverName: "parts", label: "Parts", entrypoints: [], mentionTool: "search" },
+    { serverName: "manuals", label: "Manuals", entrypoints: [], mentionTool: "search" },
+  ]);
+  const first = createDeferred<never>();
+  await waitForSolid(() => expect(container.querySelector("button")).not.toBeNull());
+  request.mockReturnValueOnce(first.promise);
+  await searchResources(container);
+  first.reject(new Error("Resource unavailable"));
+  await waitForSolid(() =>
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain(
+      "Resource unavailable",
+    ),
+  );
+  const message = container.querySelector('[role="alert"]')!.textContent;
+  const input = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  input.value = "brass gear";
+  input.dispatchEvent(new InputEvent("input", { bubbles: true }));
+  const select = container.querySelector("select")!;
+  select.value = "manuals";
+  select.dispatchEvent(new Event("change", { bubbles: true }));
+  flush();
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(message);
+
+  const toggle = container.querySelector<HTMLButtonElement>("button")!;
+  toggle.click();
+  flush();
+  expect(container.querySelector("form")).toBeNull();
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe(message);
+  toggle.click();
+  flush();
+  expect(container.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe(
+    "brass gear",
+  );
+  const retryInput = container.querySelector<HTMLInputElement>('input[type="search"]')!;
+  const retry = createDeferred<{ resources: [] }>();
+  request.mockReturnValueOnce(retry.promise);
+  container.querySelector("form")!.dispatchEvent(new Event("submit", { cancelable: true }));
+  expect(request).toHaveBeenLastCalledWith("mcp.app.mention", {
+    sessionKey: "agent:main:main",
+    agentId: "main",
+    serverName: "manuals",
+    query: "brass gear",
+  });
+  flush();
+  expect(container.querySelector('[role="alert"]')).toBeNull();
+  expect(container.querySelector<HTMLInputElement>('input[type="search"]')).toBe(retryInput);
+  expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
+  retry.resolve({ resources: [] });
+  await waitForSolid(() => expect(container.querySelector('[role="status"]')).not.toBeNull());
+  expect(container.querySelector('[role="alert"]')).toBeNull();
   expect(container.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(false);
 });

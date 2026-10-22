@@ -56,11 +56,19 @@ describe("OpenAI Responses diagnostics", () => {
       expect(summary).not.toContain("cmp-private-id");
       expect(summary).not.toContain("opaque-private-ciphertext");
       const failure = normalizeFailure(
-        { response: { error_details: { text: privateText } } },
+        {
+          response: {
+            error_details: {
+              text: privateText,
+              input: [{ type: "compaction", encrypted_content: "opaque-private-ciphertext" }],
+            },
+          },
+        },
         failedEventModel,
       );
       expect(failure.observation?.failureFieldNames).toEqual(["error_details"]);
       expectRedacted(JSON.stringify(failure.observation));
+      expect(JSON.stringify(failure.observation)).not.toContain("opaque-private-ciphertext");
       const error = Object.assign(new Error(privateText), {
         status: 503,
         code: "service_unavailable",

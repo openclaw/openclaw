@@ -17,6 +17,16 @@ import {
 } from "./update-doctor-result.js";
 
 const resultPaths: string[] = [];
+function resultFile() {
+  const file = createUpdatePostInstallDoctorResultPath();
+  resultPaths.push(file);
+  return file;
+}
+
+async function consume(file: string, expected: unknown) {
+  await expect(consumeUpdatePostInstallDoctorResult(file)).resolves.toEqual(expected);
+  await expect(fs.access(file)).rejects.toThrow();
+}
 
 afterEach(async () => {
   vi.restoreAllMocks();
@@ -62,17 +72,14 @@ describe("post-install doctor result IPC", () => {
       expect(JSON.parse(output.join("").split("=").slice(1).join("="))).toEqual(result);
       return;
     }
-    const resultPath = createUpdatePostInstallDoctorResultPath();
-    resultPaths.push(resultPath);
+    const resultPath = resultFile();
     await writeUpdatePostInstallDoctorResult({ resultPath, result });
 
-    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toEqual(result);
-    await expect(fs.access(resultPath)).rejects.toThrow();
+    await consume(resultPath, result);
   });
 
   it("bounds distinct warnings before writing and after reading", async () => {
-    const resultPath = createUpdatePostInstallDoctorResultPath();
-    resultPaths.push(resultPath);
+    const resultPath = resultFile();
     const warnings = [
       "   ",
       ...Array.from({ length: 40 }, (_, index) => `Warning ${index}. ${"x".repeat(600)}`),
@@ -84,20 +91,12 @@ describe("post-install doctor result IPC", () => {
       resultPath,
       result: { status: "ok", warnings: repeatedWarnings },
     });
-    expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toEqual({
-      status: "ok",
-      warnings: expected,
-    });
-    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toEqual({
-      status: "ok",
-      warnings: expected,
-    });
+    const bounded = { status: "ok", warnings: expected };
+    expect(JSON.parse(await fs.readFile(resultPath, "utf8"))).toEqual(bounded);
+    await consume(resultPath, bounded);
 
     await fs.writeFile(resultPath, JSON.stringify({ status: "ok", warnings: repeatedWarnings }));
-    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toEqual({
-      status: "ok",
-      warnings: expected,
-    });
+    await consume(resultPath, bounded);
   });
 
   it("bounds warnings at complete sentences or fields instead of cutting recovery advice", () => {
@@ -132,16 +131,12 @@ describe("post-install doctor result IPC", () => {
   )(
     "keeps malformed selector evidence unknown without changing Doctor status ($ids)",
     async ({ ids }) => {
-      const resultPath = createUpdatePostInstallDoctorResultPath();
-      resultPaths.push(resultPath);
+      const resultPath = resultFile();
       await fs.writeFile(
         resultPath,
         JSON.stringify({ status: "ok", deferredInspectionCheckIds: ids }),
       );
-      const result = await consumeUpdatePostInstallDoctorResult(resultPath);
-      expect(result?.status).toBe("ok");
-      expect(result?.deferredInspectionCheckIds).toBeUndefined();
-      await expect(fs.access(resultPath)).rejects.toThrow();
+      await consume(resultPath, { status: "ok" });
     },
   );
 
@@ -230,8 +225,7 @@ describe("post-install doctor result IPC", () => {
   });
 
   it("rejects malformed advisory payloads and consumes the file", async () => {
-    const resultPath = createUpdatePostInstallDoctorResultPath();
-    resultPaths.push(resultPath);
+    const resultPath = resultFile();
     await fs.writeFile(
       resultPath,
       JSON.stringify({
@@ -246,7 +240,6 @@ describe("post-install doctor result IPC", () => {
       { encoding: "utf8", mode: 0o600, flag: "wx" },
     );
 
-    await expect(consumeUpdatePostInstallDoctorResult(resultPath)).resolves.toBeNull();
-    await expect(fs.access(resultPath)).rejects.toThrow();
+    await consume(resultPath, null);
   });
 });

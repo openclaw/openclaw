@@ -39,10 +39,7 @@ type MxcExecFinalizeToken = {
 const CONTAINER_ID_MAX_LEN = 64;
 function uniqueContainerId(runtimeId: string): string {
   const suffix = randomBytes(4).toString("hex");
-  const base =
-    runtimeId.length + suffix.length + 1 > CONTAINER_ID_MAX_LEN
-      ? runtimeId.slice(0, CONTAINER_ID_MAX_LEN - suffix.length - 1)
-      : runtimeId;
+  const base = runtimeId.slice(0, CONTAINER_ID_MAX_LEN - suffix.length - 1);
   return `${base}-${suffix}`;
 }
 
@@ -160,7 +157,7 @@ export function createMxcSandboxBackendHandle(params: {
       );
       const workspace = resolveMxcWorkspaceContext(params);
       const runtimeWorkdir = resolveMxcRuntimeWorkdir(workspace, effectiveWorkdir);
-      const baselineContext = resolveCurrentBaselineContext(workspace.activeWorkspaceDir);
+      const baselineContext = resolveCurrentBaselineContext();
       const sandboxTempDir = createSandboxTempDir(baselineContext.hostEnv);
       try {
         const payload = buildMxcContainerConfig({
@@ -225,7 +222,7 @@ export function createMxcSandboxBackendHandle(params: {
       const effectiveWorkdir = path.resolve(params.workdir);
       const workspace = resolveMxcWorkspaceContext(params);
       const runtimeWorkdir = resolveMxcRuntimeWorkdir(workspace, effectiveWorkdir);
-      const baselineContext = resolveCurrentBaselineContext(workspace.activeWorkspaceDir);
+      const baselineContext = resolveCurrentBaselineContext();
       const sandboxTempDir = createSandboxTempDir(baselineContext.hostEnv);
       let commandBridge: ReturnType<typeof createWindowsCommandBridge> | undefined;
 

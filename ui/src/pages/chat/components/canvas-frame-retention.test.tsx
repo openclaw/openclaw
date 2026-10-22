@@ -10,7 +10,7 @@ import {
   createApplicationGateway,
   createSolidApplicationContextProvider,
 } from "../../../test-helpers/solid-application-context.tsx";
-import { flush } from "../../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { SidebarPanel } from "./chat-sidebar-content.tsx";
 import { ToolPreview } from "./widget-card.ts";
 
@@ -73,6 +73,8 @@ it.each(["transcript", "strict transcript", "sidebar"] as const)(
       { wrapper: provider.wrapper },
     );
     const frame = () => root.container.querySelector<HTMLIFrameElement>("iframe");
+    await vi.dynamicImportSettled();
+    await waitForSolid(() => expect(frame()).not.toBeNull());
     const original = frame()!;
     expect(original).not.toBeNull();
     const src = original.getAttribute("src");

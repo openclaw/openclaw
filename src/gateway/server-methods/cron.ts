@@ -33,6 +33,7 @@ import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { assertActiveAgentRuntimeAuthority } from "./agent-runtime-authority.js";
 import { cronAddHandler } from "./cron-add.js";
 import {
+  assertCronModelJobAllowed,
   cronCreateMatchesCallerScope,
   cronJobMatchesCallerScope,
   cronPatchSessionRefsMatchCaller,
@@ -193,6 +194,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     const touchesToolRuntime = patch.payload !== undefined || Object.hasOwn(patch, "trigger");
     let deliveryPreview: CronDeliveryPreview | undefined;
     const validateUpdate = async (jobToUpdate: CronJob) => {
+      assertCronModelJobAllowed(client, cfg, jobToUpdate, patch);
       const nextJob = await assertValidCronUpdatePatch({
         cfg,
         defaultAgentId: context.cron.getDefaultAgentId(),
@@ -248,6 +250,7 @@ export const cronHandlers: GatewayRequestHandlers = {
         inference?.assertInferenceSelectionCurrent();
       },
       hasCurrentClientAuthority,
+      modelJobPolicy: { config: cfg, jobId, patch },
     });
     const updateOptions: CronUpdateOptions = {
       ...(touchesToolRuntime
@@ -496,12 +499,18 @@ export const cronHandlers: GatewayRequestHandlers = {
         return;
       }
       let result: Awaited<ReturnType<typeof context.cron.enqueueRun>>;
+      const cfg = context.getRuntimeConfig();
       try {
+        assertCronModelJobAllowed(client, cfg, job);
         const commitGuard = resolveCronMutationCommitGuard(
           client,
           context,
           { callerScope, jobId },
-          { sessionMutationCommitGuard, hasCurrentClientAuthority },
+          {
+            sessionMutationCommitGuard,
+            hasCurrentClientAuthority,
+            modelJobPolicy: { config: cfg, jobId },
+          },
         );
         result = commitGuard
           ? await context.cron.enqueueRun(jobId, p.mode ?? "force", { commitGuard })

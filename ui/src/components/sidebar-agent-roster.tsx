@@ -1,4 +1,4 @@
-import { createMemo, For, onCleanup, onSettled, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import { isSessionRouteId, pathForAgentPanel } from "../app-route-paths.ts";
 import { togglePinnedAgent } from "../app/bootstrap-navigation-preferences.ts";
 import { registerAgentsHomeEnglish } from "../i18n/locales/en-agents-home.ts";
@@ -25,7 +25,7 @@ import { showConfirmDialog } from "./confirm-dialog.ts";
 import "../styles/sidebar-pinned-agents.css";
 import { Icon } from "./solid/icon.tsx";
 import { AgentIdentityAvatar } from "./solid/identity-avatar.tsx";
-import { Menu } from "./solid/menu.tsx";
+import { Menu, type MenuEntry } from "./solid/menu.tsx";
 import {
   SessionGlyph,
   TeamSessionSlots,
@@ -88,17 +88,21 @@ export function SidebarAgentRoster(props: RosterProps) {
   }, presented);
   const agentLinks = new Map<string, HTMLAnchorElement>();
   const createAgentLinkRef = (card: () => { id: string }) => {
-    // The keyed row keeps this identity until its branch is removed.
-    const id = card().id;
     let link: HTMLAnchorElement | undefined;
-    onCleanup(() => {
-      if (agentLinks.get(id) === link) {
-        agentLinks.delete(id);
+    onSettled(() => {
+      // The keyed row keeps this identity until its branch is removed.
+      const id = card().id;
+      if (link) {
+        agentLinks.set(id, link);
       }
+      return () => {
+        if (agentLinks.get(id) === link) {
+          agentLinks.delete(id);
+        }
+      };
     });
     return (element: HTMLAnchorElement) => {
       link = element;
-      agentLinks.set(id, element);
     };
   };
   const parkedSections = createParkedProjection(() => props.sections, presented);
@@ -141,95 +145,98 @@ export function SidebarAgentRoster(props: RosterProps) {
       await currentContext.agents.refreshList();
     }
   };
-  const agentMenu = (card: () => { id: string; name: string }, pinned = false) => (
-    <Menu
-      id={`sidebar-agent-roster-${card().id}`}
-      class="sidebar-customize-menu sidebar-agent-roster__menu"
-      placement="bottom-end"
-      label={t("agentsHome.agentOptions", { agent: card().name })}
-      triggerClass="sidebar-agent-roster__action"
-      trigger={<Icon name="moreHorizontal" />}
-      lazy
-      ref={({ overlay }) => {
-        overlay.surface.dataset.chatAutotypeExempt = "";
-      }}
-      onBeforeShow={() => {
-        host().dismissTransientMenus();
-      }}
-      onSelect={(item) => {
-        switch (item.id) {
-          case "pin": {
-            const id = card().id;
-            togglePinnedAgent(context.navigation, id);
-            // Pinning moves the row into the menu-less gallery; keep keyboard focus on its agent.
-            onSettled(() => agentLinks.get(id)?.focus());
-            break;
+  const agentMenu = (card: () => { id: string; name: string }, pinned = false) => {
+    const items = createMemo<MenuEntry[]>(() => [
+      ...(!pinned
+        ? [
+            {
+              id: "pin",
+              label: t("nav.pin"),
+              class: "sidebar-customize-menu__item",
+              icon: <Icon name="pin" />,
+            },
+            {
+              id: "sessions",
+              label: t("agentsHome.viewSessions"),
+              class: "sidebar-customize-menu__item",
+              icon: <Icon name="listTree" />,
+            },
+          ]
+        : []),
+      ...(canCreateClawDraft(context)
+        ? [
+            {
+              id: "create-claw",
+              label: t("clawsDraft.title"),
+              class: "sidebar-customize-menu__item",
+              icon: <Icon name="share" />,
+            },
+          ]
+        : []),
+      ...(!pinned
+        ? [
+            {
+              id: "settings",
+              label: t("nav.settings"),
+              class: "sidebar-customize-menu__item",
+              icon: <Icon name="settings" />,
+            },
+            {
+              id: "delete",
+              label: t("common.delete"),
+              class: "sidebar-customize-menu__item",
+              icon: <Icon name="trash" />,
+              variant: "danger" as const,
+              disabled: !canDeleteAgent(card().id),
+            },
+          ]
+        : []),
+    ]);
+    return (
+      <Menu
+        id={`sidebar-agent-roster-${card().id}`}
+        class="sidebar-customize-menu sidebar-agent-roster__menu"
+        placement="bottom-end"
+        label={t("agentsHome.agentOptions", { agent: card().name })}
+        triggerClass="sidebar-agent-roster__action"
+        trigger={<Icon name="moreHorizontal" />}
+        lazy
+        ref={({ overlay }) => {
+          overlay.surface.dataset.chatAutotypeExempt = "";
+        }}
+        onBeforeShow={() => {
+          host().dismissTransientMenus();
+        }}
+        onSelect={(item) => {
+          switch (item.id) {
+            case "pin": {
+              const id = card().id;
+              togglePinnedAgent(context.navigation, id);
+              // Pinning moves the row into the menu-less gallery; keep keyboard focus on its agent.
+              onSettled(() => agentLinks.get(id)?.focus());
+              break;
+            }
+            case "sessions":
+              context.agentSelection.setScope(card().id);
+              host().onNavigate?.("sessions");
+              break;
+            case "create-claw":
+              clawCreatorAction(context, card().id)?.();
+              break;
+            case "settings":
+              context.navigate("agents", {
+                pathname: pathForAgentPanel(card().id, null, context.basePath),
+              });
+              break;
+            case "delete":
+              void deleteAgent(card());
+              break;
           }
-          case "sessions":
-            context.agentSelection.setScope(card().id);
-            host().onNavigate?.("sessions");
-            break;
-          case "create-claw":
-            clawCreatorAction(context, card().id)?.();
-            break;
-          case "settings":
-            context.navigate("agents", {
-              pathname: pathForAgentPanel(card().id, null, context.basePath),
-            });
-            break;
-          case "delete":
-            void deleteAgent(card());
-            break;
-        }
-      }}
-      items={[
-        ...(!pinned
-          ? [
-              {
-                id: "pin",
-                label: t("nav.pin"),
-                class: "sidebar-customize-menu__item",
-                icon: <Icon name="pin" />,
-              },
-              {
-                id: "sessions",
-                label: t("agentsHome.viewSessions"),
-                class: "sidebar-customize-menu__item",
-                icon: <Icon name="listTree" />,
-              },
-            ]
-          : []),
-        ...(canCreateClawDraft(context)
-          ? [
-              {
-                id: "create-claw",
-                label: t("clawsDraft.title"),
-                class: "sidebar-customize-menu__item",
-                icon: <Icon name="share" />,
-              },
-            ]
-          : []),
-        ...(!pinned
-          ? [
-              {
-                id: "settings",
-                label: t("nav.settings"),
-                class: "sidebar-customize-menu__item",
-                icon: <Icon name="settings" />,
-              },
-              {
-                id: "delete",
-                label: t("common.delete"),
-                class: "sidebar-customize-menu__item",
-                icon: <Icon name="trash" />,
-                variant: "danger" as const,
-                disabled: !canDeleteAgent(card().id),
-              },
-            ]
-          : []),
-      ]}
-    />
-  );
+        }}
+        items={items()}
+      />
+    );
+  };
   const error = () => snapshot().error ?? snapshot().subscriptionError;
   return (
     <openclaw-sidebar-agent-roster>

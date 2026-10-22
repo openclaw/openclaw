@@ -1,4 +1,14 @@
-import { action, createMemo, createOptimistic, createSignal, For, onSettled, Show } from "solid-js";
+import {
+  action,
+  createMemo,
+  createOptimistic,
+  createSignal,
+  For,
+  lazy,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import { isQuestionThumbnail } from "../../../packages/gateway-protocol/src/question-media.js";
 import type {
   McpAppDiscoveredEntrypoint,
@@ -17,6 +27,8 @@ import { Icon } from "./solid/icon.tsx";
 import "../styles/mcp-app-extensions.css";
 
 registerMcpAppEnglish();
+
+const DiscoveryStatus = lazy(() => import("./mcp-app-discovery-status.tsx"));
 
 type McpAppCatalogProps = {
   sessionKey?: string;
@@ -69,17 +81,19 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
         : entrypoint.type === (surface() === "sidebar" ? "global" : surface()),
     );
   const rows = createMemo(() =>
-    catalog().servers.flatMap((server) => entries(server).map((entry) => ({ server, entry }))),
+    catalog
+      .snapshot()
+      .servers.flatMap((server) => entries(server).map((entry) => ({ server, entry }))),
   );
   const compact = () => surface() === "thread" || surface() === "file";
   const visible = () =>
-    catalog().visible &&
+    catalog.visible() &&
     !(surface() === "file" && !rows().length) &&
     !(
       surface() === "thread" &&
       !rows().length &&
-      !catalog().onboarding.length &&
-      !catalog().servers.some((server) => server.settings)
+      !catalog.snapshot().onboarding.length &&
+      !catalog.snapshot().servers.some((server) => server.settings)
     );
   function open(
     server: McpAppDiscoveredServer,
@@ -87,7 +101,7 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
     settings = false,
     quickAction = false,
   ) {
-    if (!catalog().available) {
+    if (!catalog.available()) {
       return;
     }
     setError(null);
@@ -123,7 +137,7 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
   });
   async function onboard(pluginId: string) {
     const client = context.gateway.snapshot.client;
-    if (!client || !catalog().available || onboardingPending) {
+    if (!client || !catalog.available() || onboardingPending) {
       return;
     }
     const selected = target();
@@ -194,22 +208,14 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
               </Show>
               <Show when={!compact() || expanded()}>
                 <div class="mcp-app-catalog__entries">
-                  <Show when={catalog().loading}>
-                    <p role="status">{t("mcpApp.loading")}</p>
-                  </Show>
-                  <Show when={catalog().error}>
-                    <p role="alert">{catalog().error}</p>
-                    <button
-                      class="btn"
-                      disabled={!catalog().available}
-                      onClick={() => void catalog().refresh()}
-                    >
-                      {t("mcpApp.retry")}
-                    </button>
-                  </Show>
-                  <Show when={!catalog().loading && !catalog().error && !rows().length}>
-                    <p>{t("mcpApp.empty")}</p>
-                  </Show>
+                  <Loading fallback={<p role="status">{t("mcpApp.loading")}</p>}>
+                    <DiscoveryStatus
+                      request={catalog.request()}
+                      emptyMessage={!rows().length ? t("mcpApp.empty") : undefined}
+                      onRetry={() => void catalog.refresh()}
+                      retryDisabled={!catalog.available()}
+                    />
+                  </Loading>
                   <For
                     each={rows()}
                     keyed={(row) => JSON.stringify([row.server.serverName, row.entry.toolName])}
@@ -224,7 +230,7 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
                           <button
                             class="btn"
                             type="button"
-                            disabled={!catalog().available}
+                            disabled={!catalog.available()}
                             onClick={() => open(row().server, row().entry)}
                           >
                             <CatalogIcon server={row().server} entry={row().entry} />
@@ -238,7 +244,7 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
                               <button
                                 class="btn btn--sm"
                                 type="button"
-                                disabled={!catalog().available}
+                                disabled={!catalog.available()}
                                 onClick={() => open(row().server, row().entry, false, true)}
                               >
                                 {shortcut().title}
@@ -249,7 +255,8 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
                             <button
                               type="button"
                               class="btn btn--sm"
-                              disabled={!catalog().available}
+                              aria-label={`${t("mcpApp.settings")}: ${row().entry.title}`}
+                              disabled={!catalog.available()}
                               onClick={() => open(row().server, row().entry, true)}
                             >
                               {t("mcpApp.settings")}
@@ -261,15 +268,15 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
                   </For>
                   <Show when={surface() !== "file"}>
                     <For
-                      each={catalog().servers.filter(
-                        (server) => server.settings && !entries(server).length,
-                      )}
+                      each={catalog
+                        .snapshot()
+                        .servers.filter((server) => server.settings && !entries(server).length)}
                     >
                       {(server) => (
                         <button
                           class="btn"
                           type="button"
-                          disabled={!catalog().available}
+                          disabled={!catalog.available()}
                           onClick={() =>
                             open(
                               server,
@@ -288,12 +295,12 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
                       )}
                     </For>
                   </Show>
-                  <For each={catalog().onboarding}>
+                  <For each={catalog.snapshot().onboarding}>
                     {(plugin) => (
                       <button
                         class="btn"
                         type="button"
-                        disabled={onboardingBusy() || !catalog().available}
+                        disabled={onboardingBusy() || !catalog.available()}
                         onClick={() => void onboard(plugin.pluginId)}
                       >
                         {t("mcpApp.onboarding")} · {plugin.title}
@@ -321,7 +328,7 @@ export function McpAppCatalog(props: McpAppCatalogProps) {
               <button
                 type="button"
                 class="nav-item"
-                disabled={!catalog().available}
+                disabled={!catalog.available()}
                 onClick={() => open(row().server, row().entry)}
                 title={row().server.label}
               >

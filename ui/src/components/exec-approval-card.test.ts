@@ -345,20 +345,23 @@ describe("exec approval card", () => {
       });
       renderSurface(request, variant, onDecision);
       const buttons = Array.from(container.querySelectorAll<HTMLButtonElement>("button"));
-      expect(buttons.map((button) => button.textContent?.trim())).toEqual([
-        "Allow once",
-        "Allow while this App is open",
-        "Deny",
-      ]);
+      const expected = [
+        ["Allow once", "allow-once"],
+        ["Allow while this App is open", "allow-always"],
+        ["Deny", "deny"],
+      ] as const;
+      // The right-aligned modal footer keeps its primary decision at the trailing edge.
+      const order = variant === "modal" ? expected.toReversed() : expected;
+      expect(buttons.map((button) => button.textContent?.trim())).toEqual(
+        order.map(([label]) => label),
+      );
       for (const button of buttons) {
         button.click();
       }
       await Promise.all(onDecision.mock.results.map((result) => result.value));
-      expect(client.request.mock.calls).toEqual([
-        ["plugin.approval.resolve", { id: request.id, decision: "allow-once" }],
-        ["plugin.approval.resolve", { id: request.id, decision: "allow-always" }],
-        ["plugin.approval.resolve", { id: request.id, decision: "deny" }],
-      ]);
+      expect(client.request.mock.calls).toEqual(
+        order.map(([, decision]) => ["plugin.approval.resolve", { id: request.id, decision }]),
+      );
     },
   );
 
@@ -462,6 +465,32 @@ describe("exec approval card", () => {
     flush();
     expect(container.querySelector<HTMLDetailsElement>("details")!.open).toBe(false);
     expect(view.getByRole<HTMLButtonElement>("button", { name: "Allow once" }).disabled).toBe(true);
+  });
+
+  it("cancels an active pointer-triggered mobile disclosure animation on unmount", () => {
+    const view = renderSurface(
+      approval({
+        kind: "exec",
+        request: { command: "echo review", host: "gateway", cwd: "/workspace" },
+        expiresAtMs: Date.now() + 60_000,
+      }),
+      "inline",
+      undefined,
+      "mobile",
+    );
+    const disclosure = container.querySelector<HTMLDetailsElement>("details")!;
+    const cancel = vi.fn();
+    // JSDOM lacks Web Animations; retain the resource returned to the real click handler.
+    const animate = vi.fn(() => ({ cancel, onfinish: null }));
+    Object.defineProperty(disclosure, "animate", { configurable: true, value: animate });
+    disclosure
+      .querySelector("summary")!
+      .dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 }));
+    expect(disclosure.open).toBe(true);
+    expect(animate).toHaveBeenCalledOnce();
+    expect(cancel).not.toHaveBeenCalled();
+    view.unmount();
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it.each([

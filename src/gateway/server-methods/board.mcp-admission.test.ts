@@ -1,5 +1,6 @@
 import { Type } from "typebox";
 import { afterEach, expect, it, vi } from "vitest";
+import { GATEWAY_OWNER_PROFILE_ID } from "../../../packages/gateway-protocol/src/schema/users.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
 import type { SessionMcpRuntime } from "../../agents/agent-bundle-mcp-types.js";
 import { fetchMcpAppView, getMcpAppViewLease } from "../../agents/mcp-ui-resource.js";
@@ -19,7 +20,9 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
+import { ensureCanonicalGatewayOwnerProfile } from "../../state/user-profile-writes.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { captureGatewayAuthPolicy } from "../auth-policy.js";
 import { boardStore } from "../board-store.js";
 import {
   executeMcpAppOperation,
@@ -28,10 +31,11 @@ import {
   resolveMcpAppAllowedToolNames,
   type McpAppActiveView,
 } from "../mcp-app-operations.js";
+import { makeClient } from "../server-broadcast.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { roleClient, rolePolicyConfig } from "../session-sharing.test-utils.js";
 import { createBoardHarness } from "./board.test-support.js";
-import type { RespondFn } from "./types.js";
+import type { GatewayClient, RespondFn } from "./types.js";
 
 const profileState = { scenario: "minimal", prepareProfileCatalog: true } as const;
 const scopes = ["operator.read", "operator.write", "operator.approvals"] as const;
@@ -41,14 +45,24 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
-  "retains only current source tool authority after queueing (%s)",
+it.for([
+  "keep",
+  "revoke",
+  "cancel",
+  "retire",
+  "sharing",
+  "foreign-requester",
+  "shared-secret",
+] as const)(
+  "preserves source authority through board pins (%s)",
   (outcome, { signal: testSignal }) =>
     withOpenClawTestState(profileState, async ({ workspaceDir }) => {
       const revoke = outcome === "revoke";
       const cancel = outcome === "cancel";
       const retire = outcome === "retire";
       const sharing = outcome === "sharing";
+      const foreignRequester = outcome === "foreign-requester";
+      const sharedSecret = outcome === "shared-secret";
       const target = { agentId: "main", sessionKey: "agent:main:mcp-admission" };
       const cfg: OpenClawConfig = {
         ...rolePolicyConfig(),
@@ -58,19 +72,42 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
       };
       cfg.gateway!.roles!.definitions!.view!.scopes = [...scopes];
       setRuntimeConfigSnapshot(cfg, cfg);
-      const client = {
-        ...roleClient("view", "mcp-admission-owner"),
-        connId: "mcp-admission-owner",
-      };
-      client.connect.scopes = [...scopes];
-      const clientProfileId = client.authenticatedUserProfile!.profileId;
+      const client: GatewayClient = sharedSecret
+        ? makeClient("shared-secret-peer", "operator", ["operator.admin"]).client
+        : {
+            ...roleClient("view", "mcp-admission-owner"),
+            connId: "mcp-admission-owner",
+          };
+      if (sharedSecret) {
+        await ensureCanonicalGatewayOwnerProfile("Synthetic owner");
+        cfg.gateway!.auth = { mode: "token", token: "synthetic-fixture-token" };
+        client.connect.client = {
+          id: "gateway-client",
+          version: "test",
+          platform: "test",
+          mode: "backend",
+        };
+        client.internal = { authenticatedOperator: true, operatorRoleActor: { kind: "system" } };
+        client.authPolicy = captureGatewayAuthPolicy(cfg, {
+          role: "operator",
+          authMethod: "token",
+        });
+        client.usesSharedGatewayAuth = true;
+        client.sharedGatewaySessionGeneration = "synthetic-shared-generation";
+        expect(client.authenticatedUserProfile).toBeUndefined();
+      } else {
+        client.connect.scopes = [...scopes];
+      }
+      const clientProfileId = sharedSecret
+        ? GATEWAY_OWNER_PROFILE_ID
+        : client.authenticatedUserProfile!.profileId;
       const creatorId = sharing
         ? roleClient("view", "mcp-admission-other").authenticatedUserProfile!.profileId
         : clientProfileId;
       await upsertSessionEntryCore(target, {
         sessionId: "mcp-admission-session",
         updatedAt: 1,
-        visibility: sharing ? ("shared" as const) : ("draft" as const),
+        visibility: sharing || foreignRequester ? ("shared" as const) : ("draft" as const),
         createdActor: {
           type: "human" as const,
           source: "profile" as const,
@@ -152,6 +189,7 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
               ...options,
               runtime,
               ...sourceDescriptor,
+              requesterId: clientProfileId,
               toolInput: {},
               toolResult: { content: [] },
               ...(readOnly ? { readOnly: true } : {}),
@@ -172,11 +210,12 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
         method: string,
         input: Record<string, unknown>,
         signal?: AbortSignal,
+        requester = client,
       ) => {
         const respond = vi.fn<RespondFn>();
         await handleGatewayRequest({
           req: { type: "req", id: "mcp-admission", method, params: { ...target, ...input } },
-          client,
+          client: requester,
           context: board.context,
           respond,
           isWebchatConnect: () => false,
@@ -191,6 +230,41 @@ it.for(["keep", "revoke", "cancel", "retire", "sharing"] as const)(
       };
       await appView("source", sourceWidget);
       const sourceView = views[0]!;
+      if (sharedSecret) {
+        const pinned = await invoke("board.widget.put", {
+          name: "destination",
+          content: { kind: "mcp-app", viewId: sourceView.view.viewId },
+        });
+        expect(pinned.mock.calls[0]?.[2]).toBeUndefined();
+        expect(pinned.mock.calls[0]?.[0]).toBe(true);
+        expect(await boardStore.readWidgetMcpApp(target, "destination")).toBeDefined();
+        return;
+      }
+      if (foreignRequester) {
+        const bob = { ...roleClient("write", "mcp-admission-bob"), connId: "mcp-admission-bob" };
+        const control = await invoke(
+          "board.widget.put",
+          { name: "bob-control", content: { kind: "html", html: "<p>Bob can write</p>" } },
+          undefined,
+          bob,
+        );
+        expect(control.mock.calls[0]?.[0]).toBe(true);
+        const before = await boardStore.getSnapshot(target);
+        board.broadcast.mockClear();
+        const rejected = await invoke(
+          "board.widget.put",
+          { name: "destination", content: { kind: "mcp-app", viewId: sourceView.view.viewId } },
+          undefined,
+          bob,
+        );
+        expect(rejected.mock.calls[0]?.[0]).toBe(false);
+        expect(rejected.mock.calls[0]?.[2]?.message).toContain("expired or is not authorized");
+        expect(await boardStore.getSnapshot(target)).toEqual(before);
+        expect(await boardStore.readWidgetMcpApp(target, "destination")).toBeUndefined();
+        expect(board.broadcast).not.toHaveBeenCalled();
+        expect(callTool).not.toHaveBeenCalled();
+        return;
+      }
       await requireMcpAppInteraction(sourceView.view);
       const authorizeSource = sourceView.view.authorizeAppInteraction!;
       const policyEntered = createDeferredCore();

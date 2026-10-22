@@ -172,16 +172,12 @@ export function normalizeOpenAIToolSchemas(
   if (!shouldApplyOpenAIToolCompat(ctx)) {
     return ctx.tools;
   }
-  return ctx.tools.map((tool) => {
+  return mapArrayIfChanged(ctx.tools, (tool) => {
     if (tool.parameters != null && typeof tool.parameters !== "object") {
       return tool;
     }
-    return {
-      ...tool,
-      parameters: normalizeOpenAIStrictCompatSchema(
-        truncateToolSchemaDepth(tool.parameters ?? {}, tool.name),
-      ),
-    };
+    const parameters = normalizeOpenAIStrictCompatSchema(tool.parameters ?? {}, tool.name);
+    return parameters === tool.parameters ? tool : { ...tool, parameters };
   });
 }
 

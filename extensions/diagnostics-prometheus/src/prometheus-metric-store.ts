@@ -169,19 +169,15 @@ export function createPrometheusMetricStore() {
     gauges.samples = gauges.samples.filter((sample) => sample.name !== name);
   };
 
-  const histogram = (
+  const getHistogram = (
     name: string,
     help: string,
     labels: LabelSet,
-    value: number | undefined,
     buckets = DURATION_BUCKETS_SECONDS,
   ) => {
-    if (value === undefined || !Number.isFinite(value)) {
-      return;
-    }
     const node = series(histograms, name, labels);
     if (!node) {
-      return;
+      return undefined;
     }
     let sample = node.sample;
     if (!sample) {
@@ -202,6 +198,27 @@ export function createPrometheusMetricStore() {
       };
       node.sample = sample;
       histograms.samples.push(sample);
+    }
+    return sample;
+  };
+
+  const reserveHistogram = (name: string, help: string, labels: LabelSet) => {
+    getHistogram(name, help, labels);
+  };
+
+  const histogram = (
+    name: string,
+    help: string,
+    labels: LabelSet,
+    value: number | undefined,
+    buckets = DURATION_BUCKETS_SECONDS,
+  ) => {
+    if (value === undefined || !Number.isFinite(value)) {
+      return;
+    }
+    const sample = getHistogram(name, help, labels, buckets);
+    if (!sample) {
+      return;
     }
     sample.count += 1;
     sample.sum += value;
@@ -231,8 +248,7 @@ export function createPrometheusMetricStore() {
       ["counter", counters.samples],
       ["gauge", gauges.samples],
     ] as const) {
-      // oxlint-disable-next-line unicorn/no-array-sort -- The store owns and reuses this scrape array.
-      for (const sample of samples.sort((left, right) => left.key.localeCompare(right.key))) {
+      for (const sample of samples.toSorted((left, right) => left.key.localeCompare(right.key))) {
         header(sample.name, type, sample.help);
         write(sample.prefix, sample.value);
       }
@@ -245,10 +261,12 @@ export function createPrometheusMetricStore() {
         write(`${DROPPED_SERIES_COUNTER_NAME} `, droppedSeries);
       }
     }
-    // oxlint-disable-next-line unicorn/no-array-sort -- The store owns and reuses this scrape array.
-    for (const sample of histograms.samples.sort((left, right) =>
+    for (const sample of histograms.samples.toSorted((left, right) =>
       left.key.localeCompare(right.key),
     )) {
+      if (sample.count === 0) {
+        continue;
+      }
       header(sample.name, "histogram", sample.help);
       sample.bucketPrefixes.forEach((prefix, bucketIndex) => {
         write(prefix, sample.counts[bucketIndex] ?? sample.count);
@@ -269,5 +287,5 @@ export function createPrometheusMetricStore() {
     parts.length = 0;
   };
 
-  return { counter, counterValue, gauge, clearGauges, histogram, reset, render };
+  return { counter, counterValue, gauge, clearGauges, histogram, reserveHistogram, reset, render };
 }

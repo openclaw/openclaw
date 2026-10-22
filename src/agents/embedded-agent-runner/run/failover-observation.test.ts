@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { log } from "../logger.js";
 import { createFailoverDecisionLogger } from "./failover-observation.js";
@@ -35,11 +36,7 @@ function observeDecision(
 }
 
 function firstWarnDetails() {
-  const details = warn.mock.calls[0]?.[1];
-  if (!details) {
-    throw new Error("Expected structured failover details");
-  }
-  return details;
+  return expectDefined(warn.mock.calls[0]?.[1], "structured failover details");
 }
 
 afterEach(() => vi.restoreAllMocks());
@@ -92,15 +89,9 @@ it("omits normal continuation logs when debug is disabled", () => {
 
 it("includes from and to model refs when the source differs from the selected target", () => {
   const logDecision = createDecisionLogger({
-    runId: "run:failover",
-    rawError: "timeout",
-    failoverReason: "timeout",
-    profileFailureReason: "timeout",
     model: "gpt-5.4",
     sourceProvider: "github-copilot",
     sourceModel: "gpt-5.4-mini",
-    fallbackConfigured: true,
-    timedOut: true,
     attemptCount: 4,
     retryCount: 2,
     profileRotationCount: 1,
@@ -133,10 +124,6 @@ it.each([
       rawError,
       failoverReason: "auth",
       profileFailureReason: "auth",
-      model: "gpt-5.4",
-      sourceProvider: "openai",
-      sourceModel: "gpt-5.4",
-      fallbackConfigured: true,
     },
     "rotate_profile",
   );

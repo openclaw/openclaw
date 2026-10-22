@@ -5,8 +5,21 @@ import {
 } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { onTrustedInternalDiagnosticEvent } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { expect, it, vi } from "vitest";
+import type { DiagnosticEventPayload } from "../api.js";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
-import { createMetricsHarness, untrusted } from "./service.test-helpers.js";
+import {
+  baseEvent,
+  createMetricsHarness,
+  scrapeMetrics,
+  untrusted,
+} from "./service.test-helpers.js";
+
+// mock-isolation: Keep Gateway runtime initialization outside the fixture; scrape as a read-authorized operator.
+vi.mock("openclaw/plugin-sdk/plugin-runtime", () => ({
+  getPluginRuntimeGatewayRequestScope: () => ({
+    client: { connect: { scopes: ["operator.read"] } },
+  }),
+}));
 
 it("exports trusted WebSocket event totals and the current operator socket count", () => {
   const metrics = createMetricsHarness();
@@ -303,7 +316,7 @@ it("records terminal metrics without reading logs or private diagnostic content"
       },
     );
     await waitForDiagnosticEventsDrained();
-    expect(exporter.render()).toContain(
+    expect(scrapeMetrics(exporter.handler)).toContain(
       'openclaw_tool_execution_total{error_category="none",outcome="completed",params_kind="unknown",tool="synthetic",tool_owner="none",tool_source="core"} 1',
     );
     expect(readPrivateContent).not.toHaveBeenCalled();
@@ -323,5 +336,82 @@ it("records terminal metrics without reading logs or private diagnostic content"
     exporter.service.stop?.();
     await waitForDiagnosticEventsDrained();
   }
-  expect(exporter.render()).toBe("");
+  expect(scrapeMetrics(exporter.handler)).toBe("");
+});
+
+it("keeps late main GC and existing operational samples updating when RPC timings fill the cap", () => {
+  const metrics = createMetricsHarness();
+  expect(metrics.render()).not.toContain("openclaw_gc_duration_seconds");
+  const queue = {
+    ...baseEvent(),
+    type: "queue.lane.dequeue" as const,
+    lane: "main",
+    queueSize: 1,
+    waitMs: 10,
+  };
+  metrics.record(queue);
+  // Enough distinct methods to exhaust the shared cap without importing core internals.
+  for (let index = 0; index < 426; index += 1) {
+    const base = { ...baseEvent(), type: "gateway.rpc" as const, method: `core.method.${index}` };
+    for (const event of [
+      { ...base, phase: "received" },
+      { ...base, phase: "response", outcome: "ok", durationMs: 10, responseBytes: 1024 },
+      {
+        ...base,
+        phase: "handler",
+        outcome: "returned",
+        durationMs: 10,
+        admissionMs: 1,
+        heapDeltaBytes: -1024,
+      },
+      {
+        ...base,
+        phase: "dispatch",
+        outcome: "returned",
+        durationMs: 11,
+        queueWaitMs: 1,
+        response: "sent",
+      },
+    ] satisfies DiagnosticEventPayload[]) {
+      metrics.record(event);
+    }
+  }
+  expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 1795");
+  metrics.record({ ...queue, queueSize: 2 });
+  const existing = metrics.render();
+  expect(existing).toContain('openclaw_queue_lane_size{lane="main"} 2');
+  expect(existing).toContain('openclaw_queue_lane_wait_seconds_count{lane="main"} 2');
+  expect(existing).toContain("openclaw_prometheus_series_dropped_total 1795");
+  metrics.record({ ...queue, lane: "later" });
+  expect(metrics.render()).toContain("openclaw_prometheus_series_dropped_total 1797");
+  expect(metrics.render()).not.toContain('lane="later"');
+  for (const kind of [
+    "scavenge",
+    "mark_sweep_compact",
+    "incremental",
+    "weak_processing",
+  ] as const) {
+    metrics.record({
+      type: "diagnostic.gc",
+      kind,
+      reason: "other",
+      thread: "main",
+      durationMs: 20,
+    });
+    metrics.record({
+      type: "diagnostic.gc",
+      kind,
+      reason: "other",
+      thread: "main",
+      durationMs: 30,
+    });
+    const labels = `kind="${kind}",reason="other",thread="main"`;
+    const rendered = metrics.render();
+    expect(rendered).toContain(`openclaw_gc_duration_seconds_count{${labels}} 2\n`);
+    expect(rendered).toContain(`openclaw_gc_duration_seconds_sum{${labels}} 0.05\n`);
+    expect(rendered).toContain(
+      `openclaw_gc_duration_seconds_bucket{kind="${kind}",le="0.025",reason="other",thread="main"} 1\n`,
+    );
+  }
+  metrics.stop();
 });

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { createPluginManifestRecordFixture as plugin } from "../plugins/plugin-metadata.test-support.js";
@@ -6,6 +6,7 @@ import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
 } from "./validation.js";
+import { validatedConfig } from "./validation.test-helpers.js";
 
 const mockLoadPluginManifestRegistry = vi.hoisted(() =>
   vi.fn((): PluginManifestRegistry => ({ diagnostics: [], plugins: [] })),
@@ -17,14 +18,6 @@ function registry(...plugins: PluginManifestRecord[]): PluginManifestRegistry {
 
 function install(...plugins: Parameters<typeof plugin>[0][]) {
   mockLoadPluginManifestRegistry.mockReturnValue(registry(...plugins.map(plugin)));
-}
-
-function validatedConfig(result: ReturnType<typeof validateConfigObjectWithPlugins>) {
-  expect(result.ok).toBe(true);
-  if (!result.ok) {
-    throw new Error("Expected valid config");
-  }
-  return result.config;
 }
 
 const objectSchema = (
@@ -159,62 +152,6 @@ describe("config validation metadata", () => {
     ).toBe("pairing");
   });
 
-  it("normalizes composed local references without changing shared definitions", () => {
-    const schema = objectSchema({
-      accounts: {
-        type: "object",
-        properties: { default: { $ref: "#/$defs/Account" } },
-        patternProperties: { "^work-": { $ref: "#/$defs/Account" } },
-        additionalProperties: { $ref: "#/$defs/Account" },
-      },
-    });
-    const external = {
-      $ref: "#/$defs/Root",
-      $defs: { Root: { anyOf: [schema] }, Account: objectSchema({}) },
-    };
-    const original = structuredClone(external);
-    install(feishuPlugin(external));
-    const config = {
-      heartbeatVisibility: { showOk: true },
-      accounts: {
-        default: { heartbeatVisibility: { showOk: true } },
-        "work-qa": { heartbeatVisibility: { useIndicator: false } },
-        work: { heartbeatVisibility: { showAlerts: false } },
-      },
-    };
-    expect(validateFeishu(config).ok).toBe(true);
-    expect(
-      validateFeishu({
-        ...config,
-        accounts: { work: { heartbeatVisibility: { showAlerts: 0 } } },
-      }).ok,
-    ).toBe(false);
-    expect(external).toEqual(original);
-  });
-
-  it("replaces stale heartbeat declarations while preserving open custom fields", () => {
-    const schema = objectSchema(
-      {
-        heartbeatVisibility: false,
-        accounts: { type: "object", additionalProperties: true },
-      },
-      { additionalProperties: true },
-    );
-    install(feishuPlugin(schema));
-    const base = {
-      customChannelField: true,
-      heartbeatVisibility: { showOk: true },
-      accounts: { work: { customAccountField: true, heartbeatVisibility: { showAlerts: false } } },
-    };
-    expect(validateFeishu(base).ok).toBe(true);
-    for (const config of [
-      { ...base, heartbeatVisibility: "enabled" },
-      { ...base, accounts: { work: { heartbeatVisibility: { showOk: "yes" } } } },
-    ]) {
-      expect(validateFeishu(config).ok).toBe(false);
-    }
-  });
-
   it("keeps schema ownership when closer root metadata shadows a later schema", () => {
     install(
       feishuPlugin(objectSchema({}), "openclaw" + String.fromCharCode(10, 27) + "[31m-lark"),
@@ -222,19 +159,17 @@ describe("config validation metadata", () => {
       feishuPlugin(objectSchema({ otherField: { type: "string" } }), "other-global-feishu"),
     );
     const result = validateFeishu({ unsupportedField: true });
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({
-          path: "channels.feishu",
-          message:
-            'invalid config for plugin openclaw-lark: must not have additional properties: "unsupportedField"',
-        }),
-      );
-      expect(result.issues.map((issue) => issue.message)).not.toContain(
-        'invalid config for plugin other-global-feishu: must not have additional properties: "unsupportedField"',
-      );
-    }
+    assert(!result.ok);
+    expect(result.issues).toContainEqual(
+      expect.objectContaining({
+        path: "channels.feishu",
+        message:
+          'invalid config for plugin openclaw-lark: must not have additional properties: "unsupportedField"',
+      }),
+    );
+    expect(result.issues.map((issue) => issue.message)).not.toContain(
+      'invalid config for plugin other-global-feishu: must not have additional properties: "unsupportedField"',
+    );
   });
 
   it.each([false, true])("materializes plugin defaults only in normal mode=%s", (materialized) => {

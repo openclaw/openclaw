@@ -24,7 +24,7 @@ import {
 import { recordGatewayWsEvent } from "./service-gateway-ws.js";
 import { recordMemorySample } from "./service-memory.js";
 import { recordModelUsage } from "./service-model-usage.js";
-import { recordOperationTimingEvent } from "./service-operation-timing.js";
+import { recordOperationTimingEvent, reserveMainGcHistograms } from "./service-operation-timing.js";
 import { recordSessionRetention } from "./service-retention.js";
 import {
   createGatewayWorkMetricsRecorder,
@@ -628,6 +628,7 @@ export function createDiagnosticsPrometheusExporter() {
         ctx.logger.error("diagnostics-prometheus: internal diagnostics capability unavailable");
         return;
       }
+      reserveMainGcHistograms(store);
       const identity = isDiagnosticsEnabled(ctx.config)
         ? ctx.internalDiagnostics?.getRuntimeIdentity?.()
         : undefined;
@@ -685,7 +686,6 @@ export function createDiagnosticsPrometheusExporter() {
 
   return {
     handler: createMetricsHandler(store),
-    render: store.render,
     service,
   };
 }

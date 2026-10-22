@@ -3,10 +3,8 @@ import {
   SESSION_ROW_DETAIL_FIELDS,
   SESSION_SIDEBAR_ROW_FIELDS,
 } from "../../../packages/gateway-protocol/src/session-row-fields.ts";
-import {
-  compareSessionEntryPairs,
-  type SessionEntryPair,
-} from "../../../src/gateway/session-list-order.ts";
+import { compareSessionEntries } from "../../../src/gateway/session-list-order.ts";
+import { readSessionListSelectionFacts } from "../../../src/gateway/session-list-target.ts";
 import {
   SESSIONS_LIST_OWNER_LIMIT,
   SESSIONS_LIST_TRANSCRIPT_LIMIT,
@@ -43,27 +41,28 @@ export type TeamScaleSidebarListInventory = {
 type TeamScaleSidebarRow = GatewaySessionRow & { updatedAt: number | null };
 type TeamScaleSidebarListResult = SessionsListResult & { sessions: TeamScaleSidebarRow[] };
 
-function sessionEntryPair(row: GatewaySessionRow): SessionEntryPair {
-  return [
-    row.key,
-    {
-      sessionId: row.sessionId ?? row.key,
-      updatedAt: row.updatedAt ?? 0,
-      createdAt: row.createdAt,
-      lastActivityAt: row.lastActivityAt,
-      lastInteractionAt: row.lastInteractionAt,
-      pinnedAt: row.pinned ? row.pinnedAt : undefined,
-      spawnedBy: row.spawnedBy,
-      parentSessionKey: row.parentSessionKey,
-      sidebarRoot: row.sidebarRoot,
-    },
-  ];
+function selectionFacts(row: GatewaySessionRow) {
+  return readSessionListSelectionFacts(row.key, {
+    sessionId: row.sessionId ?? row.key,
+    updatedAt: row.updatedAt ?? 0,
+    createdAt: row.createdAt,
+    lastActivityAt: row.lastActivityAt,
+    lastInteractionAt: row.lastInteractionAt,
+    pinnedAt: row.pinned ? row.pinnedAt : undefined,
+    spawnedBy: row.spawnedBy,
+    parentSessionKey: row.parentSessionKey,
+    sidebarRoot: row.sidebarRoot,
+  });
 }
 
 /** Owns the synthetic Gateway's changing membership; production code packs its wire rows. */
 export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInventory) {
-  const admit = (row: GatewaySessionRow): TeamScaleSidebarRow =>
-    Object.freeze({ ...row, updatedAt: row.updatedAt ?? null });
+  const selections = new WeakMap<TeamScaleSidebarRow, ReturnType<typeof selectionFacts>>();
+  const admit = (row: GatewaySessionRow): TeamScaleSidebarRow => {
+    const admitted = Object.freeze({ ...row, updatedAt: row.updatedAt ?? null });
+    selections.set(admitted, selectionFacts(admitted));
+    return admitted;
+  };
   const rows = new Map(input.rows.map((row) => [row.key, admit(row)]));
   const previous = new Map<string, { rows: TeamScaleSidebarRow[]; revision: string }>();
   const projections = new WeakMap<TeamScaleSidebarRow, Map<string, TeamScaleSidebarRow>>();
@@ -104,65 +103,35 @@ export function createTeamScaleSidebarListOwner(input: TeamScaleSidebarListInven
           : undefined;
       const eligible = [...rows.values()]
         .filter((row) => {
-          if (query.agentId && row.agentId !== query.agentId) {
-            return false;
-          }
-          if (query.ownerId && row.owner?.actor.id !== query.ownerId) {
-            return false;
-          }
-          if (
-            query.involvingMe === true &&
-            (row.hiddenFromInvolvingMe === true ||
-              (!ownedBy(row, input.viewerProfileId) &&
-                !row.participants?.some(({ identity }) => identity.id === input.viewerProfileId)))
-          ) {
-            return false;
-          }
-          if (query.archived !== "all" && (row.archived === true) !== (query.archived === true)) {
-            return false;
-          }
-          if (query.pinned !== undefined && (row.pinned === true) !== query.pinned) {
-            return false;
-          }
-          if (query.hasBoard !== undefined && (row.hasBoard === true) !== query.hasBoard) {
-            return false;
-          }
-          if (query.boardFace !== undefined && row.boardFace !== query.boardFace) {
-            return false;
-          }
-          if (query.excludeDock !== false && row.isDock === true) {
-            return false;
-          }
-          if (query.excludeSubagents && isSubagentSessionRow(row.key, row)) {
-            return false;
-          }
-          if (query.excludeCron && isCronSessionDisplayKey(row.key)) {
-            return false;
-          }
-          if (query.excludeSystem && isSystemCreatedSessionRow(row)) {
-            return false;
-          }
-          if (query.includeGlobal === false && row.kind === "global") {
-            return false;
-          }
-          if (query.includeUnknown === false && row.kind === "unknown") {
-            return false;
-          }
-          if (
-            typeof query.spawnedBy === "string" &&
-            !(row.childOwnerSessionKeys ?? [row.controlOwnerSessionKey ?? row.spawnedBy]).includes(
-              query.spawnedBy,
-            )
-          ) {
-            return false;
-          }
           return (
-            typeof query.search !== "string" ||
-            `${row.label} ${row.displayName}`.toLowerCase().includes(query.search.toLowerCase())
+            (!query.agentId || row.agentId === query.agentId) &&
+            (!query.ownerId || row.owner?.actor.id === query.ownerId) &&
+            (query.involvingMe !== true ||
+              (row.hiddenFromInvolvingMe !== true &&
+                (ownedBy(row, input.viewerProfileId) ||
+                  row.participants?.some(
+                    ({ identity }) => identity.id === input.viewerProfileId,
+                  )))) &&
+            (query.archived === "all" || (row.archived === true) === (query.archived === true)) &&
+            (query.pinned === undefined || (row.pinned === true) === query.pinned) &&
+            (query.hasBoard === undefined || (row.hasBoard === true) === query.hasBoard) &&
+            (query.boardFace === undefined || row.boardFace === query.boardFace) &&
+            (query.excludeDock === false || row.isDock !== true) &&
+            (!query.excludeSubagents || !isSubagentSessionRow(row.key, row)) &&
+            (!query.excludeCron || !isCronSessionDisplayKey(row.key)) &&
+            (!query.excludeSystem || !isSystemCreatedSessionRow(row)) &&
+            (query.includeGlobal !== false || row.kind !== "global") &&
+            (query.includeUnknown !== false || row.kind !== "unknown") &&
+            (typeof query.spawnedBy !== "string" ||
+              (row.childOwnerSessionKeys ?? [row.controlOwnerSessionKey ?? row.spawnedBy]).includes(
+                query.spawnedBy,
+              )) &&
+            (typeof query.search !== "string" ||
+              `${row.label} ${row.displayName}`.toLowerCase().includes(query.search.toLowerCase()))
           );
         })
         .toSorted((a, b) =>
-          compareSessionEntryPairs(sessionEntryPair(a), sessionEntryPair(b), sortBy),
+          compareSessionEntries(a.key, selections.get(a)!, b.key, selections.get(b)!, sortBy),
         );
       const offset = typeof query.offset === "number" ? query.offset : 0;
       const limit = typeof query.limit === "number" ? query.limit : 200;
@@ -302,6 +271,7 @@ export function prepareTeamScaleSessionOwnership(
         id: owner.id,
         identity: { type: "profile", id: owner.id },
         label: owner.name,
+        avatarUrl: owner.avatarUrl,
       },
     };
     row.hiddenFromInvolvingMe = false;
