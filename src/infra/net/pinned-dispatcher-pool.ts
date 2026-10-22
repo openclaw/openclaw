@@ -2,6 +2,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import type { Dispatcher } from "undici";
 import { closeDispatcher } from "./ssrf.js";
 
+const PROVIDER_DISPATCHER_POOL_MAX_ENTRIES = 16;
+const PROVIDER_DISPATCHER_POOL_IDLE_TTL_MS = 60_000;
+
 // Gateway startup imports this module before admitting requests. Pool timers and
 // cleanup must keep that context instead of retaining the last request's stores.
 const runInDispatcherPoolContext = AsyncLocalStorage.snapshot();
@@ -20,11 +23,6 @@ type PinnedDispatcherPoolEntry = {
   closePromise?: Promise<void>;
 };
 
-type PinnedDispatcherPoolOptions = {
-  maxEntries: number;
-  idleTtlMs: number;
-};
-
 /**
  * Bounded cache of reusable DNS-pinned dispatchers.
  *
@@ -33,14 +31,7 @@ type PinnedDispatcherPoolOptions = {
  */
 export class PinnedDispatcherPool {
   private readonly entries = new Map<string, PinnedDispatcherPoolEntry>();
-  private readonly maxEntries: number;
-  private readonly idleTtlMs: number;
   private closed = false;
-
-  constructor(options: PinnedDispatcherPoolOptions) {
-    this.maxEntries = options.maxEntries;
-    this.idleTtlMs = options.idleTtlMs;
-  }
 
   acquire(params: {
     key: string;
@@ -61,13 +52,13 @@ export class PinnedDispatcherPool {
       return this.createLease(existing, true);
     }
 
-    if (this.entries.size >= this.maxEntries) {
+    if (this.entries.size >= PROVIDER_DISPATCHER_POOL_MAX_ENTRIES) {
       const idleEntry = [...this.entries.values()].find((entry) => entry.activeLeases === 0);
       if (idleEntry) {
         this.retireEntry(idleEntry);
       }
     }
-    if (this.entries.size >= this.maxEntries) {
+    if (this.entries.size >= PROVIDER_DISPATCHER_POOL_MAX_ENTRIES) {
       // Never evict a live stream merely to satisfy the reusable-cache cap.
       return undefined;
     }
@@ -115,7 +106,7 @@ export class PinnedDispatcherPool {
           return;
         }
         entry.idleTimer = runInDispatcherPoolContext(() =>
-          setTimeout(() => this.retireEntry(entry), this.idleTtlMs),
+          setTimeout(() => this.retireEntry(entry), PROVIDER_DISPATCHER_POOL_IDLE_TTL_MS),
         );
         entry.idleTimer.unref?.();
       },

@@ -37,6 +37,62 @@ describe("resolveRetryAfterMs", () => {
       expect(classifyRateLimitWindow(message, NOW_MS)).toEqual({ kind: "long" });
     }
   });
+
+  it("reads Google RetryInfo delays from projected Gemini errors", () => {
+    const body = (retryDelay: string) =>
+      `429: ${JSON.stringify({
+        error: {
+          code: 429,
+          message: "You exceeded your current quota. Please retry in 32.578767138s.",
+          status: "RESOURCE_EXHAUSTED",
+          details: [
+            { "@type": "type.googleapis.com/google.rpc.QuotaFailure", violations: [] },
+            { "@type": "type.googleapis.com/google.rpc.RetryInfo", retryDelay },
+          ],
+        },
+      })}`;
+    // Prose and RetryInfo are both explicit; the later deadline wins.
+    expect(resolveRetryAfterMs(body("32s"), NOW_MS)).toBe(32_579);
+    expect(resolveRetryAfterMs(body("40.5s"), NOW_MS)).toBe(40_500);
+    expect(classifyRateLimitWindow(body("3600s"), NOW_MS)).toEqual({ kind: "long" });
+    // Without a valid RetryInfo, Gemini's "Please retry in" prose is still provider timing.
+    expect(resolveRetryAfterMs(body("soon"), NOW_MS)).toBe(32_579);
+    expect(resolveRetryAfterMs("429 RESOURCE_EXHAUSTED: retry in 4.5s", NOW_MS)).toBe(4_500);
+    expect(resolveRetryAfterMs("429 RESOURCE_EXHAUSTED: please retry soon", NOW_MS)).toBe(
+      undefined,
+    );
+  });
+
+  it("reads RetryInfo in any key order from a structured error body", () => {
+    const errorBody = {
+      error: {
+        details: [{ retryDelay: "12s", "@type": "type.googleapis.com/google.rpc.RetryInfo" }],
+      },
+    };
+    expect(resolveRetryAfterMs("429 RESOURCE_EXHAUSTED", NOW_MS, errorBody)).toBe(12_000);
+    expect(
+      resolveRetryAfterMs("429 RESOURCE_EXHAUSTED", NOW_MS, {
+        error: { details: [{ "@type": "type.googleapis.com/google.rpc.Help", retryDelay: "12s" }] },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("applies an exhausted-bucket reset only when the provider gave no explicit time", () => {
+    const exhausted = {
+      status: 429,
+      headers: { "x-ratelimit-remaining-tokens": "0", "x-ratelimit-reset-tokens": "5m" },
+    };
+    const tpm =
+      "429 Rate limit reached for gpt in organization org-synthetic on tokens per min (TPM)";
+    expect(resolveRetryAfterMs(`${tpm}. Please try again in 6s.`, NOW_MS, exhausted)).toBe(6_000);
+    expect(resolveRetryAfterMs(tpm, NOW_MS, exhausted)).toBe(300_000);
+    expect(
+      resolveRetryAfterMs(`${tpm}. Please try again in 6s.`, NOW_MS, {
+        ...exhausted,
+        headers: { ...exhausted.headers, "retry-after": "9" },
+      }),
+    ).toBe(9_000);
+  });
 });
 
 describe("classifyRateLimitWindow", () => {

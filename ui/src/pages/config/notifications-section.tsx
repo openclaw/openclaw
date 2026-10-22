@@ -66,18 +66,22 @@ function nativeNotificationsStatus(permission: NativeNotificationsPermission | "
   }
 }
 
-const NotificationActions = (props: { children: JSX.Element }) => (
-  <div class="settings-row">
-    <div class="settings-row__control">{props.children}</div>
-  </div>
-);
-const BlockedNotifications = (props: { description: string }) => (
-  <SettingsRow
-    title={t("configView.notifications.blocked")}
-    description={props.description}
-    control={<SettingsStatus kind="danger" label={t("configView.notifications.denied")} />}
-  />
-);
+function NotificationActions(props: { children: JSX.Element }) {
+  return (
+    <div class="settings-row">
+      <div class="settings-row__control">{props.children}</div>
+    </div>
+  );
+}
+function BlockedNotifications(props: { description: string }) {
+  return (
+    <SettingsRow
+      title={t("configView.notifications.blocked")}
+      description={props.description}
+      control={<SettingsStatus kind="danger" label={t("configView.notifications.denied")} />}
+    />
+  );
+}
 function NotificationSection(props: {
   title: string;
   status: JSX.Element;

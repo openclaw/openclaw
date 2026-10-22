@@ -3,12 +3,12 @@ import {
   inspectConversationBinding as inspectSessionBindingByConversation,
   type ConversationBindingInspection,
 } from "openclaw/plugin-sdk/conversation-binding-inspection-runtime";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { aroundEach, describe, expect, it, vi } from "vitest";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { createTestRegistry } from "../../test-utils/channel-plugins.js";
-import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { readSessionBindingInspectionConversation } from "./session-binding-normalization.js";
 import {
   testing,
@@ -27,7 +27,6 @@ type SessionBindingServiceModule = typeof import("./session-binding-service.js")
 
 const sessionBindingServiceModuleUrl = new URL("./session-binding-service.ts", import.meta.url)
   .href;
-const tempDirs = createTrackedTempDirs();
 const service = getSessionBindingService();
 const unavailableCapabilities = {
   adapterAvailable: false,
@@ -148,25 +147,17 @@ async function expectSessionBindingError(promise: Promise<unknown>, code: string
 }
 
 describe("session binding service", () => {
-  let previousStateDir: string | undefined;
-
-  beforeEach(async () => {
-    previousStateDir = process.env.OPENCLAW_STATE_DIR;
-    process.env.OPENCLAW_STATE_DIR = await tempDirs.make("openclaw-session-binding-");
-    testing.resetSessionBindingAdaptersForTests();
-    setMinimalCurrentConversationRegistry();
-  });
-
-  afterEach(async () => {
-    testing.resetSessionBindingAdaptersForTests();
-    closeOpenClawStateDatabaseForTest();
-    if (previousStateDir == null) {
-      delete process.env.OPENCLAW_STATE_DIR;
-    } else {
-      process.env.OPENCLAW_STATE_DIR = previousStateDir;
-    }
-    await tempDirs.cleanup();
-  });
+  aroundEach(async (run) =>
+    withOpenClawTestState({ label: "session-binding", layout: "state-only" }, async () => {
+      testing.resetSessionBindingAdaptersForTests();
+      setMinimalCurrentConversationRegistry();
+      try {
+        await run();
+      } finally {
+        testing.resetSessionBindingAdaptersForTests();
+      }
+    }),
+  );
 
   it.each([false, true])(
     "awaits async touch settlement (rejected: %s) without a legacy mutation",

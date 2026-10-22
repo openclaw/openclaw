@@ -15,8 +15,6 @@ import { flush } from "../../test-helpers/solid-settle.ts";
 import { createConfigViewState } from "./view-state.ts";
 import { Config, type ConfigProps } from "./view.tsx";
 
-const idlePresentation = new Promise<void>(() => {});
-
 const views = new WeakMap<HTMLElement, (props: ConfigProps) => void>();
 
 function createViewContext() {
@@ -97,7 +95,10 @@ export const baseProps = () => ({
   onFormRemove: vi.fn(),
   onSectionChange: vi.fn(),
   onSave: vi.fn(),
-  presentationRetired: () => idlePresentation,
+  presentationRetired: (() => {
+    const retired = new Promise<void>(() => {});
+    return () => retired;
+  })(),
   onRawDiscard: vi.fn(),
   onSubsectionChange: vi.fn(),
   theme: "claw" as ThemeName,

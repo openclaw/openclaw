@@ -10,6 +10,7 @@ import {
   shouldSuppressGoogleChatManualExecApprovalFollowupText,
   unregisterGoogleChatManualApprovalFollowupSuppression,
 } from "./approval-card-actions.js";
+import type { GoogleChatCardV2 } from "./types.js";
 
 const sendGoogleChatMessage = vi.hoisted(() => vi.fn());
 const updateGoogleChatMessage = vi.hoisted(() => vi.fn());
@@ -24,6 +25,7 @@ vi.mock("./api.js", async () => {
 });
 
 const { googleChatApprovalNativeRuntime } = await import("./approval-handler.runtime.js");
+const { presentation, transport } = googleChatApprovalNativeRuntime;
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -85,21 +87,10 @@ function createPendingView(): ExecApprovalPendingView {
   };
 }
 
-type CardPayloadWithTextWidgets = {
-  cardsV2: Array<{
-    card: {
-      sections?: Array<{
-        header?: string;
-        widgets?: Array<{ textParagraph?: { text: string } }>;
-      }>;
-    };
-  }>;
-};
-
-function getTextParagraphText(payload: unknown, header: string): string {
-  const text = (payload as CardPayloadWithTextWidgets).cardsV2[0]?.card.sections?.find(
-    (section) => section.header === header,
-  )?.widgets?.[0]?.textParagraph?.text;
+function getTextParagraphText(payload: { cardsV2: GoogleChatCardV2[] }, header: string): string {
+  const widget = payload.cardsV2[0]?.card.sections?.find((section) => section.header === header)
+    ?.widgets?.[0];
+  const text = widget && "textParagraph" in widget ? widget.textParagraph.text : undefined;
   if (typeof text !== "string") {
     throw new Error(`Expected ${header} text paragraph`);
   }
@@ -119,7 +110,7 @@ async function preparePendingDelivery(view = createPendingView(), context = hand
     expiresAtMs: view.expiresAtMs,
   };
   const params = { ...context, request, approvalKind: "exec" as const, view };
-  const pendingPayload = await googleChatApprovalNativeRuntime.presentation.buildPendingPayload({
+  const pendingPayload = await presentation.buildPendingPayload({
     ...params,
     nowMs,
   });
@@ -128,7 +119,7 @@ async function preparePendingDelivery(view = createPendingView(), context = hand
     target: { to: "spaces/AAA", threadId: "threads/T1" },
     reason: "preferred" as const,
   };
-  const prepared = await googleChatApprovalNativeRuntime.transport.prepareTarget({
+  const prepared = await transport.prepareTarget({
     ...params,
     plannedTarget,
     pendingPayload,
@@ -137,7 +128,7 @@ async function preparePendingDelivery(view = createPendingView(), context = hand
     throw new Error("Expected prepared target");
   }
   const deliver = () =>
-    googleChatApprovalNativeRuntime.transport.deliverPending({
+    transport.deliverPending({
       ...params,
       plannedTarget,
       preparedTarget: prepared.target,
@@ -197,7 +188,7 @@ it("sends pending cards and updates the delivered message without buttons", asyn
     decision: "allow-once",
     resolvedBy: "users/123",
   };
-  const final = await googleChatApprovalNativeRuntime.presentation.buildResolvedResult({
+  const final = await presentation.buildResolvedResult({
     ...handlerContext,
     request,
     resolved: {
@@ -213,7 +204,7 @@ it("sends pending cards and updates the delivered message without buttons", asyn
   if (final.kind !== "update" || !entry) {
     throw new Error("Expected update result and entry");
   }
-  await googleChatApprovalNativeRuntime.transport.updateEntry?.({
+  await transport.updateEntry?.({
     ...handlerContext,
     entry,
     request,

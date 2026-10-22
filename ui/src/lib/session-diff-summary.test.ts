@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../packages/gateway-protocol/src/index.js";
-import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../app/gateway.ts";
+import { createDeferred } from "../../../test/helpers/promise.ts";
+import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { watchedGateway } from "./gateway-stores.test-support.ts";
 import { createSessionDiffSummary } from "./session-diff-summary.ts";
 
 const result: SessionsDiffResult = {
@@ -13,8 +15,11 @@ const result: SessionsDiffResult = {
 };
 function harness() {
   const request = vi.fn().mockResolvedValue(result);
-  let snapshot: ApplicationGatewaySnapshot = {
-    phase: "connected",
+  const {
+    gateway,
+    publish: publishSnapshot,
+    unsubscribe,
+  } = watchedGateway({
     client: createTestGatewayClient(request),
     hello: null,
     selfUser: null,
@@ -24,32 +29,7 @@ function harness() {
     sessionKey: "agent:main:details",
     lastError: null,
     lastErrorCode: null,
-  };
-  let revision = 1;
-  const listeners = new Set<(value: ApplicationGatewaySnapshot) => void>();
-  const gateway: ApplicationGateway = {
-    connection: { gatewayUrl: "ws://test.invalid", token: "", bootstrapToken: "", password: "" },
-    eventLog: [],
-    eventLogRevision: 0,
-    connect: vi.fn(),
-    defer: () => false,
-    setSessionKey: vi.fn(),
-    start: vi.fn(),
-    stop: vi.fn(),
-    subscribeEventLog: () => () => {},
-    subscribeEvents: () => () => {},
-    loadSelfProfile: async () => null,
-    get snapshot() {
-      return snapshot;
-    },
-    get connectionRevision() {
-      return revision;
-    },
-    subscribe: (listener: (value: ApplicationGatewaySnapshot) => void) => {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
+  });
   const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   const owner = createSessionDiffSummary(document);
   const input = {
@@ -65,19 +45,19 @@ function harness() {
     owner.update(input);
   };
   const publish = (patch: Partial<ApplicationGatewaySnapshot>, newScope = false) => {
-    snapshot = { ...snapshot, ...patch };
     if (newScope) {
-      revision += 1;
+      Object.defineProperty(gateway, "connectionRevision", {
+        value: gateway.connectionRevision + 1,
+        configurable: true,
+      });
     }
-    for (const listener of listeners) {
-      listener(snapshot);
-    }
+    publishSnapshot({ ...gateway.snapshot, ...patch });
   };
   const visible = (value: "hidden" | "visible") => {
     visibility.mockReturnValue(value);
     document.dispatchEvent(new Event("visibilitychange"));
   };
-  return { owner, update, request, publish, visible, listeners };
+  return { owner, update, request, publish, visible, unsubscribe, gateway };
 }
 const owners: Array<ReturnType<typeof harness>["owner"]> = [];
 const create = () => {
@@ -156,18 +136,13 @@ describe("Details summary observation", () => {
     const h = create();
     h.update();
     await settle();
-    let resolve!: (value: SessionsDiffResult) => void;
-    h.request.mockImplementationOnce(
-      () =>
-        new Promise<SessionsDiffResult>((done) => {
-          resolve = done;
-        }),
-    );
+    const pending = createDeferred<SessionsDiffResult>();
+    h.request.mockReturnValueOnce(pending.promise);
     await vi.advanceTimersByTimeAsync(30_000);
     expect(h.owner.snapshot.summary?.additions).toBe(248);
     await vi.advanceTimersByTimeAsync(90_000);
     expect(h.request).toHaveBeenCalledTimes(2);
-    resolve({ ...result, additions: 300, truncated: true });
+    pending.resolve({ ...result, additions: 300, truncated: true });
     await settle();
     expect(h.owner.snapshot.summary).toMatchObject({ additions: 300, truncated: true });
     h.request.mockRejectedValueOnce(new Error("network failed"));
@@ -239,18 +214,13 @@ describe("Details summary observation", () => {
     h.update({ sessionKey: "agent:main:details" });
     expect(h.owner.snapshot.summary?.additions).toBe(248);
     expect(h.request).toHaveBeenCalledTimes(2);
-    let resolve!: (value: SessionsDiffResult) => void;
-    h.request.mockImplementationOnce(
-      () =>
-        new Promise<SessionsDiffResult>((done) => {
-          resolve = done;
-        }),
-    );
+    const pending = createDeferred<SessionsDiffResult>();
+    h.request.mockReturnValueOnce(pending.promise);
     h.update({ agentId: "other" });
     await settle();
     expect(h.owner.snapshot.summary).toBeNull();
     h.update({ sessionId: "two" });
-    resolve({ ...result, additions: 999 });
+    pending.resolve({ ...result, additions: 999 });
     await settle();
     expect(h.owner.snapshot.summary?.additions).toBe(248);
     expect(h.request.mock.calls.at(-1)?.[1]).toMatchObject({ agentId: "other" });
@@ -259,7 +229,8 @@ describe("Details summary observation", () => {
     await settle();
     expect(h.owner.snapshot.summary?.additions).toBe(248);
     h.owner.dispose();
-    expect(h.listeners.size).toBe(0);
+    expect(h.gateway.subscribe).toHaveBeenCalledOnce();
+    expect(h.unsubscribe).toHaveBeenCalledOnce();
     const count = h.request.mock.calls.length;
     await vi.advanceTimersByTimeAsync(60_000);
     expect(h.request).toHaveBeenCalledTimes(count);

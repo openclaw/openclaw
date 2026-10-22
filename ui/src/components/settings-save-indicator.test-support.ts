@@ -6,6 +6,7 @@ export function saveIndicatorProps(overrides: Partial<Props> = {}): Props {
     status: "idle",
     lastError: null,
     needsApply: false,
+    saving: false,
     applying: false,
     applyDisabled: false,
     onRetry: vi.fn(),

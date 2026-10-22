@@ -6,6 +6,7 @@ import type {
   SessionsCatalogListResult,
   SystemInfoResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import type * as Push from "../../../../packages/gateway-protocol/src/schema/push.js";
 import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { titleForRoute } from "../../app-navigation.ts";
@@ -54,7 +55,6 @@ import {
 } from "../../lib/system-info.ts";
 import { observeRealtimeTalkDevices } from "../chat/talk/input.ts";
 import { switchActiveRealtimeTalkCameras } from "../chat/talk/session.ts";
-import { createConfigNotificationPresentation } from "./config-notification-presentation.ts";
 import { createConfigPageModels } from "./config-page-models.ts";
 import {
   configSectionKeysForPage,
@@ -101,7 +101,10 @@ export function createConfigPage(
     subscribe: (subscribe, notify) => subscribe(notify),
     equality: "revision",
   });
-  const notifications = createConfigNotificationPresentation(context);
+  const webPush = projectOwner(context.webPush, (owner) => owner.snapshot);
+  const notifications = context.nativeNotifications
+    ? projectOwner(context.nativeNotifications, (owner) => owner.snapshot)
+    : null;
   // Imperative owner notifications can arrive while a descendant is rendering.
   const [revision, publish] = createSignal(0, { ownedWrite: true });
   const invalidate = () => {
@@ -154,6 +157,12 @@ export function createConfigPage(
   const customThemeImportOwner = new themeImport.CustomThemeImportOwner(invalidate);
   let configViewState: View.ConfigViewState = createConfigViewState();
   let runtimeConfigSource: ApplicationContext["runtimeConfig"] | null = null;
+  // Release command presentation before a reactive scope change can park its cleanup.
+  let commandLifetime = Promise.withResolvers<void>();
+  function retireCommands() {
+    commandLifetime.resolve();
+    commandLifetime = Promise.withResolvers<void>();
+  }
   const updates = createConfigUpdatesPresentation(context);
   let mediaDeviceWatch: (() => void) | null = null;
   const mediaDevices = {
@@ -199,7 +208,7 @@ export function createConfigPage(
       return;
     }
     routeInitialized = true;
-    notifications.retire();
+    retireCommands();
     if (pageId === "appearance" && nextPageId !== "appearance") {
       customThemeImportOwner.retireImport();
       retireMediaPermissionRequests();
@@ -260,7 +269,7 @@ export function createConfigPage(
       snapshot.hello !== previousHello ||
       snapshot.phase !== previousPhase;
     if (connectionChanged) {
-      notifications.retire();
+      retireCommands();
       abortRequests();
       systemInfo = null;
       systemInfoUnavailable = false;
@@ -454,7 +463,7 @@ export function createConfigPage(
 
   function synchronizeRuntimeConfig(runtimeConfig: ApplicationContext["runtimeConfig"]) {
     if (runtimeConfig !== runtimeConfigSource) {
-      notifications.retire();
+      retireCommands();
       if (runtimeConfigSource) {
         customThemeImportOwner.retireImport();
       }
@@ -466,14 +475,12 @@ export function createConfigPage(
       void runtimeConfig
         .ensureLoaded()
         .then(() =>
-          runtimeConfigSource === runtimeConfig && pageId !== "updates"
+          runtimeConfigSource === runtimeConfig && pageId !== "updates" && !runtimeConfig.schemaRead
             ? runtimeConfig.ensureSchemaLoaded()
             : undefined,
         )
         .catch(() => undefined);
-      return;
-    }
-    if (pageId !== "updates" && !config.configSchema && !config.configSchemaLoading) {
+    } else if (pageId !== "updates" && !config.configSchema && !runtimeConfig.schemaRead) {
       void runtimeConfig.ensureSchemaLoaded().catch(() => undefined);
     }
   }
@@ -613,6 +620,13 @@ export function createConfigPage(
       isUpdateBusy() ||
       context.overlays.snapshot.updateStatusRefreshing ||
       !hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null);
+    const observerLifetime = commandLifetime.promise;
+    const observerResult = (saved: boolean) => {
+      if (!saved && observerLifetime === commandLifetime.promise && configState.lastError) {
+        throw new Error(configState.lastError);
+      }
+      return saved;
+    };
     const withConfigMutation =
       <Args extends unknown[]>(mutate: (...args: Args) => void) =>
       (...args: Args) => {
@@ -634,6 +648,8 @@ export function createConfigPage(
       openFileAllowed: runtimeConfig.canOpenFile,
       schema: configState.configSchema,
       schemaLoading: configState.configSchemaLoading,
+      schemaRead: runtimeConfig.schemaRead,
+      onRetrySchema: () => void runtimeConfig.refreshSchema(),
       uiHints: configState.configUiHints,
       formMode: presentation.formModes[pageId] ?? "form",
       rawDraftPending: configState.configFormMode === "raw" && configState.configFormDirty,
@@ -647,7 +663,7 @@ export function createConfigPage(
       activeSubsection,
       onRawChange: withConfigMutation((next: string) => runtimeConfig.setRaw(next)),
       onFormModeChange: (mode: View.ConfigFormMode) => {
-        notifications.retire();
+        retireCommands();
         setPresentation((draft) => {
           draft.formModes[pageId] = mode;
         });
@@ -661,14 +677,14 @@ export function createConfigPage(
         runtimeConfig.removeFormValue(path),
       ),
       onSectionChange: (section: string | null) => {
-        notifications.retire();
+        retireCommands();
         setPresentation((draft) => {
           draft.selections[pageId] = { activeSection: section, activeSubsection: null };
         });
         invalidate();
       },
       onSubsectionChange: (section: string | null) => {
-        notifications.retire();
+        retireCommands();
         setPresentation((draft) => {
           draft.selections[pageId] = {
             ...(draft.selections[pageId] ?? defaultConfigSelection(pageId)),
@@ -678,6 +694,7 @@ export function createConfigPage(
         invalidate();
       },
       onSave: () => void runtimeConfig.save(),
+      presentationRetired: () => commandLifetime.promise,
       onRawDiscard: () => void runtimeConfig.discardDraft(),
       onOpenFile: () => void runtimeConfig.openFile(),
       theme: settings.theme,
@@ -815,22 +832,28 @@ export function createConfigPage(
       sessionObserverModelsUnavailable: observerModels.unavailable,
       sessionObserverDisabled: sessionObserverBusy,
       setSessionObserverEnabled: (enabled: boolean) =>
-        void runtimeConfig.patch({
-          raw: buildSessionObserverTogglePatch(enabled),
-          note: t("configView.sessionObserver.toggleNote"),
-        }),
-      setSessionObserverUtilityModel: (modelSelection: SessionObserverModelSelection) =>
-        void runtimeConfig
+        runtimeConfig
+          .patch({
+            raw: buildSessionObserverTogglePatch(enabled),
+            note: t("configView.sessionObserver.toggleNote"),
+          })
+          .then(observerResult),
+      setSessionObserverUtilityModel: (modelSelection: SessionObserverModelSelection) => {
+        const retired = commandLifetime.promise;
+        return runtimeConfig
           .patch({
             raw: buildSessionObserverUtilityModelPatch(modelSelection, utilityModel),
             note: t("configView.sessionObserver.modelNote"),
             replacePaths: ["agents.defaults.utilityModel.fallbacks"],
           })
-          .then((saved) => {
-            if (saved) {
-              void refreshSystemInfo();
+          .then(async (saved) => {
+            observerResult(saved);
+            if (saved && retired === commandLifetime.promise) {
+              await refreshSystemInfo();
             }
-          }),
+            return saved;
+          });
+      },
       lobsterPetVisits: settings.lobsterPetVisits ?? UI_APPEARANCE_DEFAULTS.lobsterPetVisits,
       sessionDeleteConfirm:
         settings.sessionDeleteConfirm ?? UI_APPEARANCE_DEFAULTS.sessionDeleteConfirm,
@@ -880,7 +903,19 @@ export function createConfigPage(
       excludeSections,
       includeVirtualSections: pageId === "appearance" || pageId === "notifications",
       settingsLayout: pageId === "advanced" ? ("accordion" as const) : undefined,
-      ...notifications.props(),
+      nativeNotifications: notifications?.read(),
+      onNativeNotificationsRequestPermission: () =>
+        context.nativeNotifications?.requestPermission(),
+      onNativeNotificationsSendTest: () => context.nativeNotifications?.sendTest(),
+      // Downstream equality checks need a new value for the mutable owner snapshot.
+      webPush: { ...webPush.read() },
+      onWebPushSubscribe: () => context.webPush.run({ kind: "enable" }),
+      onWebPushUnsubscribe: () => context.webPush.run({ kind: "disable" }),
+      onWebPushTest: () => context.webPush.run({ kind: "test" }),
+      onWebPushSetUserPreferences: (preferences: Push.WebPushNotificationPreferences) =>
+        context.webPush.run({ kind: "set", scope: "user", preferences }),
+      onWebPushSetDevicePreferences: (preferences: Push.WebPushDevicePreferences) =>
+        context.webPush.run({ kind: "set", scope: "device", preferences }),
     };
   }
   const refresh = () => {
@@ -900,7 +935,20 @@ export function createConfigPage(
     ].map((source) => source.subscribe(refresh));
     // Server selection intent can change while the stored preferences stay equal.
     subscriptions.push(context.theme.subscribe(refresh));
-    subscriptions.push(notifications.subscribeRoute());
+    let location = context.router.getState().location;
+    subscriptions.push(
+      context.router.subscribe(() => {
+        const next = context.router.getState().location;
+        if (
+          next.pathname !== location.pathname ||
+          next.search !== location.search ||
+          next.hash !== location.hash
+        ) {
+          location = next;
+          retireCommands();
+        }
+      }),
+    );
     connected = true;
     settings = loadSettings();
     hiddenSessionCatalogsChanged();
@@ -916,7 +964,7 @@ export function createConfigPage(
     });
     synchronize();
     return () => {
-      notifications.dispose();
+      commandLifetime.resolve();
       subscriptions.forEach((stop) => stop());
       connected = false;
       customThemeImportOwner.retireImport();

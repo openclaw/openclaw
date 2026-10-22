@@ -179,13 +179,10 @@ describe("transitive-manifest-risk-report", () => {
           new Headers(init?.headers).get("accept"),
           init?.signal instanceof AbortSignal ? init.signal : null,
         ]);
-        return new Response(
-          JSON.stringify({
-            time: { "1.0.0": versionPublishedAt },
-            versions: { "1.0.0": versionManifest },
-          }),
-          { status: 200 },
-        );
+        return Response.json({
+          time: { "1.0.0": versionPublishedAt },
+          versions: { "1.0.0": versionManifest },
+        });
       },
     });
 
@@ -202,24 +199,14 @@ describe("transitive-manifest-risk-report", () => {
   it("cancels stalled npm registry body reads when the request aborts", async () => {
     const controller = new AbortController();
     let canceled = false;
-    const response = {
-      headers: new Headers(),
-      body: {
-        getReader() {
-          return {
-            read() {
-              return new Promise<ReadableStreamReadResult<Uint8Array>>(() => {});
-            },
-            async cancel() {
-              canceled = true;
-            },
-            releaseLock() {
-              throw new Error("releaseLock should not run while a read is pending");
-            },
-          };
+    const response = new Response(
+      new ReadableStream({
+        pull: () => new Promise(() => {}),
+        cancel() {
+          canceled = true;
         },
-      },
-    } as unknown as Response;
+      }),
+    );
 
     const readPromise = readBoundedNpmRegistryText(response, 8, {
       signal: controller.signal,

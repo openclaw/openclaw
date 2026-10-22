@@ -1,5 +1,15 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, createUniqueId, mapArray, onSettled, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  createUniqueId,
+  isPending,
+  latest,
+  Loading,
+  mapArray,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { SessionVisibility } from "../../../api/types.ts";
 import {
   PersonAvatarLink,
@@ -25,7 +35,7 @@ import {
   type ChatSessionSharingProps,
   VISIBILITY_LABEL_KEYS,
   CHAT_SESSION_SHARING_DESCRIPTION_KEYS,
-  selectChatSessionSharingItem,
+  createChatSessionSharingPresentation,
   canManageChatSessionSharing,
   ChatSessionSharingModeIcon,
   projectChatSessionSharingRoster,
@@ -62,10 +72,16 @@ function SharingModeContent(props: { visibility: SessionVisibility }) {
 }
 
 function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControls) {
+  const presentation = createChatSessionSharingPresentation(() => props);
+  const busy = () => presentation.busy() || props.state?.loading === true;
+  const readPermissions = () => {
+    latest(presentation.read);
+    return null;
+  };
   let menu: MenuHandle | undefined;
   let search: HTMLInputElement | undefined;
   let searchToggle: HTMLButtonElement | undefined;
-  const scope = createMemo(() => `${props.session?.key}\0${props.session?.sessionId}`);
+  const scope = presentation.scope;
   const [query, setQuery] = createSignal(() => {
     scope();
     return "";
@@ -132,7 +148,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
       setCopied(false);
       setCopyError("");
     }
-    const outcome = await selectChatSessionSharingItem(props, value);
+    const outcome = await presentation.select(value);
     if (scope() !== selectedScope || !menu?.overlay.open || !outcome) {
       return;
     }
@@ -160,10 +176,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
           return mode === visibility();
         },
         get disabled() {
-          return (
-            !allowed().includes(mode) ||
-            Boolean(props.visibilityDisabledReason || props.state?.loading)
-          );
+          return !allowed().includes(mode) || Boolean(props.visibilityDisabledReason || busy());
         },
         get attributes() {
           return { title: props.visibilityDisabledReason };
@@ -267,7 +280,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                       return selected();
                     },
                     get disabled() {
-                      return Boolean(reason() || props.state?.loading);
+                      return Boolean(reason() || busy());
                     },
                     closeOnSelect: false,
                     render: (attributes) => (
@@ -275,7 +288,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                         {...attributes}
                         type="button"
                         class="chat-pane__sharing-person"
-                        disabled={Boolean(reason() || props.state?.loading)}
+                        disabled={Boolean(reason() || busy())}
                         title={reason()}
                       >
                         <Content />
@@ -291,7 +304,10 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
   );
   const showPermissions = () =>
     props.membersAvailable !== false &&
-    (!result() || props.state?.loading || Boolean(props.state?.error) || people().length > 0);
+    (!result() ||
+      Boolean(props.state?.read) ||
+      Boolean(props.state?.error ?? presentation.error()) ||
+      people().length > 0);
   const permissionItems = () => (showPermissions() ? rosterItems()().map((item) => item()) : []);
   // The observer and its ref share the mounted permissions subtree's lifetime.
   const SharingPermissions = (view: { children: JSX.Element }) => {
@@ -364,38 +380,41 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
           </div>
         </Show>
         <div class="chat-pane__sharing-roster-frame">
-          <div
-            ref={scroll}
-            class="chat-pane__sharing-roster"
-            aria-busy={props.state?.loading ? "true" : "false"}
+          <Loading
+            on={presentation.scope()}
+            fallback={
+              <div class="chat-pane__sharing-roster">
+                <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
+              </div>
+            }
           >
-            <Show
-              when={matches().length > 0}
-              fallback={
-                <Show
-                  when={props.state?.loading}
-                  fallback={
-                    <div class="chat-pane__sharing-empty" role="status">
-                      <span>
-                        {t(
-                          people().length === 0
-                            ? "chat.sessionSharing.noPeople"
-                            : "chat.sessionSharing.noPeopleFound",
-                        )}
-                      </span>
-                      <Show when={people().length > 0 && query().trim()}>
-                        <span>{t("chat.sessionSharing.tryAnotherName")}</span>
-                      </Show>
-                    </div>
-                  }
-                >
-                  <PanelLoadingSkeleton variant="file-list" label={t("common.loading")} compact />
-                </Show>
-              }
+            {readPermissions()}
+            <div
+              ref={scroll}
+              class="chat-pane__sharing-roster"
+              aria-busy={isPending(presentation.read) || busy() ? "true" : "false"}
             >
-              {view.children}
-            </Show>
-          </div>
+              <Show
+                when={matches().length > 0}
+                fallback={
+                  <div class="chat-pane__sharing-empty" role="status">
+                    <span>
+                      {t(
+                        people().length === 0
+                          ? "chat.sessionSharing.noPeople"
+                          : "chat.sessionSharing.noPeopleFound",
+                      )}
+                    </span>
+                    <Show when={people().length > 0 && query().trim()}>
+                      <span>{t("chat.sessionSharing.tryAnotherName")}</span>
+                    </Show>
+                  </div>
+                }
+              >
+                {view.children}
+              </Show>
+            </div>
+          </Loading>
         </div>
       </section>
     );
@@ -404,9 +423,9 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
     kind: "content",
     id: "error",
     content: (
-      <Show when={props.state?.error}>
+      <Show when={props.state?.error ?? presentation.error()}>
         <div class="chat-pane__sharing-status chat-pane__sharing-status--error" role="alert">
-          {props.state?.error}
+          {props.state?.error ?? presentation.error()}
         </div>
       </Show>
     ),
@@ -450,7 +469,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
               aria-checked={result()?.publicShare ? "true" : "false"}
               disabled={
                 !props.onPublicShareChange ||
-                Boolean(props.publicShareDisabledReason || props.state?.loading || !result())
+                Boolean(props.publicShareDisabledReason || busy() || !result())
               }
               title={props.publicShareDisabledReason}
               onClick={(event) => {
@@ -486,9 +505,7 @@ function useDesktopSharing(props: ChatSessionSharingProps, controls: MenuControl
                   data-form-control=""
                   data-value="public:copy"
                   class="chat-pane__sharing-url"
-                  disabled={
-                    !result()?.publicShare || !props.onCopyPublicLink || props.state?.loading
-                  }
+                  disabled={!result()?.publicShare || !props.onCopyPublicLink || busy()}
                   aria-label={t(copied() ? "common.copied" : "chat.sessionSharing.copyPublicLink")}
                   title={props.state?.publicUrl}
                   onClick={() => void select("public:copy")}

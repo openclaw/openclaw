@@ -56,6 +56,7 @@ export function ShellSettingsSidebar(props: {
         status: runtimeConfig.configRecoveryError ? "recovery" : runtimeConfig.configAutoSaveStatus,
         lastError: runtimeConfig.configRecoveryError ?? runtimeConfig.lastError,
         needsApply: runtimeConfig.configNeedsApply,
+        saving: runtimeConfig.configSaving,
         applying: runtimeConfig.configApplying,
         applyDisabled:
           context.runtimeConfig.canApply === false ||

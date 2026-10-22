@@ -1,5 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { resolveThinkingProfile } from "../auto-reply/thinking.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,7 +12,6 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { isSmallModel } from "../shared/model-param-b.js";
 import { makeModel } from "./embedded-agent-runner/model.test-harness.js";
 import {
-  type ModelCatalogRoutePolicy,
   projectModelCatalogEntryForRoute,
   createConfiguredModelCatalogOverridesResolver,
 } from "./model-catalog-route.js";
@@ -23,6 +22,7 @@ import {
   buildConfiguredModelCatalog,
   createModelVisibilityPolicyWithFallbacks,
 } from "./model-selection-shared.js";
+import { openAIModelCatalogRoutePolicy } from "./openai-model-routes.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -31,10 +31,14 @@ type OverlayCase = [string, Partial<ModelDefinitionConfig>, boolean, ("api" | "b
 const capturedRoute = { api: "openai-responses", baseUrl: "https://captured.example/v1" } as const;
 const configuredEndpoint = "https://configured.example/v1";
 const thinkingOwner = "fixture-thinking-owner";
-const routePolicy: ModelCatalogRoutePolicy = {
-  resolveIdentity: ({ provider, id }) => ({ id, key: `${provider}/${id}` }),
-  matchesRoute: modelTransportRoutesMatch,
-};
+beforeEach(() => {
+  vi.spyOn(openAIModelCatalogRoutePolicy, "resolveIdentity").mockImplementation(
+    ({ provider, id }) => ({ id, key: `${provider}/${id}` }),
+  );
+  vi.spyOn(openAIModelCatalogRoutePolicy, "matchesRoute").mockImplementation(
+    modelTransportRoutesMatch,
+  );
+});
 
 function modelConfig<T>(
   models: T[],
@@ -61,9 +65,8 @@ function project(
         authRequirement: "api-key",
         requestTransportOverrides: "none",
       },
-      policy: routePolicy,
     },
-    overrides: createConfiguredModelCatalogOverridesResolver({ cfg, policy: routePolicy })(entry),
+    overrides: createConfiguredModelCatalogOverridesResolver({ cfg })(entry),
   });
 }
 

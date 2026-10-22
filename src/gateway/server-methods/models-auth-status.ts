@@ -43,7 +43,7 @@ import {
 import { resolveModelAuthAgentScope } from "./model-auth-agent-scope.js";
 import { modelsAuthRefreshHandlers } from "./models-auth-refresh.js";
 import { readModelAuthStatusFacts } from "./models-auth-status-facts.js";
-import { readProviderUsageStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
+import { readProviderUsage } from "./models-auth-status-usage-cache.js";
 import type {
   ModelAuthExpiry,
   ModelAuthLogoutResult,
@@ -403,7 +403,7 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         agentDir,
         store,
       });
-      const usageByProvider = readProviderUsageStaleWhileRevalidate({
+      const usageParams = {
         agentId,
         agentDir,
         authStore: providerUsageRuntime.store,
@@ -412,6 +412,10 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
         forceRefresh: refreshRequested,
         providerIds: usageProviderIds,
         now,
+      };
+      const { usageByProvider, refreshAt: usageRefreshAt } = await readProviderUsage({
+        ...usageParams,
+        awaitRefresh: Boolean(params.refreshUsage),
       });
 
       const providers: ModelAuthStatusProvider[] = [];
@@ -521,7 +525,12 @@ export const modelsAuthStatusHandlers: GatewayRequestHandlers = {
               : undefined,
         });
       }
-      const result: ModelAuthStatusResult = { ts: now, providers, providerCapabilities };
+      const result: ModelAuthStatusResult = {
+        ts: now,
+        providers,
+        providerCapabilities,
+        usageRefreshAt,
+      };
       respond(true, result, undefined);
     });
   },

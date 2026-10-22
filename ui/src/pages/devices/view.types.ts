@@ -10,6 +10,10 @@ export type DevicesProps = Omit<
   "client" | "requestGeneration" | "nodesLoading" | "nodesQueuedRefresh" | "devicesQueuedRefresh"
 > & {
   loading: boolean;
+  inventoryRead: () => void;
+  inventoryScope: object;
+  inventorySaving?: boolean;
+  onReloadInventory: () => void;
   presence: PresenceEntry[];
   gatewayVersion: string | null;
   basePath: string;

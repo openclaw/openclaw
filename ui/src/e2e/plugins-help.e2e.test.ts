@@ -285,7 +285,7 @@ suite.define(() => {
     });
   });
 
-  it("opens installed help once, preserves the draft, redacts setting values, and clears departed context", async () => {
+  it("opens installed help on request, preserves the draft, redacts setting values, and clears departed context", async () => {
     await suite.withPage({ viewport: { width: 1440, height: 1000 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods,
@@ -307,6 +307,10 @@ suite.define(() => {
           })
           .toBe(true);
       };
+      await page
+        .locator(".plugin-catalog-detail__actions")
+        .getByRole("button", { name: "Ask OpenClaw", exact: true })
+        .click();
       await panel.getByText("Existing conversation.", { exact: true }).waitFor();
       await expect.poll(() => composer.isEnabled()).toBe(true);
       const userRequests = async () =>
@@ -452,6 +456,7 @@ suite.define(() => {
 
   it.each([
     { width: 900, catalog: false },
+    { width: 1440, catalog: false },
     { width: 1440, catalog: true },
   ])(
     "opens help only explicitly for $width pixels and catalog=$catalog",

@@ -4,7 +4,7 @@ import { getAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { prepareSessionFileWorkspace } from "../session-file-workspace.js";
 import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
-import { authorizeSessionAgentRun } from "../session-sharing-policy.js";
+import { authorizeSessionAgentRun, isSessionOwnRequester } from "../session-sharing-policy.js";
 import type { GatewaySessionEntryRead } from "../session-utils-store.js";
 import { resolveSessionWorkspaceRoots } from "../session-workspace-roots.js";
 import type { WorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
@@ -17,6 +17,8 @@ export type SessionFileReadPolicyTarget = {
   canonicalKey: string;
   entry?: InternalSessionEntry;
   unscopedHostRoot?: boolean;
+  /** The read serves files from before the conversation switched to its PR workspace. */
+  historical?: boolean;
 };
 
 /** Conversation visibility does not admit a caller to an unsandboxed host workspace. */
@@ -24,6 +26,24 @@ export function assertSessionFileReadPolicy(
   options: GatewayRequestHandlerOptions,
   target: SessionFileReadPolicyTarget,
 ) {
+  // Shared viewing, membership and admin scope never extend to the original files.
+  if (
+    target.historical &&
+    !(
+      target.entry &&
+      isSessionOwnRequester(
+        { cfg: options.context.getRuntimeConfig(), client: options.client },
+        { canonicalKey: target.canonicalKey, entry: target.entry },
+      )
+    )
+  ) {
+    throw new SessionMutationAuthorizationChangedError(
+      errorShape(
+        ErrorCodes.FORBIDDEN,
+        "Only this conversation's owner can open its files from before the PR workspace.",
+      ),
+    );
+  }
   if (!target.unscopedHostRoot) {
     return;
   }
@@ -165,6 +185,7 @@ export function createSessionFileReadAuthority(
           ...source,
           entry: current,
           unscopedHostRoot: source.fileWorkspace.unscopedHostRoot,
+          historical: source.fileWorkspace.historical,
         });
       }
       if (
