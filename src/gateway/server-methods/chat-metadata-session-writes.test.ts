@@ -30,6 +30,7 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { rolePolicyConfig, sharingPolicyClient } from "../session-sharing.test-utils.js";
 import { handleChatMetadataRequest } from "./chat-metadata-handler.js";
 import {
+  chatMetadataCommandFields,
   connectChatMetadataAccount,
   createChatMetadataHarness,
   createChatMetadataOwner,
@@ -539,7 +540,7 @@ it.each([
           harness.buildCommands.mockImplementationOnce(async () => {
             entered.resolve();
             await gate.promise;
-            return { commands: [{ name: "help" }] };
+            return { commands: [{ ...chatMetadataCommandFields, name: "help" }] };
           });
           const respond = vi.fn<RespondFn>();
           const request = invoke(respond);
@@ -602,7 +603,7 @@ it.each([
           expect(control.respond).toHaveBeenCalledExactlyOnceWith(
             true,
             expect.objectContaining({
-              commands: [{ name: "help" }],
+              commands: [{ ...chatMetadataCommandFields, name: "help" }],
               models: [expect.objectContaining({ id: "gpt-5.6-luna", provider: "openai" })],
             }),
           );

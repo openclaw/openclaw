@@ -4,7 +4,6 @@ import * as sessionEntryWriter from "../../../config/sessions/session-accessor.s
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { normalizeEmbeddedRunAttempt } from "./attempt-normalization.js";
 import { applyEmbeddedAttemptSessionIdentity } from "./attempt-session-identity.js";
-import { loadAttemptSessionEntryAfterQuotaMaintenance } from "./attempt-transcript-helpers.js";
 import { createEmbeddedRunContextRecoveryState } from "./context-recovery-state.js";
 import { createEmbeddedRunLaneController } from "./lane-controller.js";
 import {
@@ -13,6 +12,21 @@ import {
   resetNoRealConversationTokenSnapshot,
 } from "./session-bootstrap.js";
 import { createEmbeddedRunSessionPromptState } from "./session-prompt-state.js";
+
+const fixedStoreConfig = {
+  agents: {
+    ownership: "explicit" as const,
+    defaults: { sessionStore: { agentId: "ops" } },
+    entries: { ops: {}, research: {} },
+  },
+  session: { store: "/tmp/shared-sessions.json" },
+};
+const mainTarget = (sessionId = "session-before") => ({
+  agentId: "main",
+  sessionId,
+  sessionKey: "agent:main:main",
+  storePath: "/tmp/sessions.json",
+});
 
 const sessionAccessorMocks = vi.hoisted(() => ({
   patchSessionEntryCore:
@@ -74,7 +88,6 @@ it.each([0, 2])(
       getLifecycleGeneration: () => generation,
       initialQueuedLifecycleGeneration: generation,
       globalLane: "normalization-stop-global",
-      sessionLane: "normalization-stop-session",
       setParams: vi.fn(),
       setLifecycleGeneration: vi.fn(),
     });
@@ -145,14 +158,7 @@ describe("buildContextEngineCompactionSessionTarget", () => {
   it("rejects a partial target that conflicts with the fixed-store owner", async () => {
     await expect(
       buildContextEngineCompactionSessionTarget({
-        config: {
-          agents: {
-            ownership: "explicit",
-            defaults: { sessionStore: { agentId: "ops" } },
-            entries: { ops: {}, research: {} },
-          },
-          session: { store: "/tmp/shared-sessions.json" },
-        },
+        config: fixedStoreConfig,
         sessionFile: "global",
         sessionId: "ops-session",
         sessionKey: "global",
@@ -185,15 +191,6 @@ describe("buildContextEngineCompactionSessionTarget", () => {
 });
 
 describe("fixed-store session bootstrap", () => {
-  const config = {
-    agents: {
-      ownership: "explicit" as const,
-      defaults: { sessionStore: { agentId: "ops" } },
-      entries: { ops: {}, research: {} },
-    },
-    session: { store: "/tmp/shared-sessions.json" },
-  };
-
   it.each([false, true])(
     "keeps the prepared reset target and its commit owner (closed=%s)",
     async (closeBeforeCommit) => {
@@ -241,7 +238,7 @@ describe("fixed-store session bootstrap", () => {
 
   it("carries the persisted owner into harness admission", async () => {
     await assertAgentHarnessRunAdmission({
-      config,
+      config: fixedStoreConfig,
       sessionId: "ops-session",
       sessionKey: "global",
     } as never);
@@ -254,23 +251,6 @@ describe("fixed-store session bootstrap", () => {
       }),
       expect.any(Function),
     );
-  });
-
-  it("carries the resolved owner into quota-maintenance reads", async () => {
-    sessionReaderMocks.readSessionEntryInWorker.mockResolvedValueOnce({
-      sessionId: "ops-session",
-      updatedAt: 1,
-    });
-
-    const assertCurrent = vi.fn();
-    const scope = {
-      agentId: "ops",
-      sessionKey: "global",
-      storePath: "/tmp/shared-sessions.json",
-    };
-    await loadAttemptSessionEntryAfterQuotaMaintenance(scope, assertCurrent);
-
-    expect(sessionReaderMocks.readSessionEntryInWorker).toHaveBeenCalledWith(scope, assertCurrent);
   });
 });
 
@@ -285,12 +265,9 @@ describe("createEmbeddedRunSessionPromptState", () => {
         sessionId: "session-before",
         sessionKey: "agent:main:main",
         sessionTarget: {
-          agentId: "main",
+          ...mainTarget(),
           expectedLifecycleRevision: "revision-a",
           expectedWriterRunId: "run-b",
-          sessionId: "session-before",
-          sessionKey: "agent:main:main",
-          storePath: "/tmp/sessions.json",
         },
         timeoutMs: 30_000,
         workspaceDir: "/tmp",
@@ -301,12 +278,7 @@ describe("createEmbeddedRunSessionPromptState", () => {
       sessionAgentId: "main",
     });
 
-    state.sessionTarget = {
-      agentId: "main",
-      sessionId: "session-after",
-      sessionKey: "agent:main:main",
-      storePath: "/tmp/sessions.json",
-    };
+    state.sessionTarget = mainTarget("session-after");
 
     expect(state.sessionTarget).not.toHaveProperty("expectedWriterRunId");
     expect(state.sessionWriterFence).toEqual({
@@ -316,21 +288,27 @@ describe("createEmbeddedRunSessionPromptState", () => {
   });
 });
 
-function promptState(storePath = "/tmp/sessions.json") {
+function promptState() {
   return {
     sessionId: "session-before",
     sessionFile: "agent:main:main",
-    sessionTarget: {
-      agentId: "main",
-      sessionId: "session-before",
-      sessionKey: "agent:main:main",
-      storePath,
-    },
+    sessionTarget: mainTarget(),
     adoptSessionId: vi.fn(),
   };
 }
 
+function adopt(state: ReturnType<typeof promptState>, sessionFileUsed?: string) {
+  return applyEmbeddedAttemptSessionIdentity({
+    assertCurrent: vi.fn(),
+    sessionPromptState: state,
+    sessionIdUsed: "session-after",
+    sessionFileUsed,
+  });
+}
+
 describe("applyEmbeddedAttemptSessionIdentity", () => {
+  const bindingChanged = "successor target changed the active session binding";
+  const inconsistent = /successor (identity is inconsistent|files are unsupported)/u;
   it.each(["marker", "key"] as const)(
     "waits for a %s lookup and preserves caller authority and the active binding",
     async (kind) => {
@@ -442,12 +420,7 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
     ]);
     const state = promptState();
 
-    await applyEmbeddedAttemptSessionIdentity({
-      assertCurrent: vi.fn(),
-      sessionPromptState: state,
-      sessionIdUsed: "session-after",
-      sessionFileUsed: "sqlite:main:session-after:/tmp/sessions.json",
-    });
+    await adopt(state, "sqlite:main:session-after:/tmp/sessions.json");
 
     expect(state.sessionTarget).toEqual({
       agentId: "main",
@@ -457,52 +430,21 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
     });
   });
 
-  it("rejects a legacy marker successor already mapped to another key", async () => {
-    sessionReaderMocks.readSessionEntrySummariesInWorker.mockResolvedValue([
-      { sessionKey: "agent:main:main", entry: { sessionId: "session-before", updatedAt: 1 } },
-      {
-        sessionKey: "agent:main:other",
-        entry: { sessionId: "session-after", updatedAt: 2 },
-      },
-    ]);
-    const state = promptState();
-
-    await expect(
-      applyEmbeddedAttemptSessionIdentity({
-        assertCurrent: vi.fn(),
-        sessionPromptState: state,
-        sessionIdUsed: "session-after",
-        sessionFileUsed: "sqlite:main:session-after:/tmp/sessions.json",
-      }),
-    ).rejects.toThrow("successor target changed the active session binding");
-  });
-
-  it("rejects a legacy SQLite marker outside the active store", async () => {
-    const state = promptState();
-
-    await expect(
-      applyEmbeddedAttemptSessionIdentity({
-        assertCurrent: vi.fn(),
-        sessionPromptState: state,
-        sessionIdUsed: "session-after",
-        sessionFileUsed: "sqlite:main:session-after:/tmp/other-sessions.json",
-      }),
-    ).rejects.toThrow("successor target changed the active session binding");
-  });
-
-  it.each(["sqlite:other:session-after:/tmp/sessions.json", "agent:other:main"])(
-    "rejects a cross-agent legacy successor identity: %s",
-    async (sessionFileUsed) => {
-      const state = promptState();
-
-      await expect(
-        applyEmbeddedAttemptSessionIdentity({
-          assertCurrent: vi.fn(),
-          sessionPromptState: state,
-          sessionIdUsed: "session-after",
-          sessionFileUsed,
-        }),
-      ).rejects.toThrow(/successor (identity is inconsistent|files are unsupported)/u);
+  it.each([
+    ["sqlite:main:session-after:/tmp/sessions.json", true, bindingChanged],
+    ["sqlite:main:session-after:/tmp/other-sessions.json", false, bindingChanged],
+    ["sqlite:other:session-after:/tmp/sessions.json", false, inconsistent],
+    ["agent:other:main", false, inconsistent],
+  ] as const)(
+    "rejects an incompatible successor %s (mapped=%s)",
+    async (sessionFileUsed, mapped, error) => {
+      if (mapped) {
+        sessionReaderMocks.readSessionEntrySummariesInWorker.mockResolvedValue([
+          { sessionKey: "agent:main:main", entry: { sessionId: "session-before", updatedAt: 1 } },
+          { sessionKey: "agent:main:other", entry: { sessionId: "session-after", updatedAt: 2 } },
+        ]);
+      }
+      await expect(adopt(promptState(), sessionFileUsed)).rejects.toThrow(error);
     },
   );
 
@@ -510,11 +452,7 @@ describe("applyEmbeddedAttemptSessionIdentity", () => {
     const state = promptState();
     state.sessionFile = "sqlite:main:session-before:/tmp/sessions.json";
 
-    await applyEmbeddedAttemptSessionIdentity({
-      assertCurrent: vi.fn(),
-      sessionPromptState: state,
-      sessionIdUsed: "session-after",
-    });
+    await adopt(state);
 
     expect(state.sessionFile).toBe("sqlite:main:session-after:/tmp/sessions.json");
     expect(state.sessionTarget).toMatchObject({ sessionId: "session-after" });

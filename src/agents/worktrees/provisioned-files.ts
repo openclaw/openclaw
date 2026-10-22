@@ -4,7 +4,7 @@ import path from "node:path";
 import { writeFileWindowFully } from "../../infra/file-descriptor.js";
 import { root as fsRoot, FsSafeError, type Root } from "../../infra/fs-safe.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import { lstatIfExists } from "./git.js";
+import { lstatIfExists } from "../../infra/path-existence.js";
 import {
   captureParentDirectoryIdentities,
   hasSafeParentDirectories,
@@ -36,7 +36,7 @@ async function copyProvisionedFile(params: {
   if (!sourceStat?.isFile() || sourceStat.isSymbolicLink()) {
     return false;
   }
-  if (await lstatIfExists(destination)) {
+  if (await lstatIfExists(destination, "ENOENT")) {
     return false;
   }
   try {
@@ -119,7 +119,7 @@ export async function restoreProvisionedFiles(
     }
     const target = resolveGitPath(worktreePath, normalized);
     if (state.mode === null) {
-      if (await lstatIfExists(target)) {
+      if (await lstatIfExists(target, "ENOENT")) {
         throw new Error(`snapshot expected provisioned path to be absent: ${state.path}`);
       }
       continue;

@@ -71,18 +71,6 @@ export function resolveDiscordMessageBatch(last: Message, preceding: readonly Me
     ...Object.getOwnPropertyDescriptors(last),
     content: { value: content, enumerable: true, configurable: true },
     attachments: { value: [], enumerable: true, configurable: true },
-    message_snapshots: {
-      // SAFETY: This optional transport field stays opaque until snapshot normalization.
-      value: (last as { message_snapshots?: unknown }).message_snapshots,
-      enumerable: true,
-      configurable: true,
-    },
-    messageSnapshots: {
-      // SAFETY: This optional wrapper field stays opaque until snapshot normalization.
-      value: (last as { messageSnapshots?: unknown }).messageSnapshots,
-      enumerable: true,
-      configurable: true,
-    },
     rawData: {
       value: { ...last.rawData },
       enumerable: true,

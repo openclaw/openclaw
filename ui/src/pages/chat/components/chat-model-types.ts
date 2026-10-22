@@ -1,18 +1,7 @@
-import type { ChatAccountSelection } from "../../../../../packages/gateway-protocol/src/index.ts";
 import type { ChatModelCatalogState as ModelCatalogState } from "../../../lib/model-catalog-store.ts";
+import type { ChatModelAccountSection } from "./chat-model-account-control.ts";
 
-export type ChatModelAccountSectionViewProps = {
-  selectionKind: ChatAccountSelection["kind"];
-  disabled: boolean;
-  selectedIdentity: string;
-  options: readonly { value: string; label: string; description?: string; disabled?: boolean }[];
-  currentValue: string;
-  open: boolean;
-  error: string | null;
-  startIndex: number;
-  onToggle: () => void;
-  onSelect: (value: string, event: MouseEvent) => void;
-};
+export type ChatModelAccountSectionViewProps = ReturnType<ChatModelAccountSection["viewProps"]>;
 
 export type ChatModelCatalogStateProps = {
   state: ModelCatalogState | undefined;

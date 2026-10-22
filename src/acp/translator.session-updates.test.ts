@@ -7,6 +7,11 @@ import { AcpTranslatorSessionUpdates } from "./translator.session-updates.js";
 const session = { sessionId: "session-1", sessionKey: "agent:main:session-1" };
 const update: SessionUpdate = { sessionUpdate: "available_commands_update", availableCommands: [] };
 const emission = { ...session, record: true, update };
+const emptyReplay = { complete: false, events: [] };
+const textUpdate = (text: string): SessionUpdate => ({
+  sessionUpdate: "agent_message_chunk",
+  content: { type: "text", text },
+});
 
 function harness(sessionUpdate: AgentSideConnection["sessionUpdate"] = vi.fn(async () => {})) {
   const ledger = {
@@ -32,12 +37,10 @@ describe("AcpTranslatorSessionUpdates", () => {
     const { updates, ledger, sessionUpdate } = harness();
     ledger.readReplay.mockReturnValueOnce(reading.promise);
     const replay = updates.readLedgerReplay(session);
-    let stopped = false;
-    const closing = updates.stop().then(() => {
-      stopped = true;
-    });
+    const stopped = vi.fn();
+    const closing = updates.stop().then(stopped);
     await Promise.resolve();
-    expect(stopped).toBe(false);
+    expect(stopped).not.toHaveBeenCalled();
     reading.resolve({ complete: true, events: [] });
     await replay;
     await closing;
@@ -45,23 +48,64 @@ describe("AcpTranslatorSessionUpdates", () => {
     await updates.startLedgerSession({ ...session, cwd: "/tmp" }, { complete: true });
     await updates.recordUserPrompt(session, "run-1", []);
     await updates.emit(emission);
-    await expect(updates.readLedgerReplay(session)).resolves.toEqual({
-      complete: false,
-      events: [],
-    });
-    await expect(updates.readLedgerReplayBySessionId(session.sessionId)).resolves.toEqual({
-      complete: false,
-      events: [],
-    });
-    await expect(updates.readLedgerReplayBySessionKey(session.sessionKey)).resolves.toEqual({
-      complete: false,
-      events: [],
-    });
+    await expect(updates.readLedgerReplay(session)).resolves.toEqual(emptyReplay);
+    await expect(updates.readLedgerReplayBySessionId(session.sessionId)).resolves.toEqual(
+      emptyReplay,
+    );
+    await expect(updates.readLedgerReplayBySessionKey(session.sessionKey)).resolves.toEqual(
+      emptyReplay,
+    );
     expect(sessionUpdate).not.toHaveBeenCalled();
     for (const method of Object.values(ledger)) {
       expect(method).not.toHaveBeenCalled();
     }
   });
+
+  it.each([false, true])(
+    "drains admitted queued ledger updates during shutdown (first write fails: %s)",
+    async (firstFails) => {
+      const writing = createDeferred();
+      const release = createDeferred();
+      const { updates, ledger } = harness();
+      const firstUpdate = textUpdate("first");
+      const secondUpdate = textUpdate("second");
+      ledger.recordUpdate.mockImplementation(async ({ update: recordedUpdate }) => {
+        if (
+          recordedUpdate.sessionUpdate === "agent_message_chunk" &&
+          recordedUpdate.content.type === "text" &&
+          recordedUpdate.content.text === "first"
+        ) {
+          writing.resolve();
+          await release.promise;
+          if (firstFails) {
+            throw new Error("ledger write failed during shutdown");
+          }
+        }
+      });
+      const first = updates.emit({ ...emission, update: firstUpdate });
+      await writing.promise;
+      const second = updates.emit({ ...emission, update: secondUpdate });
+      const stopped = vi.fn();
+      const closing = updates.stop().then(stopped);
+      try {
+        await Promise.resolve();
+        expect(stopped).not.toHaveBeenCalled();
+        release.resolve();
+        await Promise.all([first, second, closing]);
+        expect(ledger.recordUpdate.mock.calls.map(([params]) => params.update)).toEqual([
+          firstUpdate,
+          secondUpdate,
+        ]);
+        expect(ledger.markIncomplete).toHaveBeenCalledTimes(firstFails ? 1 : 0);
+        if (firstFails) {
+          expect(ledger.markIncomplete).toHaveBeenCalledWith(session);
+        }
+      } finally {
+        release.resolve();
+        await Promise.allSettled([first, second, closing]);
+      }
+    },
+  );
 
   it("preserves ledger order without waiting for ACP delivery", async () => {
     const delivery = createDeferred();
@@ -72,14 +116,8 @@ describe("AcpTranslatorSessionUpdates", () => {
     ledger.recordUpdate.mockImplementation(async () => {
       recorded.resolve();
     });
-    const firstUpdate: SessionUpdate = {
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: "first" },
-    };
-    const interruption: SessionUpdate = {
-      sessionUpdate: "agent_message_chunk",
-      content: { type: "text", text: "interrupted" },
-    };
+    const firstUpdate = textUpdate("first");
+    const interruption = textUpdate("interrupted");
     const first = updates.emit({ ...emission, update: firstUpdate });
     await recorded.promise;
     await updates.emit({ ...emission, update: interruption, waitForDelivery: false });

@@ -8,13 +8,24 @@ const modelControlViews = new WeakMap<
   { update: (props: ModelControlProps) => void }
 >();
 
-export function renderPaneModelControl(props: ModelControlProps, container: HTMLElement) {
+export function renderPaneModelControl(
+  props: ModelControlProps,
+  container: HTMLElement,
+  openModelPicker = false,
+) {
+  const renderProps = openModelPicker
+    ? { ...props, model: { ...props.model, modelPickerOpen: true } }
+    : props;
   const mounted = modelControlViews.get(container);
   if (mounted) {
-    mounted.update(props);
+    mounted.update(renderProps);
     return;
   }
-  modelControlViews.set(container, mountSolid(ChatPaneModelControl, props, container));
+  if (!container.isConnected) {
+    document.body.append(container);
+    onTestFinished(() => container.remove());
+  }
+  modelControlViews.set(container, mountSolid(ChatPaneModelControl, renderProps, container));
   onTestFinished(() => {
     modelControlViews.delete(container);
   });

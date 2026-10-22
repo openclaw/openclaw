@@ -5,7 +5,8 @@ import type {
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
 import { projectRecordedModelPrompt } from "../../sessions/user-turn-transcript.message.js";
-import { estimateTokens, type AgentMessage } from "../runtime/index.js";
+import { mapArrayIfChanged } from "../../shared/map-array-if-changed.js";
+import { estimateTokens, type Agent, type AgentMessage } from "../runtime/index.js";
 import { resolveToolResultContextMaxChars } from "../tool-result-limits.js";
 import { formatContextLimitTruncationNotice } from "./context-truncation-notice.js";
 import { estimateRenderedLlmBoundaryTokenPressure } from "./run/preemptive-compaction.js";
@@ -13,7 +14,6 @@ import {
   TOOL_IMAGE_CHARS,
   TOOL_RESULT_CHARS_PER_TOKEN_ESTIMATE,
   type MessageCharEstimateCache,
-  createMessageCharEstimateCache,
   estimateMessageChars,
   estimateMessageCharsCached,
   getToolResultText,
@@ -21,28 +21,6 @@ import {
 } from "./tool-result-char-estimator.js";
 import { isToolResultTextBlock } from "./tool-result-text-budget.js";
 import { truncateToolResultMessage, truncateToolResultText } from "./tool-result-truncation.js";
-
-type GuardableTransformContext = (
-  messages: AgentMessage[],
-  signal: AbortSignal,
-) => AgentMessage[] | Promise<AgentMessage[]>;
-
-type GuardableAgentRecord = {
-  transformContext?: GuardableTransformContext;
-};
-
-function projectMessages(
-  messages: AgentMessage[],
-  project: (message: AgentMessage) => AgentMessage,
-): AgentMessage[] {
-  let changed = false;
-  const projected = messages.map((message) => {
-    const next = project(message);
-    changed ||= next !== message;
-    return next;
-  });
-  return changed ? projected : messages;
-}
 
 function replaceToolResultContent(
   msg: AgentMessage,
@@ -159,7 +137,7 @@ function truncateToolResultToChars(
  * attempts retain their eager lifecycle and finalization checkpoint.
  */
 export function installContextEngineLoopHook(params: {
-  agent: object;
+  agent: Pick<Agent, "transformContext">;
   contextEngine: ContextEngine;
   sessionId: string;
   sessionKey?: string;
@@ -183,7 +161,7 @@ export function installContextEngineLoopHook(params: {
 }): () => void {
   const { contextEngine, sessionId, sessionKey, sessionFile, tokenBudget, modelId } = params;
   const sessionIdentity = { sessionId, sessionKey };
-  const mutableAgent = params.agent as GuardableAgentRecord;
+  const mutableAgent = params.agent;
   const originalTransformContext = mutableAgent.transformContext;
   let lastSeenLength: number | null = null;
   let lastAssembledView: AgentMessage[] | null = null;
@@ -323,14 +301,12 @@ export function installContextEngineLoopHook(params: {
 }
 
 export function installToolResultContextGuard(params: {
-  agent: object;
+  agent: Pick<Agent, "transformContext">;
   contextWindowTokens: number;
 }): () => void {
   const maxSingleToolResultChars = resolveToolResultContextMaxChars(params.contextWindowTokens);
 
-  // Agent.transformContext is private in session runtime, so access it via a
-  // narrow runtime view to keep callsites type-safe while preserving behavior.
-  const mutableAgent = params.agent as GuardableAgentRecord;
+  const mutableAgent = params.agent;
   const originalTransformContext = mutableAgent.transformContext;
 
   mutableAgent.transformContext = async (messages, signal) => {
@@ -339,8 +315,8 @@ export function installToolResultContextGuard(params: {
       : messages;
 
     const sourceMessages = Array.isArray(transformed) ? transformed : messages;
-    const estimateCache = createMessageCharEstimateCache();
-    return projectMessages(sourceMessages, (message) =>
+    const estimateCache = new WeakMap<AgentMessage, number>();
+    return mapArrayIfChanged(sourceMessages, (message) =>
       truncateToolResultToChars(message, maxSingleToolResultChars, estimateCache),
     );
   };

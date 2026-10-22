@@ -4,11 +4,7 @@ import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { readRequestBody, stripDispatcher, writeOversizedJson } from "./http.test-support.js";
-import {
-  FeishuStreamingFinalizationError,
-  FeishuStreamingSession,
-  mergeStreamingText,
-} from "./streaming-card.js";
+import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
 import { createStreamingSession, type StreamingFetchDeps } from "./streaming-card.test-support.js";
 
 const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
@@ -403,11 +399,11 @@ describe("FeishuStreamingSession", () => {
       await session.update("Already visible answer");
 
       await expect(session.discard()).rejects.toMatchObject({
-        name: "FeishuStreamingFinalizationError",
-        result: {
+        code: "CHANNEL_PARTIAL_DELIVERY",
+        deliveryResult: {
           visibleReplySent: true,
           content: "Already visible answer",
-          ...(messageId ? { messageId } : {}),
+          ...(messageId ? { messageIds: [messageId] } : {}),
         },
       });
       expect(remove).toHaveBeenCalledTimes(messageId ? 1 : 0);
@@ -425,8 +421,8 @@ describe("FeishuStreamingSession", () => {
     await session.update("Already visible answer");
 
     await expect(session.closeWithResult("Already visible answer")).rejects.toMatchObject({
-      name: "FeishuStreamingFinalizationError",
-      result: {
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
         visibleReplySent: true,
         content: "Already visible answer",
       },
@@ -767,8 +763,8 @@ describe("FeishuStreamingSession", () => {
 
     await session.update(next);
     await expect(session.closeWithResult()).rejects.toMatchObject({
-      name: "FeishuStreamingFinalizationError",
-      result: { visibleReplySent: true, content: previous },
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: { visibleReplySent: true, content: previous },
     });
 
     expect(replaceBodies).toHaveLength(1);
@@ -820,12 +816,13 @@ describe("FeishuStreamingSession", () => {
       .closeWithResult(undefined, { note: "model note" })
       .catch((caught: unknown) => caught);
 
-    expect(error).toBeInstanceOf(FeishuStreamingFinalizationError);
+    expect(error).toBeInstanceOf(Error);
     expect(error).toMatchObject({
-      result: {
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
         visibleReplySent: true,
         content: "visible answer",
-        messageId: "om_rejected_note_and_close",
+        messageIds: ["om_rejected_note_and_close"],
       },
     });
 
@@ -1002,8 +999,8 @@ describe("FeishuStreamingSession", () => {
     });
 
     await expect(session.closeWithResult("final answer")).rejects.toMatchObject({
-      name: "FeishuStreamingFinalizationError",
-      result: { visibleReplySent: true, content: "working\n\nfinal answer" },
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: { visibleReplySent: true, content: "working\n\nfinal answer" },
     });
 
     expect(updateBodies).toHaveLength(0);
@@ -1032,11 +1029,11 @@ describe("FeishuStreamingSession", () => {
     });
 
     await expect(session.closeWithResult("working\n\nfinal answer")).rejects.toMatchObject({
-      name: "FeishuStreamingFinalizationError",
-      result: {
+      code: "CHANNEL_PARTIAL_DELIVERY",
+      deliveryResult: {
         visibleReplySent: true,
         content: "working",
-        messageId: "om_8",
+        messageIds: ["om_8"],
         finalTextAccepted: false,
       },
     });
@@ -1063,10 +1060,10 @@ describe("FeishuStreamingSession", () => {
       log,
     });
 
-    await expect(session.closeWithResult("final answer")).rejects.toMatchObject({
-      name: "FeishuStreamingFinalizationError",
-      result: { visibleReplySent: false },
-    });
+    const error = await session.closeWithResult("final answer").catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ message: "Update card content failed with HTTP 500" });
+    expect(error).not.toHaveProperty("deliveryResult");
 
     expect(updateBodies).toHaveLength(1);
     expect(replaceBodies).toHaveLength(0);

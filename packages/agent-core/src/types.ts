@@ -4,6 +4,7 @@ import type {
   ImageContent,
   Message,
   Model,
+  ModelThinkingLevel,
   SimpleStreamOptions,
   StreamFn as LlmStreamFn,
   TextContent,
@@ -312,6 +313,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
     message: AssistantMessage;
     toolResults: ToolResultMessage[];
     terminalToolCallIds: ReadonlySet<string>;
+    inputScope: object;
   }) => boolean;
 
   /** @internal Preserves loop safety evidence across Agent.continue() retries. */
@@ -354,7 +356,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
  * Note: "xhigh" is only supported by selected model families. Use model thinking-level metadata
  * from openclaw/plugin-sdk/llm to detect support for a concrete model.
  */
-export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export type ThinkingLevel = ModelThinkingLevel;
 
 export interface BashExecutionMessage {
   role: "bashExecution";

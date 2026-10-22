@@ -109,10 +109,8 @@ export function startNodeHostConnection({
     gatewayHelloReceived = false;
     connectedGatewayProtocol = 0;
     gatewayCapabilities = new Set();
-    if (hostStatsTimer) {
-      clearInterval(hostStatsTimer);
-      hostStatsTimer = undefined;
-    }
+    clearInterval(hostStatsTimer);
+    hostStatsTimer = undefined;
     for (const state of optionalPublicationStates.values()) {
       if (state.retryTimer) {
         clearTimeout(state.retryTimer);
@@ -203,11 +201,6 @@ export function startNodeHostConnection({
         state.rejectedParams = undefined;
         try {
           await connectionClient.request(method, nextParams);
-          // Request settlement races reconnect teardown. Stale completions must
-          // not mutate or report against the retired connection.
-          if (!connectionIsCurrent()) {
-            return;
-          }
           if (isDeepStrictEqual(state.pendingParams, nextParams)) {
             state.pendingParams = undefined;
           }
@@ -217,9 +210,6 @@ export function startNodeHostConnection({
           state.retryDelayMs = NODE_OPTIONAL_PUBLICATION_RETRY_INITIAL_MS;
           state.retryPending = false;
         } catch (error) {
-          if (!connectionIsCurrent()) {
-            return;
-          }
           const failure = classifyNodeMethodFailure(error, method, gatewayProtocol);
           if (failure === "legacy-unsupported") {
             state.unsupported = true;
@@ -415,6 +405,22 @@ export function startNodeHostConnection({
     onRunnerCapacityChanged: (capacity) => {
       workerCapacity = capacity;
       publishRunnerInventory();
+    },
+    onProcessesChanged: (binding) => {
+      if (!gatewayHelloReceived) {
+        return;
+      }
+      // Retained processes outlive invocation routes; the current connection owns publication.
+      const generation = gatewayConnectionGeneration;
+      void publicationClient
+        .request("node.event", buildNodeEventParams("worker.processes.changed", binding))
+        .catch((error: unknown) => {
+          if (generation === gatewayConnectionGeneration) {
+            writeStderrLine(
+              `worker process notification failed: ${redactSensitiveText(String(error))}`,
+            );
+          }
+        });
     },
     onWorkerHostingDisabled,
     onManifestChanged: (manifest) => {

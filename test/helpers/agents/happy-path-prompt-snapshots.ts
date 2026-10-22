@@ -5,14 +5,12 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolveHeartbeatPromptForResponseTool } from "../../../src/auto-reply/heartbeat.js";
 import {
   buildSourceConversationContext,
-  buildGroupChatContext,
   buildGroupIntro,
 } from "../../../src/auto-reply/reply/groups.js";
 import {
   buildInboundMetaSystemPrompt,
   buildInboundUserContextPrefix,
 } from "../../../src/auto-reply/reply/inbound-meta.js";
-import { buildReplyPromptEnvelope } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import { normalizeChatType } from "../../../src/channels/chat-type.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
@@ -31,6 +29,7 @@ import {
 import { withStateDirEnv } from "../../../src/test-helpers/state-dir-env.js";
 import { resolveRelativeBundledPluginPublicModuleId } from "../../../src/test-utils/bundled-plugin-public-surface.js";
 import { createTestRegistry } from "../../../src/test-utils/channel-plugins.js";
+import { preparePromptSnapshotReply } from "./prepared-reply-prompt.js";
 import {
   CODEX_MODEL_PROMPT_FIXTURE_DIR,
   CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO,
@@ -61,7 +60,6 @@ const HAPPY_PATH_TOOL_NAMES = new Set([
   "nodes",
   "automations",
   "message",
-  "heartbeat_respond",
   "tts",
   "gateway",
   "agents_list",
@@ -208,11 +206,19 @@ async function loadScenarioChannelPluginFixture(
 }
 
 /**
- * Pins exactly the scenario channel while its tools are built. Cross-channel
+ * Pins exactly the scenario channel while its tools and prompt are built. Cross-channel
  * action discovery walks every loaded channel plugin, so registering more than
  * the scenario channel would change the generated message-tool schema bytes.
  */
-function withScenarioChannelRegistry<T>(fixture: ScenarioChannelPluginFixture, build: () => T): T {
+async function withScenarioChannelRegistry<T>(
+  ctx: TemplateContext,
+  build: () => T | Promise<T>,
+): Promise<T> {
+  const provider = ctx.Provider;
+  if (!provider) {
+    throw new Error("prompt snapshot scenarios must set ctx.Provider for channel tool fixtures");
+  }
+  const fixture = await scenarioChannelPluginFixture(provider);
   const previousRegistry: PluginRegistry | null = getActivePluginRegistry();
   setActivePluginRegistry(
     createTestRegistry([
@@ -225,7 +231,7 @@ function withScenarioChannelRegistry<T>(fixture: ScenarioChannelPluginFixture, b
     ]),
   );
   try {
-    return build();
+    return await build();
   } finally {
     if (previousRegistry) {
       setActivePluginRegistry(previousRegistry);
@@ -373,19 +379,15 @@ function textStats(value: string): { chars: number; roughTokens: number } {
   };
 }
 
-function createPrompt(ctx: TemplateContext, body: string): string {
+async function createPrompt(ctx: TemplateContext, body: string): Promise<string> {
   const inboundUserContext = buildInboundUserContextPrefix(ctx);
   const promptBody = [inboundUserContext, body].filter(Boolean).join("\n\n");
-  return buildReplyPromptEnvelope({
+  const prepared = await preparePromptSnapshotReply({
     ctx,
-    sessionCtx: ctx,
-    baseBody: promptBody,
-    hasUserBody: true,
-    inboundUserContext: "",
-    isBareSessionReset: false,
-    startupAction: "new",
-    prefixedBody: promptBody,
-  }).prefixedCommandBody;
+    body,
+    workspaceDir: WORKSPACE_DIR,
+  });
+  return prepared.buildPromptBodies({ prefixedBody: promptBody }).prefixedCommandBody;
 }
 
 function createExtraSystemPrompt(params: {
@@ -494,8 +496,6 @@ function createDynamicTools(params: {
     suppressManagedWebSearch: false,
     modelContextWindowTokens: 272_000,
     forceMessageTool: true,
-    enableHeartbeatTool: params.trigger === "heartbeat",
-    forceHeartbeatTool: params.trigger === "heartbeat",
     trigger: params.trigger,
     config: dynamicToolsConfig,
     toolConstructionPlan: {
@@ -531,12 +531,7 @@ async function createScenarioDynamicTools(params: {
   ctx: TemplateContext;
   trigger: "user" | "heartbeat";
 }): Promise<CodexDynamicToolSpec[]> {
-  const provider = params.ctx.Provider;
-  if (!provider) {
-    throw new Error("prompt snapshot scenarios must set ctx.Provider for channel tool fixtures");
-  }
-  const fixture = await scenarioChannelPluginFixture(provider);
-  return withScenarioChannelRegistry(fixture, () => createDynamicTools(params));
+  return withScenarioChannelRegistry(params.ctx, () => createDynamicTools(params));
 }
 
 async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<PromptScenario[]> {
@@ -618,7 +613,7 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
       ],
       trigger: "user",
       ctx: telegramDirectCtx,
-      prompt: createPrompt(
+      prompt: await createPrompt(
         telegramDirectCtx,
         telegramDirectCtx.BodyStripped ?? telegramDirectCtx.Body ?? "",
       ),
@@ -641,13 +636,13 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
       ],
       trigger: "user",
       ctx: discordGroupCtx,
-      prompt: createPrompt(
+      prompt: await createPrompt(
         discordGroupCtx,
         discordGroupCtx.BodyStripped ?? discordGroupCtx.Body ?? "",
       ),
       extraSystemPrompt: createExtraSystemPrompt({
         ctx: discordGroupCtx,
-        chatContext: buildGroupChatContext({
+        chatContext: buildSourceConversationContext({
           sessionCtx: discordGroupCtx,
           sourceReplyDeliveryMode: "message_tool_only",
         }),
@@ -662,12 +657,14 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
       id: "telegram-heartbeat-codex-tool",
       title: "Telegram Direct Codex Heartbeat Tool Turn",
       notes: [
-        "Heartbeat happy path: Codex receives the structured `heartbeat_respond` dynamic tool in the searchable catalog instead of the initial tool context.",
-        "The heartbeat tool still carries the notify/no-notify decision, outcome, summary, and optional notification text instead of relying only on final-text parsing.",
+        "Legacy heartbeat trigger: Codex receives the ordinary tool catalog without the retired `heartbeat_respond` tool.",
       ],
       trigger: "heartbeat",
       ctx: heartbeatCtx,
-      prompt: createPrompt(heartbeatCtx, heartbeatCtx.BodyStripped ?? heartbeatCtx.Body ?? ""),
+      prompt: await createPrompt(
+        heartbeatCtx,
+        heartbeatCtx.BodyStripped ?? heartbeatCtx.Body ?? "",
+      ),
       extraSystemPrompt: createExtraSystemPrompt({
         ctx: heartbeatCtx,
         chatContext: buildSourceConversationContext({
@@ -915,20 +912,23 @@ async function renderScenarioSnapshot(
   });
   const appServer = codexApi.resolveCodexPromptSnapshotAppServerOptions();
   const codexTurnPromptText = prependCodexOpenClawRuntimeContext(scenario.prompt);
-  if (attempt.startedAtMs === undefined) {
+  const startedAtMs = attempt.startedAtMs;
+  if (startedAtMs === undefined) {
     throw new Error("Codex prompt snapshot attempt requires a fixed start time");
   }
-  const codexSnapshot = await withFixedDateNow(attempt.startedAtMs, () =>
-    codexApi.buildCodexHarnessPromptSnapshot({
-      attempt,
-      cwd: WORKSPACE_DIR,
-      threadId: `thread-${scenario.id}`,
-      dynamicTools: scenario.dynamicTools,
-      appServer,
-      config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
-      promptText: codexTurnPromptText,
-      personaInstructions: CODEX_WORKSPACE_PERSONA_INSTRUCTIONS,
-    }),
+  const codexSnapshot = await withScenarioChannelRegistry(scenario.ctx, () =>
+    withFixedDateNow(startedAtMs, () =>
+      codexApi.buildCodexHarnessPromptSnapshot({
+        attempt,
+        cwd: WORKSPACE_DIR,
+        threadId: `thread-${scenario.id}`,
+        dynamicTools: scenario.dynamicTools,
+        appServer,
+        config: CODEX_PROMPT_SNAPSHOT_THREAD_CONFIG,
+        promptText: codexTurnPromptText,
+        personaInstructions: CODEX_WORKSPACE_PERSONA_INSTRUCTIONS,
+      }),
+    ),
   );
   const dynamicToolFunctions = flattenCodexDynamicToolSpecs(scenario.dynamicTools);
   const criticalToolSpecs = dynamicToolFunctions.filter((tool) =>
@@ -1019,7 +1019,7 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "- OpenAI model through the Codex harness and Codex app-server runtime.",
     "- Codex harness default coverage for tool-only visible source replies.",
-    "- Telegram direct chat, Discord group chat, and a heartbeat turn with `heartbeat_respond` available through searchable dynamic tools.",
+    "- Telegram direct chat, Discord group chat, and a legacy heartbeat trigger without the retired response tool.",
     "",
     "The materialized Markdown snapshots show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.",
     "",

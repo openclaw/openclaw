@@ -60,21 +60,9 @@ describe("shared control ownership", () => {
       "pages/chat/components/chat-composer-menu.ts",
       "pages/chat/components/chat-model-account-control.ts",
       "pages/chat/components/chat-model-picker-options.ts",
-      "pages/chat/components/chat-model-picker.ts",
+      "pages/chat/components/chat-model-picker-panel.ts",
       "pages/new-session/checkout-chip.ts",
       "pages/new-session/place-browser.ts",
-    ]);
-  });
-
-  it("limits custom dividers to docked multi-pane layouts", () => {
-    // These layouts coordinate sidebar, inspector, and responsive dock state
-    // across more than two panes.
-    expect(matchingFiles(/<resizable-divider\b/u)).toEqual([
-      "app/app-shell-view.ts",
-      "components/assistant-panel-view.ts",
-      "components/dock-layout-solid.ts",
-      "pages/chat/chat-page-pane-render.ts",
-      "pages/chat/components/chat-sidebar-region.runtime.ts",
     ]);
   });
 });

@@ -1,6 +1,10 @@
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
-import type { SessionsUsageResult } from "./data-types.ts";
-import type { UsageProps } from "./types.ts";
+import type {
+  CostUsageDailyEntry,
+  SessionsUsageEntry,
+  SessionsUsageResult,
+  SessionsUsageTotals,
+} from "./data-types.ts";
 
 type UsageCacheStatus = SessionsUsageResult["cacheStatus"];
 
@@ -11,9 +15,13 @@ export function isUsageCacheIncomplete(
   return [sessionsStatus, costStatus].some((cache) => cache && cache.status !== "fresh");
 }
 
-export function resolveUsageOverviewState(
-  data: Pick<UsageProps["data"], "cacheRefresh" | "loading" | "totals" | "sessions" | "costDaily">,
-): { hasOverviewData: boolean; loadingOverview: boolean } {
+export function resolveUsageOverviewState(data: {
+  cacheRefresh: "complete" | "retrying" | "failed";
+  loading: boolean;
+  totals: SessionsUsageTotals | null;
+  sessions: SessionsUsageEntry[];
+  costDaily: CostUsageDailyEntry[];
+}): { hasOverviewData: boolean; loadingOverview: boolean } {
   // Cold caches can list sessions before any usage has been read. Zero-filled
   // aggregate objects are not evidence of zero usage while that read is pending.
   const awaitingUsage =

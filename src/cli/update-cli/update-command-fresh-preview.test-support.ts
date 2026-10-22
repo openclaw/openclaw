@@ -5,7 +5,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
 import { parseUpdateRecoveryBackupManifest } from "../../commands/backup-verify-manifest.js";
 import * as nodeRuntimeDiagnostics from "../../commands/node-runtime-diagnostics.js";
-import * as tempRoot from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
@@ -20,7 +19,12 @@ import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state
 import * as shared from "./shared.js";
 import { updateStatusCommand } from "./status.js";
 import * as execution from "./update-command-execution.js";
-import type { installFreshUpdateFixture } from "./update-command-fresh.test-support.js";
+import {
+  denyFreshLeaseRelease,
+  expectNoFreshCalls,
+  writeFreshJson,
+  type installFreshUpdateFixture,
+} from "./update-command-fresh.test-support.js";
 import * as initialization from "./update-command-initialization.js";
 import * as packageUpdate from "./update-command-package.js";
 import * as commandRun from "./update-command-run.js";
@@ -132,10 +136,10 @@ export function registerOriginalCaptureTests({
       const captureRoot = refused ? dirs.make("managed-refused-update-") : fixture.root;
       if (refused) {
         fs.mkdirSync(path.join(captureRoot, "dist"));
-        fs.writeFileSync(
-          path.join(captureRoot, "package.json"),
-          JSON.stringify({ name: "openclaw", version: "2026.9.3" }),
-        );
+        writeFreshJson(path.join(captureRoot, "package.json"), {
+          name: "openclaw",
+          version: "2026.9.3",
+        });
         const serviceUnitTarget = path.join(captureRoot, "dist", "index.js");
         fs.writeFileSync(serviceUnitTarget, "");
         const prepare = vi.mocked(commandRun.prepareUpdateCommand).getMockImplementation();
@@ -150,44 +154,50 @@ export function registerOriginalCaptureTests({
         }));
       }
       let admittedRun: shared.UpdateCommandOptions["run"];
-      let admittedRecord: ReturnType<typeof getUpdateRun> | undefined;
+      let preparedRecord: ReturnType<typeof getUpdateRun> | undefined;
+      let preparationCount = 0;
       if (releaseDenied) {
+        const complete = commandRun.completeUpdateCommandRun;
+        vi.spyOn(commandRun, "completeUpdateCommandRun").mockImplementation((...args) => {
+          const run = args[1];
+          if (!admittedRun || run !== admittedRun) {
+            return complete(...args);
+          }
+          assert(run.executorFence);
+          run.executorFence.assertCurrent();
+          const result = complete(...args);
+          preparedRecord = getUpdateRun(run.runId, { env: run.env });
+          preparationCount += 1;
+          expect(preparedRecord).toMatchObject({
+            runId: run.runId,
+            phase: "finished",
+            status: "failed",
+            reason: "unsupported-package-target",
+            finishedAtMs: expect.any(Number),
+          });
+          return result;
+        });
         const prepareTriage = commandTriage.prepareUpdateCommandFailureTriage;
         vi.spyOn(commandTriage, "prepareUpdateCommandFailureTriage").mockImplementation(
           async (...args) => {
             const handleFailure = await prepareTriage(...args);
             admittedRun = args[0].run;
             assert(admittedRun);
-            admittedRecord = getUpdateRun(admittedRun.runId, { env: admittedRun.env });
+            const admittedRecord = getUpdateRun(admittedRun.runId, { env: admittedRun.env });
             expect(admittedRecord).toMatchObject({ status: "running", finishedAtMs: null });
             expect(admittedRecord?.phase).not.toBe("finished");
-            const db = new DatabaseSync(
-              path.join(
-                tempRoot.resolvePreferredOpenClawTmpDir(),
-                "managed-update-handoffs.sqlite",
-              ),
-            );
-            try {
-              db.exec(
-                "CREATE TRIGGER deny_refusal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture final lease delete denied'); END",
-              );
-            } finally {
-              db.close();
-            }
+            denyFreshLeaseRelease("fixture final lease delete denied");
             return handleFailure;
           },
         );
       }
       const candidate = dirs.make("artifact-forward-");
-      fs.writeFileSync(
-        path.join(candidate, "package.json"),
-        JSON.stringify({
-          name: "openclaw",
-          version: "2026.9.4",
-          engines: { node: ">=22" },
-          openclaw: { schemaVersions: { state: schema, agent: 19 } },
-        }),
-      );
+      writeFreshJson(path.join(candidate, "package.json"), {
+        name: "openclaw",
+        version: "2026.9.4",
+        engines: { node: ">=22" },
+        openclaw: { schemaVersions: { state: schema, agent: 19 } },
+      });
       vi.mocked(shared.resolveTargetVersion).mockResolvedValue({ version: null });
       const stage = createStage(candidate);
       vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue(stage);
@@ -267,7 +277,9 @@ export function registerOriginalCaptureTests({
             "`--tag main` cannot update a package install",
           );
           expect(result.failedStep.stderrTail).toContain("fixture final lease delete denied");
-          expect(getUpdateRun(admittedRun.runId, { env: admittedRun.env })).toEqual(admittedRecord);
+          expect(preparationCount).toBe(1);
+          assert(preparedRecord);
+          expect(getUpdateRun(admittedRun.runId, { env: admittedRun.env })).toEqual(preparedRecord);
           expect(createManagedHandoffLeaseStore().read(captureRoot)).toMatchObject({
             kind: "current",
           });
@@ -296,10 +308,12 @@ export function registerOriginalCaptureTests({
           databasePath: fixture.databasePath,
           previousRunId,
         });
-        expect(execute).not.toHaveBeenCalled();
-        expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-        expect(shared.resolveTargetVersion).not.toHaveBeenCalled();
-        expect(stage.close).not.toHaveBeenCalled();
+        expectNoFreshCalls(
+          execute,
+          packageUpdate.stagePackageInstallUpdate,
+          shared.resolveTargetVersion,
+          stage.close,
+        );
       } else {
         await update;
         expect(execute).toHaveBeenCalledOnce();

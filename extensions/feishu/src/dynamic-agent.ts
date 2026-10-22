@@ -1,8 +1,8 @@
-import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { resolveChannelConfigWrites } from "openclaw/plugin-sdk/channel-config-writes";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { normalizeAccountId, resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
@@ -10,7 +10,6 @@ import type { DynamicAgentCreationConfig } from "./types.js";
 
 type DynamicAgentMutationResult = {
   created: boolean;
-  agentId?: string;
 };
 
 type MaybeCreateDynamicAgentResult = DynamicAgentMutationResult & {
@@ -62,12 +61,7 @@ function resolveDynamicAgentId(accountId: string, senderOpenId: string): string 
   if (accountId === "default") {
     return `feishu-${senderOpenId}`;
   }
-  const identityDigest = createHash("sha256")
-    .update(accountId)
-    .update("\0")
-    .update(senderOpenId)
-    .digest("hex")
-    .slice(0, 32);
+  const identityDigest = sha256Hex(`${accountId}\0${senderOpenId}`).slice(0, 32);
   return `feishu-${accountId.slice(0, 12)}-${identityDigest}`;
 }
 
@@ -182,7 +176,7 @@ export async function maybeCreateDynamicAgent(params: {
             },
           },
         ];
-        return { created: true, agentId };
+        return { created: true };
       },
     })
     .catch((error: unknown) => {
@@ -199,7 +193,6 @@ export async function maybeCreateDynamicAgent(params: {
   return {
     created: committed.result?.created ?? false,
     updatedCfg: runtime.config.current() as OpenClawConfig,
-    agentId: committed.result?.agentId,
   };
 }
 

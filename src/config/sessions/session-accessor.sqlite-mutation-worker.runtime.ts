@@ -1,6 +1,5 @@
 import { on, once } from "node:events";
 import type { MessagePort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync-cache-state.js";
 import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
 import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
@@ -31,6 +30,10 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import type { CanonicalSessionValidationResult } from "./session-accessor.sqlite-contract.js";
+import {
+  readStagedConversationPublications,
+  type ConversationPublication,
+} from "./session-accessor.sqlite-conversation-publication.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
   markSqliteReclamationSettled,
@@ -358,6 +361,7 @@ export async function runReclamationWorkerPort(
                   // Deferred periodic work outside this synchronous page unit still needs its relay.
                   checkpointResultOwnedByRequest =
                     request.type === "reclaim" && request.plan.kind === "maintenance-pages";
+                  const conversationPublication: ConversationPublication[] = [];
                   const reclaimed =
                     request.type === "canonical-validation"
                       ? runOpenClawAgentWriteTransaction(
@@ -404,13 +408,19 @@ export async function runReclamationWorkerPort(
                           { ...request.plan, databaseOptions: options },
                           {
                             beforeMutation: currentClaim.assertCurrent,
+                            onCommit: (committedDatabase) =>
+                              conversationPublication.push(
+                                ...readStagedConversationPublications(committedDatabase),
+                              ),
                           },
                         );
                   // Warm results must not revive proof invalidated by the parent between requests.
                   if (openedForRequest) {
                     validation = getOpenClawAgentDatabaseValidation(database);
                   }
-                  return reclaimed;
+                  return conversationPublication.length
+                    ? { ...reclaimed, conversationPublication }
+                    : reclaimed;
                 } finally {
                   checkpointResultOwnedByRequest = false;
                   clearNodeSqliteKyselyCacheForDatabase(sqlPublicationAnchor(database.db));
@@ -447,16 +457,6 @@ export async function runReclamationWorkerPort(
       );
       if (response.type === "closed") {
         port.postMessage(response);
-        if (pooledTask) {
-          const [release]: unknown[] = await once(port, "message");
-          if (
-            !isRecord(release) ||
-            release.type !== "release" ||
-            release.operationId !== operationId
-          ) {
-            throw new Error("Canonical validation task received an invalid close release");
-          }
-        }
         port.close();
         return response;
       }

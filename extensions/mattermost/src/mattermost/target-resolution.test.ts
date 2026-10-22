@@ -1,5 +1,5 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-// Mattermost tests cover target resolution plugin behavior.
 import type { MattermostClient } from "./client.js";
 import { parseMattermostTarget, resolveMattermostOpaqueTarget } from "./target-resolution.js";
 
@@ -23,6 +23,21 @@ const fixtureClient = (token = "token", baseUrl = "https://mm.example.com"): Mat
   request: vi.fn(),
   fetchImpl: vi.fn(),
 });
+const directoryConfig = { channels: { mattermost: {} } };
+const directoryAccount = (accountId: string, enabled = true) => ({
+  accountId,
+  enabled,
+  baseUrl: "https://mm.example.com",
+  botToken: "token",
+  config: {},
+});
+
+async function expectRepeatedResolution(input: string, kind: "channel" | "group") {
+  const params = { input, client: fixtureClient() };
+  const expected = { kind, id: input, to: `channel:${input}` };
+  await expect(resolveMattermostOpaqueTarget(params)).resolves.toEqual(expected);
+  await expect(resolveMattermostOpaqueTarget(params)).resolves.toEqual(expected);
+}
 
 vi.mock("./accounts.js", () => ({
   resolveMattermostAccount,
@@ -58,14 +73,13 @@ describe("mattermost target resolution", () => {
     expect(parseMattermostTarget("short")).toEqual({ kind: "channel-name", name: "short" });
   });
 
-  it.each(["mattermost:chan"])(
-    "skips explicit target %s before account resolution",
-    async (input) => {
-      await expect(resolveMattermostOpaqueTarget({ input, cfg: {} })).resolves.toBeNull();
-      expect(resolveMattermostAccount).not.toHaveBeenCalled();
-      expect(createMattermostClient).not.toHaveBeenCalled();
-    },
-  );
+  it("skips explicit targets before account resolution", async () => {
+    await expect(
+      resolveMattermostOpaqueTarget({ input: "mattermost:chan", cfg: {} }),
+    ).resolves.toBeNull();
+    expect(resolveMattermostAccount).not.toHaveBeenCalled();
+    expect(createMattermostClient).not.toHaveBeenCalled();
+  });
 
   it("does not cache non-404 lookup failures", async () => {
     fetchMattermostUser.mockRejectedValue(new Error("other error"));
@@ -82,23 +96,7 @@ describe("mattermost target resolution", () => {
   it("resolves public channels (type O) as channel and caches the result", async () => {
     fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
     fetchMattermostChannel.mockResolvedValue({ id: "bcde1234abcd1234abcd1234ab", type: "O" });
-    const input = "bcde1234abcd1234abcd1234ab";
-    const params = {
-      input,
-      client: fixtureClient(),
-    };
-
-    await expect(resolveMattermostOpaqueTarget(params)).resolves.toEqual({
-      kind: "channel",
-      id: input,
-      to: `channel:${input}`,
-    });
-    await expect(resolveMattermostOpaqueTarget(params)).resolves.toEqual({
-      kind: "channel",
-      id: input,
-      to: `channel:${input}`,
-    });
-
+    await expectRepeatedResolution("bcde1234abcd1234abcd1234ab", "channel");
     expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
   });
 
@@ -116,103 +114,101 @@ describe("mattermost target resolution", () => {
     expect(fetchMattermostUser).toHaveBeenCalledTimes(1);
 
     vi.advanceTimersByTime(5 * 60 * 1000 + 1);
-    await resolveMattermostOpaqueTarget(params);
+    fetchMattermostUser.mockRejectedValueOnce(new Error("Mattermost API 404 Not Found"));
+    fetchMattermostChannel.mockResolvedValue({ type: "P" });
+    await expect(resolveMattermostOpaqueTarget(params)).resolves.toMatchObject({ kind: "group" });
     expect(fetchMattermostUser).toHaveBeenCalledTimes(2);
   });
 
   it("resolves private channels (type P) as group, keeping a channel:<id> wire target", async () => {
     fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
     fetchMattermostChannel.mockResolvedValue({ id: "priv1234abcd1234abcd1234ab", type: "P" });
-    const input = "priv1234abcd1234abcd1234ab";
-
-    await expect(
-      resolveMattermostOpaqueTarget({
-        input,
-        client: fixtureClient(),
-      }),
-    ).resolves.toEqual({
-      kind: "group",
-      id: input,
-      to: `channel:${input}`,
-    });
-
-    // Second call is served from cache (no extra channel lookup).
-    await expect(
-      resolveMattermostOpaqueTarget({
-        input,
-        client: fixtureClient(),
-      }),
-    ).resolves.toEqual({ kind: "group", id: input, to: `channel:${input}` });
+    await expectRepeatedResolution("priv1234abcd1234abcd1234ab", "group");
     expect(fetchMattermostChannel).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to channel when the channel lookup fails", async () => {
     fetchMattermostUser.mockRejectedValue(new Error("Mattermost API 404 Not Found"));
     fetchMattermostChannel.mockRejectedValue(new Error("Mattermost API 500"));
-    const input = "fail1234abcd1234abcd1234ab";
-
-    await expect(
-      resolveMattermostOpaqueTarget({
-        input,
-        client: fixtureClient(),
-      }),
-    ).resolves.toEqual({
-      kind: "channel",
-      id: input,
-      to: `channel:${input}`,
-    });
-
-    await expect(
-      resolveMattermostOpaqueTarget({
-        input,
-        client: fixtureClient(),
-      }),
-    ).resolves.toEqual({
-      kind: "channel",
-      id: input,
-      to: `channel:${input}`,
-    });
+    await expectRepeatedResolution("fail1234abcd1234abcd1234ab", "channel");
     expect(fetchMattermostUser).toHaveBeenCalledTimes(2);
     expect(fetchMattermostChannel).toHaveBeenCalledTimes(2);
+    fetchMattermostChannel.mockResolvedValue({ type: "P" });
+    await expect(
+      resolveMattermostOpaqueTarget({
+        input: "fail1234abcd1234abcd1234ab",
+        client: fixtureClient(),
+      }),
+    ).resolves.toMatchObject({ kind: "group" });
+    expect(fetchMattermostChannel).toHaveBeenCalledTimes(3);
+  });
+
+  it("coalesces cold lookups only within the same credential and server", async () => {
+    const release = createDeferred<void>();
+    const input = "j".repeat(26);
+    fetchMattermostUser.mockImplementation(async () => {
+      await release.promise;
+      return { id: input };
+    });
+    const client = fixtureClient("joined-token");
+    const pending = [
+      resolveMattermostOpaqueTarget({ input, client }),
+      resolveMattermostOpaqueTarget({ input, client }),
+      resolveMattermostOpaqueTarget({ input, client: fixtureClient("other-token") }),
+      resolveMattermostOpaqueTarget({
+        input,
+        client: fixtureClient("joined-token", "https://other.example.com"),
+      }),
+    ];
+    release.resolve();
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(3);
+    expect(await Promise.all(pending)).toEqual(
+      Array.from({ length: 4 }, () => ({ kind: "user", id: input, to: `user:${input}` })),
+    );
+  });
+
+  it("bounds retained targets without refreshing insertion order on a cache hit", async () => {
+    fetchMattermostUser.mockResolvedValue({ id: "bounded-user" });
+    const client = fixtureClient("bounded-token");
+    const resolve = (index: number) =>
+      resolveMattermostOpaqueTarget({ input: index.toString(36).padStart(26, "0"), client });
+    for (let index = 0; index < 1024; index++) {
+      await resolve(index);
+    }
+    await resolve(0);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1024);
+    await resolve(1024);
+    await resolve(1024);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1025);
+    await resolve(0);
+    expect(fetchMattermostUser).toHaveBeenCalledTimes(1026);
   });
 
   it("uses the configured account for directory discovery", async () => {
     createMattermostClient.mockReturnValue(fixtureClient());
-    resolveMattermostAccount.mockReturnValue({
-      accountId: "acct-1",
-      enabled: true,
-      baseUrl: "https://mm.example.com",
-      botToken: "token",
-      config: {},
-    });
+    resolveMattermostAccount.mockReturnValue(directoryAccount("acct-1"));
     fetchMattermostUser.mockResolvedValue({ id: "cdef1234abcd1234abcd1234ab" });
     const input = "cdef1234abcd1234abcd1234ab";
 
     await resolveMattermostOpaqueTarget({
       input,
-      cfg: { channels: { mattermost: {} } },
+      cfg: directoryConfig,
       accountId: "acct-1",
     });
 
     expect(resolveMattermostAccount).toHaveBeenCalledWith({
-      cfg: { channels: { mattermost: {} } },
+      cfg: directoryConfig,
       accountId: "acct-1",
     });
   });
 
   it("rejects disabled accounts before cache or provider access", async () => {
-    resolveMattermostAccount.mockReturnValue({
-      accountId: "disabled",
-      enabled: false,
-      baseUrl: "https://mm.example.com",
-      botToken: "token",
-      config: {},
-    });
+    resolveMattermostAccount.mockReturnValue(directoryAccount("disabled", false));
 
     await expect(
       resolveMattermostOpaqueTarget({
         input: "disabled12abcd1234abcd1234",
-        cfg: { channels: { mattermost: {} } },
+        cfg: directoryConfig,
         accountId: "disabled",
       }),
     ).rejects.toThrow('Mattermost account "disabled" is disabled');

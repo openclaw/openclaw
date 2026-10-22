@@ -1,4 +1,3 @@
-// Storage-neutral session maintenance operations for the file-backed session store.
 import path from "node:path";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
 import { planSessionEntryMaintenance } from "./store-maintenance-plan.js";

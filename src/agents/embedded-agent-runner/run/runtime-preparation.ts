@@ -1,6 +1,5 @@
 import type { ThinkLevel } from "../../../auto-reply/thinking.js";
 import { resolveProviderRuntimePluginHandle } from "../../../plugins/provider-hook-runtime.js";
-import { createStageTimingTracker } from "../../../shared/stage-timing.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { resolvePreparedModelThinkingCompat } from "../../model-catalog-lookup.js";
 import type { PreparedModelRuntimeSnapshot } from "../../prepared-model-runtime.js";
@@ -16,7 +15,6 @@ import {
 } from "../../runtime-plan/prepare-auth.js";
 import { resolveCandidateThinkingLevel } from "../../thinking-runtime.js";
 import { log } from "../logger.js";
-import { formatEmbeddedRunStageSummary } from "./attempt-stage-timing.js";
 import {
   createEmbeddedRunAuthController,
   createEmbeddedAuthProfileAdmission,
@@ -163,7 +161,6 @@ export async function prepareEmbeddedRunTransport(input: {
 
   agentHarness = selectHarness(models.effective);
   let pluginHarnessOwnsTransport = agentHarness.id !== "openclaw";
-  const authStages = log.isEnabled("trace") ? createStageTimingTracker(Date.now) : undefined;
   const preparedAuthPlan = await prepareEmbeddedRunAuthPlan({
     assertCurrent: input.assertCurrent,
     runParams: params,
@@ -189,7 +186,6 @@ export async function prepareEmbeddedRunTransport(input: {
     getEffectiveModel: () => models.effective,
     applyResolvedRuntimeModel,
     selectHarnessForPreparedAttempts: selectHarness,
-    markStage: (stage) => authStages?.mark(stage),
   });
   assertRefreshTarget();
   const {
@@ -350,7 +346,6 @@ export async function prepareEmbeddedRunTransport(input: {
     ...(prepareModelForAuthProfile ? { prepareModelForAuthProfile } : {}),
     log,
   });
-  authStages?.mark("controller");
   const admitAuthProfile = createEmbeddedAuthProfileAdmission({
     authStore: attemptAuthProfileStore,
     profileCandidates,
@@ -430,15 +425,6 @@ export async function prepareEmbeddedRunTransport(input: {
       preparedProfileAttempted = initialAttempt?.kind === "profile";
       authState.lastProfileId = forwardedPluginHarnessProfileId;
     }
-  }
-  authStages?.mark("initialize");
-  if (authStages) {
-    log.trace(
-      formatEmbeddedRunStageSummary(
-        `[trace:embedded-run] auth stages: runId=${params.runId} sessionId=${params.sessionId} phase=auth`,
-        authStages.snapshot(),
-      ),
-    );
   }
   input.markStartupStage("auth");
   input.notifyExecutionPhase("auth", { provider, model: modelId });

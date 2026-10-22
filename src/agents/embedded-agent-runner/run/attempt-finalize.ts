@@ -4,12 +4,14 @@ import { freezeDiagnosticTraceContext } from "../../../infra/diagnostic-trace-co
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { projectNestedToolActivityForHooks } from "../../../sessions/nested-tool-activity.js";
 import { buildTrajectoryArtifacts } from "../../../trajectory/metadata.js";
+import { hasAcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import {
   mergeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
 } from "../../agent-run-terminal-outcome.js";
 import { FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE } from "../../bootstrap-files.js";
 import { isHeartbeatLifecycleRunKind } from "../../bootstrap-mode.js";
+import { hasAnyNonEmptyString } from "../../delivery-evidence-values.js";
 import { countActiveToolExecutions } from "../../embedded-agent-subscribe.handlers.tools.start.js";
 import { isSignalTimeoutReason } from "../../failover-error.js";
 import { runAgentEndSideEffectsAsync } from "../../harness/agent-end-side-effects.js";
@@ -22,6 +24,7 @@ import {
   captureCompletedTurnMessageAnchor,
 } from "../../sessions/session-manager-message-anchor.js";
 import { runContextEngineMaintenance } from "../context-engine-maintenance.js";
+import { hasCommittedMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
 import { log } from "../logger.js";
 import { markActiveEmbeddedRunAbandoned, type EmbeddedAgentQueueHandle } from "../runs.js";
 import { buildEmbeddedAgentEndContext } from "./agent-end-context.js";
@@ -31,10 +34,7 @@ import { buildAfterTurnRuntimeContextFromUsage } from "./attempt-prompt-helpers.
 import { SESSIONS_YIELD_ABORT_REASON } from "./attempt-sessions-yield.js";
 import type { settleEmbeddedAttemptStream } from "./attempt-stream-settle.js";
 import { resolveTerminalMessageEntryId } from "./attempt-terminal-anchor.js";
-import {
-  resolveAttemptTrajectoryTerminal,
-  resolveTerminalAssistantTexts,
-} from "./attempt-trajectory-status.js";
+import { hasAsyncActivity } from "./attempt-terminal-evidence.js";
 import { shouldFlagCompactionTimeout } from "./compaction-timeout.js";
 import type { EmbeddedAttemptDeferredLifecycleOwner } from "./deferred-lifecycle-owner.js";
 import { resolveFinalAssistantVisibleText } from "./helpers.js";
@@ -80,35 +80,43 @@ export function finalizeEmbeddedAttempt(
     terminalState.cleanupYieldAborted && completionOutcome.status === "ok"
       ? "end_turn"
       : completionOutcome.stopReason;
-  const toolEvidence = () => ({
-    toolMetas: result.toolMetas,
-    didSendViaMessagingTool: result.didSendViaMessagingTool,
-    messagingToolSentTexts: result.messagingToolSentTexts,
-    messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
-    messagingToolSentTargets: result.messagingToolSentTargets,
-    successfulCronAdds: result.successfulCronAdds ?? 0,
-    lastToolError: result.lastToolError,
-  });
-  const terminal = resolveAttemptTrajectoryTerminal({
-    ...toolEvidence(),
-    failed: completionOutcome.status === "error",
-    interrupted: isEmbeddedRunTerminalInterrupted(completionOutcome),
-    assistantTexts: resolveTerminalAssistantTexts({
-      assistantTexts: result.assistantTexts,
-      lastAssistantStopReason: stopReason,
-      lastAssistantVisibleText: resolveFinalAssistantVisibleText(assistant),
-    }),
-    didSendDeterministicApprovalPrompt: result.didSendDeterministicApprovalPrompt === true,
-    synthesizedPayloadCount: params.synthesizedPayloadCount,
-    acceptedSessionSpawns: result.acceptedSessionSpawns,
-    heartbeatToolResponse: result.heartbeatToolResponse,
-    clientToolCalls: result.clientToolCalls,
-    yieldDetected: result.yieldDetected,
-    silentExpected: params.silentExpected,
-    emptyAssistantReplyIsSilent: params.emptyAssistantReplyIsSilent,
-    lastAssistantStopReason: stopReason,
-    hasTerminalOutput: params.hasTerminalOutput,
-  });
+  let assistantTexts = result.assistantTexts;
+  // Error and abort text can describe interrupted generation, not a completed reply.
+  if (!hasAnyNonEmptyString(assistantTexts) && stopReason !== "error" && stopReason !== "aborted") {
+    const fallbackText = resolveFinalAssistantVisibleText(assistant)?.trim();
+    if (fallbackText) {
+      assistantTexts = [fallbackText];
+    }
+  }
+  const interrupted = isEmbeddedRunTerminalInterrupted(completionOutcome);
+  const failed = completionOutcome.status === "error";
+  // Tool-use turns need explicit delivery; length stops also accept visible partial output.
+  const hasDeliverableOrProgress =
+    !interrupted &&
+    !failed &&
+    (params.silentExpected === true ||
+      params.emptyAssistantReplyIsSilent ||
+      result.didSendDeterministicApprovalPrompt === true ||
+      hasCommittedMessagingToolDeliveryEvidence(result) ||
+      hasAcceptedSessionSpawn(result.acceptedSessionSpawns) ||
+      (result.clientToolCalls?.length ?? 0) > 0 ||
+      result.yieldDetected === true ||
+      result.lastToolError !== undefined ||
+      hasAsyncActivity(result.toolMetas) ||
+      (stopReason !== "toolUse" &&
+        (params.hasTerminalOutput ||
+          hasAnyNonEmptyString(assistantTexts) ||
+          params.synthesizedPayloadCount > 0 ||
+          (stopReason !== "length" && (result.successfulCronAdds ?? 0) > 0))));
+  const status = interrupted
+    ? "interrupted"
+    : failed || !hasDeliverableOrProgress
+      ? "error"
+      : "success";
+  const terminalError =
+    !interrupted && !failed && !hasDeliverableOrProgress
+      ? "non_deliverable_terminal_turn"
+      : undefined;
   const promptError = terminalState.promptError
     ? formatErrorMessage(terminalState.promptError)
     : undefined;
@@ -127,7 +135,7 @@ export function finalizeEmbeddedAttempt(
   const modelFields = {
     ...terminalFields,
     promptErrorSource: terminalState.promptErrorSource,
-    terminalError: terminal.terminalError,
+    terminalError,
     usage: result.attemptUsage,
     promptCache: result.promptCache,
     compactionCount: result.compactionCount,
@@ -142,17 +150,23 @@ export function finalizeEmbeddedAttempt(
   trajectoryRecorder.recordEvent(
     "trace.artifacts",
     buildTrajectoryArtifacts({
-      status: terminal.status,
+      status,
       ...modelFields,
       compactionCount: result.compactionCount ?? 0,
       itemLifecycle: result.itemLifecycle,
-      ...toolEvidence(),
+      toolMetas: result.toolMetas,
+      didSendViaMessagingTool: result.didSendViaMessagingTool,
+      messagingToolSentTexts: result.messagingToolSentTexts,
+      messagingToolSentMediaUrls: result.messagingToolSentMediaUrls,
+      messagingToolSentTargets: result.messagingToolSentTargets,
+      successfulCronAdds: result.successfulCronAdds ?? 0,
+      lastToolError: result.lastToolError,
     }),
   );
   const sessionEndData = {
-    status: terminal.status,
+    status,
     ...terminalFields,
-    terminalError: terminal.terminalError,
+    terminalError,
     stopReason,
   };
   if (params.deferredLifecycleOwner) {

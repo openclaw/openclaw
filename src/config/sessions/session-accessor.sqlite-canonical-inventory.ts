@@ -1,12 +1,7 @@
-import { createHash } from "node:crypto";
 import type { InferResult } from "kysely";
-import { iterateSqliteQuerySync } from "../../infra/kysely-sync.js";
+import { iterateSqliteQuerySync, sqliteStringSet } from "../../infra/kysely-sync.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
-import {
-  deliveryContextFromSession,
-  sessionDeliveryOrigin,
-} from "../../utils/delivery-context.read.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { isInternalSessionEffectsKey } from "./internal-session-key.js";
 import type { SessionEntrySummary } from "./session-accessor.sqlite-contract.js";
@@ -25,7 +20,7 @@ import type { SessionEntry } from "./types.js";
 
 type CanonicalRepairRow = InferResult<ReturnType<typeof canonicalRepairQuery>>[number];
 
-type CanonicalSessionDecision = {
+export type CanonicalSessionRepairFact = {
   canonicalOwnerSessionKey?: string;
   delivery?: SessionEntry["delivery"];
   forkSourceSessionKey?: string;
@@ -36,17 +31,11 @@ type CanonicalSessionDecision = {
   spawnedBy?: string;
 };
 
-export type CanonicalSessionRepairFact = CanonicalSessionDecision & {
-  decisionToken: string;
-  inventoryToken: string;
-};
-
 type ScannedCanonicalSessionFact = {
   currentSessionId: string;
   currentWindowOwnerSessionKey: string | null;
-  decision: Omit<CanonicalSessionDecision, "canonicalOwnerSessionKey">;
+  decision: Omit<CanonicalSessionRepairFact, "canonicalOwnerSessionKey">;
   entryJsonIsEmpty: boolean;
-  rowToken: string;
 };
 
 export type DoctorSessionScanScope = {
@@ -141,7 +130,10 @@ function hydrateCanonicalRepairEntry(row: CanonicalRepairRow): SessionEntry {
   return projectSqliteSessionOwner(entry, row);
 }
 
-function canonicalRepairQuery(database: Pick<OpenClawAgentDatabase, "db">) {
+function canonicalRepairQuery(
+  database: Pick<OpenClawAgentDatabase, "db">,
+  includeSnapshots = true,
+) {
   const db = getSessionKysely(database.db);
   return db
     .selectFrom("session_nodes")
@@ -161,7 +153,7 @@ function canonicalRepairQuery(database: Pick<OpenClawAgentDatabase, "db">) {
       "current_window.primary_conversation_id",
     )
     .selectAll("session_nodes")
-    .select(sessionEntrySnapshotColumns)
+    .$if(includeSnapshots, (query) => query.select(sessionEntrySnapshotColumns))
     .select([
       "current_window_owner.session_key as current_window_owner_session_key",
       "current_window.started_at as current_started_at",
@@ -181,20 +173,15 @@ function canonicalRepairQuery(database: Pick<OpenClawAgentDatabase, "db">) {
 
 function scanCanonicalSessionFactsFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
-  selectedKeys?: ReadonlySet<string>,
-): {
-  facts: CanonicalSessionRepairFact[];
-  inventoryToken: string;
-  loaded: Map<string, { entry: SessionEntry; rawEntryJson: string; rawSnapshotRevision: number }>;
-} {
+  includeSnapshots = true,
+): CanonicalSessionRepairFact[] {
   const scanned: ScannedCanonicalSessionFact[] = [];
-  const loaded = new Map<
-    string,
-    { entry: SessionEntry; rawEntryJson: string; rawSnapshotRevision: number }
-  >();
   const validSessionKeysById = new Map<string, string[]>();
   const inventoriedSessionKeys = new Set<string>();
-  for (const row of iterateSqliteQuerySync(database.db, canonicalRepairQuery(database))) {
+  for (const row of iterateSqliteQuerySync(
+    database.db,
+    canonicalRepairQuery(database, includeSnapshots),
+  )) {
     inventoriedSessionKeys.add(row.session_key);
     const persistedEntry = parseSessionEntryJson(row);
     if (row.entry_valid === 1 && persistedEntry) {
@@ -203,13 +190,6 @@ function scanCanonicalSessionFactsFromDatabase(
       validSessionKeysById.set(row.current_session_id, keys);
     }
     const entry = persistedEntry ?? hydrateCanonicalRepairEntry(row);
-    if (selectedKeys?.has(row.session_key)) {
-      loaded.set(row.session_key, {
-        entry,
-        rawEntryJson: row.entry_json,
-        rawSnapshotRevision: row.snapshot_revision,
-      });
-    }
     const lineageProjectionMismatch = Boolean(
       persistedEntry &&
       ((row.parent_session_key ?? undefined) !==
@@ -227,39 +207,14 @@ function scanCanonicalSessionFactsFromDatabase(
       sessionKey: row.session_key,
       spawnedBy: entry.spawnedBy,
     };
-    const context = deliveryContextFromSession(decision);
-    const origin = sessionDeliveryOrigin(decision);
     scanned.push({
       currentSessionId: row.current_session_id,
       currentWindowOwnerSessionKey: row.current_window_owner_session_key,
       decision,
       entryJsonIsEmpty: row.entry_json === "{}",
-      rowToken: JSON.stringify([
-        row.session_key,
-        row.current_session_id,
-        row.entry_valid,
-        row.snapshot_revision,
-        persistedEntry !== null,
-        row.entry_json === "{}",
-        row.current_window_owner_session_key,
-        context?.channel ?? null,
-        context?.to ?? null,
-        context?.threadId == null ? null : String(context.threadId),
-        origin?.nativeChannelId ?? null,
-        origin?.to ?? null,
-        decision.groupId ?? null,
-        decision.parentSessionKey ?? null,
-        decision.spawnedBy ?? null,
-        decision.forkSourceSessionKey ?? null,
-        row.parent_session_key,
-        row.spawned_by,
-        row.fork_source_session_key,
-        decision.rawCompareRequired,
-      ]),
     });
   }
-  const inventoryHash = createHash("sha256");
-  const facts: Array<Omit<CanonicalSessionRepairFact, "inventoryToken">> = [];
+  const facts: CanonicalSessionRepairFact[] = [];
   for (const fact of scanned) {
     const isEmptyWindowOwner =
       fact.entryJsonIsEmpty && fact.currentWindowOwnerSessionKey === fact.decision.sessionKey;
@@ -275,56 +230,49 @@ function scanCanonicalSessionFactsFromDatabase(
           inventoriedSessionKeys.has(fact.currentWindowOwnerSessionKey)
         ? fact.currentWindowOwnerSessionKey
         : undefined;
-    const decisionToken = JSON.stringify([fact.rowToken, canonicalOwnerSessionKey ?? null]);
-    inventoryHash.update(decisionToken).update("\0");
     if (!isEmptyWindowOwner || canonicalOwnerSessionKey) {
       facts.push({
         ...fact.decision,
         ...(canonicalOwnerSessionKey ? { canonicalOwnerSessionKey } : {}),
-        decisionToken,
       });
     }
   }
-  const inventoryToken = inventoryHash.digest("base64url");
-  return {
-    facts: facts.map((fact) => Object.assign(fact, { inventoryToken })),
-    inventoryToken,
-    loaded,
-  };
+  return facts;
 }
 
 function loadCanonicalRepairEntriesFromDatabase(
   database: Pick<OpenClawAgentDatabase, "db">,
   facts: readonly CanonicalSessionRepairFact[],
 ): CanonicalSessionRepairEntry[] {
-  const current = scanCanonicalSessionFactsFromDatabase(
-    database,
-    new Set(facts.map((fact) => fact.sessionKey)),
+  // Selection and hydration are synchronous under offline Doctor ownership. Recheck
+  // the selected rows at mutation, not the whole inventory between these steps.
+  const rows = new Map(
+    Array.from(
+      iterateSqliteQuerySync(
+        database.db,
+        canonicalRepairQuery(database).where(
+          "session_nodes.session_key",
+          "in",
+          sqliteStringSet(facts.map((fact) => fact.sessionKey)),
+        ),
+      ),
+      (row) => [row.session_key, row],
+    ),
   );
-  const currentByKey = new Map(current.facts.map((fact) => [fact.sessionKey, fact]));
-  const expectedInventoryTokens = new Set(facts.map((fact) => fact.inventoryToken));
-  if (expectedInventoryTokens.size !== 1 || !expectedInventoryTokens.has(current.inventoryToken)) {
-    throw new Error("Canonical session repair inputs changed during scan; retry Doctor");
-  }
   return facts.map((fact) => {
-    if (currentByKey.get(fact.sessionKey)?.decisionToken !== fact.decisionToken) {
-      throw new Error(
-        `Canonical session repair inputs changed during scan for ${fact.sessionKey}; retry Doctor`,
-      );
-    }
-    const loaded = current.loaded.get(fact.sessionKey);
-    if (!loaded) {
+    const row = rows.get(fact.sessionKey);
+    if (!row) {
       throw new Error(`Canonical session repair row disappeared during scan: ${fact.sessionKey}`);
     }
     const summary = {
-      entry: loaded.entry,
+      entry: parseSessionEntryJson(row) ?? hydrateCanonicalRepairEntry(row),
       sessionKey: fact.sessionKey,
     };
     return fact.rawCompareRequired
       ? {
           ...summary,
-          rawEntryJson: loaded.rawEntryJson,
-          rawSnapshotRevision: loaded.rawSnapshotRevision,
+          rawEntryJson: row.entry_json,
+          rawSnapshotRevision: row.snapshot_revision,
         }
       : summary;
   });
@@ -335,7 +283,7 @@ export function listCanonicalSessionRepairFacts(
 ): CanonicalSessionRepairFact[] {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly(
-    (database) => scanCanonicalSessionFactsFromDatabase(database).facts,
+    scanCanonicalSessionFactsFromDatabase,
     toDatabaseOptions(resolved),
   );
   return result.found ? result.value : [];
@@ -386,18 +334,21 @@ export function scanDoctorSessionEntriesTolerant(
 ): number {
   const resolved = resolveSqliteScope({ ...scope, sessionKey: "" });
   const result = withOpenClawAgentDatabaseReadOnly((database) => {
+    // Eligibility uses hot identity/delivery fields; load cold snapshots only in the visitor pass.
     const eligible = new Set(
-      scanCanonicalSessionFactsFromDatabase(database).facts.map((fact) => fact.sessionKey),
+      scanCanonicalSessionFactsFromDatabase(database, false).map((fact) => fact.sessionKey),
     );
     let count = 0;
     for (const row of iterateSqliteQuerySync(database.db, canonicalRepairQuery(database))) {
+      const persistedEntry = parseSessionEntryJson(row);
+      // Excluded tombstones still participate in malformed-snapshot refusal.
+      const entry = persistedEntry ?? hydrateCanonicalRepairEntry(row);
       if (!eligible.has(row.session_key) || isInternalSessionEffectsKey(row.session_key)) {
         continue;
       }
-      const entry = parseSessionEntryJson(row);
       visit({
-        entry: entry ?? hydrateCanonicalRepairEntry(row),
-        recoveredFromProjections: entry === null,
+        entry,
+        recoveredFromProjections: persistedEntry === null,
         sessionKey: row.session_key,
       });
       count += 1;

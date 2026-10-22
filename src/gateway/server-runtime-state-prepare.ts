@@ -26,6 +26,7 @@ import { resolveDatabasePath } from "../state/openclaw-state-db.paths.js";
 import { createGatewayAuthRateLimiter } from "./auth-rate-limit.js";
 import { resolveGatewayAuth } from "./auth.js";
 import { createDesktopSessionRegistry } from "./desktop/session-registry.js";
+import { publishHooksTokenEnvKey } from "./hooks.js";
 import { isLoopbackHost } from "./net.js";
 import { createNodeReapprovalCoordinator } from "./node-reapproval-coordinator.js";
 import { GatewayOperatorAccessUnavailableError } from "./operator-access-policy.js";
@@ -34,7 +35,7 @@ import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
-import type { GatewayPluginReloadStatus } from "./server-plugin-runtime-generation.js";
+import type { GatewayPluginReloadStatus } from "./server-plugin-reload-status.types.js";
 import { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import { isChannelStartupSuppressedByEnvironment } from "./server-sidecar-startup-mode.js";
 import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
@@ -368,6 +369,8 @@ export async function prepareGatewayKernelState(params: {
     required: null,
   });
   const initialHooksConfig = runtimeConfig.hooksConfig;
+  // Publish before startup prepares plugins and other host exec owners.
+  publishHooksTokenEnvKey(initialHooksConfig);
   const initialHookClientIpConfig = resolveHookClientIpConfig(cfgAtStart);
 
   const rateLimitConfig = cfgAtStart.gateway?.auth?.rateLimit;
@@ -486,6 +489,7 @@ export async function prepareGatewayKernelState(params: {
   log.info("starting HTTP server...");
   const connectionState = await startupTrace.measure("runtime.state", () =>
     createGatewayConnectionState({
+      resolveGatewayContext: resolvePluginGatewayContext,
       scheduler,
       bootId,
       cfg: cfgAtStart,

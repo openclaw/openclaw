@@ -284,9 +284,9 @@ switching the default, assign every staff member an explicit role with
 then asks the agent to call `visitor_invite` with a GitHub login or email; the
 guest signs in at the normal Team URL.
 
-Guests can create sandboxed sessions on the listed agents and publish draft
-pull requests from their own sessions through the shared GitHub account. They
-cannot merge through OpenClaw. Before inviting anyone, review the paths a
+Guests can create sandboxed sessions on the listed agents and publish open or
+explicitly requested draft pull requests from their own sessions through the
+shared GitHub account. They cannot merge through OpenClaw. Before inviting anyone, review the paths a
 required sandbox does not contain, listed under
 [Named operator roles](/gateway/operator-scopes#named-operator-roles), and
 [Workflow and CI changes](/gateway/config-tools/github-identity#workflow-and-ci-changes)

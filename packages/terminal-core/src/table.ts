@@ -1,7 +1,12 @@
+import os from "node:os";
+import { lowercasePreservingWhitespace } from "@openclaw/normalization-core";
+import {
+  normalizeHomeDirValue,
+  resolveEffectiveHomeDir,
+} from "@openclaw/normalization-core/home-dir";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { iterateAnsiSegments } from "./ansi-sequences.js";
 import { iterateGraphemes, truncateToVisibleWidth, visibleWidth } from "./ansi.js";
-import { createDisplayStringFormatter } from "./display-string.js";
 import { sanitizeTerminalText } from "./safe-text.js";
 
 type Align = "left" | "right" | "center";
@@ -11,7 +16,6 @@ export type TableColumn = {
   header: string;
   align?: Align;
   minWidth?: number;
-  maxWidth?: number;
   flex?: boolean;
 };
 
@@ -19,22 +23,17 @@ export type RenderTableOptions = {
   columns: TableColumn[];
   rows: Array<Record<string, string>>;
   width?: number;
-  padding?: number;
-  border?: "unicode" | "ascii" | "none";
 };
 
-function resolveDefaultBorder(
-  platform: NodeJS.Platform,
-  env: NodeJS.ProcessEnv,
-): "unicode" | "ascii" {
-  if (platform !== "win32") {
+function resolveDefaultBorder(): "unicode" | "ascii" {
+  if (process.platform !== "win32") {
     return "unicode";
   }
 
-  const term = env.TERM ?? "";
-  const termProgram = env.TERM_PROGRAM ?? "";
+  const term = process.env.TERM ?? "";
+  const termProgram = process.env.TERM_PROGRAM ?? "";
   const isModernTerminal =
-    Boolean(env.WT_SESSION) ||
+    Boolean(process.env.WT_SESSION) ||
     term.includes("xterm") ||
     term.includes("cygwin") ||
     term.includes("msys") ||
@@ -365,8 +364,8 @@ function naturalCellWidth(text: string): number {
   );
 }
 
-export function getTerminalTableWidth(minWidth = 60, fallbackWidth = 120): number {
-  return Math.max(minWidth, process.stdout.columns ?? fallbackWidth);
+export function getTerminalTableWidth(): number {
+  return Math.max(60, process.stdout.columns ?? 120);
 }
 
 /** Render untrusted single-line values without changing renderTable's trusted ANSI contract. */
@@ -385,8 +384,73 @@ export function renderTerminalSafeTable(opts: RenderTableOptions): string {
   });
 }
 
+/** Find a case-insensitive Windows path without changing offsets in the original string. */
+function indexOfWindowsPath(input: string, home: string, cursor: number): number {
+  const foldedHome = lowercasePreservingWhitespace(home);
+  // Resolved Windows homes begin with a drive or UNC prefix. Their first backslash
+  // anchors candidates without folding the input and shifting Unicode offsets.
+  const separatorOffset = home.indexOf("\\");
+  for (
+    let separator = input.indexOf("\\", cursor + separatorOffset);
+    separator !== -1;
+    separator = input.indexOf("\\", separator + 1)
+  ) {
+    const index = separator - separatorOffset;
+    if (index > input.length - home.length) {
+      break;
+    }
+    if (lowercasePreservingWhitespace(input.slice(index, index + home.length)) === foldedHome) {
+      return index;
+    }
+  }
+  return -1;
+}
+
 export function renderTable(opts: RenderTableOptions): string {
-  const displayString = createDisplayStringFormatter();
+  // One home snapshot per synchronous render; the next render observes environment changes.
+  const home = resolveEffectiveHomeDir(process.env, os.homedir, {
+    preserveUnresolvedTilde: true,
+  });
+  const prefix = home && normalizeHomeDirValue(process.env.OPENCLAW_HOME) ? "$OPENCLAW_HOME" : "~";
+  const displayString = (input: string): string => {
+    if (!home) {
+      return input;
+    }
+    let output = "";
+    let cursor = 0;
+    // Keep the token-aware table scan local; core owns application path rendering.
+    while (cursor < input.length) {
+      const index =
+        process.platform === "win32"
+          ? indexOfWindowsPath(input, home, cursor)
+          : input.indexOf(home, cursor);
+      if (index < 0) {
+        return `${output}${input.slice(cursor)}`;
+      }
+
+      const before = input[index - 1];
+      const homeEnd = index + home.length;
+      const after = input[homeEnd];
+      const startsToken = before === undefined || /[\s("'`:=[{,]/u.test(before);
+      let punctuationEnd = homeEnd;
+      while (punctuationEnd < input.length && /[)"'`:,;.\]}]/u.test(input.charAt(punctuationEnd))) {
+        punctuationEnd += 1;
+      }
+      const punctuationEndsToken =
+        punctuationEnd > homeEnd &&
+        (punctuationEnd === input.length || /\s/u.test(input.charAt(punctuationEnd)));
+      const endsTokenOrContinuesPath =
+        after === undefined || after === "/" || after === "\\" || punctuationEndsToken;
+      if (startsToken && endsTokenOrContinuesPath) {
+        output += `${input.slice(cursor, index)}${prefix}`;
+      } else {
+        output += input.slice(cursor, index + home.length);
+      }
+      cursor = index + home.length;
+    }
+
+    return output;
+  };
   const rows = opts.rows.map((row) => {
     const next: Record<string, string> = {};
     for (const [key, value] of Object.entries(row)) {
@@ -394,15 +458,8 @@ export function renderTable(opts: RenderTableOptions): string {
     }
     return next;
   });
-  const border = opts.border ?? resolveDefaultBorder(process.platform, process.env);
-  if (border === "none") {
-    const columns = opts.columns;
-    const header = columns.map((c) => c.header).join(" | ");
-    const lines = [header, ...rows.map((r) => columns.map((c) => r[c.key] ?? "").join(" | "))];
-    return `${lines.join("\n")}\n`;
-  }
-
-  const padding = Math.max(0, opts.padding ?? 1);
+  const border = resolveDefaultBorder();
+  const padding = 1;
   const columns = opts.columns;
 
   const metrics = columns.map((c) => {
@@ -414,8 +471,7 @@ export function renderTable(opts: RenderTableOptions): string {
   const widths = columns.map((c, i) => {
     const m = metrics[i];
     const base = Math.max(m?.headerW ?? 0, m?.cellW ?? 0) + padding * 2;
-    const capped = c.maxWidth ? Math.min(base, c.maxWidth) : base;
-    return Math.max(c.minWidth ?? 3, capped);
+    return Math.max(c.minWidth ?? 3, base);
   });
 
   const maxWidth = Math.floor(asPositiveFiniteNumber(opts.width) ?? 0);
@@ -469,41 +525,14 @@ export function renderTable(opts: RenderTableOptions): string {
   // This keeps tables from looking "clipped" and reduces wrapping in wide terminals.
   if (maxWidth) {
     const currentTotal = widths.reduce((a, b) => a + b, 0) + sepCount;
-    let extra = maxWidth - currentTotal;
+    const extra = maxWidth - currentTotal;
     if (extra > 0) {
-      let flexCols = columns.flatMap((column, i) => (column.flex ? [i] : []));
+      const flexCols = columns.flatMap((column, i) => (column.flex ? [i] : []));
       if (flexCols.length > 0) {
-        const caps = columns.map((c) =>
-          typeof c.maxWidth === "number" && c.maxWidth > 0
-            ? Math.floor(c.maxWidth)
-            : Number.POSITIVE_INFINITY,
-        );
-        while (extra > 0) {
-          flexCols = flexCols.filter(
-            (i) => (widths[i] ?? 0) < (caps[i] ?? Number.POSITIVE_INFINITY),
-          );
-          if (flexCols.length === 0) {
-            break;
-          }
-          // Fractional additions can round at a cap, so retain their one-cell steps.
-          // Complete integer rounds stop at the first cap; partial rounds keep column order.
-          const rounds = flexCols.reduce(
-            (amount, i) =>
-              Number.isSafeInteger(widths[i])
-                ? Math.min(amount, (caps[i] ?? Number.POSITIVE_INFINITY) - (widths[i] ?? 0))
-                : 1,
-            Number.isSafeInteger(maxWidth) && Number.isSafeInteger(extra)
-              ? Math.max(1, Math.floor(extra / flexCols.length))
-              : 1,
-          );
-          for (const i of flexCols) {
-            const amount = Math.min(rounds, Math.ceil(extra));
-            widths[i] = (widths[i] ?? 0) + amount;
-            extra -= amount;
-            if (extra <= 0) {
-              break;
-            }
-          }
+        const rounds = Math.floor(extra / flexCols.length);
+        const remainder = extra % flexCols.length;
+        for (const [position, i] of flexCols.entries()) {
+          widths[i] = (widths[i] ?? 0) + rounds + (position < remainder ? 1 : 0);
         }
       }
     }
@@ -521,7 +550,7 @@ export function renderTable(opts: RenderTableOptions): string {
   const padStr = repeat(" ", padding);
 
   const lines: string[] = [];
-  const renderRow = (record: Record<string, string>, isHeader = false) => {
+  const renderRow = (record: Record<string, string>, isHeader: boolean) => {
     const cells = columns.map((c) => (isHeader ? c.header : (record[c.key] ?? "")));
     const wrapped = contentWidths.map((width, i) => ({
       width,

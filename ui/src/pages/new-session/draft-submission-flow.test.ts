@@ -1,18 +1,23 @@
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { GatewayPendingRequests } from "../../../../packages/gateway-client/src/pending-request.js";
 import { SESSION_CREATE_RETRY_WINDOW_MS } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
+import {
+  requestSessionCreate,
+  type SessionCreateOutcome,
+  type SessionCreateParams,
+} from "../../lib/sessions/create.ts";
 import { writeSessionPlacementRecovery } from "../../lib/sessions/session-placement-recovery.ts";
 import * as toast from "../../lib/toast.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { buildChatApiAttachments } from "../chat/attachment-api.ts";
 import {
   getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
 } from "../chat/attachment-payload-store.ts";
 import { CHAT_ROUTE_READY_EVENT } from "../chat/chat-history-events.ts";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
 import {
   createDraftFixture,
   registerTextPayload,
@@ -38,6 +43,102 @@ async function readyChatRoute() {
 }
 
 describe("DraftSubmissionFlow", () => {
+  it.each([
+    { waitMs: 45_000, cancel: false },
+    { waitMs: 240_000, cancel: false },
+    { waitMs: 45_000, cancel: true },
+    { waitMs: 240_000, cancel: true },
+  ])(
+    "keeps startup creation client-owned ($waitMs ms, cancel=$cancel)",
+    async ({ waitMs, cancel }) => {
+      vi.useFakeTimers();
+      const { context, flow } = createDraftFixture();
+      const frames: string[] = [];
+      let ready = false;
+      let writes = 0;
+      const pending = new GatewayPendingRequests({
+        createRequestId: () => "startup-create",
+        nowMs: Date.now,
+        requestTimeoutMs: 30_000,
+      });
+      onTestFinished(() => pending.flush(new Error("test disposed")));
+      const wire = {
+        send(raw: string) {
+          frames.push(raw);
+          const request = JSON.parse(raw) as { id: string; method: string };
+          if (ready) {
+            writes += 1;
+            pending.handleResponse({
+              type: "res",
+              id: request.id,
+              ok: true,
+              payload: { key: "agent:main:startup-created", runStarted: false },
+            });
+          } else {
+            pending.handleResponse({
+              type: "res",
+              id: request.id,
+              ok: false,
+              error: {
+                code: "UNAVAILABLE",
+                message: "Agent is preparing",
+                retryable: true,
+                retryAfterMs: 500,
+                details: { reason: "startup-sidecars", method: request.method },
+              },
+            });
+          }
+        },
+      };
+      const client = createTestGatewayClient((method, params, options) =>
+        pending.request(wire, method, params, options),
+      );
+      vi.mocked(context.sessions.createResult).mockImplementation((params, options) =>
+        requestSessionCreate(client, params, options).catch(() => null),
+      );
+      flow.setMessage("Send after startup");
+      const submission = flow.submit(undefined, true);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(pending.hasPending).toBe(true);
+      expect(writes).toBe(0);
+      if (cancel) {
+        flow.invalidate();
+        expect(pending.hasPending).toBe(false);
+      }
+      await vi.advanceTimersByTimeAsync(waitMs - 30_000);
+      ready = true;
+      await vi.advanceTimersByTimeAsync(500);
+      await submission;
+      expect(writes).toBe(cancel ? 0 : 1);
+      expect(new Set(frames).size).toBe(1);
+      expect(pending.hasPending).toBe(false);
+    },
+  );
+
+  it("publishes complete restored drafts and attachment-read changes", () => {
+    const { flow } = createDraftFixture();
+    const snapshots: ReturnType<typeof flow.composerDraft.read>[] = [];
+    const stop = flow.composerDraft.subscribe(() => snapshots.push(flow.composerDraft.read()));
+    try {
+      const mentions = [{ profileId: "alex", start: 0, end: 5 }];
+      flow.restoreDraftState({
+        message: "@Alex restored",
+        mentions,
+        attachments: [],
+        visibility: "normal",
+      });
+      expect(snapshots.at(-1)).toMatchObject({ draft: "@Alex restored", mentions });
+      flow.restoreMessage("A replacement");
+      expect(snapshots.at(-1)).toMatchObject({ draft: "A replacement", mentions: [] });
+      const signal = flow.attachmentDraft.reads.readSignal;
+      flow.attachmentDraft.reads.updatePending(signal, 1);
+      expect(snapshots.at(-1)?.pendingAttachmentReads).toBe(1);
+    } finally {
+      stop();
+      flow.disconnect();
+    }
+  });
+
   it.each(["available", "unavailable before create", "unavailable after create"] as const)(
     "preserves the runtime through Auto placement when recovery storage is %s",
     async (storage) => {
@@ -81,7 +182,10 @@ describe("DraftSubmissionFlow", () => {
             model: "openai/gpt-5.6-sol",
             agentRuntime: "codex",
           }),
-          { reconciliation: "background" },
+          {
+            reconciliation: "background",
+            signal: expect.any(AbortSignal),
+          },
         );
         if (storage === "available") {
           expect(context.placementStartup.start).toHaveBeenCalledOnce();
@@ -362,7 +466,10 @@ describe("DraftSubmissionFlow", () => {
         message: "@Alex start this in the background",
         mentions: [{ profileId: "profile-alex", start: 0, end: 5 }],
       }),
-      { reconciliation: "background" },
+      {
+        reconciliation: "background",
+        signal: expect.any(AbortSignal),
+      },
     );
     expect(context.navigateAndWait).not.toHaveBeenCalled();
     expect(request).toHaveBeenCalledWith(
@@ -680,7 +787,10 @@ describe("DraftSubmissionFlow", () => {
         projectGitUrl: "https://github.com/openclaw/openclaw.git",
         attachments: [expect.objectContaining({ fileName: "note.txt", mimeType: "text/plain" })],
       }),
-      { reconciliation: "background" },
+      {
+        reconciliation: "background",
+        signal: expect.any(AbortSignal),
+      },
     );
     expect(request).not.toHaveBeenCalledWith("projects.add", expect.anything(), expect.anything());
     expect(vi.mocked(context.sessions.createResult).mock.calls[0]?.[0]?.worktree).toBe(
@@ -783,13 +893,11 @@ describe("DraftSubmissionFlow", () => {
       { profileId: "profile-alex", start: 0, end: 5 },
     ]);
     const apiAttachments = [{ fileName: "note.txt", content: "SGk=" }];
-    const createParams = buildDraftSessionCreateParams({
+    const createParams: SessionCreateParams = {
       agentId: "cloud",
       message: "",
       worktree: true,
-      cwd: "/workspace",
-      workspace: "/workspace",
-    });
+    };
     flow.pendingPlacement.stageCreate({
       agentId: "cloud",
       target: { kind: "profile", profileId: "aws" },

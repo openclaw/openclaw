@@ -1,4 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import { afterEach, expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
@@ -7,7 +9,6 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createFixture, sessionKey } from "../control-ui-session-pr-access.test-support.js";
 import {
   redeemFactoryGitHubProof,
-  factoryGitHubRequestDigest,
   type FactoryGitHubProofVerdict,
 } from "../factory-github-proof.js";
 import { handleGatewayRequest } from "../server-methods.js";
@@ -21,6 +22,10 @@ const privateKey = generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKe
 });
 const permissions = { contents: "write" as const, metadata: "read" as const };
 const time = "2026-10-10T10:00:00Z";
+const repo = { id: 404, fullName: "example/project" };
+const apiRepo = { id: repo.id, full_name: repo.fullName };
+const target = { owner: "example", repo: "project", number: 7 };
+const preview = { ...target, title: "Private session pull request" };
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -49,7 +54,7 @@ it.each([
         f.client.authenticatedFactoryGitHubAccountId = scenario === "actor-mismatch" ? 51 : 50;
         f.client.authenticatedUserId = `github:${host}:${f.client.authenticatedFactoryGitHubAccountId}`;
         f.client.internal = { ...f.client.internal, authenticatedOperator: true };
-        const config = {
+        setRuntimeConfigSnapshot({
           ...f.cfg,
           gateway: { ...f.cfg.gateway, github: { host, apiBaseUrl } },
           tools: {
@@ -61,7 +66,7 @@ it.each([
                 installationId: 202,
                 accountId: 303,
                 repositories: [
-                  { id: 404, fullName: "example/project" },
+                  repo,
                   ...(scenario === "multiple-repositories"
                     ? [{ id: 405, fullName: "example/other" }]
                     : []),
@@ -72,8 +77,7 @@ it.each([
               },
             },
           },
-        };
-        setRuntimeConfigSnapshot(config);
+        });
         const repository = await getSessionRepositoryWorkspaceStore().create({
           agentId: "main",
           sessionKey,
@@ -91,10 +95,10 @@ it.each([
           const url = new URL(input instanceof Request ? input.url : String(input));
           requests.push(url.origin + url.pathname);
           if (url.origin === "http://127.0.0.1:8080") {
-            const proof = new Headers(init?.headers).get("x-factory-github-proof");
-            if (!proof) {
-              throw new Error("Missing fixture broker proof");
-            }
+            const proof = expectDefined(
+              new Headers(init?.headers).get("x-factory-github-proof"),
+              "fixture broker proof",
+            );
             const claim = redeemFactoryGitHubProof(proof);
             claims.push(claim);
             if (scenario === "admission-denied") {
@@ -106,7 +110,7 @@ it.each([
               host,
               appId: 101,
               installationId: 202,
-              repository: { id: 404, fullName: "example/project" },
+              repository: repo,
               actor: { accountId: claim.actorId, profileId: claim.profileId },
               purpose: claim.purpose,
               binding: claim.binding,
@@ -121,7 +125,7 @@ it.each([
             return new Response(null, { status: scenario === "cleanup-failure" ? 500 : 204 });
           }
           const bodies: Record<string, unknown> = {
-            "/app": { id: 101, slug: "factory", permissions },
+            "/app": { id: 101, slug: "x", permissions },
             "/app/installations/202": {
               id: 202,
               app_id: 101,
@@ -129,19 +133,13 @@ it.each([
               suspended_at: null,
               permissions,
             },
-            "/users/factory%5Bbot%5D": {
-              id: 9001,
-              login: "factory[bot]",
-              type: "Bot",
-              avatar_url: null,
-            },
+            "/users/x%5Bbot%5D": { id: 9001, login: "x[bot]", type: "Bot", avatar_url: null },
             "/installation/repositories": {
               total_count: 1,
-              repositories: [{ id: 404, full_name: "example/project" }],
+              repositories: [apiRepo],
             },
             "/repos/example/project": {
-              id: 404,
-              full_name: "example/project",
+              ...apiRepo,
               private: true,
               visibility: "private",
             },
@@ -151,10 +149,7 @@ it.each([
             if (typeof init?.body !== "string") {
               throw new Error("App token request body must be JSON text");
             }
-            expect(JSON.parse(init.body)).toEqual({
-              repository_ids: [404],
-              permissions,
-            });
+            expect(JSON.parse(init.body)).toEqual({ repository_ids: [404], permissions });
             return Response.json({
               token: "synthetic-preview-app-token",
               expires_at: new Date(Date.now() + 3_600_000).toISOString(),
@@ -169,28 +164,20 @@ it.each([
               await f.changeReader("grant");
             }
             return Response.json({
-              title: "Private session pull request",
+              title: preview.title,
               state: "open",
-              user: { login: "reader" },
               created_at: time,
               updated_at: time,
-              comments: 0,
-              review_comments: 0,
-              changed_files: 0,
               base: { repo: { url: `${apiBaseUrl}/repos/example/project` } },
             });
           }
-          if (!(url.pathname in bodies)) {
-            throw new Error(`Unexpected synthetic endpoint ${url.pathname}`);
-          }
-          return Response.json(bodies[url.pathname]);
+          return Response.json(expectDefined(bodies[url.pathname], `endpoint ${url.pathname}`));
         });
         vi.stubGlobal("fetch", fetcher);
         const params = {
           kind: "pull",
-          owner: "example",
+          ...target,
           repo: scenario === "foreign-repository" ? "other" : "project",
-          number: 7,
           githubHost: scenario === "foreign-host" ? "other.example.test" : host,
           sessionKey,
           agentId: "main",
@@ -203,16 +190,10 @@ it.each([
           isWebchatConnect: () => false,
           respond,
         });
-        expect(respond).toHaveBeenCalledOnce();
         if (scenario === "allowed" || scenario === "multiple-repositories") {
-          expect(respond).toHaveBeenCalledWith(
+          expect(respond).toHaveBeenCalledExactlyOnceWith(
             true,
-            expect.objectContaining({
-              title: "Private session pull request",
-              owner: "example",
-              repo: "project",
-              number: 7,
-            }),
+            expect.objectContaining(preview),
             undefined,
           );
           expect(claims).toHaveLength(1);
@@ -226,13 +207,12 @@ it.each([
               sessionKey,
               sessionId: f.sessionId,
               lifecycleRevision: "synthetic-lifecycle",
-              requestDigest: factoryGitHubRequestDigest(targetUrl),
+              requestDigest: sha256Hex(targetUrl),
             },
           });
           expect(requests.at(-1)).toBe(`${apiBaseUrl}/installation/token`);
         } else {
-          expect(respond.mock.calls[0]?.[0]).toBe(false);
-          expect(respond.mock.calls[0]?.[1]).toBeUndefined();
+          expect(respond.mock.calls.map((args) => args.slice(0, 2))).toEqual([[false, undefined]]);
           if (["foreign-repository", "foreign-host", "actor-mismatch"].includes(scenario)) {
             expect(fetcher).not.toHaveBeenCalled();
           }

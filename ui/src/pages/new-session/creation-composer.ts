@@ -1,4 +1,4 @@
-import { registerListener } from "../../../../src/shared/listeners.js";
+import { createChangeListeners, registerListener } from "../../../../src/shared/listeners.js";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
 import { registerControlUiReloadGuard } from "../../app/document-reload-guard.ts";
 import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
@@ -7,8 +7,10 @@ import type { UiPreferences } from "../../app/settings.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import type { ChatAttachment, HumanMention } from "../../lib/chat/chat-types.ts";
+import type { ComposerDraftSource } from "../../lib/chat/composer-draft-changes.ts";
 import { trimHumanMentions, updateHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { MAX_STORED_QUEUE_ITEMS } from "../../lib/chat/outbox-store-codec.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionCreateOutcome } from "../../lib/sessions/create.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -55,13 +57,23 @@ export type CreationComposerTransfer = {
 export class CreationComposer {
   readonly id = generateUUID();
   readonly attachmentDraft: NewSessionAttachmentDraft;
+  readonly composerDraft: ComposerDraftSource = {
+    read: () => ({
+      draft: this.message,
+      mentions: this.mentions,
+      attachments: this.attachmentDraft.attachments,
+      pendingAttachmentReads: this.attachmentDraft.reads.pendingReads,
+    }),
+    // The shared composer projection consumes this synchronous draft-owner contract.
+    subscribe: (listener) => this.subscribe(listener),
+  };
   message = "";
   mentions: readonly HumanMention[] = [];
   inputs: CreationComposerInput[] = [];
   error: string | null = null;
   flushInput: (() => void) | undefined;
   releasePresentation: (() => void) | undefined;
-  private readonly listeners = new Set<() => void>();
+  private readonly listeners = createChangeListeners();
   private readonly invalidations = new Set<() => void>();
   private readonly gatewayUrl;
   private readonly recoveryScope;
@@ -90,14 +102,14 @@ export class CreationComposer {
         event.returnValue = "";
       }
     };
-    window.addEventListener("beforeunload", onBeforeUnload);
+    const stopBeforeUnload = listen(window, "beforeunload", onBeforeUnload);
     const unregister = registerControlUiReloadGuard(
       () => !this.hasInput,
       () => showToast({ message: t("newSession.followUpReloadBlocked") }),
     );
     this.unregisterReload = () => {
       unregister();
-      window.removeEventListener("beforeunload", onBeforeUnload);
+      stopBeforeUnload();
     };
   }
 
@@ -142,14 +154,10 @@ export class CreationComposer {
 
   readonly notify = () => {
     this.notifyDraft();
-    for (const listener of this.listeners) {
-      listener();
-    }
+    this.listeners.publish();
   };
 
-  subscribe(listener: () => void): () => void {
-    return registerListener(this.listeners, listener);
-  }
+  readonly subscribe = this.listeners.subscribe;
 
   setMessage(message: string, mentions?: readonly HumanMention[]): void {
     if (!this.canDisplay()) {
@@ -320,6 +328,7 @@ export function retainCreatedComposer(
       entries.clear();
       registry?.release();
     };
+    // Scope changes release accepted input custody even while its view is unmounted.
     const unsubscribe = context.gateway.subscribe(() => {
       for (const [entryKey, value] of entries) {
         if (!value.canRecover()) {
@@ -331,18 +340,20 @@ export function retainCreatedComposer(
         registry?.release();
       }
     });
+    const stopLifetime = context.lifecycleAbortSignal
+      ? listen(context.lifecycleAbortSignal, "abort", dispose, { once: true })
+      : undefined;
     registry = {
       entries,
       release: () => {
         unsubscribe();
-        context.lifecycleAbortSignal?.removeEventListener("abort", dispose);
+        stopLifetime?.();
         if (acceptedComposers.get(context) === registry) {
           acceptedComposers.delete(context);
         }
       },
     };
     acceptedComposers.set(context, registry);
-    context.lifecycleAbortSignal?.addEventListener("abort", dispose, { once: true });
   }
   const previous = registry.entries.get(key);
   if (previous && previous !== composer) {

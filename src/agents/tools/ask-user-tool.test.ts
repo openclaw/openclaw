@@ -1,8 +1,10 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { ReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispatch-outcome.js";
 import type { UserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.types.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../embedded-agent-runner/run/attempt-queue-message.js";
+import * as questionDispatch from "../harness/gateway-question-dispatch.js";
+import type { AgentHarnessQuestionGatewayCall as GatewayCall } from "../harness/gateway-question-dispatch.js";
 import {
   cancelAskUserPromptDelivery,
   createAskUserTool,
@@ -12,12 +14,7 @@ import {
   settleAskUserPromptDelivery,
   waitForAskUserPromptReady,
 } from "./ask-user-tool.js";
-import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
 
-type GatewayCall = Extract<
-  NonNullable<Parameters<typeof createAskUserTool>[0]["gatewayCall"]>,
-  (...args: never[]) => unknown
->;
 type SentPrompt = Parameters<
   NonNullable<Parameters<typeof createAskUserTool>[0]["questionPrompt"]>["send"]
 >[0];
@@ -26,6 +23,10 @@ const replyDispatchOutcomeModuleUrl = new URL(
   "../../auto-reply/reply/reply-dispatch-outcome.ts",
   import.meta.url,
 ).href;
+
+const SESSION_KEY = "agent:main:test";
+const TOOL_CALL_ID = "call";
+const IMAGE_REPLY = [{ type: "image" as const, data: "pixels", mimeType: "image/png" }];
 
 const validArgs = {
   questions: [
@@ -41,34 +42,119 @@ const validArgs = {
   ],
 };
 
-function gatewayStub(
-  implementation: (
-    method: string,
-    opts: Record<string, unknown>,
-    params: Record<string, unknown>,
-    extra?: { signal?: AbortSignal },
-  ) => Promise<unknown>,
-) {
+type RpcHandlers = Record<
+  string,
+  (params: Record<string, unknown>, extra?: { signal?: AbortSignal }) => Promise<unknown>
+>;
+
+function gatewayStub(handlers: RpcHandlers) {
   const started = {
     "question.request": createDeferred(),
     "question.waitAnswer": createDeferred(),
   };
-  const mock = vi.fn((...args: Parameters<typeof implementation>) => {
-    const response = implementation(...args);
-    const [method] = args;
-    // Callback setup has completed, but the owner's later prompt-delivery phase
-    // is not implied by starting either RPC.
-    if (method === "question.request" || method === "question.waitAnswer") {
-      started[method].resolve();
-    }
-    return response;
-  });
+  const mock = vi.fn(
+    (
+      method: string,
+      _opts: Record<string, unknown>,
+      params: Record<string, unknown>,
+      extra?: { signal?: AbortSignal },
+    ) => {
+      const handler = handlers[method];
+      if (!handler) {
+        throw new Error(`unexpected method ${method}`);
+      }
+      const response = handler(params, extra);
+      // Callback setup has completed, but the owner's later prompt-delivery phase
+      // is not implied by starting either RPC.
+      if (method === "question.request" || method === "question.waitAnswer") {
+        started[method].resolve();
+      }
+      return response;
+    },
+  );
+  const call = questionDispatch.resolveAgentQuestionGatewayCall(mock as unknown as GatewayCall);
+  vi.spyOn(questionDispatch, "resolveAgentQuestionGatewayCall").mockReturnValue(call);
   return {
     mock,
-    call: mock as unknown as GatewayCall,
+    call,
     waitForCall: (method: keyof typeof started) =>
       withTestTimeout(started[method].promise, 1_000, `ask_user did not start ${method}`),
   };
+}
+
+function reservePrompt(
+  params: Partial<Omit<Parameters<typeof reserveAskUserPromptDelivery>[0], "questions">> = {},
+) {
+  const input = {
+    toolCallId: TOOL_CALL_ID,
+    sessionKey: SESSION_KEY,
+    ...params,
+    questions: normalizeAskUserParams(validArgs).questions,
+  };
+  const reservation = reserveAskUserPromptDelivery(input);
+  if (!reservation) {
+    throw new Error("expected prompt reservation");
+  }
+  onTestFinished(() =>
+    cancelAskUserPromptDelivery(input.toolCallId, input.sessionKey, input.runId, input.agentId),
+  );
+  return reservation;
+}
+
+function registeredGateway(handlers: RpcHandlers) {
+  return gatewayStub({ "question.request": async ({ id }) => ({ id }), ...handlers });
+}
+
+function ask(signal?: AbortSignal) {
+  return createAskUserTool({ sessionKey: SESSION_KEY }).execute(TOOL_CALL_ID, validArgs, signal);
+}
+
+function settleOnCleanup(pending: Promise<unknown>, release: () => void) {
+  const settled = Promise.allSettled([pending]);
+  onTestFinished(async () => {
+    release();
+    await settled;
+  });
+}
+
+function steerReply(
+  steer: Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[0]["steer"],
+  text: string,
+  options: Parameters<typeof steerActiveSessionWithOptionalDeliveryWait>[2],
+  sessionKey = SESSION_KEY,
+) {
+  return steerActiveSessionWithOptionalDeliveryWait(
+    { steer, subscribe: vi.fn(() => () => undefined) },
+    text,
+    options,
+    sessionKey,
+  );
+}
+
+function expectCancelled(
+  gateway: ReturnType<typeof gatewayStub>,
+  questionId: string,
+  resolvedBy: string,
+) {
+  expect(gateway.mock).toHaveBeenCalledWith(
+    "question.resolve",
+    { timeoutMs: 10_000 },
+    { id: questionId, cancel: true, resolvedBy },
+  );
+}
+
+function expectSteered(steer: ReturnType<typeof vi.fn>, text: string, images?: unknown) {
+  expect(steer).toHaveBeenCalledWith(
+    text,
+    images,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+  );
 }
 
 function requestedQuestionId(mock: ReturnType<typeof gatewayStub>["mock"]): string {
@@ -80,24 +166,23 @@ function requestedQuestionId(mock: ReturnType<typeof gatewayStub>["mock"]): stri
   return questionId;
 }
 
-afterEach(() => {
-  resetPendingAskUserQuestionsForTest();
-});
+beforeEach(() =>
+  onTestFinished(() => {
+    vi.restoreAllMocks();
+  }),
+);
 
-describe("ask_user prompt delivery", () => {
+describe("ask_user", () => {
   it("reserves duplicate bare keys independently per agent", () => {
-    const questions = normalizeAskUserParams(validArgs).questions;
-    const research = reserveAskUserPromptDelivery({
+    const research = reservePrompt({
       toolCallId: "call-research",
       sessionKey: "global",
       agentId: "research",
-      questions,
     });
-    const ops = reserveAskUserPromptDelivery({
+    const ops = reservePrompt({
       toolCallId: "call-ops",
       sessionKey: "global",
       agentId: "ops",
-      questions,
     });
 
     expect(research).toBeDefined();
@@ -105,98 +190,44 @@ describe("ask_user prompt delivery", () => {
     expect(research?.questionId).not.toBe(ops?.questionId);
   });
 
-  it("uses the Gateway record when the executor has isolated runtime state", async () => {
-    const questions = normalizeAskUserParams(validArgs).questions;
-    const reservation = reserveAskUserPromptDelivery({
-      toolCallId: "call-isolated-runtime",
-      sessionKey: "agent:main:isolated-runtime",
-      questions,
-    });
-    if (!reservation) {
-      throw new Error("expected prompt reservation");
-    }
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      expect(method).toBe("question.list");
-      expect(params).toEqual({});
-      return { questions: [{ id: reservation.questionId, status: "pending" }] };
-    });
-
-    await expect(waitForAskUserPromptReady(reservation.questionId, gateway.call)).resolves.toEqual(
-      questions,
-    );
-    await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(true);
-  });
-
-  it("rejects prompt delivery after the Gateway question terminalizes", async () => {
-    const questions = normalizeAskUserParams(validArgs).questions;
-    const reservation = reserveAskUserPromptDelivery({
-      toolCallId: "call-terminal-before-delivery",
-      sessionKey: "agent:main:terminal-before-delivery",
-      questions,
-    });
-    if (!reservation) {
-      throw new Error("expected prompt reservation");
-    }
-    const gateway = gatewayStub(async () => ({
-      questions: [{ id: reservation.questionId, status: "expired" }],
-    }));
-
-    await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(false);
-  });
-
-  it("retries a transient Gateway revalidation failure before delivering", async () => {
-    const questions = normalizeAskUserParams(validArgs).questions;
-    const reservation = reserveAskUserPromptDelivery({
-      toolCallId: "call-revalidation-failure",
-      sessionKey: "agent:main:revalidation-failure",
-      questions,
-    });
-    if (!reservation) {
-      throw new Error("expected prompt reservation");
-    }
+  it.each([
+    ["isolated executor", "pending", true],
+    ["remote terminalization", "expired", false],
+    ["transient failure", "pending", true],
+    ["local terminalization", "pending", false],
+  ] as const)("revalidates prompt delivery: %s", async (scenario, status, expected) => {
+    const reservation = reservePrompt();
     let attempts = 0;
-    const gateway = gatewayStub(async () => {
-      attempts += 1;
-      if (attempts === 1) {
-        throw new Error("temporary Gateway disconnect");
-      }
-      return { questions: [{ id: reservation.questionId, status: "pending" }] };
+    const gateway = gatewayStub({
+      "question.list": async (params) => {
+        expect(params).toEqual({});
+        if (++attempts === 1 && scenario === "transient failure") {
+          throw new Error("temporary Gateway disconnect");
+        }
+        if (scenario === "local terminalization") {
+          cancelAskUserPromptDelivery(TOOL_CALL_ID, SESSION_KEY);
+        }
+        return { questions: [{ id: reservation.questionId, status }] };
+      },
     });
-
-    await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(true);
-    expect(attempts).toBe(2);
-  });
-
-  it("drops a prompt when local terminalization wins during Gateway revalidation", async () => {
-    const questions = normalizeAskUserParams(validArgs).questions;
-    const toolCallId = "call-revalidation-terminal";
-    const sessionKey = "agent:main:revalidation-terminal";
-    const reservation = reserveAskUserPromptDelivery({ toolCallId, sessionKey, questions });
-    if (!reservation) {
-      throw new Error("expected prompt reservation");
+    if (scenario === "isolated executor") {
+      await expect(
+        waitForAskUserPromptReady(reservation.questionId, gateway.call),
+      ).resolves.toEqual(normalizeAskUserParams(validArgs).questions);
     }
-    const gateway = gatewayStub(async () => {
-      cancelAskUserPromptDelivery(toolCallId, sessionKey);
-      return { questions: [{ id: reservation.questionId, status: "pending" }] };
-    });
-
-    await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(false);
+    await expect(isAskUserPromptPending(reservation.questionId, gateway.call)).resolves.toBe(
+      expected,
+    );
+    if (scenario === "transient failure") {
+      expect(attempts).toBe(2);
+    }
   });
 
   it("expires prompt revalidation while the Gateway lookup remains stalled", async () => {
     vi.useFakeTimers();
     try {
-      const questions = normalizeAskUserParams(validArgs).questions;
-      const reservation = reserveAskUserPromptDelivery({
-        toolCallId: "call-revalidation-stalled",
-        sessionKey: "agent:main:revalidation-stalled",
-        questions,
-        timeoutSeconds: 30,
-      });
-      if (!reservation) {
-        throw new Error("expected prompt reservation");
-      }
-      const gateway = gatewayStub(async () => await new Promise(() => {}));
+      const reservation = reservePrompt({ timeoutSeconds: 30 });
+      const gateway = gatewayStub({ "question.list": async () => await new Promise(() => {}) });
 
       const pending = isAskUserPromptPending(reservation.questionId, gateway.call);
       await vi.advanceTimersByTimeAsync(30_000);
@@ -210,37 +241,27 @@ describe("ask_user prompt delivery", () => {
     const runId = "run-split-module";
     const toolCallId = "call-split-module";
     const questions = normalizeAskUserParams(validArgs).questions;
-    const reservation = reserveAskUserPromptDelivery({
+    const reservation = reservePrompt({
       toolCallId,
       runId,
       sessionKey: "agent:main:subscriber-session",
-      questions,
     });
-    if (!reservation) {
-      throw new Error("expected prompt reservation");
-    }
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      throw new Error(`unexpected method ${method}`);
+    const finishWait = createDeferred<unknown>();
+    const gateway = registeredGateway({
+      "question.waitAnswer": async () => await finishWait.promise,
     });
 
     vi.resetModules();
     const isolatedModule = await import("./ask-user-tool.js");
+    const isolatedDispatch = await import("../harness/gateway-question-dispatch.js");
+    vi.spyOn(isolatedDispatch, "resolveAgentQuestionGatewayCall").mockReturnValue(gateway.call);
     const pending = isolatedModule
       .createAskUserTool({
         runId,
         sessionKey: "agent:main:executor-session",
-        gatewayCall: gateway.call,
       })
       .execute(toolCallId, validArgs);
+    settleOnCleanup(pending, () => finishWait.resolve({ status: "cancelled" }));
     await vi.waitFor(() =>
       expect(gateway.mock.mock.calls.some(([method]) => method === "question.request")).toBe(true),
     );
@@ -253,31 +274,23 @@ describe("ask_user prompt delivery", () => {
     ).resolves.toEqual(questions);
 
     settleAskUserPromptDelivery(reservation.questionId);
-    finishWait?.({
+    finishWait.resolve({
       status: "answered",
       answers: { answers: { deploy_target: ["Production"] } },
     });
     await expect(pending).resolves.toMatchObject({ details: { status: "answered" } });
   });
-});
 
-describe("ask_user execution", () => {
   it("returns answered details plus readable answer lines", async () => {
     const answers = { answers: { deploy_target: ["Staging (Recommended)"] } };
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: params.id, expiresAtMs: Date.now() + 30_000 };
-      }
-      if (method === "question.waitAnswer") {
-        return { status: "answered", answers };
-      }
-      throw new Error(`unexpected method ${method}`);
+    const gateway = gatewayStub({
+      "question.request": async (params) => ({ id: params.id, expiresAtMs: Date.now() + 30_000 }),
+      "question.waitAnswer": async () => ({ status: "answered", answers }),
     });
     const tool = createAskUserTool({
       agentId: "main",
       sessionKey: "agent:main:main",
       runId: "run-main",
-      gatewayCall: gateway.call,
     });
 
     const result = await tool.execute("call-answered", validArgs);
@@ -315,28 +328,20 @@ describe("ask_user execution", () => {
   it("publishes its own prompt when no harness reserved one", async () => {
     const answers = { answers: { deploy_target: ["Production"] } };
     const sent: SentPrompt[] = [];
-    let promptDelivered: () => void = () => {};
-    const promptIsOut = new Promise<void>((resolve) => {
-      promptDelivered = resolve;
-    });
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        await promptIsOut;
+    const promptIsOut = createDeferred();
+    const gateway = registeredGateway({
+      "question.waitAnswer": async () => {
+        await promptIsOut.promise;
         return { status: "answered", answers };
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
     });
 
     const result = await createAskUserTool({
       sessionKey: "agent:main:direct-dispatch",
-      gatewayCall: gateway.call,
       questionPrompt: {
         send: (payload) => {
           sent.push(payload);
-          promptDelivered();
+          promptIsOut.resolve();
         },
       },
     }).execute("call-direct-dispatch", validArgs);
@@ -356,27 +361,26 @@ describe("ask_user execution", () => {
       const result = status === "answered" ? { status, answers } : { status };
       const finishWait = createDeferred<typeof result>();
       const promptStarted = createDeferred();
+      const promptReleased = createDeferred();
       let aborted = false;
-      const gateway = gatewayStub(async (method, _opts, params) =>
-        method === "question.request"
-          ? { id: params.id }
-          : method === "question.waitAnswer"
-            ? finishWait.promise
-            : method === "question.resolve"
-              ? { status: "cancelled" }
-              : Promise.reject(new Error(`unexpected method ${method}`)),
-      );
+      registeredGateway({
+        "question.waitAnswer": async () => finishWait.promise,
+        "question.resolve": async () => ({ status: "cancelled" }),
+      });
       const pending = createAskUserTool({
         sessionKey: "agent:main:direct-dispatch-abort",
-        gatewayCall: gateway.call,
         questionPrompt: {
           send: (_payload, options) => {
             options?.signal?.addEventListener("abort", () => (aborted = true), { once: true });
             promptStarted.resolve();
-            return new Promise<void>(() => {});
+            return promptReleased.promise;
           },
         },
       }).execute("call-direct-dispatch-abort", validArgs);
+      settleOnCleanup(pending, () => {
+        finishWait.resolve(result);
+        promptReleased.resolve();
+      });
       await promptStarted.promise;
       finishWait.resolve(result);
       await expect(pending).resolves.toMatchObject({
@@ -388,21 +392,18 @@ describe("ask_user execution", () => {
 
   it("leaves the prompt to a harness that already reserved one", async () => {
     const sessionKey = "agent:main:reserved-prompt";
-    const normalized = normalizeAskUserParams(validArgs);
-    const reservation = reserveAskUserPromptDelivery({
+    const reservation = reservePrompt({
       toolCallId: "call-reserved",
       sessionKey,
-      questions: normalized.questions,
-      timeoutSeconds: normalized.timeoutSeconds,
+      timeoutSeconds: normalizeAskUserParams(validArgs).timeoutSeconds,
     });
     const sent: SentPrompt[] = [];
-    const gateway = gatewayStub(async (method, _opts, params) =>
-      method === "question.request" ? { id: params.id } : { status: "expired" },
-    );
+    registeredGateway({
+      "question.waitAnswer": async () => ({ status: "expired" }),
+    });
 
     const result = await createAskUserTool({
       sessionKey,
-      gatewayCall: gateway.call,
       questionPrompt: {
         send: (payload) => {
           sent.push(payload);
@@ -420,12 +421,12 @@ describe("ask_user execution", () => {
     ["pending", "No answer arrived"],
     ["cancelled", "question was cancelled"],
   ] as const)("maps %s to no_answer", async (status, text) => {
-    const gateway = gatewayStub(async (method, _opts, params) =>
-      method === "question.request" ? { id: params.id } : { status },
-    );
+    const gateway = registeredGateway({
+      "question.waitAnswer": async () => ({ status }),
+      "question.resolve": async () => ({ status }),
+    });
     const result = await createAskUserTool({
       sessionKey: `agent:main:${status}`,
-      gatewayCall: gateway.call,
     }).execute(`call-${status}`, validArgs);
     const questionId = requestedQuestionId(gateway.mock);
 
@@ -441,154 +442,84 @@ describe("ask_user execution", () => {
   });
 
   it("rejects a second pending question in the same session", async () => {
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      if (method === "question.resolve") {
-        finishWait?.({ status: "cancelled" });
+    const finishWait = createDeferred<unknown>();
+    const gateway = registeredGateway({
+      "question.waitAnswer": async () => await finishWait.promise,
+      "question.resolve": async () => {
+        finishWait.resolve({ status: "cancelled" });
         return { status: "cancelled" };
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
     });
     const tool = createAskUserTool({
       sessionKey: "agent:main:serialized",
-      gatewayCall: gateway.call,
     });
     const first = tool.execute("call-first", validArgs);
+    settleOnCleanup(first, () => finishWait.resolve({ status: "cancelled" }));
     await gateway.waitForCall("question.waitAnswer");
-    expect(finishWait).toBeTypeOf("function");
 
     await expect(tool.execute("call-second", validArgs)).rejects.toThrow(
       "already has a pending question",
     );
-    finishWait?.({ status: "cancelled" });
+    finishWait.resolve({ status: "cancelled" });
     await expect(first).resolves.toMatchObject({ details: { status: "no_answer" } });
   });
 
-  it("cancels the gateway question when the run aborts", async () => {
+  it.each([
+    ["question.waitAnswer", "aborted"],
+    ["question.request", "registration aborted"],
+  ] as const)("cancels the Gateway question when abort interrupts %s", async (method, message) => {
     const controller = new AbortController();
-    const gateway = gatewayStub(async (method, _opts, params, extra) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.resolve") {
-        return { status: "cancelled" };
-      }
-      return await new Promise((_resolve, reject) => {
-        extra?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
-          once: true,
-        });
+    const blocked: RpcHandlers[string] = async (_params, extra) =>
+      new Promise((_resolve, reject) => {
+        extra?.signal?.addEventListener("abort", () => reject(new Error(message)), { once: true });
       });
+    const gateway = gatewayStub({
+      "question.request": method === "question.request" ? blocked : async ({ id }) => ({ id }),
+      "question.waitAnswer": blocked,
+      "question.resolve": async () => ({ status: "cancelled" }),
     });
-    const pending = createAskUserTool({
-      sessionKey: "agent:main:abort",
-      gatewayCall: gateway.call,
-    }).execute("call-abort", validArgs, controller.signal);
-    await gateway.waitForCall("question.waitAnswer");
-    expect(gateway.mock.mock.calls.some((call) => call[0] === "question.waitAnswer")).toBe(true);
+    const pending = ask(controller.signal);
+    settleOnCleanup(pending, () => controller.abort());
+    await gateway.waitForCall(method);
+    expect(gateway.mock.mock.calls.some((call) => call[0] === method)).toBe(true);
     const questionId = requestedQuestionId(gateway.mock);
-
     controller.abort(new Error("stop"));
-
-    await expect(pending).rejects.toThrow("aborted");
-    expect(gateway.mock).toHaveBeenCalledWith(
-      "question.resolve",
-      { timeoutMs: 10_000 },
-      { id: questionId, cancel: true, resolvedBy: "run-abort" },
-    );
-  });
-
-  it("aborts registration and still attempts gateway cancellation", async () => {
-    const controller = new AbortController();
-    const gateway = gatewayStub(async (method, _opts, _params, extra) => {
-      if (method === "question.resolve") {
-        return { status: "cancelled" };
-      }
-      return await new Promise((_resolve, reject) => {
-        extra?.signal?.addEventListener("abort", () => reject(new Error("registration aborted")), {
-          once: true,
-        });
-      });
-    });
-    const pending = createAskUserTool({
-      sessionKey: "agent:main:register-abort",
-      gatewayCall: gateway.call,
-    }).execute("call-register-abort", validArgs, controller.signal);
-    await gateway.waitForCall("question.request");
-    expect(gateway.mock.mock.calls.some((call) => call[0] === "question.request")).toBe(true);
-    const questionId = requestedQuestionId(gateway.mock);
-
-    controller.abort(new Error("stop"));
-
-    await expect(pending).rejects.toThrow("registration aborted");
-    expect(gateway.mock).toHaveBeenCalledWith(
-      "question.resolve",
-      { timeoutMs: 10_000 },
-      { id: questionId, cancel: true, resolvedBy: "run-abort" },
-    );
+    await expect(pending).rejects.toThrow(message);
+    expectCancelled(gateway, questionId, "run-abort");
   });
 
   it("does not activate prompt delivery when registration ignores an earlier abort", async () => {
-    const sessionKey = "agent:main:late-registration-abort";
-    const reservation = reserveAskUserPromptDelivery({
-      toolCallId: "call-late-registration-abort",
-      sessionKey,
-      questions: normalizeAskUserParams(validArgs).questions,
-    });
-    if (!reservation) {
-      throw new Error("expected prompt reservation");
-    }
-    let finishRegistration: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method) => {
-      if (method === "question.request") {
-        return await new Promise((resolve) => {
-          finishRegistration = resolve;
-        });
-      }
-      if (method === "question.resolve") {
-        return { status: "cancelled" };
-      }
-      throw new Error(`unexpected method ${method}`);
+    const reservation = reservePrompt();
+    const finishRegistration = createDeferred<unknown>();
+    const gateway = gatewayStub({
+      "question.request": async () => await finishRegistration.promise,
+      "question.resolve": async () => ({ status: "cancelled" }),
     });
     const controller = new AbortController();
-    const pending = createAskUserTool({ sessionKey, gatewayCall: gateway.call }).execute(
-      "call-late-registration-abort",
-      validArgs,
-      controller.signal,
-    );
+    const pending = ask(controller.signal);
+    settleOnCleanup(pending, () => {
+      controller.abort();
+      finishRegistration.resolve({ id: reservation.questionId });
+    });
     await gateway.waitForCall("question.request");
-    expect(finishRegistration).toBeTypeOf("function");
 
     controller.abort(new Error("stop before registration completed"));
-    finishRegistration?.({ id: reservation.questionId });
+    finishRegistration.resolve({ id: reservation.questionId });
 
     await expect(pending).rejects.toThrow("stop before registration completed");
-    expect(
-      reserveAskUserPromptDelivery({
-        toolCallId: "call-after-late-registration-abort",
-        sessionKey,
-        questions: normalizeAskUserParams(validArgs).questions,
-      }),
-    ).toBeDefined();
+    expect(reservePrompt({ toolCallId: "call-after-late-registration-abort" })).toBeDefined();
   });
 
   it("suppresses a stale prompt when an image arrives during registration", async () => {
-    let finishRegistration: ((value: unknown) => void) | undefined;
+    const finishRegistration = createDeferred<unknown>();
     let resolveCount = 0;
-    const gateway = gatewayStub(async (method) => {
-      if (method === "question.request") {
-        return await new Promise((resolve) => {
-          finishRegistration = resolve;
-        });
-      }
-      if (method === "question.resolve") {
+    let registeredQuestionId = "";
+    const gateway = gatewayStub({
+      "question.request": async (params) => {
+        registeredQuestionId = String(params.id);
+        return await finishRegistration.promise;
+      },
+      "question.resolve": async () => {
         resolveCount += 1;
         if (resolveCount === 1) {
           throw Object.assign(new Error("not registered yet"), {
@@ -597,39 +528,18 @@ describe("ask_user execution", () => {
           });
         }
         return { status: "cancelled" };
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
     });
-    const sessionKey = "agent:main:register-image";
-    const pending = createAskUserTool({ sessionKey, gatewayCall: gateway.call }).execute(
-      "call-register-image",
-      validArgs,
-    );
+    const pending = ask();
+    settleOnCleanup(pending, () => finishRegistration.resolve({ id: registeredQuestionId }));
     await gateway.waitForCall("question.request");
-    expect(finishRegistration).toBeTypeOf("function");
     const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
-    const images = [{ type: "image" as const, data: "pixels", mimeType: "image/png" }];
 
-    await steerActiveSessionWithOptionalDeliveryWait(
-      { steer, subscribe: vi.fn(() => () => undefined) },
-      "Use this image",
-      { isInboundUserMessage: true, images },
-      sessionKey,
-    );
-    finishRegistration?.({ id: questionId });
+    await steerReply(steer, "Use this image", { isInboundUserMessage: true, images: IMAGE_REPLY });
+    finishRegistration.resolve({ id: questionId });
 
-    expect(steer).toHaveBeenCalledWith(
-      "Use this image",
-      images,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-    );
+    expectSteered(steer, "Use this image", IMAGE_REPLY);
     await expect(pending).resolves.toMatchObject({ details: { status: "no_answer" } });
     expect(
       gateway.mock.mock.calls.filter(([method]) => method === "question.resolve"),
@@ -640,62 +550,31 @@ describe("ask_user execution", () => {
   });
 
   it("best-effort cancels a deterministic id after an ambiguous registration failure", async () => {
-    const sessionKey = "agent:main:registration-loss";
-    const gateway = gatewayStub(async (method) => {
-      if (method === "question.request") {
+    const gateway = gatewayStub({
+      "question.request": async () => {
         throw new Error("connection lost after send");
-      }
-      if (method === "question.resolve") {
-        return { status: "cancelled" };
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
+      "question.resolve": async () => ({ status: "cancelled" }),
     });
 
-    await expect(
-      createAskUserTool({ sessionKey, gatewayCall: gateway.call }).execute(
-        "call-registration-loss",
-        validArgs,
-      ),
-    ).rejects.toThrow("connection lost after send");
+    await expect(ask()).rejects.toThrow("connection lost after send");
     const questionId = requestedQuestionId(gateway.mock);
-    expect(gateway.mock).toHaveBeenCalledWith(
-      "question.resolve",
-      { timeoutMs: 10_000 },
-      { id: questionId, cancel: true, resolvedBy: "registration-failed" },
-    );
+    expectCancelled(gateway, questionId, "registration-failed");
   });
 
   it("terminates when a separately loaded dispatcher reports visible control failure", async () => {
-    const sessionKey = "agent:main:delivery-failure";
-    const reservation = reserveAskUserPromptDelivery({
-      toolCallId: "call-delivery-failure",
-      sessionKey,
-      questions: normalizeAskUserParams(validArgs).questions,
-    });
-    if (!reservation) {
-      throw new Error("expected prompt reservation");
-    }
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      if (method === "question.resolve") {
-        finishWait?.({ status: "cancelled" });
+    const reservation = reservePrompt();
+    const finishWait = createDeferred<unknown>();
+    const gateway = registeredGateway({
+      "question.waitAnswer": async () => await finishWait.promise,
+      "question.resolve": async () => {
+        finishWait.resolve({ status: "cancelled" });
         return { status: "cancelled" };
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
     });
-    const pending = createAskUserTool({ sessionKey, gatewayCall: gateway.call }).execute(
-      "call-delivery-failure",
-      validArgs,
-    );
-    await vi.waitFor(() => expect(finishWait).toBeTypeOf("function"));
+    const pending = ask();
+    settleOnCleanup(pending, () => finishWait.resolve({ status: "cancelled" }));
+    await gateway.waitForCall("question.waitAnswer");
 
     const foreignModule = (await import(
       `${replyDispatchOutcomeModuleUrl}?instance=ask-user-foreign`
@@ -709,49 +588,32 @@ describe("ask_user execution", () => {
       details: { status: "delivery_failed" },
       content: [expect.objectContaining({ text: expect.stringMatching(/no retry\/fallback/i) })],
     });
-    expect(gateway.mock).toHaveBeenCalledWith(
-      "question.resolve",
-      { timeoutMs: 10_000 },
-      { id: reservation.questionId, cancel: true, resolvedBy: "prompt-delivery-failed" },
-    );
+    expectCancelled(gateway, reservation.questionId, "prompt-delivery-failed");
     expect(gateway.mock.mock.calls.some((call) => call[0] === "question.waitAnswer")).toBe(true);
   });
 
   it("preserves an answer that wins the prompt-failure cancellation race", async () => {
-    const sessionKey = "agent:main:delivery-answer-race";
-    const reservation = reserveAskUserPromptDelivery({
-      toolCallId: "call-delivery-answer-race",
-      sessionKey,
-      questions: normalizeAskUserParams(validArgs).questions,
-    });
-    if (!reservation) {
-      throw new Error("expected prompt reservation");
-    }
+    const reservation = reservePrompt();
     const answers = { answers: { deploy_target: ["Production"] } };
     let waitCalls = 0;
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
+    const firstWait = createDeferred<unknown>();
+    registeredGateway({
+      "question.waitAnswer": async () => {
         waitCalls += 1;
         if (waitCalls === 1) {
-          return await new Promise<unknown>(() => {});
+          return await firstWait.promise;
         }
         return { status: "answered", answers };
-      }
-      if (method === "question.resolve") {
+      },
+      "question.resolve": async () => {
         throw Object.assign(new Error("already answered"), {
           name: "GatewayClientRequestError",
           details: { reason: "QUESTION_ALREADY_TERMINAL" },
         });
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
     });
-    const pending = createAskUserTool({ sessionKey, gatewayCall: gateway.call }).execute(
-      "call-delivery-answer-race",
-      validArgs,
-    );
+    const pending = ask();
+    settleOnCleanup(pending, () => firstWait.resolve({ status: "cancelled" }));
     await vi.waitFor(() => expect(waitCalls).toBe(1));
 
     settleAskUserPromptDelivery(
@@ -764,40 +626,28 @@ describe("ask_user execution", () => {
   });
 
   it("aborts while prompt delivery is still pending", async () => {
-    const sessionKey = "agent:main:delivery-abort";
-    const reservation = reserveAskUserPromptDelivery({
-      toolCallId: "call-delivery-abort",
-      sessionKey,
-      questions: normalizeAskUserParams(validArgs).questions,
-    });
-    if (!reservation) {
-      throw new Error("expected prompt reservation");
-    }
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _opts, params, extra) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
+    const reservation = reservePrompt();
+    const finishWait = createDeferred<unknown>();
+    const gateway = registeredGateway({
+      "question.waitAnswer": async (_params, extra) => {
         return await new Promise((resolve, reject) => {
-          finishWait = resolve;
+          void finishWait.promise.then(resolve, reject);
           extra?.signal?.addEventListener("abort", () => reject(new Error("wait aborted")), {
             once: true,
           });
         });
-      }
-      if (method === "question.resolve") {
-        finishWait?.({ status: "cancelled" });
+      },
+      "question.resolve": async () => {
+        finishWait.resolve({ status: "cancelled" });
         return { status: "cancelled" };
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
     });
     const controller = new AbortController();
-    const pending = createAskUserTool({ sessionKey, gatewayCall: gateway.call }).execute(
-      "call-delivery-abort",
-      validArgs,
-      controller.signal,
-    );
+    const pending = ask(controller.signal);
+    settleOnCleanup(pending, () => {
+      controller.abort();
+      finishWait.resolve({ status: "cancelled" });
+    });
     await vi.waitFor(() =>
       expect(gateway.mock.mock.calls.some((call) => call[0] === "question.request")).toBe(true),
     );
@@ -805,52 +655,37 @@ describe("ask_user execution", () => {
     controller.abort(new Error("stop during delivery"));
 
     await expect(pending).rejects.toThrow("stop during delivery");
-    expect(
-      reserveAskUserPromptDelivery({
-        toolCallId: "call-after-delivery-abort",
-        sessionKey,
-        questions: normalizeAskUserParams(validArgs).questions,
-      }),
-    ).toBeDefined();
-    expect(gateway.mock).toHaveBeenCalledWith(
-      "question.resolve",
-      { timeoutMs: 10_000 },
-      { id: reservation.questionId, cancel: true, resolvedBy: "run-abort" },
-    );
+    expect(reservePrompt({ toolCallId: "call-after-delivery-abort" })).toBeDefined();
+    expectCancelled(gateway, reservation.questionId, "run-abort");
   });
 
   it("claims unmatched plain text as free text without steering it into the run", async () => {
     let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      if (method === "question.resolve") {
+    const answer = createDeferred<unknown>();
+    const gateway = registeredGateway({
+      "question.waitAnswer": async () => {
+        finishWait = answer.resolve;
+        return await answer.promise;
+      },
+      "question.resolve": async (params) => {
         const answers = params.answers;
         finishWait?.({ status: "answered", answers });
         return { status: "answered", answers };
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
     });
     const pending = createAskUserTool({
       sessionKey: "agent:main:claim",
-      gatewayCall: gateway.call,
     }).execute("call-claim", validArgs);
+    settleOnCleanup(pending, () => answer.resolve({ status: "cancelled" }));
     await gateway.waitForCall("question.waitAnswer");
     expect(finishWait).toBeTypeOf("function");
     const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
-    const activeSession = { steer, subscribe: vi.fn(() => () => undefined) };
     const persistApproved = vi.fn(async () => undefined);
     const recorder = { persistApproved } as unknown as UserTurnTranscriptRecorder;
 
-    await steerActiveSessionWithOptionalDeliveryWait(
-      activeSession,
+    await steerReply(
+      steer,
       "A custom destination",
       {
         isInboundUserMessage: true,
@@ -879,77 +714,35 @@ describe("ask_user execution", () => {
     ["cancellation succeeds", false],
     ["cancellation fails", true],
   ])("keeps image replies on normal steering when %s", async (_name, cancelFails) => {
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      if (method === "question.resolve") {
+    const finishWait = createDeferred<unknown>();
+    const gateway = registeredGateway({
+      "question.waitAnswer": async () => await finishWait.promise,
+      "question.resolve": async (params) => {
         if ("cancel" in params) {
           if (cancelFails) {
             throw new Error("gateway unavailable");
           }
-          finishWait?.({ status: "cancelled" });
+          finishWait.resolve({ status: "cancelled" });
           return { status: "cancelled" };
         }
         const result = { status: "answered", answers: params.answers };
-        finishWait?.(result);
+        finishWait.resolve(result);
         return result;
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
     });
-    const suffix = cancelFails ? "image-cancel-failure" : "image-reply";
-    const sessionKey = `agent:main:${suffix}`;
-    const pending = createAskUserTool({ sessionKey, gatewayCall: gateway.call }).execute(
-      `call-${suffix}`,
-      validArgs,
-    );
+    const pending = ask();
+    settleOnCleanup(pending, () => finishWait.resolve({ status: "cancelled" }));
     await gateway.waitForCall("question.waitAnswer");
-    expect(finishWait).toBeTypeOf("function");
     const questionId = requestedQuestionId(gateway.mock);
     const steer = vi.fn(async () => undefined);
-    const images = [{ type: "image" as const, data: "pixels", mimeType: "image/png" }];
 
-    await steerActiveSessionWithOptionalDeliveryWait(
-      { steer, subscribe: vi.fn(() => () => undefined) },
-      "Use this image",
-      { isInboundUserMessage: true, images },
-      sessionKey,
-    );
+    await steerReply(steer, "Use this image", { isInboundUserMessage: true, images: IMAGE_REPLY });
 
-    expect(steer).toHaveBeenCalledWith(
-      "Use this image",
-      images,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-    );
-    expect(gateway.mock).toHaveBeenCalledWith(
-      "question.resolve",
-      { timeoutMs: 10_000 },
-      {
-        id: questionId,
-        cancel: true,
-        resolvedBy: "image-reply",
-      },
-    );
+    expectSteered(steer, "Use this image", IMAGE_REPLY);
+    expectCancelled(gateway, questionId, "image-reply");
     if (cancelFails) {
       const followUpSteer = vi.fn(async () => undefined);
-      await steerActiveSessionWithOptionalDeliveryWait(
-        { steer: followUpSteer, subscribe: vi.fn(() => () => undefined) },
-        "Follow-up after image",
-        { isInboundUserMessage: true },
-        sessionKey,
-      );
+      await steerReply(followUpSteer, "Follow-up after image", { isInboundUserMessage: true });
       expect(followUpSteer).not.toHaveBeenCalled();
     }
     await expect(pending).resolves.toMatchObject({
@@ -958,51 +751,36 @@ describe("ask_user execution", () => {
   });
 
   it("confirms a committed plain-text answer after its resolve response is lost", async () => {
-    let finishWait: ((value: unknown) => void) | undefined;
+    const finishWait = createDeferred<unknown>();
     let committedAnswer: unknown;
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
+    const gateway = registeredGateway({
+      "question.waitAnswer": async (params) => {
         expect(params.includeResolutionId).toBe(true);
         if (committedAnswer) {
           return committedAnswer;
         }
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      if (method === "question.resolve") {
+        return await finishWait.promise;
+      },
+      "question.resolve": async (params) => {
         committedAnswer = {
           status: "answered",
           answers: params.answers,
           resolutionId: params.resolutionId,
         };
-        finishWait?.(committedAnswer);
+        finishWait.resolve(committedAnswer);
         throw new Error("response lost after commit");
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
     });
-    const sessionKey = "agent:main:resolve-loss";
-    const pending = createAskUserTool({ sessionKey, gatewayCall: gateway.call }).execute(
-      "call-resolve-loss",
-      validArgs,
-    );
+    const pending = ask();
+    settleOnCleanup(pending, () => finishWait.resolve({ status: "cancelled" }));
     await gateway.waitForCall("question.waitAnswer");
-    expect(finishWait).toBeTypeOf("function");
     const steer = vi.fn(async () => undefined);
     const persistApproved = vi.fn(async () => undefined);
 
-    await steerActiveSessionWithOptionalDeliveryWait(
-      { steer, subscribe: vi.fn(() => () => undefined) },
-      "1",
-      {
-        isInboundUserMessage: true,
-        userTurnTranscriptRecorder: { persistApproved } as unknown as UserTurnTranscriptRecorder,
-      },
-      sessionKey,
-    );
+    await steerReply(steer, "1", {
+      isInboundUserMessage: true,
+      userTurnTranscriptRecorder: { persistApproved } as unknown as UserTurnTranscriptRecorder,
+    });
 
     expect(steer).not.toHaveBeenCalled();
     expect(persistApproved).toHaveBeenCalledOnce();
@@ -1010,51 +788,25 @@ describe("ask_user execution", () => {
   });
 
   it("falls back to normal steering when the gateway question is already terminal", async () => {
-    let finishWait: ((value: unknown) => void) | undefined;
-    const gateway = gatewayStub(async (method, _opts, params) => {
-      if (method === "question.request") {
-        return { id: params.id };
-      }
-      if (method === "question.waitAnswer") {
-        return await new Promise((resolve) => {
-          finishWait = resolve;
-        });
-      }
-      if (method === "question.resolve") {
+    const finishWait = createDeferred<unknown>();
+    const gateway = registeredGateway({
+      "question.waitAnswer": async () => await finishWait.promise,
+      "question.resolve": async () => {
         throw Object.assign(new Error("already answered"), {
           name: "GatewayClientRequestError",
           details: { reason: "QUESTION_ALREADY_TERMINAL" },
         });
-      }
-      throw new Error(`unexpected method ${method}`);
+      },
     });
-    const pending = createAskUserTool({
-      sessionKey: "agent:main:terminal-race",
-      gatewayCall: gateway.call,
-    }).execute("call-terminal-race", validArgs);
+    const pending = ask();
+    settleOnCleanup(pending, () => finishWait.resolve({ status: "cancelled" }));
     await gateway.waitForCall("question.waitAnswer");
-    expect(finishWait).toBeTypeOf("function");
     const steer = vi.fn(async () => undefined);
 
-    await steerActiveSessionWithOptionalDeliveryWait(
-      { steer, subscribe: vi.fn(() => () => undefined) },
-      "Follow-up message",
-      { isInboundUserMessage: true },
-      "agent:main:terminal-race",
-    );
+    await steerReply(steer, "Follow-up message", { isInboundUserMessage: true });
 
-    expect(steer).toHaveBeenCalledWith(
-      "Follow-up message",
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-    );
-    finishWait?.({ status: "cancelled" });
+    expectSteered(steer, "Follow-up message");
+    finishWait.resolve({ status: "cancelled" });
     await pending;
   });
 });

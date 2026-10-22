@@ -1,4 +1,3 @@
-/** Group/direct chat prompt context, activation, and silent-reply helpers. */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { getLoadedChannelPluginForRead } from "../../channels/plugins/registry-loaded.js";
 import { findChatChannelMeta, normalizeChatChannelId } from "../../channels/registry.js";
@@ -97,7 +96,7 @@ function resolveProviderLabel(rawProvider: string | undefined): string {
  * context. Legacy automatic delivery posts text final replies directly, but
  * files/images/attachments still need message(action=send).
  */
-export function buildGroupChatContext(params: {
+function buildGroupChatContext(params: {
   sessionCtx: TemplateContext;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
 }): string {

@@ -57,7 +57,6 @@ export function resetSessionEntryInWorker(
             }
           },
           beforeWrite: () => source.assertCurrent(),
-          release: async () => {},
         })
       : undefined,
     async run(worker, commit) {

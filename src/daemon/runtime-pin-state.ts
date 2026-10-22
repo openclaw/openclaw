@@ -1,17 +1,14 @@
 import { z } from "zod";
 import { resolveConfigPathCandidate } from "../config/paths.js";
 import { sha256Hex } from "../infra/crypto-digest.js";
-import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "../infra/kysely-sync.js";
+import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { resolveNodeServiceIdentityEnvironment } from "./constants.js";
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import {
   completeUnshippedDaemonRuntimePinMigration,
   readDaemonRuntimePinValue,
+  readDaemonRuntimePinMigrationReceipt,
   withDaemonRuntimePinStore,
   type DaemonRuntimePinDatabase,
 } from "./runtime-pin-store.js";
@@ -29,7 +26,8 @@ const recordSchema = z.object({ version: z.literal(1), pin: pinSchema, definitio
 
 type PinScope = { kind: "gateway" | "node"; env: NodeJS.ProcessEnv };
 function resolveKey({ kind, env }: PinScope) {
-  const nativeEnv = kind === "node" ? { ...env, ...resolveNodeServiceIdentityEnvironment() } : env;
+  const nativeEnv =
+    kind === "node" ? { ...env, ...resolveNodeServiceIdentityEnvironment(env) } : env;
   const name =
     process.platform === "darwin"
       ? resolveLaunchAgentLabel(nativeEnv)
@@ -45,15 +43,7 @@ export function readDaemonRuntimePinMigrationPending(env: NodeJS.ProcessEnv): bo
   }
   const source = resolveOpenClawStateSqlitePath(env);
   if (!migrationPending.has(source)) {
-    const receipt = withDaemonRuntimePinStore(env, false, (db) =>
-      executeSqliteQueryTakeFirstSync(
-        db,
-        getNodeSqliteKysely<DaemonRuntimePinDatabase>(db)
-          .selectFrom("daemon_runtime_pin_migration")
-          .selectAll()
-          .where("version", "=", 1),
-      ),
-    );
+    const receipt = readDaemonRuntimePinMigrationReceipt(env);
     migrationPending.set(
       source,
       receipt?.phase !== "complete" ||

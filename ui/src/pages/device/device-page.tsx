@@ -1,11 +1,12 @@
-import { createSignal, onCleanup } from "@solidjs/signals";
-import { For, Show } from "solid-js";
+import { createSignal } from "@solidjs/signals";
+import { action, createOptimistic, For, onSettled, Show } from "solid-js";
 import { deviceSettingsGroupLabelKey } from "../../app-navigation.ts";
 import type {
   NativeDeviceSettingsCapability,
   NativeDeviceSettingsSnapshot,
   SettingKey,
 } from "../../app/native-device-settings.ts";
+import { NativeChromeSetup } from "../../components/native-chrome-setup.tsx";
 import {
   LearnMoreLink,
   SettingsEmpty,
@@ -24,16 +25,7 @@ import { projectNativeDeviceSettings } from "../../lib/reactive/application-nati
 import { useApplication } from "../../lib/reactive/context.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
-import "../../components/native-chrome-setup.ts";
 import "./device.css";
-
-declare module "@solidjs/web" {
-  namespace JSX {
-    interface IntrinsicElements {
-      "openclaw-native-chrome-setup": HTMLAttributes<HTMLElement>;
-    }
-  }
-}
 
 registerEnglishCatalog(registerAppsEnglish);
 registerEnglishCatalog(registerSettingsEnglish);
@@ -76,11 +68,9 @@ export function DevicePage() {
   const snapshot = () => projection?.read();
   const [newDomain, setNewDomain] = createSignal("");
   const [editRevision, setEditRevision] = createSignal(0);
-  const [gatewayHostingEdit, setGatewayHostingEdit] = createSignal<{
-    pending: boolean;
-    error?: Error;
-  } | null>(null);
-  let gatewayHostingRequest = 0;
+  const [gatewayHostingPending, setGatewayHostingPending] = createOptimistic(false);
+  const [gatewayHostingError, setGatewayHostingError] = createSignal<Error>();
+  let finishGatewayHosting: (() => void) | undefined;
   let targetProfileTimer: ReturnType<typeof setTimeout> | null = null;
 
   const pendingEdits = () => {
@@ -89,9 +79,18 @@ export function DevicePage() {
     return capability ? pendingCookieSyncEdits.get(capability) : undefined;
   };
   let disposed = false;
-  onCleanup(() => {
+  onSettled(() => () => {
     disposed = true;
+    finishGatewayHosting?.();
     flushTargetProfile();
+  });
+  const presentGatewayHosting = action(function* (pending: Promise<Error | undefined>) {
+    setGatewayHostingPending(true);
+    const error: Error | undefined = yield pending;
+    if (!disposed) {
+      setGatewayHostingError(error);
+    }
+    finishGatewayHosting = undefined;
   });
   const invalidateEdits = () => {
     if (!disposed) {
@@ -108,7 +107,7 @@ export function DevicePage() {
     const profile = pendingCookieSyncEdits.get(capability)?.targetProfile;
     if (profile && !profile.sent) {
       profile.sent = true;
-      capability.set("browser.cookieSync.targetProfile", profile.value, () => {
+      void capability.set("browser.cookieSync.targetProfile", profile.value, () => {
         settleCookieSyncEdit(capability, "targetProfile", profile);
         invalidateEdits();
       });
@@ -144,7 +143,7 @@ export function DevicePage() {
     ];
     retainCookieSyncEdits(capability).domains = values;
     invalidateEdits();
-    capability.set("browser.cookieSync.domains", values, () => {
+    void capability.set("browser.cookieSync.domains", values, () => {
       settleCookieSyncEdit(capability, "domains", values);
       invalidateEdits();
     });
@@ -164,7 +163,7 @@ export function DevicePage() {
           description={props.description}
           checked={props.checked ?? false}
           disabled={props.disabled}
-          onChange={(value) => capability?.set(props.setting, value)}
+          onChange={(value) => void capability?.set(props.setting, value)}
         />
       </Show>
     );
@@ -188,7 +187,7 @@ export function DevicePage() {
             aria-label={title()}
             ref={liveValue(() => props.value)}
             disabled={props.disabled}
-            onChange={(event) => capability?.set(props.setting, event.currentTarget.value)}
+            onChange={(event) => void capability?.set(props.setting, event.currentTarget.value)}
           >
             <For each={props.options} keyed={(option) => option.id}>
               {(option) => (
@@ -207,7 +206,6 @@ export function DevicePage() {
     );
   }
   function GatewayHosting(props: { app: NonNullable<NativeDeviceSettingsSnapshot["app"]> }) {
-    const edit = gatewayHostingEdit;
     return (
       <Show when={props.app.keepGatewayRunning !== undefined && capability}>
         <SettingsToggleRow
@@ -215,7 +213,7 @@ export function DevicePage() {
           description={
             <>
               {t("configPage.deviceSettings.keepGatewayRunningHint")}
-              <Show when={edit()?.error}>
+              <Show when={!gatewayHostingPending() && gatewayHostingError()}>
                 {(error) => (
                   <>
                     <br />
@@ -228,18 +226,18 @@ export function DevicePage() {
             </>
           }
           checked={props.app.keepGatewayRunning ?? false}
-          disabled={props.app.keepGatewayRunningAvailable !== true || edit()?.pending === true}
+          disabled={props.app.keepGatewayRunningAvailable !== true || gatewayHostingPending()}
           onChange={(value) => {
-            if (!capability) {
+            if (!capability || disposed || finishGatewayHosting) {
               return;
             }
-            const request = ++gatewayHostingRequest;
-            setGatewayHostingEdit({ pending: true });
-            capability.set("app.keepGatewayRunning", value, (error) => {
-              if (!disposed && gatewayHostingRequest === request) {
-                setGatewayHostingEdit({ pending: false, error });
-              }
+            const pending = Promise.withResolvers<Error | undefined>();
+            // Navigation releases presentation without cancelling the native write.
+            finishGatewayHosting = () => pending.resolve(undefined);
+            void capability.set("app.keepGatewayRunning", value, (error) => {
+              pending.resolve(error);
             });
+            void presentGatewayHosting(pending.promise);
           }}
         />
       </Show>
@@ -258,7 +256,7 @@ export function DevicePage() {
             stacked
             control={
               <div class="device-extension-setup">
-                <openclaw-native-chrome-setup />
+                <NativeChromeSetup />
                 <div class="device-extension-setup__actions">
                   <a
                     href="https://chromewebstore.google.com/detail/openclaw/kcdjddhmeafeomebliikmbpblkmkfoig"

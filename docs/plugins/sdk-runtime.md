@@ -34,6 +34,12 @@ enabling behavior that depends on it; equal product versions and tool names do
 not establish support. These process-stable facts do not grant caller authority,
 and they remain unavailable during metadata-only registration.
 
+Versioned APIs use string tokens in that list. For example,
+`api.runtime.capabilities?.includes("requester-model-catalog-v1")` advertises the
+[requester-admitted model catalog](/plugins/sdk-runtime/models#requester-admitted-model-catalog).
+An absent token is unsupported; do not substitute a product-version check or
+attach capability properties to the array.
+
 `sender-restricted-hidden-helpers-v1` guarantees that sender-restricted requesters
 can start only hidden helpers of the same agent, retaining their restricted tool
 surface and session root. Channels may use this capability to enable helper
@@ -342,6 +348,9 @@ immediately and returns the callback's value or promise. It detaches the calling
 turn, request, and unrelated async-local context while preserving the instance's
 host resource bindings. Each call selects that exact instance's current adopted
 registry, so a retained plugin sees replacement providers after a reload.
+Background SQLite readers belong to the instance, independently of the temporary
+scope that loaded it or invoked the callback. They stay available through admitted
+work and cleanup, and close with the instance's module resources.
 
 Use it when installing timers, watchers, and listeners, and again when delivering
 each background callback. Keep the runner with the resource that owns it; an old
@@ -425,6 +434,13 @@ private `sqlite-runtime` facade exposes that existing owner and its recorded
 native identity; each worker command keeps its own FIFO turn and live authority
 checks. Native maintenance and private shadow stores keep their existing owners.
 
+Doctor migrations can use `withSqliteReadOnlyInspection(path, inspect)` from
+`openclaw/plugin-sdk/sqlite-runtime`. The synchronous callback borrows a read-only
+connection in one transaction snapshot. For a shared-state path already admitted
+by Doctor after backup, the maintenance scope owns the reader. Other sources use
+an artifact-preserving private copy with the existing unstable-source refusal.
+The helper owns cleanup; callbacks must not retain or close the connection.
+
 SQLite worker backends set connection lock-wait policy with
 `setSqliteBusyTimeout` from `openclaw/plugin-sdk/sqlite-worker-runtime`, including
 temporary changes. The connection owner retains the current timeout, skips
@@ -480,6 +496,12 @@ use the latter to attach the committed scope receipt to a transaction result.
 Each participating writer names its affected scopes with
 `withSqliteDatabaseWriteScope`. Unscoped writes and schema changes invalidate
 all scope receipts. These tokens describe committed data, never effect authority.
+
+`readSqliteDatabaseWriteRevision` from `sqlite-worker-runtime` reads the in-process
+write revision without SQL. PostgreSQL owners retaining a snapshot across their own
+commit capture this revision under the writer lock and accept only that commit's
+advance afterward. Another advance invalidates the snapshot, including during
+post-commit reads. Read the scope token before the final revision check.
 
 First-party runtime callers use `openOpenClawAgentSqliteWorkerStoreV2` from the
 same subpath to admit cold agent storage without receiving a writable native

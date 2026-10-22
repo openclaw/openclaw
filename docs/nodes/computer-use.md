@@ -87,6 +87,8 @@ Providers with the v2 window/element family can additionally expose `list_apps`,
 
 Window input coordinates follow the observation's `details.coordinateSpace`. CUA reports `image-pixels`: use pixels in the delivered image, including when OpenClaw resized it. Peekaboo reports `global-logical-points`: use desktop logical points. Accessibility element bounds retain their native screen coordinates; prefer `elementRef` when targeting those elements. Browser coordinate inputs use viewport CSS pixels.
 
+On macOS, Peekaboo omits the hosting OpenClaw process from `list_windows` and reports a warning. It also refuses accessibility-tree inspection of that process. Use the CUA provider to inspect or control OpenClaw's own windows.
+
 For a window image, use `get_window_state` with `windowRef` and `includeScreenshot: true`, then pass the returned `observationId` with window input. With CUA, `includeScreenshot: false` skips capture and refreshes accessibility elements and their references. This opt-out requires an updated node; default and `true` observations remain compatible with older nodes. Use those references for element actions; window pixel input still requires an observation with a delivered image. The native macOS Peekaboo provider rejects `includeScreenshot: false` because its window observations require capture. A desktop `frameId` cannot replace a window observation: the images can use different coordinate spaces. Like `screenshot`, `wait` returns a desktop capture and rejects target and observation references.
 
 The CUA provider also exposes the v2 browser family: `get_browser_state`, `browser_prepare`, `browser_navigate`, `browser_click`, `browser_type`, `browser_dialog`, `browser_set_input_files`, `browser_download`, and `browser_pointer`. Use `list_windows` to discover a native browser's `windowRef`, then pass it to `get_browser_state` to obtain an opaque `browserRef` and page references. Subsequent `get_browser_state` page snapshots and browser actions require both `browserRef` and `pageRef`; snapshots return the observation and element references needed for input. `browser_prepare` also requires the discovered `windowRef`, even for an isolated profile. These references belong to one Computer Use execution and driver generation; navigation invalidates page-element observations, and a driver restart invalidates the complete browser reference set.
@@ -256,6 +258,8 @@ Updates preserve existing desktop configuration, explicit plugin enablement or d
 
 Provider descriptors declare `contractVersion: 2`. Invalid capability descriptors or `computer.act` result envelopes are rejected with `COMPUTER_CONTRACT_MISMATCH`.
 
+The receiver accepts optional numeric `cursorX` and `cursorY` receipt fields from independently updated paired macOS nodes, including `v2026.8.1`. Unknown fields and invalid field types remain rejected.
+
 Direct `node.invoke` calls to the provider-backed `computer.act` command must include an `executionId` UUID in the action parameters. The built-in `computer` tool supplies it automatically.
 
 For CUA, use the same `executionId` for the preceding `screen.snapshot` call. Copy its `displayFrameId` into the action and its returned `width` into `refWidth`; coordinates refer to pixels within that returned bitmap. CUA limits both image dimensions to `maxWidth` without enlarging smaller displays, so direct snapshots and the built-in tool share one coordinate space.
@@ -287,6 +291,13 @@ On macOS, default-on means a paired gateway can drive pointer and keyboard input
 `gateway.nodes.commands.deny` remains an explicit global revocation and always wins; a denied `computer.act` is withheld from the node's advertised surface together with its `computer` capability, and the Gateway records what it withheld. No fulfiller needs a `gateway.nodes.commands.allow` entry: `computer.act` is a built-in desktop platform default, so node-local enablement plus pairing approval is the whole grant on every platform and for either fulfiller. An authenticated operator with `operator.write` can invoke an enabled, paired command through `node.invoke`; there is no per-action admin check.
 
 ## Safety
+
+OpenClaw hides its native macOS human-approval panels from Peekaboo screen snapshots
+and refuses native computer input while an approval panel or menu-bar approval is
+pending. Human clicks and **Command-Return** still work. These native guards do not
+cover browser automation, the separate CUA driver, or third-party automation on
+the same machine. This is hardening, not an isolation boundary. Do not combine
+ask-mode exec with unrestricted computer use for a model you do not trust.
 
 - Tool policy, local provider enablement, and platform permissions must agree. Node targets also require Gateway command policy, pairing, and node-app settings. On macOS that includes **Allow Computer Control**, Accessibility, and Screen Recording; the native Peekaboo path also requires Event Posting. Actions execute while those durable controls remain enabled; there is no per-action confirmation.
 - The macOS fulfiller posts text one grapheme at a time, so cancellation, disconnect, pause, disable, or endpoint replacement stops it before the next grapheme. The experimental CUA Driver fulfiller passes node cancellation to the SDK for each call.

@@ -1,5 +1,6 @@
 import type { AssistantMessage } from "@openclaw/llm-core";
 import type { ExecutedToolCallBatch } from "./agent-stream-response.js";
+import { getInternalToolTurnInputScope } from "./internal-hooks.js";
 import type { FinalizedToolCallOutcome } from "./tool-call-outcome.js";
 import type { AgentLoopConfig } from "./types.js";
 
@@ -27,11 +28,13 @@ export function combineExecutedToolBatches(
   const terminalToolCallIds = batches.flatMap((batch) => batch.terminalToolCallIds);
   // Completion also commits finalized host replies; run it even if every tool
   // already requested termination.
+  const complete = config.completesToolTurn;
   const completesToolTurn =
-    config.completesToolTurn?.({
+    complete?.({
       message,
       toolResults: messages,
       terminalToolCallIds: new Set(terminalToolCallIds),
+      inputScope: getInternalToolTurnInputScope(complete),
     }) === true;
   const terminate = batches.every((batch) => batch.terminate) || completesToolTurn;
   const terminatingBatch = batches.find((batch) => batch.terminateRun);

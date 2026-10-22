@@ -1,12 +1,14 @@
 import { classifyAgentRunTerminalOutcome } from "../../agents/agent-run-terminal-outcome.js";
-import { isContextOverflowError } from "../../agents/embedded-agent-helpers.js";
 import { hasCompletedSourceReplyDeliveryEvidence } from "../../agents/embedded-agent-runner/delivery-evidence.js";
+import { isContextOverflowError } from "../../agents/failover/context-overflow.js";
 import {
   PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE,
   renderControlUiAgentFailureCopy,
 } from "../../agents/failover/user-copy.js";
-import { resolveReplyExpectation } from "../../agents/reply-completion.js";
-import { logVerbose } from "../../globals.js";
+import {
+  isHostMissingReplyNoticeText,
+  resolveReplyExpectation,
+} from "../../agents/reply-completion.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { defaultRuntime } from "../../runtime.js";
 import { buildContextOverflowRecoveryText } from "./agent-runner-context-recovery.js";
@@ -51,7 +53,7 @@ export async function settleAgentFallbackCycle(params: {
   const abortReason = resolveReplyOperationAbortReason(turn.replyOperation);
   if (abortReason) {
     settledLifecycleTerminal?.emit("end", runResult, terminalMetadata);
-    await drainPendingToolTasks({ tasks: turn.pendingToolTasks, onTimeout: logVerbose });
+    await drainPendingToolTasks({ tasks: turn.pendingToolTasks });
     return { kind: "aborted", reason: abortReason };
   }
   cycle.commitTerminalOutcome();
@@ -71,10 +73,14 @@ export async function settleAgentFallbackCycle(params: {
   const userFacingErrorPayload = runResult.payloads?.find(
     (payload) => payload.isError === true && payload.text !== undefined,
   )?.text;
+  const hostMissingReplyError = isHostMissingReplyNoticeText(embeddedError?.message)
+    ? embeddedError?.message
+    : undefined;
   // The timeout owner distinguishes its diagnostic from earlier tool failures.
   const terminalErrorMessage =
     deferredLifecycleError ??
     (terminalOutcome.status === "timeout" ? terminalOutcome.error : userFacingErrorPayload) ??
+    hostMissingReplyError ??
     (embeddedError ? "Agent run failed" : undefined);
   const emitSettledLifecycleError = (error: Error, extraData?: Record<string, unknown>) => {
     if (settledLifecycleTerminal) {
@@ -171,7 +177,6 @@ export async function settleAgentFallbackCycle(params: {
       cycle.modelPatch.captureFailure(embeddedError ?? terminalError);
     }
     emitSettledLifecycleError(terminalError, terminalMetadata);
-    turn.replyOperation?.retainFailureUntilComplete();
     turn.replyOperation?.fail("run_failed", terminalError);
   } else {
     if (privateFinalTerminalReply) {

@@ -2,7 +2,12 @@ import { getHeapSpaceStatistics, getHeapStatistics } from "node:v8";
 import { MessageChannel, type MessagePort } from "node:worker_threads";
 import type { WorkerGcProfiles } from "../logging/diagnostic-worker-gc-profile.js";
 import type { DiagnosticWorkerRetainedData } from "./diagnostic-process-types.js";
-import { observeGcSamples, type GcSample } from "./gc-observer.js";
+import {
+  flushGcSamples,
+  getOldGenerationAfterGcBytes,
+  observeGcSamples,
+  type GcSample,
+} from "./gc-observer.js";
 
 export type WorkerGcStorm = {
   workerId?: string;
@@ -49,11 +54,12 @@ const MAX_PENDING_GC_SAMPLES = 256;
 export function serveWorkerMemorySamples(
   parent: MessagePort,
   retainedData?: () => readonly DiagnosticWorkerRetainedData[],
-): () => void {
+) {
   const { port1, port2 } = new MessageChannel();
   diagnosticPort = port1;
   const heapSizeLimitBytes = process.versions.bun ? undefined : getHeapStatistics().heap_size_limit;
   let gc: GcSample[] | undefined;
+  let taskMetrics = false;
   const flushGc = () => {
     if (gc) {
       port1.postMessage({ gc });
@@ -74,6 +80,7 @@ export function serveWorkerMemorySamples(
       external,
       arrayBuffers,
       heapSizeLimitBytes,
+      oldGenerationAfterGcBytes: getOldGenerationAfterGcBytes(),
       heapSpaces,
       retainedData: retainedData?.(),
       gc,
@@ -81,9 +88,33 @@ export function serveWorkerMemorySamples(
     gc = undefined;
   };
   let stopGc: (() => void) | undefined;
+  const setGcEnabled = (enabled: boolean) => {
+    if (enabled) {
+      stopGc ??= observeGcSamples((samples) => {
+        (gc ??= []).push(...samples);
+        // Pool workers can retire between heartbeats. Use the existing native sampler's cadence.
+        if (taskMetrics || gc.length >= MAX_PENDING_GC_SAMPLES) {
+          flushGc();
+        }
+      });
+    } else {
+      stopGc?.();
+      stopGc = undefined;
+      gc = undefined;
+    }
+  };
   port1.on(
     "message",
-    (request: { gc: boolean } | { captureGcProfile: WorkerGcStorm } | undefined) => {
+    (
+      request: { gc: boolean } | { flush: true } | { captureGcProfile: WorkerGcStorm } | undefined,
+    ) => {
+      if (request && "flush" in request) {
+        flushGcSamples();
+        flushGc();
+        // Only this heap counter survives retirement; RSS, spaces and retained data do not.
+        port1.postMessage({ flushed: true, heapUsed: getHeapStatistics().used_heap_size });
+        return;
+      }
       if (request && "captureGcProfile" in request) {
         const storm = request.captureGcProfile;
         void import("../logging/diagnostic-worker-gc-profile.js")
@@ -104,20 +135,7 @@ export function serveWorkerMemorySamples(
         return;
       }
       if (request) {
-        if (request.gc) {
-          // The heartbeat already requests memory every 30 seconds; carry GC events with it.
-          stopGc ??= observeGcSamples((samples) => {
-            (gc ??= []).push(...samples);
-            // A stalled host must not make this worker retain an unbounded interval.
-            if (gc.length >= MAX_PENDING_GC_SAMPLES) {
-              flushGc();
-            }
-          });
-        } else {
-          stopGc?.();
-          stopGc = undefined;
-          gc = undefined;
-        }
+        setGcEnabled(request.gc);
       } else {
         sample();
       }
@@ -132,10 +150,20 @@ export function serveWorkerMemorySamples(
   port1.unref();
   sample();
   parent.postMessage({ status: "memory", port: port2 }, [port2]);
-  return () => {
-    diagnosticPort = undefined;
-    stopGc?.();
-    flushGc();
-    port1.close();
+  return {
+    setTaskMetrics(enabled: boolean) {
+      taskMetrics = enabled;
+      setGcEnabled(enabled);
+    },
+    collectTask(): true | undefined {
+      return taskMetrics ? true : undefined;
+    },
+    close(this: void) {
+      diagnosticPort = undefined;
+      stopGc?.();
+      stopGc = undefined;
+      flushGc();
+      port1.close();
+    },
   };
 }

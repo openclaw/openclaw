@@ -1,3 +1,4 @@
+import { composedAncestors } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import type { OverlayPlacement } from "./overlay-anchor.ts";
 import { containsComposed } from "./overlay-registry.ts";
@@ -10,8 +11,6 @@ interface TooltipProviderPolicy extends HTMLElement {
   closeTooltip(): void;
 }
 
-const DESCRIBABLE_SELECTOR =
-  'a[href], button, input, select, textarea, [tabindex]:not([tabindex="-1"])';
 const HOVER_DELAY = 150;
 const RICH_CONTENT_CLOSE_DELAY = 100;
 let nextTooltipId = 0;
@@ -24,6 +23,8 @@ export interface TooltipPolicyProps {
   hoverDismissDelay?: number;
   delay?: number;
   describe?: boolean;
+  /** The described control can differ from the wrapper that owns hover geometry. */
+  descriptionTarget?: () => Element | null;
   /** Read-only cards must not block nearby actions when their surface overlaps them. */
   pointerThrough?: boolean;
   autoSize?: boolean;
@@ -36,6 +37,7 @@ export interface TooltipPolicyOptions {
   trigger: () => HTMLElement | SVGElement | null;
   richContent: () => readonly Node[];
   richContainer: () => HTMLElement | null;
+  surface: HTMLElement;
   requestOpen: (open: boolean) => boolean;
   retire: () => void;
   preview: (anchor: HTMLElement | SVGElement, content: string) => void;
@@ -130,11 +132,21 @@ export class TooltipOwner {
     return this.#triggerElement;
   }
   get resolvedPlacement(): OverlayPlacement {
-    const placement = this.options.props().placement ?? "top";
+    const placement = this.options.props().placement ?? this.#inheritedPlacement() ?? "top";
     return (placement === "right-start" || placement === "right") &&
       this.host.ownerDocument.defaultView?.matchMedia?.("(max-width: 640px)").matches
       ? "bottom-start"
       : placement;
+  }
+  /** Edge rails declare one hint side for every control, including adapted titles. */
+  #inheritedPlacement(): OverlayPlacement | undefined {
+    for (const node of composedAncestors(this.#triggerElement)) {
+      const side = node instanceof HTMLElement ? node.dataset.tooltipPlacement : undefined;
+      if (side === "top" || side === "right" || side === "bottom" || side === "left") {
+        return side;
+      }
+    }
+    return undefined;
   }
   refresh() {
     this.#attachTrigger();
@@ -430,25 +442,10 @@ export class TooltipOwner {
     return this.options.requestOpen(false);
   }
 
-  #triggerAncestors() {
-    const ancestors: Node[] = [];
-    let node: Node | null = this.#triggerElement;
-    while (node) {
-      ancestors.push(node);
-      node =
-        node instanceof Element && node.assignedSlot
-          ? node.assignedSlot
-          : node instanceof ShadowRoot
-            ? node.host
-            : node.parentNode;
-    }
-    return ancestors;
-  }
-
   #isPresented() {
     return (
       this.#triggerElement?.isConnected === true &&
-      !this.#triggerAncestors().some(
+      !composedAncestors(this.#triggerElement).some(
         (node) =>
           node instanceof Element &&
           (node.hasAttribute("hidden") ||
@@ -459,7 +456,7 @@ export class TooltipOwner {
   }
 
   #observePresentation() {
-    const ancestors = this.#triggerAncestors();
+    const ancestors = composedAncestors(this.#triggerElement);
     if (
       ancestors.length === this.#presentationAncestors.length &&
       ancestors.every((node, index) => node === this.#presentationAncestors[index])
@@ -490,20 +487,15 @@ export class TooltipOwner {
     if (!trigger) {
       return null;
     }
-    return trigger.matches(DESCRIBABLE_SELECTOR)
-      ? trigger
-      : (trigger.querySelector(DESCRIBABLE_SELECTOR) ?? trigger);
+    return this.options.props().descriptionTarget?.() ?? trigger;
   }
 
   #syncDescription() {
     const richText = this.#richContentText;
-    this.options
-      .richContainer()
-      ?.closest<HTMLElement>(".tooltip-surface")
-      ?.style.setProperty(
-        "pointer-events",
-        richText && !this.options.props().pointerThrough ? "auto" : "none",
-      );
+    this.options.surface.style.setProperty(
+      "pointer-events",
+      richText && !this.options.props().pointerThrough ? "auto" : "none",
+    );
     if (!(this.options.props().describe ?? true)) {
       this.#restoreDescription();
       return;

@@ -4,7 +4,7 @@ import {
   asOptionalObjectRecord as readObjectRecord,
   asOptionalRecord as readRecord,
 } from "@openclaw/normalization-core/record-coerce";
-import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
+import { prepareAgentRunReplyText } from "../agents/agent-run-terminal-reply.js";
 import { normalizeContextUsage } from "../agents/usage.js";
 import { parseInboundMediaUri, buildInboundMediaUriFromPath } from "../media/media-reference.js";
 import { STATE_CONTENTION_DIAGNOSTIC } from "../sessions/session-run-error-presentation.js";
@@ -418,9 +418,8 @@ export function prepareAssistantHistoryMessage(message: unknown): unknown {
   const blocks = finalBlocks.length ? finalBlocks : readAssistantTextBlocksForPhase(entry);
   const rawText =
     typeof inlineText === "string" ? inlineText : blocks.map((block) => block.text).join("");
-  const prepared = prepareAgentRunTerminalReply({ rawText });
-  const text = prepared.text;
-  if (prepared.terminalReply.disposition === "silent" || text === rawText) {
+  const text = prepareAgentRunReplyText(rawText);
+  if (text === undefined || text === rawText) {
     return message;
   }
   // History is projected more than once. This is already prepared text,
@@ -471,6 +470,8 @@ export function sanitizeChatHistoryMessage(
     ("upstreamUserText" in openClawMeta ||
       "modelPromptProjection" in openClawMeta ||
       "sessionSendDelivery" in openClawMeta ||
+      "requesterOrigin" in openClawMeta ||
+      "chatInputRecovery" in openClawMeta ||
       "media" in openClawMeta)
   ) {
     // Codex retains the decorated upstream prompt for transcript reconstruction.
@@ -481,6 +482,9 @@ export function sanitizeChatHistoryMessage(
     delete projectedMeta.modelPromptProjection;
     // Durable delivery facts contain private endpoint bindings, not display data.
     delete projectedMeta.sessionSendDelivery;
+    // Operational requester custody is independent of redacted display identity.
+    delete projectedMeta.requesterOrigin;
+    delete projectedMeta.chatInputRecovery;
     if ("media" in projectedMeta) {
       projectedMeta.media = projectChatHistoryMediaFacts(projectedMeta.media);
       if (projectedMeta.media === undefined) {

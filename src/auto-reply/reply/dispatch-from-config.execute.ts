@@ -15,16 +15,18 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { isFileLogLevelEnabled } from "../../logging/logger.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { cleanDeferredFinalText } from "../../tts/captioned-final.js";
+import { observeAgentRunStart } from "../agent-run-start.js";
+import { isExplicitFollowupCommandTurn } from "../command-turn-context.js";
 import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
 import {
   getReplyPayloadMetadata,
   isCommandReplyForDelivery,
+  markReplyPayloadForSourceSuppressionDelivery,
   readAskUserQuestionId,
 } from "../reply-payload.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
-import { handleAcpDispatchTailAfterReset } from "./dispatch-from-config.acp-tail.js";
 import { createDispatchBlockReplyHandler } from "./dispatch-from-config.block-reply.js";
 import {
   hasAskUserPayload,
@@ -32,11 +34,14 @@ import {
   requiresDurableToolResultDelivery,
 } from "./dispatch-from-config.payloads.js";
 import type { PrepareDispatchExecutionReadyState } from "./dispatch-from-config.prepare-execution.js";
+import { runReplyDispatchHook } from "./dispatch-from-config.reply-dispatch-hook.js";
 import { requireQueuedReplyDelivery } from "./dispatch-from-config.turn-ledger.js";
+import { runWithCommandNativeSubagents } from "./dispatch-native-subagent.js";
 import type { PendingContinuationSettlement } from "./get-reply.types.js";
 import { bindPreparedReplyDispatchRuntime } from "./prepared-reply-dispatch-context.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import { REPLY_OPERATION_RUN_STATE } from "./reply-operation-run-state.js";
+import { readReplySourceInput, readReplySourcePreparationRetry } from "./reply-source-binding.js";
 
 export async function executeDispatch(state: PrepareDispatchExecutionReadyState) {
   const {
@@ -73,10 +78,15 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     wrapProgressCallback,
   } = state;
   // Bind at invocation so every public resolver consumes the request generation without widening its Plugin SDK contract.
-  const replyResolver = bindPreparedReplyDispatchRuntime(
+  const preparedReplyResolver = bindPreparedReplyDispatchRuntime(
     params.configOverride ? undefined : state.preparedReplyDispatchRuntime,
     state.replyResolver,
   );
+  const runPreparation = readReplySourcePreparationRetry(readReplySourceInput(params.replyOptions));
+  // Retry before raw resolver work settles so this same turn and FIFO source retain custody.
+  const replyResolver: typeof preparedReplyResolver = runPreparation
+    ? (...args) => runPreparation(() => preparedReplyResolver(...args))
+    : preparedReplyResolver;
   let pendingContinuation = false;
   let pendingContinuationSettlement: PendingContinuationSettlement | undefined;
   let rawLlmResponse: string | undefined;
@@ -88,6 +98,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
   let didDeliverVisiblePartialReply = false;
   let replyResolverError: string | undefined;
   const pendingToolProgress = new Set<Promise<void>>();
+  let explicitFollowupStartNotice: Promise<void> | undefined;
   const {
     onBlockReply,
     onPreparedBlockReply,
@@ -156,11 +167,33 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
             allowWhenToolSummariesHidden:
               params.replyOptions?.allowToolLifecycleWhenProgressHidden === true,
           };
+          const replyOptions = state.getReplyOptions();
           const result = await replyResolver(
             ctx,
             {
-              ...state.getReplyOptions(),
+              ...replyOptions,
+              ...observeAgentRunStart(replyOptions, () => {
+                if (
+                  !explicitFollowupStartNotice &&
+                  isExplicitFollowupCommandTurn(ctx) &&
+                  state.replyOperationRunState.admission?.status !== "accepted"
+                ) {
+                  // The synchronous start callback retains completion ownership; delivery
+                  // joins the existing progress lifecycle without waiting for the answer.
+                  explicitFollowupStartNotice = Promise.resolve(
+                    onBlockReply(
+                      markReplyPayloadForSourceSuppressionDelivery({
+                        text: "Your followup has started.",
+                        isStatusNotice: true,
+                      }),
+                    ),
+                  );
+                  trackDispatchLifecycleWork(explicitFollowupStartNotice, "delivery");
+                }
+              }),
               preparedTtsPreferences: state.preparedTtsPreferences,
+              withCommandNativeSubagents: (binding, run) =>
+                runWithCommandNativeSubagents(state, binding, run),
               [REPLY_OPERATION_RUN_STATE]: state.replyOperationRunState,
               sourceReplyDeliveryMode: state.sourceReplyDeliveryMode,
               sessionPromptSourceReplyDeliveryMode: state.sessionStableSourceReplyDeliveryMode,
@@ -191,6 +224,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 ? undefined
                 : wrapProgressCallback(params.replyOptions?.onPartialReply, {
                     onForward: async () => {
+                      await explicitFollowupStartNotice;
                       if (!state.deliverStandaloneCommentaryProgress) {
                         return;
                       }
@@ -203,9 +237,17 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                       didDeliverVisiblePartialReply ||= hasOutboundReplyContent(payload, {
                         trimText: true,
                       });
+                      if (didDeliverVisiblePartialReply) {
+                        state
+                          .getDispatchReplyOperation()
+                          ?.watchdog.progress("finalization", "reply:partial_delivered");
+                      }
                     },
                   }),
               onReasoningStream,
+              onReasoningProgress: wrapProgressCallback(params.replyOptions?.onReasoningProgress, {
+                forwardWhenSourceDeliverySuppressed: true,
+              }),
               streamReasoningInNonStreamModes: params.replyOptions?.streamReasoningInNonStreamModes,
               onReasoningEnd: wrapProgressCallback(params.replyOptions?.onReasoningEnd),
               onAssistantMessageStart: wrapProgressCallback(
@@ -458,8 +500,14 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 forwardToolProgress(() => state.onApprovalEventFromReplyOptions?.(payload)),
               onPatchSummary: (payload) =>
                 forwardToolProgress(() => state.onPatchSummaryFromReplyOptions?.(payload)),
-              onBlockReply,
-              onPreparedBlockReply,
+              onBlockReply: (payload, context) =>
+                explicitFollowupStartNotice
+                  ? explicitFollowupStartNotice.then(() => onBlockReply(payload, context))
+                  : onBlockReply(payload, context),
+              onPreparedBlockReply: (plan, context) =>
+                explicitFollowupStartNotice
+                  ? explicitFollowupStartNotice.then(() => onPreparedBlockReply(plan, context))
+                  : onPreparedBlockReply(plan, context),
             },
             state.preparedReplyDispatchRuntime && !params.configOverride ? undefined : replyConfig,
           );
@@ -483,6 +531,7 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     try {
       return await resolverWork;
     } finally {
+      await explicitFollowupStartNotice;
       await flushBlockTtsText();
     }
   }).catch(async (error: unknown) => {
@@ -546,9 +595,30 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       };
     }
 
-    const acpTailResult = await handleAcpDispatchTailAfterReset(state);
-    if (acpTailResult) {
-      return acpTailResult;
+    if (state.ctx.AcpDispatchTailAfterReset === true) {
+      // Command handling prepared a trailing prompt after ACP in-place reset.
+      // Route that tail through ACP now (same turn) instead of embedded dispatch.
+      state.ctx.AcpDispatchTailAfterReset = false;
+      const tailDispatchResult = await runReplyDispatchHook(state, {
+        shouldSendToolSummaries: state.shouldSendToolSummaries,
+        shouldSendToolSummariesAsync: state.shouldSendToolSummariesAsync,
+        isTailDispatch: true,
+      });
+      if (tailDispatchResult?.handled) {
+        state.commitInboundDedupeIfClaimed();
+        state.recordAgentDispatchCompleted("completed");
+        state.completeDispatchReplyOperation();
+        return {
+          status: "complete" as const,
+          result: state.attachSourceReplyDeliveryMode({
+            queuedFinal: tailDispatchResult.queuedFinal,
+            counts: tailDispatchResult.counts,
+            ...(state.routeState.sessionMetadataChangesForResult
+              ? { sessionMetadataChanges: state.routeState.sessionMetadataChangesForResult }
+              : {}),
+          }),
+        };
+      }
     }
     const nextState = Object.assign(state, {
       pendingContinuation,

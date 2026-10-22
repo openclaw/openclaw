@@ -31,8 +31,6 @@ export async function probeSetupProviderChoices<T>(
      * instance lifetime; without this, every call rediscovers all plugin packages.
      */
     metadataSnapshot?: PluginMetadataSnapshot;
-    enablePluginInConfig?: typeof enablePluginInConfig;
-    resolvePluginProviders?: typeof resolvePluginProvidersCore;
   },
   probe: (
     choice: ProviderAuthChoiceMetadata,
@@ -54,15 +52,12 @@ export async function probeSetupProviderChoices<T>(
         });
         params.signal?.throwIfAborted();
         if (enabled.enabled) {
-          config = (params.enablePluginInConfig ?? enablePluginInConfig)(
-            config,
-            choice.pluginId,
-          ).config;
+          config = enablePluginInConfig(config, choice.pluginId).config;
           choices.push(choice);
         }
       }
       const providers = choices.length
-        ? (params.resolvePluginProviders ?? resolvePluginProvidersCore)({
+        ? resolvePluginProvidersCore({
             config,
             workspaceDir: params.workspaceDir,
             env,

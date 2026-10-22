@@ -10,11 +10,14 @@ import { assertNoRetainedSessionSharingReads } from "../../config/sessions/sessi
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { mintMcpLoopbackClientGrant as MintMcpLoopbackClientGrant } from "../../gateway/mcp-grant-store.js";
+import { handleMcpJsonRpc } from "../../gateway/mcp-http.handlers.js";
 import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "../../gateway/mcp-http.runtime.js";
+import { buildMcpToolSchema } from "../../gateway/mcp-http.schema.js";
 import type { CliBackendPlugin } from "../../plugins/cli-backend.types.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import { testing as cliBackendsTesting } from "../cli-backends.test-support.js";
 import {
   createCliRunnerPrepareFixture,
@@ -33,6 +36,10 @@ import {
   setCliRunnerPrepareTestDeps,
 } from "./prepare.test-support.js";
 import type { RunCliAgentParams } from "./types.js";
+
+const { buildAnthropicCliBackend } = await loadBundledPluginFacade<{
+  buildAnthropicCliBackend: () => CliBackendPlugin;
+}>({ pluginId: "anthropic", artifactBasename: "api.js" });
 
 const claudeBackend: CliBackendPlugin & { pluginId: string } = {
   id: "claude-cli",
@@ -220,10 +227,12 @@ describe("restricted CLI tool preparation", () => {
     },
   );
 
-  it("retains native file tools when the agent disables global workspace-only policy", async () => {
+  it("retains selected native file tools when the agent disables global workspace-only policy", async () => {
     const context = await fixture.prepare({
       provider: "claude-cli",
       sessionKey: "agent:main:main",
+      // Default managed turns are mediated; an explicit native selection keeps its contract.
+      cliToolAvailability: { native: ["Read"], openClaw: [] },
       config: {
         session: { store: fixture.session.sessionTarget.storePath },
         tools: { fs: { workspaceOnly: true }, exec: { security: "full", ask: "off" } },
@@ -513,75 +522,333 @@ describe("restricted CLI tool preparation", () => {
     expect(mintGrant).not.toHaveBeenCalled();
   });
 
-  it("mediates trusted completion tools with persisted requester policy", async () => {
+  it("keeps the Claude tool and system prefix across ordinary and completion turns", async () => {
+    const nativeBackend = buildAnthropicCliBackend();
+    cliBackendsTesting.setDepsForTest({
+      resolvePluginSetupCliBackend: () => undefined,
+      resolveRuntimeCliBackends: () => [
+        {
+          ...claudeBackend,
+          prepareExecution: nativeBackend.prepareExecution,
+          resolveExecutionArgs: nativeBackend.resolveExecutionArgs,
+          transformSystemPrompt: nativeBackend.transformSystemPrompt,
+        },
+      ],
+    });
     const { sessionTarget } = fixture.session;
-    const childSessionKey = "agent:main:subagent:completion-review";
-    const inheritedToolDeny = ["terminal", "gateway", "write", "edit", "apply_patch"];
+    const skillPath = path.join(fixture.session.dir, "SKILL.md");
+    const skillPrompt = `<available_skills><skill><name>cache-fixture</name><description>Check the prefix.</description><location>${skillPath}</location></skill></available_skills>`;
+    fs.writeFileSync(
+      skillPath,
+      "---\nname: cache-fixture\ndescription: Check the prefix.\n---\nRead the current facts.\n",
+    );
+    const nativeSkillsPlugin = vi.fn(async () => ({
+      args: ["--plugin-dir", "/synthetic/native-skills"],
+      cleanup: async () => {},
+    }));
+    setCliRunnerPrepareTestDeps({ prepareClaudeCliSkillsPlugin: nativeSkillsPlugin });
+    const childSessionKey = "agent:main:subagent:cache-prefix";
     replaceSessionEntrySync(
       { storePath: sessionTarget.storePath, sessionKey: childSessionKey },
       {
-        sessionId: "completion-child",
+        sessionId: "cache-prefix-child",
         updatedAt: 1,
         spawnedBy: sessionTarget.sessionKey,
         spawnDepth: 1,
-        subagentRole: "orchestrator",
-        subagentControlScope: "children",
         inheritedToolPolicyVersion: 1,
-        inheritedToolDeny,
-        inheritedToolAllow: ["read", "exec", "write"],
+        inheritedToolAllow: ["read"],
       },
     );
-    const trustedInternalHandoff = {
-      kind: "subagent-completion" as const,
-      sourceSessionKey: childSessionKey,
-      sourceSessionId: "completion-child",
-      targetSessionKey: sessionTarget.sessionKey,
-      targetSessionId: sessionTarget.sessionId,
-      provider: "claude-cli",
-      model: "opus",
-    };
-    const context = await fixture.prepare({
+    const base = {
       sessionKey: sessionTarget.sessionKey,
       sessionId: sessionTarget.sessionId,
       provider: "claude-cli",
       model: "opus",
       modelHasVision: false,
-      sourceReplyDeliveryMode: "automatic",
-      trustedInternalHandoff,
-      inputProvenance: {
-        kind: "inter_session",
-        sourceTool: "subagent_announce",
-        sourceSessionKey: childSessionKey,
+      sourceReplyDeliveryMode: "automatic" as const,
+      skillsSnapshot: {
+        prompt: skillPrompt,
+        skills: [{ name: "cache-fixture" }],
+        resolvedSkills: [
+          {
+            name: "cache-fixture",
+            description: "Check the prefix.",
+            filePath: skillPath,
+            baseDir: fixture.session.dir,
+            source: "openclaw-workspace",
+            sourceInfo: {
+              path: skillPath,
+              source: "openclaw-workspace",
+              scope: "project" as const,
+              origin: "top-level" as const,
+              baseDir: fixture.session.dir,
+            },
+            disableModelInvocation: false,
+          },
+        ],
       },
       config: {
         session: { store: sessionTarget.storePath },
-        tools: {
-          toolsBySender: { "*": { deny: ["group:runtime", "group:fs"] } },
-        },
-        mcp: { servers: { userProbe: { command: "node", args: ["user-probe.mjs"] } } },
+        tools: { allow: ["read"] },
       },
-    });
-    try {
-      const grant = mintGrant.mock.calls[0]?.[0]?.context;
-      expect(grant).toBeDefined();
-      expect(context.params.cliToolAvailability?.native).toEqual([]);
-      expect(grant?.toolsAllow).toEqual(expect.arrayContaining(["read", "exec"]));
-      expect(grant?.toolsAllow).toEqual(context.params.cliToolAvailability?.openClaw);
-      for (const denied of inheritedToolDeny) {
-        expect(grant?.toolsAllow).not.toContain(denied);
+    };
+    const turns = [];
+    for (const completion of [false, true, false]) {
+      const context = await fixture.prepare({
+        ...base,
+        ...(completion
+          ? {
+              trustedInternalHandoff: {
+                kind: "subagent-completion" as const,
+                sourceSessionKey: childSessionKey,
+                sourceSessionId: "cache-prefix-child",
+                targetSessionKey: sessionTarget.sessionKey,
+                targetSessionId: sessionTarget.sessionId,
+                provider: "claude-cli",
+                model: "opus",
+              },
+              inputProvenance: {
+                kind: "inter_session" as const,
+                sourceTool: "subagent_announce",
+                sourceSessionKey: childSessionKey,
+              },
+            }
+          : {}),
+      });
+      try {
+        expect(context.executionTarget.kind).toBe("plugin");
+        expect(context.promptContext?.appendContext).toBeTruthy();
+        expect(context.systemPrompt).toContain("cache-fixture");
+        const executionArgs =
+          context.backendResolved.resolveExecutionArgs?.({
+            config: context.params.config,
+            workspaceDir: context.workspaceDir,
+            provider: context.params.provider,
+            modelId: context.modelId,
+            executionMode: "agent",
+            toolAvailability: context.params.cliToolAvailability,
+            hostOwnedTools: context.hostOwnedTools,
+            useResume: completion,
+            baseArgs: context.preparedBackend.backend.args ?? [],
+          }) ?? [];
+        turns.push({
+          availability: context.params.cliToolAvailability,
+          systemPrompt: context.systemPrompt,
+          toolsAllow: mintGrant.mock.lastCall?.[0]?.context.toolsAllow,
+          nativeTools: executionArgs[executionArgs.indexOf("--tools") + 1],
+          allowedTools: executionArgs[executionArgs.indexOf("--allowedTools") + 1],
+        });
+        expect(executionArgs).not.toContain("--plugin-dir");
+      } finally {
+        await context.preparedBackend.cleanup?.();
       }
-      expect(grant?.trustedInternalHandoff).toEqual(trustedInternalHandoff);
-      expect(grant?.toolsAllow?.toSorted()).toEqual(["exec", "read"]);
-      const args = context.preparedBackend.backend.args ?? [];
-      const mcpConfigPath = args[args.indexOf("--mcp-config") + 1];
-      const bundle = JSON.parse(fs.readFileSync(mcpConfigPath ?? "", "utf-8")) as {
-        mcpServers: Record<string, unknown>;
-      };
-      expect(Object.keys(bundle.mcpServers)).toEqual(["openclaw"]);
-    } finally {
-      await context.preparedBackend.cleanup?.();
     }
+    expect(turns[0]?.availability).toEqual({ native: [], openClaw: ["read"] });
+    expect(turns[0]?.toolsAllow).toEqual(["read"]);
+    expect(turns[0]?.nativeTools).toBe("");
+    expect(turns[0]?.allowedTools).toBe("mcp__openclaw__read");
+    expect(turns[1]).toEqual(turns[0]);
+    expect(turns[2]).toEqual(turns[0]);
+    expect(nativeSkillsPlugin).not.toHaveBeenCalled();
   });
+
+  it.each([false, true])(
+    "keeps bootstrap file access accurate with mediated write=%s",
+    async (writeAllowed) => {
+      const { dir } = fixture.session;
+      const bootstrapPath = path.join(dir, "BOOTSTRAP.md");
+      const content = "Complete the first-run ritual, then delete this file.";
+      setCliRunnerPrepareTestDeps({
+        isWorkspaceBootstrapPending: async () => true,
+        resolveBootstrapContextForRun: async () => ({
+          bootstrapFiles: [{ name: "BOOTSTRAP.md", path: bootstrapPath, content, missing: false }],
+          contextFiles: [{ path: bootstrapPath, content }],
+        }),
+      });
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [
+          {
+            ...claudeBackend,
+            config: { ...claudeBackend.config, systemPromptArg: "--system-prompt" },
+          },
+        ],
+      });
+      const context = await fixture.prepare({
+        provider: "claude-cli",
+        sessionKey: "agent:main:main",
+        trigger: "user",
+        config: {
+          agents: { defaults: { workspace: dir } },
+          tools: { allow: writeAllowed ? ["read", "write"] : ["read"] },
+        },
+      });
+      try {
+        expect(context.params.cliToolAvailability?.native).toEqual([]);
+        expect(context.systemPrompt).toContain(
+          writeAllowed
+            ? "BOOTSTRAP.md below; follow before normal reply."
+            : "this run cannot safely finish full BOOTSTRAP.md",
+        );
+        expect(context.systemPrompt.includes(content)).toBe(writeAllowed);
+      } finally {
+        await context.preparedBackend.cleanup?.();
+      }
+    },
+  );
+
+  it.each([false, undefined])(
+    "keeps the CLI catalog stable while gating persisted completion authority with owner=%s",
+    async (senderIsOwner) => {
+      const { sessionTarget } = fixture.session;
+      const childSessionKey = "agent:main:subagent:completion-review";
+      const inheritedToolDeny = ["terminal", "gateway", "write", "edit", "apply_patch"];
+      replaceSessionEntrySync(
+        { storePath: sessionTarget.storePath, sessionKey: childSessionKey },
+        {
+          sessionId: "completion-child",
+          updatedAt: 1,
+          spawnedBy: sessionTarget.sessionKey,
+          spawnDepth: 1,
+          subagentRole: "orchestrator",
+          subagentControlScope: "children",
+          inheritedToolPolicyVersion: 1,
+          inheritedToolDeny,
+          inheritedToolAllow: ["read", "exec", "write", "intent"],
+        },
+      );
+      const trustedInternalHandoff = {
+        kind: "subagent-completion" as const,
+        sourceSessionKey: childSessionKey,
+        sourceSessionId: "completion-child",
+        targetSessionKey: sessionTarget.sessionKey,
+        targetSessionId: sessionTarget.sessionId,
+        provider: "claude-cli",
+        model: "opus",
+      };
+      const run = {
+        sessionKey: sessionTarget.sessionKey,
+        sessionId: sessionTarget.sessionId,
+        provider: "claude-cli",
+        model: "opus",
+        modelHasVision: false,
+        sourceReplyDeliveryMode: "automatic",
+        toolsAllow: ["read", "exec", "write", "gateway", "intent"],
+        config: {
+          plugins: { allow: ["memory-core"], entries: { "memory-core": { enabled: true } } },
+          session: { store: sessionTarget.storePath },
+          tools: {
+            deny: ["apply_patch"],
+            toolsBySender: {
+              "id:owner": { allow: ["*"] },
+              "*": { deny: ["group:runtime", "group:fs"] },
+            },
+          },
+          mcp: { servers: { userProbe: { command: "node", args: ["user-probe.mjs"] } } },
+        },
+      } satisfies Partial<RunCliAgentParams>;
+      const owner = await fixture.prepare({ ...run, senderId: "owner", senderIsOwner: true });
+      const ownerGrant = mintGrant.mock.calls[0]![0].context;
+      const ownerTools = await resolveMcpLoopbackScopedTools({
+        cfg: run.config,
+        context: ownerGrant,
+        admittedRunContext: owner.params.admittedRunContext,
+      });
+      await owner.preparedBackend.cleanup?.();
+      setCliRunnerPrepareTestDeps({
+        claudeCliSessionTranscriptHasContent: async () => true,
+        claudeCliSessionTranscriptHasOrphanedToolUse: async () => false,
+      });
+      const context = await fixture.prepare({
+        ...run,
+        senderIsOwner,
+        cliSessionBinding: {
+          sessionId: "native-parent-session",
+          authEpoch: owner.authEpoch,
+          authEpochVersion: owner.authEpochVersion,
+          extraSystemPromptHash: owner.extraSystemPromptHash,
+          messageToolPolicyHash: owner.messageToolPolicyHash,
+          promptToolNamesHash: owner.promptToolNamesHash,
+          cwdHash: owner.cwdHash,
+          mcpConfigHash: owner.preparedBackend.mcpConfigHash,
+          mcpResumeHash: owner.preparedBackend.mcpResumeHash,
+        },
+        trustedInternalHandoff,
+        inputProvenance: {
+          kind: "inter_session",
+          sourceTool: "subagent_announce",
+          sourceSessionKey: childSessionKey,
+        },
+      });
+      try {
+        const grant = mintGrant.mock.calls[1]![0].context;
+        expect(grant).toBeDefined();
+        expect(context.params.cliToolAvailability?.native).toEqual([]);
+        expect(ownerGrant.toolsAllow?.toSorted()).toEqual([
+          "exec",
+          "gateway",
+          "intent",
+          "read",
+          "write",
+        ]);
+        expect(grant.toolsAllow).toEqual(ownerGrant.toolsAllow);
+        expect(context.promptToolNamesHash).toBe(owner.promptToolNamesHash);
+        expect(context.reusableCliSession).toEqual({
+          mode: "reuse",
+          sessionId: "native-parent-session",
+        });
+        expect(grant.toolsAllow).toEqual(context.params.cliToolAvailability?.openClaw);
+        expect(grant.trustedInternalHandoff).toEqual(trustedInternalHandoff);
+        const scoped = await resolveMcpLoopbackScopedTools({
+          cfg: run.config,
+          context: grant,
+          admittedRunContext: context.params.admittedRunContext,
+        });
+        const toolSchema = buildMcpToolSchema(scoped.tools);
+        expect(toolSchema).toEqual(buildMcpToolSchema(ownerTools.tools));
+        const deniedPath = path.join(fixture.session.dir, "completion-must-not-write.txt");
+        for (const [name, args, denial] of [
+          [
+            "write",
+            { path: deniedPath, content: "must not execute" },
+            "write is outside the authority this completion turn carries from its requester. Do not retry write.",
+          ],
+          [
+            "gateway",
+            { action: "config.get" },
+            "gateway needs the owner's authority, and this turn was not started by the owner. Do not retry gateway.",
+          ],
+          [
+            "intent",
+            { action: "create", description: "Must not create", triggerKeywords: ["completion"] },
+            "intent needs the owner's authority, and this turn was not started by the owner. Do not retry intent.",
+          ],
+        ] as const) {
+          await expect(
+            handleMcpJsonRpc({
+              message: {
+                jsonrpc: "2.0",
+                id: name,
+                method: "tools/call",
+                params: { name, arguments: args },
+              },
+              tools: scoped.tools,
+              toolSchema,
+            }),
+          ).resolves.toMatchObject({ result: { content: [{ type: "text", text: denial }] } });
+        }
+        expect(fs.existsSync(deniedPath)).toBe(false);
+        const args = context.preparedBackend.backend.args ?? [];
+        const mcpConfigPath = args[args.indexOf("--mcp-config") + 1];
+        const bundle = JSON.parse(fs.readFileSync(mcpConfigPath ?? "", "utf-8")) as {
+          mcpServers: Record<string, unknown>;
+        };
+        expect(Object.keys(bundle.mcpServers)).toEqual(["openclaw"]);
+      } finally {
+        await context.preparedBackend.cleanup?.();
+      }
+    },
+  );
 
   it.each([
     {

@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { OpenClawSchema } from "../config/zod-schema.js";
 import { getCanonicalUserPreferences } from "../state/user-preferences.js";
 import { prepareControlUiBootstrapPreferences } from "./control-ui-bootstrap-preferences.js";
 
@@ -9,8 +10,14 @@ vi.mock("../state/user-preferences.js", () => ({
 }));
 
 it("includes only the viewer's presentation data and redacts MCP credentials", async () => {
+  using jsonSchema = vi.spyOn(OpenClawSchema, "toJSONSchema");
   const config: OpenClawConfig = {
     ui: { prefs: { locale: "de" } },
+    tts: {
+      provider: "openai",
+      maxTextLength: 1234,
+      providers: { openai: { apiKey: "synthetic-speech-secret" } },
+    },
     models: {
       providers: {
         fixture: {
@@ -42,17 +49,36 @@ it("includes only the viewer's presentation data and redacts MCP credentials", a
   });
   expect(bootstrap).toMatchObject({
     profileId: "synthetic-viewer",
-    config: { ui: { prefs: { locale: "de" } } },
+    config: { ui: { prefs: { locale: "de" } }, tts: { maxTextLength: 1234 } },
     entries: { "ui.themeMode": "light" },
   });
   expect(getCanonicalUserPreferences).toHaveBeenCalledWith(
     "synthetic-viewer",
     expect.arrayContaining(["ui.themeMode", "ui.railShortcuts"]),
   );
-  expect(JSON.stringify(bootstrap)).not.toMatch(/synthetic-(provider|mcp|header|env)-secret/);
+  expect(JSON.stringify(bootstrap)).not.toMatch(
+    /synthetic-(provider|mcp|header|env|speech)-secret/,
+  );
+  expect(jsonSchema).not.toHaveBeenCalled();
   const reader = await prepareControlUiBootstrapPreferences(config, {
     operatorScopes: ["operator.approvals"],
   });
   expect(reader?.config).toBeUndefined();
   expect(reader?.entries).toBeUndefined();
 });
+
+it.each([
+  { tts: undefined, expected: null },
+  { tts: {}, expected: {} },
+])(
+  "distinguishes unconfigured speech from its default limit ($expected)",
+  async ({ tts, expected }) => {
+    const bootstrap = await prepareControlUiBootstrapPreferences(
+      { tts },
+      {
+        operatorScopes: ["operator.admin"],
+      },
+    );
+    expect(bootstrap?.config).toHaveProperty("tts", expected);
+  },
+);

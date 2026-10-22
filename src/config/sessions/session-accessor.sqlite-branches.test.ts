@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import * as sqliteRuntime from "../../infra/node-sqlite.js";
@@ -24,6 +25,11 @@ import {
   upsertSessionEntryCore,
 } from "./session-accessor.js";
 import {
+  branchMessage,
+  branchSummary as summary,
+  expectBranchList,
+} from "./session-accessor.sqlite-branch-fixtures.test-support.js";
+import {
   invalidateSessionBranchCache,
   type SessionBranchSummaryReadRequest,
 } from "./session-accessor.sqlite-branches.js";
@@ -45,6 +51,7 @@ import {
   waitForSessionTranscriptIndexReconcilesInStateDir,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
+import { maintenanceLane, rotateDatabaseWorkers } from "./session-transcript-worker-resources.js";
 
 const { tempDirs, createSession, createSiblingSession } = useSessionMessageCutFixtures();
 const diagnosticCleanups: Array<() => void> = [];
@@ -71,27 +78,14 @@ function trackFullTranscriptLoads(env: NodeJS.ProcessEnv): () => number {
 
 function trackBranchSummaryReads(): () => number {
   let reads = 0;
-  const postMessage: unknown = Object.getOwnPropertyDescriptor(
-    Worker.prototype,
-    "postMessage",
-  )?.value;
-  if (typeof postMessage !== "function") {
-    throw new Error("expected Worker.postMessage to be an own method");
-  }
+  // oxlint-disable-next-line typescript/unbound-method -- Reflect.apply preserves the worker receiver.
+  const postMessage = Worker.prototype.postMessage;
   vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
     this: Worker,
     ...args: Parameters<Worker["postMessage"]>
   ) {
     const [message] = args;
-    if (
-      message &&
-      typeof message === "object" &&
-      "input" in message &&
-      message.input &&
-      typeof message.input === "object" &&
-      "kind" in message.input &&
-      message.input.kind === "branch-summaries"
-    ) {
+    if (isRecord(message) && isRecord(message.input) && message.input.kind === "branch-summaries") {
       reads++;
     }
     Reflect.apply(postMessage, this, args);
@@ -99,7 +93,63 @@ function trackBranchSummaryReads(): () => number {
   return () => reads;
 }
 
+function expectActiveBranch(
+  result: unknown,
+  leafEntryId: string,
+  headline: string,
+  messageCount?: number,
+) {
+  expect(result).toMatchObject({
+    status: "ok",
+    branches: expect.arrayContaining([
+      expect.objectContaining({
+        active: true,
+        leafEntryId,
+        headline,
+        ...(messageCount === undefined ? {} : { messageCount }),
+      }),
+    ]),
+  });
+}
+
 describe("SQLite session branches", () => {
+  it("retains a cold branch reader across concurrent viewers and transcript writes", async () => {
+    const { env, scope } = await createSession();
+    const sibling = await createSiblingSession({
+      env,
+      sessionId: "branch-reader-sibling",
+      sessionKey: "agent:main:branch-reader-sibling",
+      headline: "Sibling conversation",
+    });
+    await rotateDatabaseWorkers(maintenanceLane);
+    const rotations = vi.spyOn(maintenanceLane.pool, "rotate");
+    const scopes = [scope, sibling];
+    const before = await Promise.all(scopes.map(listSessionBranches));
+    expect(before).toEqual([
+      expect.objectContaining({ status: "ok" }),
+      { status: "ok", branches: [expect.objectContaining({ headline: "Sibling conversation" })] },
+    ]);
+
+    await appendTranscriptMessage(sibling, {
+      eventId: "branch-reader-answer",
+      parentId: "branch-reader-sibling-user",
+      message: { role: "assistant", content: "Updated sibling answer" },
+    });
+    const after = await Promise.all(scopes.map(listSessionBranches));
+    expect(after[0]).toEqual(before[0]);
+    expect(after[1]).toEqual({
+      status: "ok",
+      branches: [
+        expect.objectContaining({
+          headline: "Updated sibling answer",
+          leafEntryId: "branch-reader-answer",
+          messageCount: 2,
+        }),
+      ],
+    });
+    expect(rotations).not.toHaveBeenCalled();
+  });
+
   it("coalesces concurrent viewers and skips restoration for unchanged summaries", async () => {
     const { scope } = await createSession();
     const branchReads = trackBranchSummaryReads();
@@ -119,7 +169,7 @@ describe("SQLite session branches", () => {
     expect(restore).not.toHaveBeenCalled();
   });
 
-  it("carries summaries into fresh readers and invalidates changed transcripts", async () => {
+  it("carries summaries between read snapshots and invalidates changed transcripts", async () => {
     const { env, scope } = await createSession();
     const database = openOpenClawAgentDatabase({ agentId, env });
     const request: SessionBranchSummaryReadRequest = {
@@ -157,17 +207,7 @@ describe("SQLite session branches", () => {
     });
     const rawLoads = () => counters.reduce((total, counter) => total + counter.loads, 0);
     const first = readSessionBranchSummariesInWorker(request);
-    expect(first).toMatchObject({
-      status: "ok",
-      branches: expect.arrayContaining([
-        expect.objectContaining({
-          active: true,
-          leafEntryId: "assistant-2",
-          headline: "second answer",
-          messageCount: 4,
-        }),
-      ]),
-    });
+    expectActiveBranch(first, "assistant-2", "second answer", 4);
     if (first.status !== "ok" || !first.branches[0]) {
       throw new Error("expected worker branch summaries");
     }
@@ -200,17 +240,7 @@ describe("SQLite session branches", () => {
       message: { role: "assistant", content: "third answer" },
     });
     const appended = readSessionBranchSummariesInWorker(request);
-    expect(appended).toMatchObject({
-      status: "ok",
-      branches: expect.arrayContaining([
-        expect.objectContaining({
-          active: true,
-          leafEntryId: "assistant-3",
-          headline: "third answer",
-          messageCount: 5,
-        }),
-      ]),
-    });
+    expectActiveBranch(appended, "assistant-3", "third answer", 5);
     expect(rawLoads()).toBe(2);
     expect(
       rowCounters.reduce((total, counter) => total + counter.loads, 0) - rowsBeforeAppend,
@@ -227,17 +257,12 @@ describe("SQLite session branches", () => {
       ),
     );
     await waitForSessionTranscriptIndexReconcilesInStateDir(env.OPENCLAW_STATE_DIR);
-    expect(readSessionBranchSummariesInWorker(request)).toMatchObject({
-      status: "ok",
-      branches: expect.arrayContaining([
-        expect.objectContaining({
-          active: true,
-          leafEntryId: "assistant-3",
-          headline: "rewritten answer",
-          messageCount: 5,
-        }),
-      ]),
-    });
+    expectActiveBranch(
+      readSessionBranchSummariesInWorker(request),
+      "assistant-3",
+      "rewritten answer",
+      5,
+    );
     expect(rawLoads()).toBe(3);
   });
 
@@ -250,17 +275,8 @@ describe("SQLite session branches", () => {
       sessionKey: fixture.scope.sessionKey,
     };
     const first = readSessionBranchSummariesInWorker(request);
-    expect(first).toMatchObject({
-      status: "ok",
-      branches: [
-        {
-          active: true,
-          leafEntryId: "history-assistant",
-          headline: "Preserved response",
-          messageCount: 2,
-        },
-      ],
-    });
+    const branches = [summary("history-assistant", "Preserved response", 2, true)];
+    expect(first).toMatchObject({ status: "ok", branches });
     await expect(
       coldStorage.runSessionColdStorageMaintenance({ config: maintenanceConfig(storePath) }),
     ).resolves.toMatchObject({ archivedTranscripts: 1 });
@@ -269,49 +285,9 @@ describe("SQLite session branches", () => {
     );
     await expect(listSessionBranches(fixture.scope)).resolves.toMatchObject({
       status: "ok",
-      branches: [
-        {
-          active: true,
-          leafEntryId: "history-assistant",
-          headline: "Preserved response",
-          messageCount: 2,
-        },
-      ],
+      branches,
     });
     expect(readSessionBranchSummariesInWorker(request)).toEqual(first);
-  });
-
-  it("reuses unchanged summaries across fifty active sessions without repeating worker reads", async () => {
-    const { env } = await createSession();
-    const scopes = [];
-    for (let index = 0; index < 50; index++) {
-      scopes.push(
-        await createSiblingSession({
-          env,
-          sessionId: `viewer-${index}`,
-          sessionKey: `agent:main:viewer-${index}`,
-          headline: `Conversation ${index}`,
-        }),
-      );
-    }
-    const branchReads = trackBranchSummaryReads();
-    for (let round = 0; round < 2; round++) {
-      for (const scope of scopes) {
-        await expect(listSessionBranches(scope)).resolves.toEqual({
-          status: "ok",
-          branches: [
-            {
-              active: true,
-              leafEntryId: `${scope.sessionId}-user`,
-              headline: scope.headline,
-              messageCount: 1,
-              updatedAt: "2026-07-18T01:00:01.000Z",
-            },
-          ],
-        });
-      }
-      expect(branchReads()).toBe(scopes.length);
-    }
   });
 
   it("recomputes summaries after physical database replacement with identical watermarks", async () => {
@@ -331,8 +307,8 @@ describe("SQLite session branches", () => {
     await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual(first);
     expect(branchReads()).toBe(2);
     await expect(listSessionBranches({ agentId, env, sessionKey })).resolves.toEqual(first);
-    // Without a host write receipt, a newly admitted read-only database stays uncached.
-    expect(branchReads()).toBe(3);
+    // The retained reader keeps the replacement's admission valid for the host cache.
+    expect(branchReads()).toBe(2);
     expect(isOpenClawAgentDatabaseOpen(database.path)).toBe(false);
   });
 
@@ -408,28 +384,13 @@ describe("SQLite session branches", () => {
       const branchReads = trackBranchSummaryReads();
       await listSessionBranches({ agentId, env, sessionKey });
 
+      const source = { agentId, env, sessionKey };
       const result =
         mode === "rewind"
-          ? await rewindSessionToMessage({
-              agentId,
-              env,
-              entryId: "user-2",
-              sessionKey,
-            })
+          ? await rewindSessionToMessage({ ...source, entryId: "user-2" })
           : mode === "switch"
-            ? await switchSessionBranch({
-                agentId,
-                env,
-                leafEntryId: "off-path-user",
-                sessionKey,
-              })
-            : await forkSessionAtMessage({
-                agentId,
-                env,
-                entryId: "user-2",
-                sessionKey,
-                targetKey,
-              });
+            ? await switchSessionBranch({ ...source, leafEntryId: "off-path-user" })
+            : await forkSessionAtMessage({ ...source, entryId: "user-2", targetKey });
       expect(result.status).toBe("created");
 
       const readsBeforeAliasRead = branchReads();
@@ -457,12 +418,7 @@ describe("SQLite session branches", () => {
     const finalText = "🦞".repeat(130);
     const events = [
       { type: "session", id: scope.sessionId, version: 3 },
-      {
-        type: "message",
-        id: "prompt",
-        parentId: null,
-        message: { role: "user", content: "prompt" },
-      },
+      branchMessage("prompt", null, "prompt"),
       {
         type: "message",
         id: "answer",
@@ -502,12 +458,7 @@ describe("SQLite session branches", () => {
     const fullTranscriptLoads = trackFullTranscriptLoads(env);
     const branchReads = trackBranchSummaryReads();
 
-    await expect(listSessionBranches(scope)).resolves.toEqual({
-      status: "ok",
-      branches: [
-        { active: true, headline: `${"🦞".repeat(119)}…`, leafEntryId: "tool-7", messageCount: 10 },
-      ],
-    });
+    await expectBranchList(scope, [summary("tool-7", `${"🦞".repeat(119)}…`, 10, true)]);
     expect(fullTranscriptLoads()).toBe(0);
     expect(branchReads()).toBe(1);
 
@@ -551,18 +502,8 @@ describe("SQLite session branches", () => {
             input: {
               entry: { sessionId: scope.sessionId, updatedAt: 1, incognito: true },
               transcriptEvents: [
-                {
-                  type: "message",
-                  id: "user-2",
-                  parentId: null,
-                  message: { role: "user", content: "second prompt" },
-                },
-                {
-                  type: "message",
-                  id: "assistant-2",
-                  parentId: "user-2",
-                  message: { role: "assistant", content: "second answer" },
-                },
+                branchMessage("user-2", null, "second prompt"),
+                branchMessage("assistant-2", "user-2", "second answer", { role: "assistant" }),
               ],
             },
           },
@@ -577,32 +518,14 @@ describe("SQLite session branches", () => {
       throw new Error("Memory branch listing opened SQLite");
     });
     try {
-      await expect(listSessionBranches(scope)).resolves.toMatchObject({
-        status: "ok",
-        branches: expect.arrayContaining([
-          expect.objectContaining({
-            active: true,
-            leafEntryId: "assistant-2",
-            headline: "second answer",
-          }),
-        ]),
-      });
+      expectActiveBranch(await listSessionBranches(scope), "assistant-2", "second answer");
       await appendTranscriptMessage(scope, {
         eventId: "assistant-3",
         parentId: "assistant-2",
         now: Date.parse("2026-07-18T00:00:07.000Z"),
         message: { role: "assistant", content: "fresh memory answer" },
       });
-      await expect(listSessionBranches(scope)).resolves.toMatchObject({
-        status: "ok",
-        branches: expect.arrayContaining([
-          expect.objectContaining({
-            active: true,
-            leafEntryId: "assistant-3",
-            headline: "fresh memory answer",
-          }),
-        ]),
-      });
+      expectActiveBranch(await listSessionBranches(scope), "assistant-3", "fresh memory answer");
       await expect(
         listSessionBranches({
           ...scope,
@@ -628,7 +551,7 @@ describe("SQLite session branches", () => {
     // Match replacement's resident writer so warmup and measurement use the maintenance reader.
     // Replacement below still forces a fresh graph scan.
     openOpenClawAgentDatabase({ agentId, env });
-    await expect(listSessionBranches(scope)).resolves.toEqual({ status: "ok", branches: [] });
+    await expectBranchList(scope, []);
     const events: Parameters<typeof replaceTranscriptEvents>[1] = [
       {
         type: "session",
@@ -636,20 +559,13 @@ describe("SQLite session branches", () => {
         version: 3,
         timestamp: "2026-08-30T00:00:00.000Z",
       },
-      {
-        type: "message",
-        id: "orphan-user",
-        parentId: "missing-ancestor",
+      branchMessage("orphan-user", "missing-ancestor", "orphan prompt", {
         timestamp: "2026-08-30T00:00:01.000Z",
-        message: { role: "user", content: "orphan prompt" },
-      },
-      {
-        type: "message",
-        id: "orphan-assistant",
-        parentId: "orphan-user",
+      }),
+      branchMessage("orphan-assistant", "orphan-user", "orphan answer", {
+        role: "assistant",
         timestamp: "2026-08-30T00:00:02.000Z",
-        message: { role: "assistant", content: "orphan answer" },
-      },
+      }),
     ];
     for (let index = 1; index <= 12_554; index += 1) {
       events.push({
@@ -688,12 +604,8 @@ describe("SQLite session branches", () => {
     }
     expect(elapsedMs).toBeLessThan(1_000);
     expect(result.branches).toHaveLength(1_362);
-    expect(result.branches.find((branch) => branch.leafEntryId === "orphan-assistant")).toEqual({
-      leafEntryId: "orphan-assistant",
-      headline: "orphan answer",
-      messageCount: 2,
-      updatedAt: "2026-08-30T00:00:02.000Z",
-      active: false,
-    });
+    expect(result.branches.find((branch) => branch.leafEntryId === "orphan-assistant")).toEqual(
+      summary("orphan-assistant", "orphan answer", 2, false, "2026-08-30T00:00:02.000Z"),
+    );
   }, 15_000);
 });

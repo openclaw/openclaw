@@ -86,15 +86,29 @@ Session grants never authorize deletion or changes to an existing session's
 sharing and visibility.
 Archiving a session does not grant permission to delete it.
 
+Session readers can review changes with `sessions.diff` for conversations they can
+currently read when the session has an admitted project checkout. Unmanaged
+private sandbox file workspaces return `not_git`; their Files browser remains
+available. Existing sharing, agent, and sandbox access rules still apply; no
+general Gateway read grant is needed.
+
 Session readers can use `sessions.files.list`, `sessions.files.get`, and
-`sessions.files.assets` for files within a visible session's workspace. Reads
-outside that root also require the session's file tools to allow Gateway-host
+`sessions.files.assets` for files within the workspace admitted to both the
+visible session and the caller. A caller whose role requires a sandbox cannot
+read an unsandboxed host workspace through another person's visible session,
+including an administrator's managed worktree. This does not require write access:
+ordinary read-only callers retain their admitted in-root reads, and shared
+sandbox sessions retain their own private workspace. Reads outside that root also
+require the session's file tools to allow Gateway-host
 access and the caller to have current permission to start a turn there, including
 ownership, sharing-role, agent, and sandbox checks. Such previews are read-only.
 `canvas.document.preview` also accepts session read access: it returns the
 caller's HTML and isolated sandbox location without reading session data.
-Stored Canvas documents still require broader read access through
-`canvas.document.view`.
+For saved inline widgets, `canvas.document.view` also accepts session read access
+with `sessionKey`: the Gateway verifies a successful saved `show_widget` result
+for that document in a conversation the caller can currently read. Inaccessible
+conversations and unbound documents remain denied. Broad `operator.read` callers
+retain document-ID-only access.
 
 In the Control UI, session writers can use **New Session**, send messages in
 their own conversations, and stop their own active runs. Their model, effort,
@@ -473,6 +487,8 @@ Connection authority is resolved in this order:
 2. OpenClaw unions a matching server-side identity grant with those scopes.
 3. OpenClaw applies `x-openclaw-scopes` to the final union as the session cap.
    An absent header means no cap. A present-but-empty header yields no scopes.
+   The intersection honors scope implications: an `operator.write` grant with
+   an `operator.read` cap yields only `operator.read`.
 4. If the authenticated profile has an effective named operator role,
    OpenClaw intersects the result with that role's configured scope ceiling.
 

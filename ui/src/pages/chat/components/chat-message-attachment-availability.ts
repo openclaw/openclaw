@@ -256,7 +256,7 @@ export function retryAssistantAttachmentAvailability(
   allowImage = false,
 ): void {
   if (!isLocalAssistantAttachmentSource(source)) {
-    options.onRequestUpdate?.();
+    options.onMediaChange?.();
     return;
   }
   const resource = observeAssistantAttachment(source, options);
@@ -265,7 +265,7 @@ export function retryAssistantAttachmentAvailability(
     resolveAssistantAttachmentAvailability(source, options, true);
   }
   notifyChatMediaResourceSubscribers(resource);
-  options.onRequestUpdate?.();
+  options.onMediaChange?.();
 }
 
 export function reportAssistantImageFailure(
@@ -397,7 +397,7 @@ function observeAssistantAttachment(source: string, options: ImageRenderOptions)
   const resource = observeChatMediaResource<AssistantAttachmentAvailability>(
     "assistant-attachment",
     JSON.stringify([cacheScope, options.policyKey]),
-    options.onRequestUpdate,
+    options.onMediaChange,
     source,
     cacheScope,
   );

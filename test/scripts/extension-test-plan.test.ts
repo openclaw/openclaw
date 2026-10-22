@@ -7,6 +7,12 @@ import {
 } from "../../scripts/lib/changed-extensions.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import * as extensionTestPlan from "../../scripts/lib/extension-test-plan.mts";
+import {
+  createExtensionTestProcessTargetChunks as chunksFor,
+  listExtensionTestFilesForRoots as listFiles,
+  resolveExtensionTestPlan as resolvePlan,
+  splitExtensionTestJobTargets as splitTargets,
+} from "../../scripts/lib/extension-test-plan.mts";
 import { resolveBoundedVitestInvocations } from "../../scripts/run-vitest.mts";
 import {
   buildFullSuiteVitestRunPlans,
@@ -20,83 +26,66 @@ import { databaseWorkerExtensionTestFiles } from "../vitest/vitest.extension-dat
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const telegramConfig = "test/vitest/vitest.extension-telegram.config.ts";
 const workerConfig = "test/vitest/vitest.extension-database-workers.config.ts";
+const telegramFile = (name: string) => `extensions/telegram/src/${name}.test.ts`;
+function writeFixture(cwd: string, file: string) {
+  const absolute = path.join(cwd, file);
+  mkdirSync(path.dirname(absolute), { recursive: true });
+  writeFileSync(absolute, file.endsWith(".json") ? "{}\n" : "export {};\n");
+  return file;
+}
 afterEach(() => vi.restoreAllMocks());
 
 describe("extension executable test plans", () => {
   it("reuses singleton invocation costs across envelopes without pricing multi-file pools as serial", () => {
-    const files = ["extensions/telegram/src/one.test.ts", "extensions/telegram/src/two.test.ts"];
-    const added = "extensions/telegram/src/three.test.ts";
-    const key = extensionTestPlan.createExtensionTestTimingKey;
+    const [one, two, added] = ["one", "two", "three"].map(telegramFile);
+    const files = [one!, two!];
+    const { createExtensionTestTimingKey: key, estimateExtensionTestCost: cost } =
+      extensionTestPlan;
+    const singleton = (file: string, value: number, env?: Record<string, string>) => ({
+      [key(workerConfig, [file], env, "singleton-invocation")!]: value,
+    });
     const timings: Record<string, number> = {
-      [key(workerConfig, [files[0]!], undefined, "singleton-invocation")!]: 10,
-      [key(workerConfig, [files[1]!], undefined, "singleton-invocation")!]: 21,
+      ...singleton(one!, 10),
+      ...singleton(two!, 21),
       [key(workerConfig, [], undefined, "wrapper-overhead")!]: 3,
     };
     const samples = vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(timings);
-    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files)).toBe(34);
-    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 3, [...files, added])).toBe(
-      42,
-    );
-    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, [files[1]!, added])).toBe(
-      32,
-    );
+    expect(cost(workerConfig, 2, files)).toBe(34);
+    expect(cost(workerConfig, 3, [...files, added!])).toBe(42);
+    expect(cost(workerConfig, 2, [two!, added!])).toBe(32);
     timings[key(workerConfig, files)!] = 60;
-    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files)).toBe(60);
+    expect(cost(workerConfig, 2, files)).toBe(60);
     const parallelEnv = { OPENCLAW_VITEST_MAX_WORKERS: "2", OPENCLAW_TEST_PROJECTS_PARALLEL: "2" };
     const parallelKey = key(workerConfig, files, parallelEnv)!;
     expect(parallelKey).not.toBe(key(workerConfig, files));
     expect(key(workerConfig, files, { ...parallelEnv, OPENCLAW_TEST_PROJECTS_PARALLEL: "1" })).toBe(
       key(workerConfig, files),
     );
-    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files, parallelEnv)).toBe(
-      60,
-    );
+    expect(cost(workerConfig, 2, files, parallelEnv)).toBe(60);
     timings[parallelKey] = 25;
-    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files, parallelEnv)).toBe(
-      25,
-    );
-    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files)).toBe(60);
+    expect(cost(workerConfig, 2, files, parallelEnv)).toBe(25);
+    expect(cost(workerConfig, 2, files)).toBe(60);
 
     samples.mockReturnValue({
       [key(telegramConfig, [files[0]!], undefined, "singleton-invocation")!]: 100,
       [key(telegramConfig, [files[1]!], undefined, "singleton-invocation")!]: 100,
       [key(telegramConfig, [], undefined, "wrapper-overhead")!]: 20,
     });
-    expect(extensionTestPlan.estimateExtensionTestCost(telegramConfig, 2, files)).toBe(9);
+    expect(cost(telegramConfig, 2, files)).toBe(9);
     samples.mockReturnValue({
-      [key(
-        workerConfig,
-        [files[0]!],
-        { OPENCLAW_VITEST_MAX_WORKERS: "8" },
-        "singleton-invocation",
-      )!]: 100,
-      [key(
-        workerConfig,
-        [files[1]!],
-        { OPENCLAW_VITEST_MAX_WORKERS: "2", MODE: "other" },
-        "singleton-invocation",
-      )!]: 100,
+      ...singleton(one!, 100, { OPENCLAW_VITEST_MAX_WORKERS: "8" }),
+      ...singleton(two!, 100, { OPENCLAW_VITEST_MAX_WORKERS: "2", MODE: "other" }),
     });
-    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 2, files)).toBe(16);
-    const only = [files[0]!];
+    expect(cost(workerConfig, 2, files)).toBe(16);
+    const only = [one!];
     samples.mockReturnValue({ [key(workerConfig, only)!]: 22 });
-    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 1, only)).toBe(22);
-    samples.mockReturnValue({
-      [key(workerConfig, only)!]: 22,
-      [key(workerConfig, only, undefined, "singleton-invocation")!]: 20,
-      [key(workerConfig, [], undefined, "wrapper-overhead")!]: 2,
-    });
-    expect(extensionTestPlan.estimateExtensionTestCost(workerConfig, 1, only)).toBe(22);
+    expect(cost(workerConfig, 1, only)).toBe(22);
   });
 
   it("requests overlap only for selected Telegram singleton envelopes", async () => {
     const { createChangedExtensionConfigShards } =
       await import("../../scripts/lib/ci-extension-test-shards.mts");
-    const files = [
-      "extensions/telegram/src/telegram-ingress-spool.test.ts",
-      "extensions/telegram/src/telegram-ingress-drain.test.ts",
-      "extensions/telegram/src/webhook.test.ts",
-    ];
+    const files = ["telegram-ingress-spool", "telegram-ingress-drain", "webhook"].map(telegramFile);
     vi.spyOn(extensionTestPlan, "listExtensionTestFilesForRoots").mockReturnValue(files);
     const shards = createChangedExtensionConfigShards(["extensions/telegram"], {
       targets: new Set(files),
@@ -127,16 +116,12 @@ describe("extension executable test plans", () => {
         `${root}/dist/generated.test.ts`,
         `${root}/node_modules/dependency/copied.test.ts`,
       ];
-      for (const file of files) {
-        const absolute = path.join(cwd, file);
-        mkdirSync(path.dirname(absolute), { recursive: true });
-        writeFileSync(absolute, file.endsWith(".json") ? "{}\n" : "export {};\n");
-      }
+      files.forEach((file) => writeFixture(cwd, file));
       expect(listAvailableExtensionIds(cwd)).toEqual(
         [snapshot, "fixture", `manifest-${snapshot}`].toSorted(),
       );
-      expect(extensionTestPlan.listExtensionTestFilesForRoots([root], cwd)).toEqual([selected]);
-      expect(extensionTestPlan.listExtensionTestFilesForRoots([selected], cwd)).toEqual([selected]);
+      expect(listFiles([root], cwd)).toEqual([selected]);
+      expect(listFiles([selected], cwd)).toEqual([selected]);
     }
   });
 
@@ -145,7 +130,7 @@ describe("extension executable test plans", () => {
     { selection: "path", targetArg: "extensions/active-memory", cwd: process.cwd() },
     { selection: "cwd", cwd: path.join(process.cwd(), "extensions/active-memory") },
   ])("plans manifest-only Active Memory by $selection", ({ targetArg, cwd }) => {
-    expect(extensionTestPlan.resolveExtensionTestPlan({ targetArg, cwd })).toMatchObject({
+    expect(resolvePlan({ targetArg, cwd })).toMatchObject({
       extensionId: "active-memory",
       extensionDir: "extensions/active-memory",
       hasTests: true,
@@ -179,7 +164,7 @@ describe("extension executable test plans", () => {
       const root = `extensions/${name}`;
       const config = `test/vitest/vitest.extension-${name}.config.ts`;
       const expected = (await listVitestConfigTestFiles(config)).toSorted();
-      const chunks = extensionTestPlan.createExtensionTestProcessTargetChunks(config, [root]);
+      const chunks = chunksFor(config, [root]);
       expect(chunks).toHaveLength(Math.ceil(expected.length / limit));
       expect(chunks.every((chunk) => chunk.length > 0 && chunk.length <= limit)).toBe(true);
       expect(Math.max(...chunks.map((chunk) => chunk.length))).toBeLessThanOrEqual(
@@ -209,7 +194,7 @@ describe("extension executable test plans", () => {
 
   it("keeps raw untracked root discovery while excluding non-default tests before chunking", () => {
     const cwd = tempDirs.make("test-plan-eligibility-");
-    const root = path.join(cwd, "extensions/fixture");
+    const root = "extensions/fixture";
     const names = [
       "newly-authored.test.ts",
       "api.live.test.ts",
@@ -217,24 +202,31 @@ describe("extension executable test plans", () => {
       "._copy.test.ts",
       "vendor/copied.test.ts",
     ];
-    const files = names.map((name) => {
-      const file = path.join(root, name);
-      mkdirSync(path.dirname(file), { recursive: true });
-      writeFileSync(file, "export {};\n");
-      return path.relative(cwd, file).replaceAll("\\", "/");
-    });
-    const roots = [path.relative(cwd, root)];
-    expect(extensionTestPlan.listExtensionTestFilesForRoots(roots, cwd).toSorted()).toEqual(
-      files.toSorted(),
-    );
+    const files = names.map((name) => writeFixture(cwd, `${root}/${name}`));
+    const roots = [root];
+    expect(listFiles(roots, cwd).toSorted()).toEqual(files.toSorted());
     for (const config of [telegramConfig, workerConfig]) {
-      expect(
-        extensionTestPlan.createExtensionTestProcessTargetChunks(config, roots, [], cwd),
-      ).toEqual([[files[0]]]);
-      expect(extensionTestPlan.splitExtensionTestJobTargets(config, files)).toEqual([[files[0]]]);
-      expect(
-        extensionTestPlan.createExtensionTestProcessTargetChunks(config, files.slice(1), [], cwd),
-      ).toEqual([]);
+      expect(chunksFor(config, roots, [], cwd)).toEqual([[files[0]]]);
+      expect(splitTargets(config, files)).toEqual([[files[0]]]);
+      expect(chunksFor(config, files.slice(1), [], cwd)).toEqual([]);
+    }
+  });
+
+  it("keeps Workboard directory and glob selections beside explicit PostgreSQL files", () => {
+    const cwd = tempDirs.make("extension-mixed-postgres-");
+    const files = [
+      "extensions/workboard/src/store.test.ts",
+      "extensions/workboard/src/retained-roots.test.ts",
+      "extensions/logbook/src/postgres-store.test.ts",
+      "extensions/matrix/src/matrix/account-state.postgres.test.ts",
+    ];
+    files.forEach((file) => writeFixture(cwd, file));
+    for (const workboard of ["extensions/workboard", "extensions/workboard/**/*.test.ts"]) {
+      const plans = buildVitestRunPlans([workboard, ...files.slice(2)], cwd);
+      expect(plans.flatMap((plan) => plan.includePatterns ?? []).toSorted()).toEqual(
+        files.toSorted(),
+      );
+      expect(plans.every((plan) => plan.config === workerConfig)).toBe(true);
     }
   });
 
@@ -262,12 +254,10 @@ describe("extension executable test plans", () => {
 
   it.each([
     ["live", "extensions/telegram/src/api-fetch.live.test.ts"],
-    ["e2e", "extensions/telegram/src/bot.media.warning-topics.e2e.test.ts"],
+    ["e2e", "extensions/telegram/src/bot.media.stickers-and-fragments.e2e.test.ts"],
   ] as const)("preserves explicit %s config selection", async (kind, file) => {
     const config = `test/vitest/vitest.${kind}.config.ts`;
-    expect(extensionTestPlan.createExtensionTestProcessTargetChunks(config, [file])).toEqual([
-      [file],
-    ]);
+    expect(chunksFor(config, [file])).toEqual([[file]]);
     const args = ["run", "--config", config, file];
     expect(resolveBoundedVitestInvocations(args)).toEqual([args]);
     expect(await listVitestConfigTestFiles(config)).toContain(file);

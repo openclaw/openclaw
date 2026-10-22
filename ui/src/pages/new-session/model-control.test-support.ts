@@ -1,13 +1,22 @@
-import { createComponent } from "solid-js";
-import { vi } from "vitest";
+import { expect, onTestFinished, vi } from "vitest";
 import type { GatewayAgentRow, ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGateway } from "../../app/context.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
 import { modelCatalogEventInvalidation } from "../../lib/model-catalog-cache.ts";
-import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { flush } from "../../test-helpers/solid-settle.ts";
+import { mountSolid } from "../../test-helpers/solid-render.tsx";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { NewSessionModelControlView } from "./model-control-view.tsx";
 import { NewSessionModelControl } from "./model-control.ts";
+
+type ViewProps = Parameters<typeof NewSessionModelControlView>[0];
+const views = new WeakMap<NewSessionModelControl, ReturnType<typeof mountSolid<ViewProps>>>();
+const openedPickers = new WeakSet<HTMLDetailsElement>();
+const subscribe =
+  <T>(listeners: Set<T>) =>
+  (listener: T) => {
+    listeners.add(listener);
+    return () => listeners.delete(listener);
+  };
 
 export function contextWith(
   models: ModelCatalogEntry[],
@@ -29,9 +38,7 @@ export function contextWith(
       undefined,
       modelCatalogEventInvalidation({ event, payload }) ?? "preserve",
     );
-    for (const listener of listeners) {
-      listener({ type: "event", event, payload });
-    }
+    listeners.forEach((listener) => listener({ type: "event", event, payload }));
   };
   const ownerListeners = {
     gateway: new Set<() => void>(),
@@ -39,22 +46,25 @@ export function contextWith(
     sessions: new Set<() => void>(),
     config: new Set<() => void>(),
   };
-  const subscribe = (owner: keyof typeof ownerListeners) => (listener: () => void) => {
-    ownerListeners[owner].add(listener);
-    return () => ownerListeners[owner].delete(listener);
-  };
   const publish = (owner: keyof typeof ownerListeners) =>
     ownerListeners[owner].forEach((listener) => listener());
+  const defaults = {
+    model: "openai/gpt-5.6-luna",
+    modelProvider: "openai",
+    agentRuntime: {
+      id: runtime,
+      ...(cloudPlacementSupported === undefined ? {} : { cloudPlacementSupported }),
+      ...(devicePlacementSupported === undefined ? {} : { devicePlacementSupported }),
+      source: "defaults",
+    },
+  };
   const context = {
     navigate,
-    agents: { subscribe: subscribe("agents") },
-    config: { subscribe: subscribe("config"), current: {} },
+    agents: { subscribe: subscribe(ownerListeners.agents) },
+    config: { subscribe: subscribe(ownerListeners.config), current: {} },
     gateway: {
-      subscribe: subscribe("gateway"),
-      subscribeEvents: (listener: Parameters<ApplicationGateway["subscribeEvents"]>[0]) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
+      subscribe: subscribe(ownerListeners.gateway),
+      subscribeEvents: subscribe(listeners),
       snapshot: {
         phase: "connected",
         client: { request },
@@ -62,22 +72,8 @@ export function contextWith(
       },
     },
     sessions: {
-      subscribe: subscribe("sessions"),
-      state: {
-        result: {
-          defaults: {
-            model: "openai/gpt-5.6-luna",
-            modelProvider: "openai",
-            agentRuntime: {
-              id: runtime,
-              ...(cloudPlacementSupported === undefined ? {} : { cloudPlacementSupported }),
-              ...(devicePlacementSupported === undefined ? {} : { devicePlacementSupported }),
-              source: "defaults",
-            },
-          },
-          sessions: [],
-        },
-      },
+      subscribe: subscribe(ownerListeners.sessions),
+      state: { result: { defaults, sessions: [] } },
     },
   } as unknown as ApplicationContext;
   return { context, navigate, request, emitCatalogChanged, publish, ownerListeners };
@@ -93,22 +89,41 @@ export function renderControl(
     thinkingDefault: "medium",
   },
 ) {
-  const { container } = mountSolid(() =>
-    createComponent(NewSessionModelControlView, {
-      control,
-      options: {
-        ...(agent ? { agent } : {}),
-        agentId,
-        context,
-        sending: false,
-      },
-    }),
-  );
-  const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker");
-  if (picker) {
+  const props: ViewProps = {
+    control,
+    options: { ...(agent ? { agent } : {}), agentId, context, sending: false },
+  };
+  let view = views.get(control);
+  if (view) {
+    view.update(props);
+  } else {
+    const container = document.body.appendChild(document.createElement("div"));
+    view = mountSolid(NewSessionModelControlView, props, container);
+    views.set(control, view);
+    onTestFinished(() => {
+      views.delete(control);
+      container.remove();
+    });
+  }
+  const container = view.container;
+  for (const picker of container.querySelectorAll<HTMLDetailsElement>(
+    ".chat-controls__model-picker[data-chat-native-picker], .chat-controls__effort-picker[data-chat-native-picker]",
+  )) {
+    if (openedPickers.has(picker)) {
+      continue;
+    }
+    openedPickers.add(picker);
     picker.open = true;
     picker.dispatchEvent(new Event("toggle"));
     flush();
   }
+  return container;
+}
+
+export async function waitForModelControl(...params: Parameters<typeof renderControl>) {
+  const container = renderControl(...params);
+  await waitForSolid(() =>
+    expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+  );
   return container;
 }

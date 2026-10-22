@@ -19,6 +19,7 @@ const settleRetainedDoctorSessionSources = vi.hoisted(() => vi.fn());
 const withDoctorSqliteMaintenanceLock = vi.hoisted(() => vi.fn());
 const runPostSessionPluginDoctorStateRepairs = vi.hoisted(() => vi.fn());
 
+// mock-isolation: capture transcript diagnostics without terminal output.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({
   note,
 }));
@@ -33,6 +34,7 @@ vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
   runPostSessionPluginDoctorStateRepairs,
 }));
 
+// mock-isolation: isolate incognito-key repair from session import fixtures.
 vi.mock("./doctor-session-incognito-key-repair.js", () => ({
   repairReservedIncognitoSessionKeys,
 }));
@@ -50,6 +52,7 @@ vi.mock("./doctor-session-exec-policy.js", () => ({
   repairLegacySessionExecPolicy: vi.fn(),
 }));
 
+// mock-isolation: isolate canonical-key repair from session import fixtures.
 vi.mock("./doctor-session-canonical-keys.js", () => ({
   repairCanonicalSessionKeys,
 }));
@@ -72,6 +75,7 @@ vi.mock("./doctor-sqlite-maintenance-lock.js", async (importOriginal) => {
 
 import { runSessionTranscriptsHealth } from "../flows/doctor-health-contribution-runners.state.js";
 import type { DoctorHealthFlowContext } from "../flows/doctor-health-contribution-types.js";
+import { showDoctorHealthSummary } from "../flows/doctor-health-contribution.js";
 import { GatewayLockError } from "../infra/gateway-lock.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite-types.js";
@@ -268,6 +272,7 @@ describe("doctor session transcript repair", () => {
       apply: false,
       cfg,
       env,
+      integrityCheck: undefined,
       targets: [],
     });
   });
@@ -358,7 +363,7 @@ describe("doctor session transcript repair", () => {
     );
 
     expect(runDoctorSessionSqlite).toHaveBeenCalledWith(
-      { allAgents: true, cfg, env, mode: "dry-run" },
+      { allAgents: true, cfg, env, mode: "dry-run", integrityCheck: "quick" },
       undefined,
     );
     expect(migrateLegacyMainSessionKeys).toHaveBeenCalledWith({ cfg, env, mode: "detect" });
@@ -366,6 +371,7 @@ describe("doctor session transcript repair", () => {
       apply: false,
       cfg,
       env,
+      integrityCheck: "quick",
       targets: [],
     });
     expect(withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
@@ -380,26 +386,20 @@ describe("doctor session transcript repair", () => {
       ),
       "Session SQLite",
     );
+    showDoctorHealthSummary(ctx);
+    const output = runtime.log.mock.calls.map(([line]) => String(line)).join("\n");
     for (const warning of warnings.slice(0, 5)) {
-      expect(note).toHaveBeenCalledWith(
-        expect.stringContaining(`${storePath}: [${code}] ${warning}`),
-        "Session SQLite",
-      );
+      expect(output).not.toContain(warning);
     }
     expect(issues).toEqual(originalIssues);
     expect(ctx.updateWarnings).toContain(
       `${storePath}: [transcript_missing] Active session transcript is missing.`,
     );
-    const output = note.mock.calls.find(([, title]) => title === "Session SQLite")![0];
     expect(output).toContain("Active session transcript is missing.");
     expect(ctx.updateWarnings).toHaveLength(7);
-    expect(output).toContain(`${count} historical transcript claim(s)`);
-    expect(output).toContain(`${count - 5} omitted`);
-    expect(output).toContain("originals and migration manifests remain protected");
-    expect(output).toContain(
-      "openclaw doctor --session-sqlite dry-run --session-sqlite-all-agents --json",
-    );
-    expect(output).not.toContain("history-5:");
+    expect(output).not.toContain("Historical recovery notices:");
+    expect(output).not.toContain(`${count} historical recovery notice(s)`);
+    expect(ctx.healthFindings).toEqual([]);
     expect(output.split("\n").length).toBeLessThan(20);
   });
 

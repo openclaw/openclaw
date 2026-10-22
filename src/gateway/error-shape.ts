@@ -1,7 +1,10 @@
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/index.js";
+import { renderStorageFailureSummary } from "../agents/failover/assistant-request-failure-copy.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
 import { formatErrorMessageWithCode } from "../infra/errors.js";
+import { classifyGatewayStorageFailure } from "../infra/sqlite-error-diagnostics.js";
+import { hasSqliteWorkerOutcomeUnknown } from "../infra/sqlite-worker-contract.js";
 import {
   AgentDatabaseAdmissionError,
   createAgentDatabaseAdmissionErrorShape,
@@ -15,9 +18,13 @@ export function errorShapeFromError(
   opts?: Parameters<typeof errorShape>[2] & { message?: string },
 ) {
   const { message, ...metadata } = opts ?? {};
-  const ended = collectNestedErrorCandidates(error).find(
-    (candidate) => candidate instanceof IncognitoSessionEndedError,
-  );
+  const candidates = collectNestedErrorCandidates(error);
+  const ended = candidates.find((candidate) => candidate instanceof IncognitoSessionEndedError);
+  const storageMessage = candidates.some(
+    (candidate) => classifyGatewayStorageFailure(candidate) === "SQLITE_FULL",
+  )
+    ? renderStorageFailureSummary("SQLITE_FULL")
+    : undefined;
   const shape =
     error instanceof AgentDatabaseAdmissionError
       ? createAgentDatabaseAdmissionErrorShape(error.refusal)
@@ -27,7 +34,19 @@ export function errorShapeFromError(
             retryable: false,
             details: { code: ended.code },
           })
-        : errorShape(code, message ?? formatErrorMessageWithCode(error), metadata);
+        : storageMessage
+          ? errorShape(ErrorCodes.UNAVAILABLE, storageMessage, {
+              ...metadata,
+              // A retryable resource failure must not replay an unacknowledged write.
+              retryable: !hasSqliteWorkerOutcomeUnknown(error) && metadata.retryable !== false,
+              details: { code: "SQLITE_FULL" },
+            })
+          : errorShape(code, message ?? formatErrorMessageWithCode(error), metadata);
+  // Native in-process callers need the original typed failure; it must never
+  // become part of the wire response or serialized dedupe payload.
+  if (error instanceof Error) {
+    Object.defineProperty(shape, "cause", { value: error });
+  }
   copyErrorDiagnostic(error, shape);
   return shape;
 }

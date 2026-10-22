@@ -231,7 +231,7 @@ export function applySessionActorPhaseWithBackend(
           },
         });
       } else {
-        lifecycle(command.input.sessionId, command.input.expectedState, patch);
+        lifecycle(command.input.sessionId, command.input.expectedState, patch, undefined, true);
       }
       break;
     }

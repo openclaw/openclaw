@@ -290,9 +290,6 @@ export async function dispatchMattermostInboundTurn(
             account.accountId,
             channelId,
             effectiveReplyToId,
-            {
-              agentId: route.agentId,
-            },
           );
         }
       };

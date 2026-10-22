@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
-import { createComponent, createSignal } from "solid-js";
+import { Dynamic } from "@solidjs/web";
+import { createComponent, createSignal, Show } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { selectBackgroundSource } from "../../../packages/gateway-protocol/src/schema/background-preferences.ts";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
@@ -11,17 +12,18 @@ import type {
   ApplicationTheme,
 } from "../app/context.ts";
 import { loadSettings } from "../app/settings.ts";
-import {
-  createApplicationContextProvider,
-  createApplicationGateway,
-} from "../test-helpers/application-context.ts";
+import { createApplicationGateway } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../test-helpers/solid-settle.ts";
 import { readBackgroundImage } from "./session-background-image.ts";
+import {
+  createBackgroundLayoutRef,
+  SessionBackgroundLayoutScope,
+} from "./session-background-layout-context.tsx";
 import { backgroundImageOpacityLimit } from "./session-background-opacity.ts";
 import { SessionBackgroundView } from "./session-background-view.tsx";
-import { SessionBackground, backgroundSourceForSurface } from "./session-background.ts";
+import { SessionBackground } from "./session-background.tsx";
 
 const profilePreferences = vi.hoisted(() => ({ ready: true }));
 // mock-isolation: Drive readiness without hydrating the process-wide profile preference cache.
@@ -56,7 +58,6 @@ function fixture(resourceBasePath = "/control") {
     branding: resolveThemeBranding(undefined),
     mode: "dark",
     resolvedMode: "dark",
-    serverSelection: null,
     appliedPalette: null,
     recordServerSelection: () => undefined,
     setMode: () => undefined,
@@ -76,10 +77,17 @@ function fixture(resourceBasePath = "/control") {
   };
 }
 
-function mountBackground(context: ApplicationContext) {
+function mountBackground(
+  context: ApplicationContext,
+  surfaceKind: SessionBackground["surface"] = "new-session",
+) {
   const background = document.createElement("openclaw-session-background") as SessionBackground;
   background.context = context;
-  background.surface = "new-session";
+  background.surface = surfaceKind;
+  if (surfaceKind === "preview") {
+    document.body.append(background);
+    return background;
+  }
   const surface = document.createElement("div");
   surface.className = "new-session-page";
   surface.append(background);
@@ -90,6 +98,15 @@ function mountBackground(context: ApplicationContext) {
 
 const imageResponse = () =>
   new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "image/jpeg" } });
+const readImage = (context: ApplicationContext, assetId = "asset-a") =>
+  readBackgroundImage(context, assetId, {
+    signal: new AbortController().signal,
+    isCurrent: () => true,
+  });
+const fadeEnd = (background: HTMLElement) =>
+  background.style.getPropertyValue("--session-background-fade-end");
+const themeImage = (background: HTMLElement) =>
+  background.querySelector<HTMLElement>(".session-background__image--theme");
 
 const createObjectUrl = vi.fn<typeof URL.createObjectURL>();
 const revokeObjectUrl = vi.fn<typeof URL.revokeObjectURL>();
@@ -134,6 +151,10 @@ it("keeps the fade centered on the composer after resizing and releases its obse
   scroll.className = "new-session-page__scroll";
   scroll.scrollTop = 30;
   background.parentElement!.append(composer, scroll);
+  background.layoutTargets = [
+    { kind: "composer", element: composer },
+    { kind: "scroll", element: scroll },
+  ];
   vi.spyOn(background, "getBoundingClientRect").mockReturnValue(
     DOMRect.fromRect({ y: 20, height: 1000 }),
   );
@@ -141,19 +162,73 @@ it("keeps the fade centered on the composer after resizing and releases its obse
   composerRect.mockReturnValue(DOMRect.fromRect({ y: 100, height: 40 }));
   source.settings.background = selectBackgroundSource({ kind: "theme" });
   source.notify();
-  await waitForSolid(() => {
-    expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("130px");
-  });
+  await waitForSolid(() => expect(fadeEnd(background)).toBe("130px"));
   expect(observe).toHaveBeenCalledWith(composer);
   composerRect.mockReturnValue(DOMRect.fromRect({ y: 150, height: 60 }));
   resize();
-  expect(background.style.getPropertyValue("--session-background-fade-end")).toBe("190px");
+  expect(fadeEnd(background)).toBe("190px");
   disconnect.mockClear();
   background.remove();
   await waitForSolid(() => expect(disconnect).toHaveBeenCalledOnce());
 });
 
+it("uses registered composers in DOM order and releases a removed draft target", async () => {
+  const source = fixture();
+  source.settings.background = selectBackgroundSource({ kind: "theme" });
+  const [firstVisible, setFirstVisible] = createSignal(true);
+  function Composer(props: { top: number; registered: boolean }) {
+    const attach = createBackgroundLayoutRef("composer");
+    return createComponent(Dynamic, {
+      component: "div",
+      class: "agent-chat__input",
+      ref: (element: HTMLDivElement) => {
+        vi.spyOn(element, "getBoundingClientRect").mockReturnValue(
+          DOMRect.fromRect({ y: props.top, height: 100 }),
+        );
+        if (props.registered) {
+          attach(element);
+        }
+      },
+    });
+  }
+  const view = mountSolid(() =>
+    createComponent(SessionBackgroundLayoutScope, {
+      get children() {
+        return [
+          createComponent(Composer, { top: 800, registered: false }),
+          createComponent(SessionBackgroundView, {
+            context: source.context,
+            surface: "new-session",
+          }),
+          createComponent(SessionBackgroundLayoutScope, {
+            get children() {
+              return createComponent(Composer, { top: 50, registered: true });
+            },
+          }),
+          createComponent(Show, {
+            get when() {
+              return firstVisible();
+            },
+            get children() {
+              return () => createComponent(Composer, { top: 200, registered: true });
+            },
+          }),
+          createComponent(Composer, { top: 300, registered: true }),
+        ];
+      },
+    }),
+  );
+  const background = view.container.querySelector<HTMLElement>("openclaw-session-background")!;
+  await waitForSolid(() => expect(fadeEnd(background)).toBe("250px"));
+  setFirstVisible(false);
+  await waitForSolid(() => expect(fadeEnd(background)).toBe("350px"));
+  setFirstVisible(true);
+  await waitForSolid(() => expect(fadeEnd(background)).toBe("250px"));
+  view.unmount();
+});
+
 it("tracks late and replaced theme owners without recreating the lazy background slot", async () => {
+  const warn = vi.spyOn(console, "warn");
   const source = fixture();
   source.settings.background = selectBackgroundSource({ kind: "none" });
   const [context, setContext] = createSignal<ApplicationContext | undefined>(undefined);
@@ -195,63 +270,42 @@ it("tracks late and replaced theme owners without recreating the lazy background
   flush();
   expect(slot.hidden).toBe(true);
   expect(view.container.querySelector("openclaw-session-background")).toBe(slot);
+  expect(warn.mock.calls.flat().join("\n")).not.toContain("STRICT_READ_UNTRACKED");
 });
 
-it("keeps absent preferences distinct from None and independent disabled surfaces", () => {
-  expect(backgroundSourceForSurface(undefined, "session")).toBeUndefined();
-  const background = selectBackgroundSource({ kind: "custom", assetId: "asset-a" });
-  expect(backgroundSourceForSurface(background, "new-session")).toEqual(background.source);
-  expect(backgroundSourceForSurface(background, "session")).toEqual({ kind: "none" });
-  expect(
-    backgroundSourceForSurface({ ...background, source: { kind: "none" } }, "new-session"),
-  ).toEqual({ kind: "none" });
-  expect(backgroundSourceForSurface({ ...background, visibility: 0 }, "new-session")).toEqual({
-    kind: "none",
+it("inherits provider preferences and subscriptions until an explicit context overrides them", async () => {
+  const warn = vi.spyOn(console, "warn");
+  const inherited = fixture();
+  const provider = createSolidApplicationContextProvider(inherited.context);
+  const view = mountSolid(() => createComponent(SessionBackground, { surface: "new-session" }), {
+    wrapper: provider.wrapper,
   });
+  const background = view.container.querySelector<SessionBackground>(
+    "openclaw-session-background",
+  )!;
+  await waitForSolid(() =>
+    expect(background.querySelector("img")?.getAttribute("src")).toBe("blob:background-a"),
+  );
+  inherited.settings.background = selectBackgroundSource({ kind: "theme" });
+  inherited.notify();
+  await waitForSolid(() =>
+    expect(background.querySelector(".session-background__image--theme")).not.toBeNull(),
+  );
+  expect(revokeObjectUrl).toHaveBeenCalledWith("blob:background-a");
+
+  const explicit = fixture();
+  explicit.settings.background = selectBackgroundSource({ kind: "none" });
+  background.context = explicit.context;
+  await waitForSolid(() =>
+    expect(background.querySelector(".session-background__image")).toBeNull(),
+  );
+  inherited.settings.background = selectBackgroundSource({ kind: "custom", assetId: "asset-b" });
+  inherited.notify();
+  await background.updateComplete;
+  expect(background.querySelector(".session-background__image")).toBeNull();
+  expect(fetch).toHaveBeenCalledTimes(1);
+  expect(warn.mock.calls.flat().join("\n")).not.toContain("STRICT_READ_UNTRACKED");
 });
-
-it.each(["Solid provider"])(
-  "inherits %s preferences and subscriptions until an explicit context overrides them",
-  async (providerKind) => {
-    const inherited = fixture();
-    let background: SessionBackground;
-    if (providerKind === "Lit provider") {
-      const provider = createApplicationContextProvider(inherited.context);
-      document.body.append(provider);
-      background = document.createElement("openclaw-session-background") as SessionBackground;
-      background.surface = "new-session";
-      mountSolid(() => background, { container: provider });
-    } else {
-      const provider = createSolidApplicationContextProvider(inherited.context);
-      const view = mountSolid(
-        () => createComponent(SessionBackground, { surface: "new-session" }),
-        { wrapper: provider.wrapper },
-      );
-      background = view.container.querySelector<SessionBackground>("openclaw-session-background")!;
-    }
-    await waitForSolid(() =>
-      expect(background.querySelector("img")?.getAttribute("src")).toBe("blob:background-a"),
-    );
-    inherited.settings.background = selectBackgroundSource({ kind: "theme" });
-    inherited.notify();
-    await waitForSolid(() =>
-      expect(background.querySelector(".session-background__image--theme")).not.toBeNull(),
-    );
-    expect(revokeObjectUrl).toHaveBeenCalledWith("blob:background-a");
-
-    const explicit = fixture();
-    explicit.settings.background = selectBackgroundSource({ kind: "none" });
-    background.context = explicit.context;
-    await waitForSolid(() =>
-      expect(background.querySelector(".session-background__image")).toBeNull(),
-    );
-    inherited.settings.background = selectBackgroundSource({ kind: "custom", assetId: "asset-b" });
-    inherited.notify();
-    await background.updateComplete;
-    expect(background.querySelector(".session-background__image")).toBeNull();
-    expect(fetch).toHaveBeenCalledTimes(1);
-  },
-);
 
 it("does not read custom bytes or render theme URLs when accessibility suppresses artwork", async () => {
   vi.stubGlobal("matchMedia", () => ({
@@ -287,10 +341,7 @@ it("recomputes custom image contrast only when painted palette tokens change, no
 
 it("reads a same-origin mounted asset using the canonical auth primitive without caching", async () => {
   const { context } = fixture();
-  const url = await readBackgroundImage(context, "asset-a", {
-    signal: new AbortController().signal,
-    isCurrent: () => true,
-  });
+  const url = await readImage(context);
   expect(url).toBe("blob:background-a");
   expect(fetch).toHaveBeenCalledWith(
     `${location.origin}/control/__openclaw__/users/background/asset-a`,
@@ -306,14 +357,13 @@ it("reads a same-origin mounted asset using the canonical auth primitive without
 it("does not request bytes before a profile is established or for a URL-shaped asset id", async () => {
   const { context, gateway, state } = fixture();
   gateway.publish({ ...state, selfUser: null });
-  const options = { signal: new AbortController().signal, isCurrent: () => true };
-  await expect(readBackgroundImage(context, "asset-a", options)).rejects.toMatchObject({
+  await expect(readImage(context)).rejects.toMatchObject({
     name: "AbortError",
   });
   gateway.publish(state);
-  await expect(
-    readBackgroundImage(context, "https://external.invalid/a", options),
-  ).rejects.toMatchObject({ name: "AbortError" });
+  await expect(readImage(context, "https://external.invalid/a")).rejects.toMatchObject({
+    name: "AbortError",
+  });
   expect(fetch).not.toHaveBeenCalled();
 });
 
@@ -323,10 +373,7 @@ it("discards a profile switch during response body reading", async () => {
   const response = imageResponse();
   const readBody = vi.spyOn(response, "blob").mockReturnValue(body.promise);
   vi.mocked(fetch).mockResolvedValue(response);
-  const pending = readBackgroundImage(context, "asset-a", {
-    signal: new AbortController().signal,
-    isCurrent: () => true,
-  });
+  const pending = readImage(context);
   const rejection = expect(pending).rejects.toMatchObject({ name: "AbortError" });
   await waitForSolid(() => expect(readBody).toHaveBeenCalled());
   gateway.publish({ ...state, selfUser: { id: "profile-b" } });
@@ -340,10 +387,7 @@ it("never retries an old credential after identity changed during a rejected fet
   context.gateway.connection.password = "fallback-credential";
   const deferred = createDeferred<Response>();
   vi.mocked(fetch).mockReturnValue(deferred.promise);
-  const pending = readBackgroundImage(context, "asset-a", {
-    signal: new AbortController().signal,
-    isCurrent: () => true,
-  });
+  const pending = readImage(context);
   const rejection = expect(pending).rejects.toMatchObject({ name: "AbortError" });
   gateway.publish({ ...state, selfUser: { id: "profile-b" } });
   deferred.resolve(new Response(null, { status: 401 }));
@@ -351,21 +395,15 @@ it("never retries an old credential after identity changed during a rejected fet
   expect(fetch).toHaveBeenCalledTimes(1);
 });
 
-it.each([["wss://remote.example/control", "https://remote.example"]])(
-  "does not infer a remote HTTP mount from %s",
-  async (gatewayUrl, origin) => {
-    const { context } = fixture();
-    context.gateway.connection.gatewayUrl = gatewayUrl;
-    await readBackgroundImage(context, "asset-a", {
-      signal: new AbortController().signal,
-      isCurrent: () => true,
-    });
-    expect(fetch).toHaveBeenCalledWith(
-      `${origin}/__openclaw__/users/background/asset-a`,
-      expect.anything(),
-    );
-  },
-);
+it("does not infer a remote HTTP mount from the WebSocket path", async () => {
+  const { context } = fixture();
+  context.gateway.connection.gatewayUrl = "wss://remote.example/control";
+  await readImage(context);
+  expect(fetch).toHaveBeenCalledWith(
+    "https://remote.example/__openclaw__/users/background/asset-a",
+    expect.anything(),
+  );
+});
 
 it("preserves the explicit same-origin development proxy mount", async () => {
   const gatewayUrl = "wss://remote.example/control";
@@ -374,10 +412,7 @@ it("preserves the explicit same-origin development proxy mount", async () => {
   const { context } = fixture(`${proxyPath}/control`);
   context.gateway.connection.gatewayUrl = gatewayUrl;
 
-  await readBackgroundImage(context, "asset-a", {
-    signal: new AbortController().signal,
-    isCurrent: () => true,
-  });
+  await readImage(context);
   expect(fetch).toHaveBeenCalledWith(
     `${location.origin}${proxyPath}/control/__openclaw__/users/background/asset-a`,
     expect.anything(),
@@ -440,25 +475,7 @@ it("preserves the Beacon 7:1 contrast target at the brightest possible image pix
   expect(opacity).toBeLessThan(backgroundImageOpacityLimit(surface, [foreground], 4.5));
 });
 
-it("bounds opacity from actual text and surface colors instead of assuming dark mode", () => {
-  const dark = backgroundImageOpacityLimit(
-    [14, 16, 21],
-    [
-      [188, 188, 192],
-      [139, 139, 148],
-    ],
-  );
-  const light = backgroundImageOpacityLimit(
-    [250, 250, 250],
-    [
-      [40, 40, 40],
-      [100, 100, 100],
-    ],
-  );
-  expect(dark).toBeGreaterThan(0);
-  expect(dark).toBeLessThan(0.2);
-  expect(light).toBeGreaterThan(0);
-  expect(light).toBeLessThanOrEqual(0.32);
+it("caps equal-foreground palettes and preserves existing low contrast", () => {
   expect(backgroundImageOpacityLimit([128, 128, 128], [[128, 128, 128]])).toBeLessThanOrEqual(0.32);
   expect(backgroundImageOpacityLimit([20, 20, 20], [[70, 70, 70]])).toBe(0);
 });
@@ -480,52 +497,32 @@ it("does not restore a private mirror before profile hydration, including unchan
   expect(revokeObjectUrl).toHaveBeenCalledWith("blob:background-a");
 });
 
-it("paints pre-dimmed plugin artwork at upload strength in both presentations", async () => {
-  const { context, settings, notify } = fixture();
-  document.documentElement.dataset.themeBackground = "plugin";
-  try {
-    settings.background = {
-      ...selectBackgroundSource({ kind: "theme" }),
-      presentation: "full-bleed",
-      visibility: 0.5,
-    };
-    const background = document.createElement("openclaw-session-background") as SessionBackground;
-    background.context = context;
-    background.surface = "preview";
-    document.body.append(background);
-    await background.updateComplete;
-    const opacity = () =>
-      background.querySelector<HTMLElement>(".session-background__image--theme")?.style.opacity;
-    // The token already carries upload dimming; the bundled 0.7 cap would dim it twice.
-    expect(opacity()).toBe("1");
-    settings.background = { ...settings.background, visibility: 0.25 };
-    notify();
-    await background.updateComplete;
-    expect(opacity()).toBe("0.5");
-  } finally {
-    delete document.documentElement.dataset.themeBackground;
-  }
-});
-
-it("also keeps bundled Full bleed artwork beneath the permanent overlay", async () => {
-  const { context, settings, notify } = fixture();
-  settings.background = {
-    ...selectBackgroundSource({ kind: "theme" }),
-    presentation: "full-bleed",
-    visibility: 1,
-  };
-  const background = document.createElement("openclaw-session-background") as SessionBackground;
-  background.context = context;
-  background.surface = "preview";
-  document.body.append(background);
-  await background.updateComplete;
-  expect(
-    background.querySelector<HTMLElement>(".session-background__image--theme")?.style.opacity,
-  ).toBe("0.7");
-  settings.background = { ...settings.background, visibility: 0.5 };
-  notify();
-  await background.updateComplete;
-  expect(
-    background.querySelector<HTMLElement>(".session-background__image--theme")?.style.opacity,
-  ).toBe("0.35");
-});
+it.each([
+  { artwork: "pre-dimmed plugin", plugin: true, visibility: 0.5, opacity: "1", dimmed: "0.5" },
+  { artwork: "bundled", plugin: false, visibility: 1, opacity: "0.7", dimmed: "0.35" },
+])(
+  "paints $artwork Full bleed artwork beneath its overlay",
+  async ({ plugin, visibility, opacity, dimmed }) => {
+    const { context, settings, notify } = fixture();
+    if (plugin) {
+      document.documentElement.dataset.themeBackground = "plugin";
+    }
+    try {
+      settings.background = {
+        ...selectBackgroundSource({ kind: "theme" }),
+        presentation: "full-bleed",
+        visibility,
+      };
+      const background = mountBackground(context, "preview");
+      await background.updateComplete;
+      // The token already carries upload dimming; the bundled 0.7 cap would dim it twice.
+      expect(themeImage(background)?.style.opacity).toBe(opacity);
+      settings.background = { ...settings.background, visibility: visibility / 2 };
+      notify();
+      await background.updateComplete;
+      expect(themeImage(background)?.style.opacity).toBe(dimmed);
+    } finally {
+      delete document.documentElement.dataset.themeBackground;
+    }
+  },
+);

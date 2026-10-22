@@ -5,6 +5,7 @@ import type {
   NodeWorkerLaunchInput,
   NodeWorkerSupervisorIdentity,
 } from "../worker/node-supervisor-protocol.js";
+import type { NodeWorkerProcessesChanged } from "../worker/worker-process-observation.js";
 import type { NodeWorkerCapacity } from "./node-worker-capacity.js";
 import type { NodeWorkerContainerEngine } from "./node-worker-container-engine.js";
 import type { NodeWorkerContainerLifecycle } from "./node-worker-container-lifecycle.js";
@@ -162,8 +163,8 @@ export type NodeWorkerSupervisorOptions = {
   bundleRoot?: string;
   env?: NodeJS.ProcessEnv;
   capacity?: number;
-  capacityWaitMs?: number;
   onCapacityChanged?: (capacity: NodeWorkerCapacitySnapshot) => void;
+  onProcessesChanged?: (binding: NodeWorkerProcessesChanged) => void;
   workspace?: NodeWorkerWorkspaceRuntime;
   containerEngine?: NodeWorkerContainerEngine;
   containerImage?: string;
@@ -195,6 +196,7 @@ export function nodeWorkerReceiptMatchesOwner(
 }
 
 export type NodeWorkerChildLifecycleOptions = {
+  onProcessesChanged?: NodeWorkerSupervisorOptions["onProcessesChanged"];
   bundleRoot: string;
   nativeInferenceSnapshot?: NodeWorkerNativeInferenceSnapshot;
   engineEnv: NodeJS.ProcessEnv;

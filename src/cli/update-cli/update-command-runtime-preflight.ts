@@ -126,7 +126,7 @@ export async function resolvePackageRuntimePreflight(params: {
           throw captureError;
         }
         activationRuntime = { ...activationRuntime, kind: "bun", env: runtimeEnv };
-        const runtime = await resolveBunRuntimeInfo(activationRuntime.path, undefined, runtimeEnv);
+        const runtime = await resolveBunRuntimeInfo(activationRuntime.path, runtimeEnv);
         if (runtime.status === "probe-failed") {
           throw runtime.error;
         }

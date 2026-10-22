@@ -7,6 +7,7 @@ import type {
   WorkerWriteOperationContext,
 } from "../state/worker-operation-registry.js";
 import { isSessionStateUpstreamCurrentInDatabase } from "./session-state-events.kernel.js";
+import { captureSessionUpstreamMutation } from "./session-upstream-links-publication.worker.js";
 import {
   deleteSessionUpstreamLinkInDatabase,
   listWatchedSessionUpstreamLinksInDatabase,
@@ -23,33 +24,37 @@ export const sessionUpstreamOperations = {
     input: SessionUpstreamWorkerOperations["sessionUpstream.upsert"]["input"],
     context,
   ) =>
-    context.write(({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      const { source } = input;
-      if (
-        source &&
-        !sessionUpstreamLinkSourceMatches(
-          readSessionUpstreamLinkInDatabase(db, source.sessionKey, source.agentId),
-          source,
-        )
-      ) {
-        throw new Error("Session upstream source changed during initialization");
-      }
-      return upsertSessionUpstreamLinkInDatabase(db, input.link, input.now, input.ifAbsent);
-    }),
+    context.write(({ db }) =>
+      captureSessionUpstreamMutation(db, () => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        const { source } = input;
+        if (
+          source &&
+          !sessionUpstreamLinkSourceMatches(
+            readSessionUpstreamLinkInDatabase(db, source.sessionKey, source.agentId),
+            source,
+          )
+        ) {
+          throw new Error("Session upstream source changed during initialization");
+        }
+        return upsertSessionUpstreamLinkInDatabase(db, input.link, input.now, input.ifAbsent);
+      }),
+    ),
   "sessionUpstream.delete": (
     input: SessionUpstreamWorkerOperations["sessionUpstream.delete"]["input"],
     context,
   ) =>
-    context.write(({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
-      return deleteSessionUpstreamLinkInDatabase(
-        db,
-        input.sessionKey,
-        input.agentId,
-        input.expected,
-      );
-    }),
+    context.write(({ db }) =>
+      captureSessionUpstreamMutation(db, () => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        return deleteSessionUpstreamLinkInDatabase(
+          db,
+          input.sessionKey,
+          input.agentId,
+          input.expected,
+        );
+      }),
+    ),
   "sessionUpstream.settle": (
     {
       expected,
@@ -58,37 +63,33 @@ export const sessionUpstreamOperations = {
     }: SessionUpstreamWorkerOperations["sessionUpstream.settle"]["input"],
     context,
   ) =>
-    context.write(({ db }) => {
-      requestSessionEntryCurrentAdmission(sessionEntryCurrentSource, {
-        stage: "transaction",
-        facts: undefined,
-      });
-      if (!isSessionStateUpstreamCurrentInDatabase(db, expected)) {
-        return false;
-      }
-      const query = getNodeSqliteKysely<Pick<DB, "session_upstream_links">>(db);
-      if (settlement.kind === "missing") {
-        executeSqliteQuerySync(
-          db,
-          query
-            .deleteFrom("session_upstream_links")
-            .where("session_key", "=", expected.sessionKey)
-            .where("agent_id", "=", expected.agentId),
-        );
-      } else {
-        executeSqliteQuerySync(
-          db,
-          query
-            .updateTable("session_upstream_links")
-            .set({
-              last_marker_json: JSON.stringify(settlement.marker),
-              last_scanned_at: settlement.now,
-              updated_at: settlement.now,
-            })
-            .where("session_key", "=", expected.sessionKey)
-            .where("agent_id", "=", expected.agentId),
-        );
-      }
-      return true;
-    }),
+    context.write(({ db }) =>
+      captureSessionUpstreamMutation(db, () => {
+        requestSessionEntryCurrentAdmission(sessionEntryCurrentSource, {
+          stage: "transaction",
+          facts: undefined,
+        });
+        if (!isSessionStateUpstreamCurrentInDatabase(db, expected)) {
+          return false;
+        }
+        const query = getNodeSqliteKysely<Pick<DB, "session_upstream_links">>(db);
+        if (settlement.kind === "missing") {
+          deleteSessionUpstreamLinkInDatabase(db, expected.sessionKey, expected.agentId);
+        } else {
+          executeSqliteQuerySync(
+            db,
+            query
+              .updateTable("session_upstream_links")
+              .set({
+                last_marker_json: JSON.stringify(settlement.marker),
+                last_scanned_at: settlement.now,
+                updated_at: settlement.now,
+              })
+              .where("session_key", "=", expected.sessionKey)
+              .where("agent_id", "=", expected.agentId),
+          );
+        }
+        return true;
+      }),
+    ),
 } satisfies WorkerOperationHandlers<WorkerWriteOperationContext>;

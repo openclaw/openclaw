@@ -205,10 +205,6 @@ export function identifyError(error: Error) {
   }
   return { type: error instanceof AggregateError ? ("aggregate" as const) : ("error" as const) };
 }
-function unreachableErrorNode(node: never): never {
-  throw new Error(`Unexpected shared-state worker error node: ${String(node)}`);
-}
-
 export function createError(node: ErrorIdentity & { message: string }): Error {
   if (isMessageOnlyErrorIdentity(node)) {
     const ErrorType = MESSAGE_ONLY_ERRORS[node.type];
@@ -275,10 +271,7 @@ export function createError(node: ErrorIdentity & { message: string }): Error {
     case "state-migration":
       return new OpenClawStateDatabaseSchemaMigrationRequiredError(node.kind, node.pathname);
     case "agent-media-migration":
-      return new OpenClawAgentDatabaseMediaMigrationRequiredError(
-        node.pathname,
-        node.schemaVersion,
-      );
+      break;
   }
-  return unreachableErrorNode(node);
+  return new OpenClawAgentDatabaseMediaMigrationRequiredError(node.pathname, node.schemaVersion);
 }

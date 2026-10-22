@@ -563,6 +563,8 @@ class ChatController internal constructor(
 
   @Volatile private var progressCardScopeKey: String? = null
 
+  @Volatile private var progressCardNeedsRetry = false
+
   private val _sessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
   private val presentedSessions = MutableStateFlow<List<ChatSessionEntry>>(emptyList())
   val sessions: StateFlow<List<ChatSessionEntry>> = presentedSessions.asStateFlow()
@@ -890,6 +892,7 @@ class ChatController internal constructor(
     synchronized(gatewayScopeApplyLock) {
       historyLoadGeneration.incrementAndGet()
       restoreRunStateOnReconnect = true
+      progressCardNeedsRetry = true
       pendingHealthRefresh = null
       _healthOk.value = false
       _defaultModelRef.value = null
@@ -2076,9 +2079,15 @@ class ChatController internal constructor(
     previousState: ChatOutboxBranchState?,
     purpose: BranchRefreshPurpose,
     mutationLease: ChatOutboxMutationLease? = null,
+    historySequence: Long = synchronized(gatewayScopeApplyLock) { latestAppliedHistoryRequest },
   ): Boolean {
-    val generation = sessionBranchesRefreshGeneration.incrementAndGet()
-    val historySequence = synchronized(gatewayScopeApplyLock) { latestAppliedHistoryRequest }
+    val generation =
+      synchronized(gatewayScopeApplyLock) {
+        // Post-history outbox IO can finish after a newer history has started its branch read.
+        // The superseded history must not retire that read with stale branch evidence.
+        if (historySequence != latestAppliedHistoryRequest) return false
+        sessionBranchesRefreshGeneration.incrementAndGet()
+      }
 
     fun isCurrent(): Boolean =
       synchronized(gatewayScopeApplyLock) {
@@ -3616,7 +3625,7 @@ class ChatController internal constructor(
 
       "health" -> {
         refreshQuestions()
-        refreshProgressCard()
+        if (progressCardNeedsRetry) refreshProgressCard()
         if (restoreRunStateOnReconnect) {
           refreshHistoryForRecovery(forceHealth = true)
         } else {
@@ -4453,7 +4462,7 @@ class ChatController internal constructor(
         publishOutbox()
         appliedHistoryEntry?.let { acknowledgeUnreadIfNeeded(it.key, it, requireActive = true) }
         if (refreshBranches && branchSnapshot != null) {
-          refreshSessionBranches(branchSnapshot, historyBranchState, BranchRefreshPurpose.Reconcile)
+          refreshSessionBranches(branchSnapshot, historyBranchState, BranchRefreshPurpose.Reconcile, historySequence = requestSequence)
         }
         pollHealthIfNeeded(sessionKey, generation)
         if (outboxChanged) kickFlushForRoutedBacklog()
@@ -6764,12 +6773,14 @@ class ChatController internal constructor(
 
   private fun clearProgressCard(clearScopeKey: Boolean = true) {
     progressCardFetchGeneration.incrementAndGet()
+    progressCardNeedsRetry = false
     if (clearScopeKey) progressCardScopeKey = null
     _progressCard.value = null
   }
 
   private fun refreshProgressCard() {
     val generation = progressCardFetchGeneration.incrementAndGet()
+    progressCardNeedsRetry = false
     if (gatewayAdvertisesMethod("progressCard.get") == false) return
     val sessionKey = normalizeRequestedSessionKey(_sessionKey.value)
     val agentId = resolveAgentIdForSessionKey(sessionKey)
@@ -6824,10 +6835,13 @@ class ChatController internal constructor(
       } catch (err: CancellationException) {
         throw err
       } catch (err: Throwable) {
-        if (err is GatewayRequestRejected && err.gatewayError.details?.code == "SESSION_PARTICIPATION_REQUIRED") {
-          publishGatewayState(lease, ::isCurrent) { _progressCard.value = null }
+        publishGatewayState(lease, ::isCurrent) {
+          progressCardNeedsRetry = true
+          if (err is GatewayRequestRejected && err.gatewayError.details?.code == "SESSION_PARTICIPATION_REQUIRED") {
+            _progressCard.value = null
+          }
         }
-        // Transient failures retain the last durable card.
+        // Failed reads retry on health; successful snapshots wait for a change event.
         Log.w("OpenClawChat", "Progress card refresh failed: ${err.message}")
       }
     }

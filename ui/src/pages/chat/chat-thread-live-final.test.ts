@@ -91,6 +91,7 @@ describe("live terminal continuity with pending collaborators", () => {
     { runId: null, localQueue: true },
     { runId: "active", localQueue: true },
     { runId: "active", localQueue: false },
+    { runId: null, localQueue: false },
   ])(
     "keeps the active input before progress through custody with runId=$runId, localQueue=$localQueue",
     ({ runId, localQueue }) => {
@@ -104,6 +105,7 @@ describe("live terminal continuity with pending collaborators", () => {
           continue;
         }
         const rows = build({
+          sessionKey: `agent:main:cold-${runId}-${localQueue}-${pendingInputs.length}`,
           messages: [],
           queue: localQueue ? [local] : [],
           runId,

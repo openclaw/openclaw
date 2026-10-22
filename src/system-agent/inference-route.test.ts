@@ -1,23 +1,44 @@
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
+import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
+import { visitModuleSpecifiers } from "../../scripts/lib/ts-guard-utils.mts";
 import { resolveAgentDir } from "../agents/agent-scope.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../agents/harness/registry.js";
 import { selectAgentHarness } from "../agents/harness/selection.js";
 import { resolveRunWorkspaceDir } from "../agents/workspace-run.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { buildCatalogModel } from "../plugin-sdk/provider-catalog.test-support.js";
 import { SYSTEM_AGENT_ID } from "./agent-id.js";
 import {
   projectInferenceRoute,
-  resolveSystemAgentConfiguredRouteFromConfig,
+  resolveSystemAgentConfiguredRouteFromConfig as resolveRoute,
+  type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
+
+const model = (id: string) => buildCatalogModel(id, { contextWindow: 8192, maxTokens: 2048 });
+
+async function expectSameProjection(
+  before: OpenClawConfig,
+  after: OpenClawConfig,
+  same: boolean,
+  modelTarget?: "utility",
+  afterTarget = modelTarget,
+) {
+  expect(
+    isDeepStrictEqual(
+      await projectInferenceRoute(before, undefined, { modelTarget }),
+      await projectInferenceRoute(after, undefined, { modelTarget: afterTarget }),
+    ),
+  ).toBe(same);
+}
 
 function devConfig(agentRuntime?: string): OpenClawConfig {
   return {
     agents: {
       defaults: { model: "openai/gpt-5.5" },
-      entries: {
-        dev: { workspace: "/tmp/x" },
-      },
+      entries: { dev: { workspace: "/tmp/x" } },
     },
     models: {
       providers: {
@@ -25,17 +46,7 @@ function devConfig(agentRuntime?: string): OpenClawConfig {
           api: "openai-responses",
           baseUrl: "https://api.openai.com/v1",
           ...(agentRuntime ? { agentRuntime: { id: agentRuntime } } : {}),
-          models: [
-            {
-              id: "gpt-5.5",
-              name: "GPT-5.5",
-              reasoning: true,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 128_000,
-              maxTokens: 8_192,
-            },
-          ],
+          models: [model("gpt-5.5")],
         },
       },
     },
@@ -44,70 +55,59 @@ function devConfig(agentRuntime?: string): OpenClawConfig {
 
 function utilityConfig(primary?: string): OpenClawConfig {
   const config = devConfig();
-  return {
-    ...config,
-    meta: { migrations: { utilityModelSeparation: true } },
-    agents: {
-      ...config.agents,
-      defaults: { ...(primary ? { model: primary } : {}), utilityModel: "local-utility/tiny" },
-    },
-    models: {
-      providers: {
-        ...config.models?.providers,
-        "local-utility": {
-          api: "openai-completions",
-          baseUrl: "http://127.0.0.1:9999/v1",
-          models: [
-            {
-              id: "tiny",
-              name: "Local utility fixture",
-              reasoning: false,
-              input: ["text"],
-              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-              contextWindow: 8_192,
-              maxTokens: 2_048,
-            },
-          ],
-        },
-      },
-    },
+  config.meta = { migrations: { utilityModelSeparation: true } };
+  config.agents!.defaults = {
+    ...(primary ? { model: primary } : {}),
+    utilityModel: "local-utility/tiny",
   };
+  config.models!.providers!["local-utility"] = {
+    api: "openai-completions",
+    baseUrl: "http://127.0.0.1:9999/v1",
+    models: [model("tiny")],
+  };
+  return config;
 }
 
-afterEach(() => {
-  clearAgentHarnesses();
-});
+afterEach(clearAgentHarnesses);
 
 describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
-  it.each([false, true])(
-    "retains a literal catalog @ suffix on a native implicit route (ACP=%s)",
-    async (acp) => {
-      const config = utilityConfig();
-      const agent = config.agents?.entries?.dev;
-      assert(agent);
-      if (acp) {
-        agent.model = "harness-only";
-        agent.runtime = { type: "acp" };
-      }
-      delete config.meta;
-      delete config.models?.providers?.openai;
-      const provider = config.models?.providers?.["local-utility"];
-      if (!provider?.models[0]) {
-        throw new Error("Missing local utility fixture");
-      }
-      provider.models[0].id = "tiny@experimental";
+  it("does not directly load completion execution to select a configured route", () => {
+    const root = path.resolve(import.meta.dirname, "../..");
+    const entry = path.join(root, "src/system-agent/inference-route.ts");
+    using parser = createNativeTypeScriptParser({ cwd: root });
+    const [source] = parser.parseSourceFiles([
+      { fileName: entry, text: readFileSync(entry, "utf8") },
+    ]);
+    assert(source);
+    const specifiers: string[] = [];
+    visitModuleSpecifiers(source, ({ specifier }) => specifiers.push(specifier));
+    expect(specifiers).not.toContain("../agents/simple-completion-runtime.js");
+  });
 
-      const route = await resolveSystemAgentConfiguredRouteFromConfig(config);
+  it.each([false, true])("preserves implicit catalog @ IDs (ACP=%s)", async (acp) => {
+    const config = utilityConfig();
+    const agent = config.agents?.entries?.dev;
+    assert(agent);
+    if (acp) {
+      agent.model = "harness-only";
+      agent.runtime = { type: "acp" };
+    }
+    delete config.meta;
+    delete config.models?.providers?.openai;
+    const provider = config.models?.providers?.["local-utility"];
+    assert(provider?.models[0]);
+    provider.models[0].id = "tiny@experimental";
 
-      expect(route).toMatchObject({
-        provider: "local-utility",
-        model: "tiny@experimental",
-        modelLabel: "local-utility/tiny@experimental",
-      });
-      expect(route?.authProfileId).toBeUndefined();
-      expect(route?.modelTarget).toBeUndefined();
-    },
-  );
+    const route = await resolveRoute(config);
+
+    expect(route).toMatchObject({
+      provider: "local-utility",
+      model: "tiny@experimental",
+      modelLabel: "local-utility/tiny@experimental",
+    });
+    expect(route?.authProfileId).toBeUndefined();
+    expect(route?.modelTarget).toBeUndefined();
+  });
 
   it("invalidates the inherited primary verification when only utility separation changes", async () => {
     const legacy = utilityConfig();
@@ -128,23 +128,16 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
       modelTarget: "utility",
     });
     expect(isDeepStrictEqual(primary, utility)).toBe(false);
-    expect(
-      isDeepStrictEqual(
-        await projectInferenceRoute(legacy, undefined, { modelTarget: "utility" }),
-        await projectInferenceRoute(separated, undefined, { modelTarget: "utility" }),
-      ),
-    ).toBe(true);
+    await expectSameProjection(legacy, separated, true, "utility");
   });
 
   it.each([undefined, "openai/gpt-5.5"])(
-    "resolves utility with primary %s without changing config or credential ownership",
+    "separates primary and utility ownership (%s)",
     async (primaryModel) => {
       const config = utilityConfig(primaryModel);
       const original = structuredClone(config);
-      const primary = primaryModel
-        ? await resolveSystemAgentConfiguredRouteFromConfig(config)
-        : undefined;
-      const utility = await resolveSystemAgentConfiguredRouteFromConfig(
+      const primary = primaryModel ? await resolveRoute(config) : undefined;
+      const utility = await resolveRoute(
         config,
         undefined,
         primaryModel ? { modelTarget: "utility" } : undefined,
@@ -170,35 +163,15 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
   );
 
   it.each(["defaults", "agent"] as const)(
-    "invalidates utility verification after a %s utility change while preserving the primary route",
+    "invalidates only the changed %s utility",
     async (scope) => {
       const before = utilityConfig("openai/gpt-5.5");
-      const after: OpenClawConfig = {
-        ...before,
-        agents: {
-          ...before.agents,
-          defaults: {
-            ...before.agents?.defaults,
-            ...(scope === "defaults" ? { utilityModel: "local-utility/other" } : {}),
-          },
-          entries: {
-            dev: {
-              ...before.agents?.entries?.dev,
-              ...(scope === "agent" ? { utilityModel: "local-utility/other" } : {}),
-            },
-          },
-        },
-      };
-
-      expect(
-        isDeepStrictEqual(
-          await projectInferenceRoute(before, undefined, { modelTarget: "utility" }),
-          await projectInferenceRoute(after, undefined, { modelTarget: "utility" }),
-        ),
-      ).toBe(false);
-      expect(
-        isDeepStrictEqual(await projectInferenceRoute(before), await projectInferenceRoute(after)),
-      ).toBe(true);
+      const after = structuredClone(before);
+      const target = scope === "defaults" ? after.agents?.defaults : after.agents?.entries?.dev;
+      assert(target);
+      target.utilityModel = "local-utility/other";
+      await expectSameProjection(before, after, false, "utility");
+      await expectSameProjection(before, after, true);
     },
   );
 
@@ -215,12 +188,7 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
   it("does not reuse a primary verification for the same model selected as utility", async () => {
     const config = utilityConfig("local-utility/tiny");
 
-    expect(
-      isDeepStrictEqual(
-        await projectInferenceRoute(config),
-        await projectInferenceRoute(config, undefined, { modelTarget: "utility" }),
-      ),
-    ).toBe(false);
+    await expectSameProjection(config, config, false, undefined, "utility");
   });
 
   it("treats a setup-materialized first-agent roster as inference-route neutral", async () => {
@@ -239,40 +207,49 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
       },
     };
 
-    expect(
-      isDeepStrictEqual(
-        await projectInferenceRoute(withoutRoster),
-        await projectInferenceRoute(withFirstAgent),
-      ),
-    ).toBe(true);
+    await expectSameProjection(withoutRoster, withFirstAgent, true);
   });
 
   it.each([
     { label: "main", agentIds: ["main"], owner: "main" },
     { label: "non-main", agentIds: ["dev"], owner: "dev" },
     { label: "multi-agent", agentIds: ["main", "dev"], owner: "dev" },
-  ])(
-    "admits the route owner and reserved agent for a $label roster",
-    async ({ agentIds, owner }) => {
-      const config = devConfig();
-      config.agents = {
-        ...config.agents,
-        entries: Object.fromEntries(agentIds.map((id) => [id, {}])),
-      };
-      const route = await resolveSystemAgentConfiguredRouteFromConfig(config, owner);
+  ])("admits owner and reserved agent: $label", async ({ agentIds, owner }) => {
+    const config = devConfig();
+    config.agents!.entries = Object.fromEntries(agentIds.map((id) => [id, {}]));
+    const route = await resolveRoute(config, owner);
 
-      expect(route?.agentId).toBe(owner);
-      for (const agentId of [owner, SYSTEM_AGENT_ID]) {
-        expect(
-          resolveRunWorkspaceDir({
-            workspaceDir: "/tmp/x",
-            agentId,
-            config: route!.runConfig,
-          }).agentId,
-        ).toBe(agentId);
-      }
-    },
-  );
+    expect(route?.agentId).toBe(owner);
+    for (const agentId of [owner, SYSTEM_AGENT_ID]) {
+      expect(
+        resolveRunWorkspaceDir({
+          workspaceDir: "/tmp/x",
+          agentId,
+          config: route!.runConfig,
+        }).agentId,
+      ).toBe(agentId);
+    }
+  });
+
+  it("admits an uncreated owner only for an explicit primary preflight", async () => {
+    const config = devConfig();
+    const before = structuredClone(config);
+    const agentId = "bot-uncreated";
+    const ordinary = await resolveRoute(config, agentId);
+    const candidate = await resolveRoute(config, agentId, {
+      modelTarget: "primary",
+    });
+    assert(ordinary && candidate);
+    expect(() =>
+      resolveRunWorkspaceDir({ workspaceDir: undefined, agentId, config: ordinary.runConfig }),
+    ).toThrow("not present in the configured roster");
+    expect(
+      resolveRunWorkspaceDir({ workspaceDir: undefined, agentId, config: candidate.runConfig })
+        .agentId,
+    ).toBe(agentId);
+    expect(candidate.sourceConfig).toBe(config);
+    expect(config).toEqual(before);
+  });
 
   it("keeps implicit harness selection fallible while forcing explicit policy", async () => {
     const supports = vi.fn((ctx: { modelProvider?: { requestTransportOverrides?: string } }) =>
@@ -291,39 +268,26 @@ describe("resolveSystemAgentConfiguredRouteFromConfig", () => {
       baseUrl: "https://api.openai.com/v1",
       requestTransportOverrides: "present" as const,
     };
-
-    const implicitRoute = await resolveSystemAgentConfiguredRouteFromConfig(devConfig());
-    expect(implicitRoute).toMatchObject({ runner: "embedded" });
-    expect(implicitRoute).not.toHaveProperty("agentHarnessRuntimeOverride");
-    expect(
+    const select = (route: SystemAgentConfiguredRoute | null) =>
       selectAgentHarness({
         provider: "openai",
         modelId: "gpt-5.5",
         modelProvider: preparedModelProvider,
-        config: implicitRoute!.runConfig,
+        config: route!.runConfig,
         agentHarnessRuntimeOverride:
-          implicitRoute!.runner === "embedded"
-            ? implicitRoute!.agentHarnessRuntimeOverride
-            : undefined,
-      }).id,
-    ).toBe("openclaw");
+          route!.runner === "embedded" ? route!.agentHarnessRuntimeOverride : undefined,
+      });
 
-    const explicitRoute = await resolveSystemAgentConfiguredRouteFromConfig(devConfig("codex"));
+    const implicitRoute = await resolveRoute(devConfig());
+    expect(implicitRoute).toMatchObject({ runner: "embedded" });
+    expect(implicitRoute).not.toHaveProperty("agentHarnessRuntimeOverride");
+    expect(select(implicitRoute).id).toBe("openclaw");
+
+    const explicitRoute = await resolveRoute(devConfig("codex"));
     expect(explicitRoute).toMatchObject({
       runner: "embedded",
       agentHarnessRuntimeOverride: "codex",
     });
-    expect(() =>
-      selectAgentHarness({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        modelProvider: preparedModelProvider,
-        config: explicitRoute!.runConfig,
-        agentHarnessRuntimeOverride:
-          explicitRoute!.runner === "embedded"
-            ? explicitRoute!.agentHarnessRuntimeOverride
-            : undefined,
-      }),
-    ).toThrow("authored request transport overrides");
+    expect(() => select(explicitRoute)).toThrow("authored request transport overrides");
   });
 });

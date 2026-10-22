@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
+import { useSqliteWorkerFault } from "../../../test/helpers/sqlite-worker-fault.js";
 import * as admission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
@@ -10,13 +11,13 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { buildConversationIdentity } from "./conversation-identity.js";
-import { trimTranscriptForManualCompact } from "./session-accessor.sqlite-compaction.js";
 import {
   linkSessionConversation,
   prepareConversationIdentities,
   upsertConversationIdentities,
 } from "./session-accessor.sqlite-conversation.js";
 import { replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
+import { readSessionTranscriptWatermark } from "./session-accessor.sqlite-transcript-watermark.js";
 import { replaceTranscriptEventsSync } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import { trimSessionTranscriptForManualCompact } from "./session-accessor.transcript.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
@@ -26,6 +27,16 @@ import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcri
 import { readSessionTranscriptModelContextInWorker } from "./session-transcript-read-worker-runtime.js";
 import * as reconcile from "./session-transcript-reconcile.js";
 import { createManualCompactRecords } from "./transcript-message.test-support.js";
+
+const metadataFault = useSqliteWorkerFault([
+  {
+    name: "reject_manual_compact_metadata_update",
+    match: /^insert into session_nodes\b/iu,
+    sql: `CREATE TEMP TRIGGER reject_manual_compact_metadata_update
+      BEFORE UPDATE OF entry_json ON main.session_nodes
+      BEGIN SELECT RAISE(ABORT, 'injected manual compact metadata failure'); END;`,
+  },
+]);
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -110,6 +121,18 @@ it("trims through the worker and clears accounting without host data SQL", async
       cliSessionIds: { synthetic: "obsolete" },
     });
     replaceTranscriptEventsSync(f.scope, createManualCompactRecords(f.scope.sessionId));
+    const prior = readSessionTranscriptWatermark(f.scope);
+    replaceSessionEntrySync(f.scope, {
+      ...f.read()!,
+      worktree: { id: "adopted", branch: "pr", repoRoot: "/synthetic/current" },
+      priorWorkspace: {
+        worktreeId: "adopted",
+        sessionId: f.scope.sessionId,
+        workspaceDir: "/synthetic/original",
+        fileRoot: "/synthetic/original",
+        through: { generation: prior.generation, maxSeq: 3 },
+      },
+    });
     const sql = observeHostDataSql();
     try {
       await expect(
@@ -129,6 +152,9 @@ it("trims through the worker and clears accounting without host data SQL", async
     expect(entry?.inputTokens).toBeUndefined();
     expect(entry?.totalTokens).toBeUndefined();
     expect(entry?.cliSessionIds).toBeUndefined();
+    const current = readSessionTranscriptWatermark(f.scope);
+    expect(current.generation).not.toBe(prior.generation);
+    expect(entry?.priorWorkspace?.through).toEqual({ generation: current.generation, maxSeq: 1 });
   });
 });
 
@@ -364,27 +390,29 @@ it.each([
   },
 );
 
-it("rolls back the native manual trim when accounting cannot be cleared", async () => {
+it("rolls back the worker manual trim when accounting cannot be cleared", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = createSessionCompoundWorkerFixture();
+    replaceSessionEntrySync(f.scope, {
+      sessionId: f.scope.sessionId,
+      updatedAt: 1,
+      inputTokens: 10,
+      totalTokens: 30,
+      totalTokensFresh: true,
+    });
     const records = createManualCompactRecords(f.scope.sessionId);
     replaceTranscriptEventsSync(f.scope, records);
     const before = f.read();
-    f.database.db.exec(`
-      CREATE TEMP TRIGGER reject_manual_compact_metadata_update
-      BEFORE UPDATE OF entry_json ON main.session_nodes
-      BEGIN
-        SELECT RAISE(ABORT, 'injected manual compact metadata failure');
-      END;
-    `);
+    metadataFault.enable();
     try {
       await expect(
-        trimTranscriptForManualCompact(f.scope, (lines) => [lines[0]!, ...lines.slice(-2)], {
+        trimSessionTranscriptForManualCompact(f.scope, {
+          maxLines: 3,
           nowMs: 500,
         }),
       ).rejects.toThrow("injected manual compact metadata failure");
     } finally {
-      f.database.db.exec("DROP TRIGGER reject_manual_compact_metadata_update");
+      metadataFault.disable();
     }
     expect(f.events()).toEqual(records);
     expect(f.read()).toEqual(before);

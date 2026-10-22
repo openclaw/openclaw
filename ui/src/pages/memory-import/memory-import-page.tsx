@@ -1,20 +1,23 @@
-import { createEffect, createMemo, createSignal, onCleanup } from "solid-js";
+import { action, createMemo, createOptimistic, onSettled } from "solid-js";
 import type {
   MigrationsMemoryApplyResult,
   MigrationsMemoryPlanResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import type { ApplicationContext } from "../../app/context-types.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
 import { SettingsPageHeader, LearnMoreLink } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { projectAgentSelection, projectGateway } from "../../lib/reactive/application.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectAgents } from "../../lib/reactive/domain-capabilities.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import type { MemoryImportClient, MemoryImportState } from "./memory-import-state.ts";
 import type {
   SessionBackfillGatewayResult,
   SessionBackfillProgress,
@@ -25,42 +28,14 @@ import { MemoryImport } from "./view.tsx";
 const SESSION_BACKFILL_BATCH_DAYS = 14;
 const MEMORY_IMPORT_DOCS_URL = "https://docs.openclaw.ai/install/migrating";
 
-type MemoryImportClient = NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
-
-type PendingMemoryImport = {
-  providerId: string;
-  agentId: string;
-  planFingerprint: string;
-  itemIds: string[];
-  overwrite: boolean;
-  idempotencyKey: string;
-  attempted: boolean;
-};
-
 export function MemoryImportPage() {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
   const agents = projectAgents(context.agents);
   const selection = projectAgentSelection(context.agentSelection);
-  const [revision, setRevision] = createSignal(0, { ownedWrite: true });
-  const publish = () => setRevision((value) => value + 1);
+  let presentationScopeKey = gatewayPresentationScope(context.gateway).key;
   // Request state stays synchronous so a second activation observes the first immediately.
-  const state: {
-    replaceExisting: boolean;
-    selectedByProvider: Record<string, string[]>;
-    applyingProviderId: string | null;
-    pendingImport: PendingMemoryImport | null;
-    applyError: string | null;
-    lastResults: Record<string, MigrationsMemoryApplyResult>;
-    backfillFrom: string;
-    backfillTo: string;
-    backfillBusy: "preview" | "apply" | "rollback" | null;
-    backfillError: string | null;
-    backfillPreview: SessionBackfillGatewayResult | null;
-    backfillProgress: SessionBackfillProgress | null;
-    backfillRollbackResult: SessionBackfillRollbackResult | null;
-    backfillRollbackTarget: { client: MemoryImportClient; agentId: string } | null;
-  } = {
+  const state: MemoryImportState = {
     replaceExisting: false,
     selectedByProvider: {},
     applyingProviderId: null,
@@ -76,103 +51,151 @@ export function MemoryImportPage() {
     backfillRollbackResult: null,
     backfillRollbackTarget: null,
   };
+  const source = projectMutableSource(state, (value) => value);
+  const publish = source.publish;
+  let presentationLifetime = Promise.withResolvers<void>();
+  let planReceipt: { promise: Promise<void> } | null = null;
+  let previewReceipt: { promise: Promise<void> } | null = null;
+  function retirePresentation() {
+    presentationLifetime.resolve();
+    presentationLifetime = Promise.withResolvers<void>();
+  }
   let applyEpoch = 0;
   let backfillEpoch = 0;
-  let planEpoch = 0;
-  let planAbort: AbortController | undefined;
-  let planLoading = false;
   let planError: string | null = null;
+  let workspaceAuthorized = false;
   let lastPlanValue: {
     client: MemoryImportClient;
     agentId: string;
     overwrite: boolean;
+    scopeKey: number;
     plan: MigrationsMemoryPlanResult;
   } | null = null;
   const read = <K extends keyof typeof state>(key: K) => {
-    revision();
+    source.revision();
     return state[key];
   };
 
-  const planArgs = createMemo(
-    () => {
-      gateway.read();
-      return [
-        context.gateway.snapshot.phase === "connected" ? context.gateway.snapshot.client : null,
-        canAdmin(),
-        currentAgentId(),
-        read("replaceExisting"),
-      ] as const;
+  const planRequest = createPageRequest(publish, {
+    task: async (scope: Omit<NonNullable<typeof lastPlanValue>, "plan">, { signal }) => ({
+      ...scope,
+      plan: await scope.client.request<MigrationsMemoryPlanResult>(
+        "migrations.memory.plan",
+        { agentId: scope.agentId, overwrite: scope.overwrite },
+        { signal },
+      ),
+    }),
+    onComplete: (value) => {
+      if (value.scopeKey !== gatewayPresentationScope(context.gateway).key) {
+        return;
+      }
+      lastPlanValue = value;
+      state.selectedByProvider = Object.fromEntries(
+        value.plan.providers.map((provider) => [
+          provider.providerId,
+          provider.items
+            .filter(
+              (item) =>
+                item.status === "planned" &&
+                (state.selectedByProvider[provider.providerId]?.includes(item.id) ?? true),
+            )
+            .map((item) => item.id),
+        ]),
+      );
     },
-    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
-  );
-
+    onError: (error) => {
+      planError = formatUiError(error, "request failed");
+    },
+  });
   async function loadPlan() {
     const snapshot = context.gateway.snapshot;
     const client = snapshot.phase === "connected" ? snapshot.client : null;
     const agentId = currentAgentId();
     const overwrite = state.replaceExisting;
-    const epoch = ++planEpoch;
-    planAbort?.abort();
-    planAbort = undefined;
     planError = null;
-    planLoading = Boolean(client && canAdmin() && agentId);
-    publish();
     if (!client || !canAdmin() || !agentId) {
+      planReceipt = null;
+      planRequest.reset();
       return;
     }
-    const abort = new AbortController();
-    planAbort = abort;
-    try {
-      const nextPlan = await client.request<MigrationsMemoryPlanResult>(
-        "migrations.memory.plan",
-        { agentId, overwrite },
-        { signal: abort.signal },
-      );
-      if (epoch !== planEpoch) {
-        return;
-      }
-      lastPlanValue = { client, agentId, overwrite, plan: nextPlan };
-      state.selectedByProvider = Object.fromEntries(
-        nextPlan.providers.map((provider) => [
-          provider.providerId,
-          provider.items.filter((item) => item.status === "planned").map((item) => item.id),
-        ]),
-      );
-    } catch (error) {
-      if (epoch === planEpoch) {
-        planError = formatUiError(error, "request failed");
-      }
-    } finally {
-      if (epoch === planEpoch) {
-        planLoading = false;
-        publish();
-      }
-    }
+    planReceipt = {
+      promise: planRequest.run({ client, agentId, overwrite, scopeKey: presentationScopeKey }),
+    };
+    publish();
+    await planReceipt.promise;
   }
-  // Retire import attempts on target changes and request a new plan from the Gateway.
-  createEffect(planArgs, ([client, , agentId, overwrite], previous) => {
+  let previousPlanArgs:
+    | readonly [MemoryImportClient | null, boolean, boolean, string | null, boolean, number]
+    | undefined;
+  function syncPlan() {
+    const next = [
+      context.gateway.snapshot.client,
+      context.gateway.snapshot.phase === "connected",
+      canAdmin(),
+      currentAgentId(),
+      state.replaceExisting,
+      gatewayPresentationScope(context.gateway).key,
+    ] as const;
+    const previous = previousPlanArgs;
+    if (previous?.every((value, index) => value === next[index])) {
+      return;
+    }
+    previousPlanArgs = next;
+    const [client, connected, allowed, agentId, overwrite, scopeKey] = next;
     if (previous) {
-      const connectionChanged = previous[0] !== client;
-      const targetChanged = connectionChanged || previous[2] !== agentId;
-      if (targetChanged || previous[3] !== overwrite) {
+      const identityChanged = previous[0] !== client || previous[5] !== scopeKey;
+      const targetChanged = identityChanged || previous[3] !== agentId;
+      const accessLost = connected && !allowed;
+      if (targetChanged || previous[4] !== overwrite || accessLost) {
         // A temporarily missing roster is not a new destination; retain the unknown apply's key.
         resetMutationState({
           preserveAttemptedImport:
-            previous[3] === overwrite &&
+            !identityChanged &&
+            !accessLost &&
+            previous[4] === overwrite &&
             (agentId === null || agentId === state.pendingImport?.agentId),
         });
       }
-      if (targetChanged) {
+      if (targetChanged || accessLost) {
         resetBackfillState();
       }
+      if (identityChanged || accessLost) {
+        lastPlanValue = null;
+        workspaceAuthorized = false;
+      }
+      if (previous[1] !== connected) {
+        retirePresentation();
+        applyEpoch += 1;
+        backfillEpoch += 1;
+        state.applyingProviderId = null;
+        state.backfillBusy = null;
+      }
     }
+    if (connected) {
+      workspaceAuthorized = allowed;
+    }
+    presentationScopeKey = scopeKey;
     void loadPlan();
-  });
-  onCleanup(() => {
-    planEpoch += 1;
-    applyEpoch += 1;
-    backfillEpoch += 1;
-    planAbort?.abort();
+  }
+  onSettled(() => {
+    // Target/access receipts retire import and backfill epochs before replanning.
+    const stops = [gateway, agents, selection].map((projection) => projection.subscribe(syncPlan));
+    stops.push(
+      context.router.subscribe(() => {
+        retirePresentation();
+        publish();
+      }),
+    );
+    syncPlan();
+    return () => {
+      for (const stop of stops) {
+        stop();
+      }
+      presentationLifetime.resolve();
+      applyEpoch += 1;
+      backfillEpoch += 1;
+      planRequest.cancel();
+    };
   });
   function currentAgentId(): string | null {
     agents.read();
@@ -192,13 +215,13 @@ export function MemoryImportPage() {
   }
 
   function plan(): MigrationsMemoryPlanResult | null {
-    revision();
+    source.revision();
     gateway.read();
     const value = lastPlanValue;
     const snapshot = context.gateway.snapshot;
     const agentId = currentAgentId();
     return value &&
-      snapshot.phase === "connected" &&
+      presentationScopeKey === gatewayPresentationScope(context.gateway).key &&
       value.client === snapshot.client &&
       value.agentId === agentId &&
       value.overwrite === state.replaceExisting
@@ -207,19 +230,25 @@ export function MemoryImportPage() {
   }
 
   function loading(): boolean {
-    revision();
-    return planLoading;
+    source.revision();
+    return planRequest.pending;
   }
   function planFailure(): string | null {
-    revision();
+    source.revision();
     return planError;
   }
 
   function canAdmin(): boolean {
-    return hasOperatorAdminAccess(context.gateway.snapshot.hello?.auth ?? null);
+    source.revision();
+    gateway.read();
+    const snapshot = context.gateway.snapshot;
+    return snapshot.phase === "connected"
+      ? hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
+      : workspaceAuthorized;
   }
 
   function resetMutationState(options: { preserveAttemptedImport?: boolean } = {}) {
+    retirePresentation();
     // An interrupted apply has an unknown outcome. Keep its key so retries can
     // recover the cached server result instead of repeating side effects.
     const pendingImport =
@@ -236,7 +265,16 @@ export function MemoryImportPage() {
   }
 
   function refresh(): Promise<void> {
-    return currentAgentId() ? loadPlan() : context.agents.ensureList().then(() => undefined);
+    const agentId = currentAgentId();
+    if (context.agents.state.agentsError) {
+      return context.agents.refreshList().then(() => {
+        if (currentAgentId() === agentId) {
+          return loadPlan();
+        }
+        return undefined;
+      });
+    }
+    return agentId ? loadPlan() : context.agents.ensureList().then(() => undefined);
   }
 
   function toggleCollection(providerId: string, itemIds: readonly string[], selected: boolean) {
@@ -253,7 +291,7 @@ export function MemoryImportPage() {
   }
 
   function requestImport(providerId: string) {
-    if (!canAdmin()) {
+    if (context.gateway.snapshot.phase !== "connected" || !canAdmin()) {
       return;
     }
     const agentId = currentAgentId();
@@ -290,6 +328,7 @@ export function MemoryImportPage() {
 
   async function confirmImport() {
     if (
+      context.gateway.snapshot.phase !== "connected" ||
       !canAdmin() ||
       state.applyingProviderId !== null ||
       state.backfillBusy === "apply" ||
@@ -348,6 +387,7 @@ export function MemoryImportPage() {
   }
 
   function resetBackfillState() {
+    retirePresentation();
     backfillEpoch += 1;
     state.backfillFrom = "";
     state.backfillTo = "";
@@ -359,6 +399,7 @@ export function MemoryImportPage() {
   }
 
   function clearBackfillResults() {
+    previewReceipt = null;
     state.backfillPreview = null;
     state.backfillProgress = null;
     state.backfillRollbackResult = null;
@@ -374,8 +415,10 @@ export function MemoryImportPage() {
   async function runBackfill(operation: "preview" | "apply" | "rollback") {
     const client = context.gateway.snapshot.client;
     const agentId = currentAgentId();
+    const scopeKey = presentationScopeKey;
     if (
       context.gateway.snapshot.phase !== "connected" ||
+      scopeKey !== gatewayPresentationScope(context.gateway).key ||
       !canAdmin() ||
       !client ||
       !agentId ||
@@ -390,6 +433,7 @@ export function MemoryImportPage() {
     const epoch = ++backfillEpoch;
     const isCurrent = () =>
       epoch === backfillEpoch &&
+      scopeKey === gatewayPresentationScope(context.gateway).key &&
       context.gateway.snapshot.phase === "connected" &&
       context.gateway.snapshot.client === client &&
       currentAgentId() === agentId;
@@ -475,6 +519,110 @@ export function MemoryImportPage() {
     }
   }
 
+  const presentationScope = createMemo(() => {
+    source.revision();
+    return presentationLifetime;
+  });
+  const presentation = createMemo(() => {
+    const retired = presentationScope().promise;
+    const [importing, setImporting] = createOptimistic<string | null>(null);
+    const [backfilling, setBackfilling] = createOptimistic<typeof state.backfillBusy>(null);
+    return { retired, importing, setImporting, backfilling, setBackfilling };
+  });
+  const admittedPlan = createMemo(() => {
+    source.revision();
+    return planReceipt;
+  });
+  const acceptedPlan = createMemo(plan);
+  const planErrorValue = createMemo(planFailure);
+  const planRead = createMemo(() => {
+    const pending = admittedPlan()?.promise;
+    const value = acceptedPlan();
+    const error = planErrorValue();
+    const retired = presentationScope().promise;
+    if (!loading()) {
+      if (!value && error) {
+        throw new Error(error);
+      }
+      return value;
+    }
+    return pending
+      ? Promise.race([pending, retired]).then(() => {
+          const result = plan();
+          if (!result && planError) {
+            throw new Error(planError);
+          }
+          return result;
+        })
+      : value;
+  });
+  const admittedPreview = createMemo(() => {
+    source.revision();
+    return previewReceipt;
+  });
+  const previewValue = createMemo(() => read("backfillPreview"));
+  const previewError = createMemo(() => read("backfillError"));
+  const previewRead = createMemo(() => {
+    const pending = admittedPreview()?.promise;
+    const value = previewValue();
+    const error = previewError();
+    const retired = presentationScope().promise;
+    if (read("backfillBusy") !== "preview") {
+      if (pending && !value && error) {
+        throw new Error(error);
+      }
+      return value;
+    }
+    return pending
+      ? Promise.race([pending, retired]).then(() => {
+          if (!state.backfillPreview && state.backfillError) {
+            throw new Error(state.backfillError);
+          }
+          return state.backfillPreview;
+        })
+      : value;
+  });
+  const presentMutation = action(function* (
+    current: ReturnType<typeof presentation>,
+    pending: Promise<void>,
+    kind: "import" | "apply" | "rollback",
+    providerId: string | null,
+  ) {
+    if (current.retired === presentationLifetime.promise) {
+      if (kind === "import") {
+        current.setImporting(providerId);
+      } else {
+        current.setBackfilling(kind);
+      }
+    }
+    // The owner records failures and settles the operation after its presentation retires.
+    yield Promise.race([pending, current.retired]);
+  });
+  async function importMemory() {
+    const current = presentation();
+    const pending = confirmImport();
+    const providerId = state.applyingProviderId;
+    if (providerId === null) {
+      return pending;
+    }
+    await Promise.resolve();
+    return presentMutation(current, pending, "import", providerId);
+  }
+  async function backfill(operation: "preview" | "apply" | "rollback") {
+    const current = presentation();
+    const pending = runBackfill(operation);
+    if (state.backfillBusy !== operation) {
+      return pending;
+    }
+    if (operation === "preview") {
+      previewReceipt = { promise: pending };
+      publish();
+      return pending;
+    }
+    await Promise.resolve();
+    return presentMutation(current, pending, operation, null);
+  }
+
   return (
     <openclaw-memory-import-page>
       <SettingsPageHeader
@@ -488,16 +636,21 @@ export function MemoryImportPage() {
       <SettingsWorkspace>
         <MemoryImport
           connected={gateway.read().snapshot.phase === "connected"}
-          canAdmin={hasOperatorAdminAccess(gateway.read().snapshot.hello?.auth ?? null)}
+          canAdmin={canAdmin()}
           agents={listSelectableAgents(agents.read().agentsList?.agents ?? [])}
           selectedAgentId={currentAgentId()}
           plan={plan()}
+          readPlan={planRead}
+          readPreview={previewRead}
+          readScope={presentationScope()}
           loading={loading() || agents.read().agentsLoading}
-          error={(currentAgentId() ? null : agents.read().agentsError) ?? planFailure()}
+          error={
+            (currentAgentId() ? null : agents.read().agentsError) ?? (plan() ? planFailure() : null)
+          }
           applyError={read("applyError")}
           replaceExisting={read("replaceExisting")}
           selectedByProvider={read("selectedByProvider")}
-          applyingProviderId={read("applyingProviderId")}
+          applyingProviderId={presentation().importing() ?? read("applyingProviderId")}
           pendingProviderId={
             read("pendingImport")?.agentId === currentAgentId()
               ? state.pendingImport!.providerId
@@ -510,25 +663,27 @@ export function MemoryImportPage() {
           }
           backfillFrom={read("backfillFrom")}
           backfillTo={read("backfillTo")}
-          backfillBusy={read("backfillBusy")}
-          backfillError={read("backfillError")}
-          backfillPreview={read("backfillPreview")}
+          backfillBusy={presentation().backfilling() ?? read("backfillBusy")}
+          backfillError={
+            admittedPreview() && !read("backfillPreview") ? null : read("backfillError")
+          }
           backfillProgress={read("backfillProgress")}
           backfillRollbackResult={read("backfillRollbackResult")}
           backfillRollbackPending={read("backfillRollbackTarget") !== null}
           onSelectAgent={(agentId) => {
-            context.agentSelection.set(agentId);
             resetMutationState();
             resetBackfillState();
+            context.agentSelection.set(agentId);
           }}
           onReplaceExisting={(enabled) => {
             state.replaceExisting = enabled;
             resetMutationState();
+            syncPlan();
           }}
           onRefresh={() => void refresh()}
           onToggleCollection={toggleCollection}
           onRequestImport={requestImport}
-          onConfirmImport={() => void confirmImport()}
+          onConfirmImport={() => void importMemory()}
           onCancelImport={() => {
             if (state.applyingProviderId === null) {
               state.pendingImport = null;
@@ -538,8 +693,8 @@ export function MemoryImportPage() {
           }}
           onBackfillFromChange={(value) => setBackfillDate("backfillFrom", value)}
           onBackfillToChange={(value) => setBackfillDate("backfillTo", value)}
-          onBackfillPreview={() => void runBackfill("preview")}
-          onBackfillApply={() => void runBackfill("apply")}
+          onBackfillPreview={() => void backfill("preview")}
+          onBackfillApply={() => void backfill("apply")}
           onBackfillRollbackRequest={() => {
             const snapshot = context.gateway.snapshot;
             const agentId = currentAgentId();
@@ -554,7 +709,7 @@ export function MemoryImportPage() {
               publish();
             }
           }}
-          onBackfillRollbackConfirm={() => void runBackfill("rollback")}
+          onBackfillRollbackConfirm={() => void backfill("rollback")}
           onBackfillRollbackCancel={() => {
             if (state.backfillBusy === null) {
               state.backfillRollbackTarget = null;

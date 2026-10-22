@@ -27,8 +27,6 @@ type AdvertisedLanHostCommandRunner = (
 type ResolveAdvertisedLanHostOptions = {
   networkInterfaces?: () => NetworkInterfacesSnapshot;
   runCommandWithTimeout?: AdvertisedLanHostCommandRunner;
-  platform?: NodeJS.Platform;
-  timeoutMs?: number;
 };
 
 type WindowsRouteRow = {
@@ -112,50 +110,6 @@ function parseLinuxDefaultRouteHints(stdout: string): string[] {
   return hints;
 }
 
-async function resolveDefaultRouteHints(params: {
-  platform: NodeJS.Platform;
-  runCommandWithTimeout: AdvertisedLanHostCommandRunner;
-  timeoutMs: number;
-}): Promise<string[]> {
-  let argv: string[];
-  let parse: typeof parseWindowsDefaultRouteHints;
-  if (params.platform === "win32") {
-    argv = [
-      "powershell.exe",
-      "-NoProfile",
-      "-ExecutionPolicy",
-      "Bypass",
-      "-Command",
-      WINDOWS_DEFAULT_ROUTE_COMMAND,
-    ];
-    parse = parseWindowsDefaultRouteHints;
-  } else if (params.platform === "darwin") {
-    argv = ["route", "-n", "get", "default"];
-    parse = parseMacOsDefaultRouteHints;
-  } else if (params.platform === "linux") {
-    argv = ["ip", "-4", "route", "show", "default"];
-    parse = parseLinuxDefaultRouteHints;
-  } else {
-    return [];
-  }
-
-  let stdout: string;
-  try {
-    const runCommandWithTimeout = params.runCommandWithTimeout;
-    const result = await runCommandWithTimeout(argv, {
-      timeoutMs: params.timeoutMs,
-      maxOutputBytes: DEFAULT_ROUTE_HINT_OUTPUT_BYTES,
-    });
-    if (result.code !== 0) {
-      return [];
-    }
-    stdout = result.stdout;
-  } catch {
-    return [];
-  }
-  return stdout ? parse(stdout) : [];
-}
-
 export async function resolveAdvertisedLanHostCore(
   options: ResolveAdvertisedLanHostOptions = {},
 ): Promise<string | null> {
@@ -167,11 +121,43 @@ export async function resolveAdvertisedLanHostCore(
     return candidates[0]?.address ?? null;
   }
 
-  const routeHints = await resolveDefaultRouteHints({
-    platform: options.platform ?? process.platform,
-    runCommandWithTimeout: options.runCommandWithTimeout ?? defaultRunCommandWithTimeout,
-    timeoutMs: options.timeoutMs ?? DEFAULT_ROUTE_HINT_TIMEOUT_MS,
-  });
+  const runCommandWithTimeout = options.runCommandWithTimeout ?? defaultRunCommandWithTimeout;
+  let argv: string[];
+  let parse: typeof parseWindowsDefaultRouteHints;
+  if (process.platform === "win32") {
+    argv = [
+      "powershell.exe",
+      "-NoProfile",
+      "-ExecutionPolicy",
+      "Bypass",
+      "-Command",
+      WINDOWS_DEFAULT_ROUTE_COMMAND,
+    ];
+    parse = parseWindowsDefaultRouteHints;
+  } else if (process.platform === "darwin") {
+    argv = ["route", "-n", "get", "default"];
+    parse = parseMacOsDefaultRouteHints;
+  } else if (process.platform === "linux") {
+    argv = ["ip", "-4", "route", "show", "default"];
+    parse = parseLinuxDefaultRouteHints;
+  } else {
+    return candidates[0]?.address ?? null;
+  }
+
+  let stdout: string;
+  try {
+    const result = await runCommandWithTimeout(argv, {
+      timeoutMs: DEFAULT_ROUTE_HINT_TIMEOUT_MS,
+      maxOutputBytes: DEFAULT_ROUTE_HINT_OUTPUT_BYTES,
+    });
+    if (result.code !== 0) {
+      return candidates[0]?.address ?? null;
+    }
+    stdout = result.stdout;
+  } catch {
+    return candidates[0]?.address ?? null;
+  }
+  const routeHints = stdout ? parse(stdout) : [];
   for (const hint of routeHints) {
     const hintedName = normalizeInterfaceName(hint);
     if (!hintedName) {

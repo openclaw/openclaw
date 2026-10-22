@@ -1,5 +1,5 @@
-// Ollama node inference tests cover local discovery, chat, and agent tool routing.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { text } from "node:stream/consumers";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { withServer } from "openclaw/plugin-sdk/test-env";
@@ -39,11 +39,7 @@ function sendJson(response: ServerResponse, body: unknown): void {
 }
 
 async function readBody(request: IncomingMessage): Promise<unknown> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.from(chunk));
-  }
-  return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+  return JSON.parse(await text(request));
 }
 
 async function withOllamaServer(
@@ -360,6 +356,17 @@ type AbortTestServer = {
   canceled: string[];
 };
 
+function nodeReplies(model: Record<string, unknown>, contextWindow: number, content: string) {
+  return {
+    "/api/tags": { models: [model] },
+    "/api/show": {
+      capabilities: ["completion", "tools"],
+      model_info: { "test.context_length": contextWindow },
+    },
+    "/api/chat": { model: model.name, message: { content }, done_reason: "stop" },
+  };
+}
+
 async function withAbortTestServer(
   stallPath: string,
   run: (server: AbortTestServer) => Promise<void>,
@@ -367,6 +374,11 @@ async function withAbortTestServer(
 ): Promise<void> {
   const requests: string[] = [];
   const canceled: string[] = [];
+  const replies = nodeReplies(
+    { name: "node-local:small", digest: "sha256:node-local-small", size: 512 },
+    8192,
+    "node-only inference",
+  );
   let stalls = 0;
   await withServer(
     (request: IncomingMessage, response: ServerResponse) => {
@@ -381,45 +393,18 @@ async function withAbortTestServer(
         });
         return;
       }
-
       response.setHeader("Content-Type", "application/json");
-      if (requestPath === "/api/tags") {
-        response.end(
-          JSON.stringify({
-            models: [{ name: "node-local:small", digest: "sha256:node-local-small", size: 512 }],
-          }),
-        );
-        return;
-      }
-      if (requestPath === "/api/show") {
-        response.end(
-          JSON.stringify({
-            capabilities: ["completion", "tools"],
-            model_info: { "test.context_length": 8192 },
-          }),
-        );
-        return;
-      }
-      if (requestPath === "/api/chat") {
-        response.end(
-          JSON.stringify({
-            model: "node-local:small",
-            message: { content: "node-only inference" },
-            done_reason: "stop",
-          }),
-        );
-        return;
+      if (
+        requestPath === "/api/tags" ||
+        requestPath === "/api/show" ||
+        requestPath === "/api/chat"
+      ) {
+        return sendJson(response, replies[requestPath]);
       }
       response.statusCode = 404;
-      response.end(JSON.stringify({ error: "not found" }));
+      sendJson(response, { error: "not found" });
     },
-    async (baseUrl) => {
-      await run({
-        baseUrl,
-        requests,
-        canceled,
-      });
-    },
+    (baseUrl) => run({ baseUrl, requests, canceled }),
   );
 }
 
@@ -500,6 +485,9 @@ describe("node-local Ollama inference cancellation", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  // Go through ollama.models without a timeout, because a timeout bypasses the
+  // cache on its own. Keep the cache key stable and prove both cancellation
+  // isolation and later successful reuse.
   it("does not poison shared model metadata after a canceled show request", async () => {
     await withAbortTestServer(
       "/api/show",
@@ -543,6 +531,7 @@ async function withDelayedOllamaServer(
   run: (baseUrl: string, requestedPaths: string[]) => Promise<void>,
 ): Promise<void> {
   const requestedPaths: string[] = [];
+  const replies = nodeReplies({ name: CHAT_MODEL }, 32_768, "within the requested deadline");
   const handleRequest = async (request: IncomingMessage, response: ServerResponse) => {
     const requestPath = request.url;
     if (requestPath !== "/api/tags" && requestPath !== "/api/show" && requestPath !== "/api/chat") {
@@ -550,11 +539,8 @@ async function withDelayedOllamaServer(
       return;
     }
     requestedPaths.push(requestPath);
-    const bodyChunks: Buffer[] = [];
-    for await (const chunk of request) {
-      bodyChunks.push(Buffer.from(chunk));
-    }
-    if (requestPath !== "/api/tags" && Buffer.concat(bodyChunks).length === 0) {
+    const body = await text(request);
+    if (requestPath !== "/api/tags" && body.length === 0) {
       throw new Error("Ollama deadline test received an empty POST body");
     }
     const delayMs = delays[requestPath];
@@ -567,26 +553,7 @@ async function withDelayedOllamaServer(
       return;
     }
     response.setHeader("Content-Type", "application/json");
-    if (requestPath === "/api/tags") {
-      response.end(JSON.stringify({ models: [{ name: CHAT_MODEL }] }));
-      return;
-    }
-    if (requestPath === "/api/show") {
-      response.end(
-        JSON.stringify({
-          capabilities: ["completion", "tools"],
-          model_info: { "test.context_length": 32_768 },
-        }),
-      );
-      return;
-    }
-    response.end(
-      JSON.stringify({
-        model: CHAT_MODEL,
-        message: { content: "within the requested deadline" },
-        done_reason: "stop",
-      }),
-    );
+    sendJson(response, replies[requestPath]);
   };
   await withServer(
     (request, response) => {

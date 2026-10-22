@@ -1,8 +1,10 @@
 import type { SkillWorkshopChange } from "@openclaw/gateway-protocol";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, Errored, For, Loading, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { SettingsEmpty, SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { visitTextDiff } from "../../lib/chat/tool-call-diff.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { undoMutationFor } from "./api.ts";
@@ -13,10 +15,10 @@ import {
   UNUSED_ARCHIVE_DAYS,
   unusedDays,
   type WorkshopView,
-  type WorkshopViewer,
+  type WorkshopReads,
 } from "./view-shared.tsx";
 
-export function Detail(props: { view: WorkshopView }) {
+export function Detail(props: { view: WorkshopView; reads: WorkshopReads }) {
   const viewer = () => props.view().viewer!;
   const target = () => viewer().target;
   const snapshot = () => props.view().snapshot!;
@@ -31,16 +33,15 @@ export function Detail(props: { view: WorkshopView }) {
   );
   const files = () => {
     const current = viewer();
-    return target().versionId && current.status === "ready"
+    return target().versionId && current.result
       ? current.result.files
-      : (skill()?.files ??
-          (current.status === "ready" ? current.result.files : [target().filePath]));
+      : (skill()?.files ?? (current.result ? current.result.files : [target().filePath]));
   };
   const supportFiles = createMemo(() => files().filter((file) => file !== "SKILL.md"));
   const description = createMemo(() => {
     const current = viewer();
     const own =
-      current.status === "ready" && current.target.filePath === "SKILL.md"
+      current.result && current.target.filePath === "SKILL.md"
         ? splitFrontmatter(current.result.content).description
         : undefined;
     return target().versionId ? own : skill()?.description || own;
@@ -145,102 +146,109 @@ export function Detail(props: { view: WorkshopView }) {
         {props.view().tab === "history" ? (
           <History view={props.view} />
         ) : props.view().tab === "files" ? (
-          <Files view={props.view} files={supportFiles()} />
+          <Files view={props.view} reads={props.reads} files={supportFiles()} />
         ) : (
-          <Instructions view={props.view} />
+          <Instructions view={props.view} reads={props.reads} />
         )}
       </div>
     </>
   );
 }
 
-function LoadState(props: { viewer: WorkshopViewer }) {
+function LoadState(props: { error?: unknown }) {
   return (
     <>
-      {props.viewer.status === "loading" ? (
-        <SettingsEmpty message={t("skillWorkshop.viewer.loading")} />
-      ) : props.viewer.status === "error" ? (
+      {props.error !== undefined ? (
         <div role="alert">
-          <SettingsStatus kind="danger" label={props.viewer.error} carapace />
+          <SettingsStatus kind="danger" label={formatUiError(props.error)} carapace />
         </div>
-      ) : null}
+      ) : (
+        <SettingsEmpty message={t("skillWorkshop.viewer.loading")} />
+      )}
     </>
   );
 }
 
-function Instructions(props: { view: WorkshopView }) {
-  const ready = () => {
-    const viewer = props.view().viewer;
-    return viewer?.status === "ready" ? viewer : null;
-  };
+function Instructions(props: { view: WorkshopView; reads: WorkshopReads }) {
   return (
-    <Show when={ready()} fallback={<LoadState viewer={props.view().viewer!} />}>
-      {(viewer) => {
-        const versions = () =>
-          props.view().snapshot?.list.archived.find((entry) => entry.name === viewer().target.name)
-            ?.versions ?? [];
-        const version = () => versions().find((entry) => entry.id === viewer().target.versionId);
-        const showVersionBar = () =>
-          viewer().target.versionId !== undefined &&
-          (viewer().current !== undefined || versions()[0]?.id !== viewer().target.versionId);
-        return (
-          <>
-            {showVersionBar() && (
-              <div class="sw-version-bar">
-                <span>
-                  {t("skillWorkshop.viewer.viewingVersion", {
-                    time: version()
-                      ? formatRelativeTimestamp(version()!.createdAtMs)
-                      : (viewer().target.versionId ?? ""),
-                  })}
-                  {viewer().current !== undefined && <> · {t("skillWorkshop.viewer.diffHint")}</>}
-                </span>
-                <span class="sw-version-bar__actions">
-                  {viewer().current !== undefined && (
-                    <button
-                      type="button"
-                      class="sw-link-button"
-                      onClick={() =>
-                        props.view().onOpen({ name: viewer().target.name, filePath: "SKILL.md" })
-                      }
-                    >
-                      {t("skillWorkshop.viewer.backToCurrent")}
-                    </button>
-                  )}
-                  <MutationButton
-                    view={props.view}
-                    label={t(
-                      viewer().current !== undefined
-                        ? "skillWorkshop.viewer.restoreVersion"
-                        : "skillWorkshop.viewer.restore",
-                    )}
-                    mutation={{
-                      method: "skills.workshop.restore",
-                      name: viewer().target.name,
-                      versionId: viewer().target.versionId,
-                    }}
-                    actionKey={`restore:${viewer().target.name}:${viewer().target.versionId}`}
+    <Loading on={props.reads.viewerRequest()} fallback={<LoadState />}>
+      <Errored fallback={(error) => <LoadState error={error()} />}>
+        <Show when={props.reads.viewer()}>
+          {(viewer) => {
+            const versions = () =>
+              props
+                .view()
+                .snapshot?.list.archived.find((entry) => entry.name === viewer().target.name)
+                ?.versions ?? [];
+            const version = () =>
+              versions().find((entry) => entry.id === viewer().target.versionId);
+            const showVersionBar = () =>
+              viewer().target.versionId !== undefined &&
+              (viewer().current !== undefined || versions()[0]?.id !== viewer().target.versionId);
+            return (
+              <>
+                {showVersionBar() && (
+                  <div class="sw-version-bar">
+                    <span>
+                      {t("skillWorkshop.viewer.viewingVersion", {
+                        time: version()
+                          ? formatRelativeTimestamp(version()!.createdAtMs)
+                          : (viewer().target.versionId ?? ""),
+                      })}
+                      {viewer().current !== undefined && (
+                        <> · {t("skillWorkshop.viewer.diffHint")}</>
+                      )}
+                    </span>
+                    <span class="sw-version-bar__actions">
+                      {viewer().current !== undefined && (
+                        <button
+                          type="button"
+                          class="sw-link-button"
+                          onClick={() =>
+                            props
+                              .view()
+                              .onOpen({ name: viewer().target.name, filePath: "SKILL.md" })
+                          }
+                        >
+                          {t("skillWorkshop.viewer.backToCurrent")}
+                        </button>
+                      )}
+                      <MutationButton
+                        view={props.view}
+                        label={t(
+                          viewer().current !== undefined
+                            ? "skillWorkshop.viewer.restoreVersion"
+                            : "skillWorkshop.viewer.restore",
+                        )}
+                        mutation={{
+                          method: "skills.workshop.restore",
+                          name: viewer().target.name,
+                          versionId: viewer().target.versionId,
+                        }}
+                        actionKey={`restore:${viewer().target.name}:${viewer().target.versionId}`}
+                      />
+                    </span>
+                  </div>
+                )}
+                {viewer().current !== undefined ? (
+                  <Diff current={viewer().current!} version={viewer().result.content} />
+                ) : (
+                  <MarkdownHtml
+                    class="sw-markdown chat-text"
+                    markdown={splitFrontmatter(viewer().result.content).body}
+                    options={{ mode: "document" }}
                   />
-                </span>
-              </div>
-            )}
-            {viewer().current !== undefined ? (
-              <Diff current={viewer().current!} version={viewer().result.content} />
-            ) : (
-              <MarkdownHtml
-                class="sw-markdown chat-text"
-                markdown={splitFrontmatter(viewer().result.content).body}
-                options={{ mode: "document" }}
-              />
-            )}
-          </>
-        );
-      }}
-    </Show>
+                )}
+              </>
+            );
+          }}
+        </Show>
+      </Errored>
+    </Loading>
   );
 }
 
-function Files(props: { view: WorkshopView; files: string[] }) {
+function Files(props: { view: WorkshopView; reads: WorkshopReads; files: string[] }) {
   const viewer = () => props.view().viewer!;
   const active = () =>
     props.files.includes(viewer().target.filePath) ? viewer().target.filePath : null;
@@ -273,30 +281,32 @@ function Files(props: { view: WorkshopView; files: string[] }) {
           {active() === null ? (
             <SettingsEmpty message={t("skillWorkshop.viewer.pickFile")} />
           ) : (
-            <FileContent viewer={viewer()} />
+            <FileContent reads={props.reads} />
           )}
         </div>
       </div>
     </Show>
   );
 }
-function FileContent(props: { viewer: WorkshopViewer }) {
+function FileContent(props: { reads: WorkshopReads }) {
   return (
-    <>
-      {props.viewer.status === "ready" ? (
-        props.viewer.target.filePath.endsWith(".md") ? (
-          <MarkdownHtml
-            class="sw-markdown chat-text"
-            markdown={props.viewer.result.content}
-            options={{ mode: "document" }}
-          />
-        ) : (
-          <pre class="sw-file">{props.viewer.result.content}</pre>
-        )
-      ) : (
-        <LoadState viewer={props.viewer} />
-      )}
-    </>
+    <Loading on={props.reads.viewerRequest()} fallback={<LoadState />}>
+      <Errored fallback={(error) => <LoadState error={error()} />}>
+        <Show when={props.reads.viewer()}>
+          {(viewer) =>
+            viewer().target.filePath.endsWith(".md") ? (
+              <MarkdownHtml
+                class="sw-markdown chat-text"
+                markdown={viewer().result.content}
+                options={{ mode: "document" }}
+              />
+            ) : (
+              <pre class="sw-file">{viewer().result.content}</pre>
+            )
+          }
+        </Show>
+      </Errored>
+    </Loading>
   );
 }
 
@@ -511,33 +521,10 @@ function diffLines(before: string, after: string): DiffLine[] | null {
   if ((midA.length + 1) * (midB.length + 1) > MAX_DIFF_CELLS) {
     return null;
   }
-  const table = Array.from({ length: midA.length + 1 }, () =>
-    Array.from({ length: midB.length + 1 }, () => 0),
-  );
-  for (let i = midA.length - 1; i >= 0; i -= 1) {
-    for (let j = midB.length - 1; j >= 0; j -= 1) {
-      table[i]![j] =
-        midA[i] === midB[j]
-          ? table[i + 1]![j + 1]! + 1
-          : Math.max(table[i + 1]![j]!, table[i]![j + 1]!);
-    }
-  }
   const lines: DiffLine[] = a.slice(0, start).map((text) => ({ kind: "same", text }));
-  let i = 0;
-  let j = 0;
-  while (i < midA.length || j < midB.length) {
-    if (i < midA.length && j < midB.length && midA[i] === midB[j]) {
-      lines.push({ kind: "same", text: midA[i]! });
-      i += 1;
-      j += 1;
-    } else if (i < midA.length && (j >= midB.length || table[i + 1]![j]! >= table[i]![j + 1]!)) {
-      lines.push({ kind: "remove", text: midA[i]! });
-      i += 1;
-    } else {
-      lines.push({ kind: "add", text: midB[j]! });
-      j += 1;
-    }
-  }
+  visitTextDiff(midA, midB, (kind, text) => {
+    lines.push({ kind: kind === "ctx" ? "same" : kind === "del" ? "remove" : "add", text });
+  });
   for (const text of a.slice(endA)) {
     lines.push({ kind: "same", text });
   }

@@ -1,13 +1,15 @@
 import "./account-usage.tsx";
-import { createMemo, For, onCleanup, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { StrokeIcon } from "../../components/solid/stroke-icon.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts";
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { createPointerDrag } from "../../lib/reactive/pointer-drag.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { ModelAccountUsageElement } from "./account-usage.tsx";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
@@ -51,6 +53,7 @@ export type ProviderProfilesViewProps = {
   usageAgentId?: string;
   registerAccountUsage?: (element: ModelAccountUsageElement) => () => void;
   busy: Record<string, boolean>;
+  logoutSaving?: Record<string, boolean>;
   canMutate: boolean;
   mutationBlockedReason: string | null;
   profileOrders: Record<string, string[]>;
@@ -191,29 +194,29 @@ function startPointerDrag(params: {
   event: PointerEvent;
   canMove: boolean;
   provider: string;
+  row: HTMLElement;
+  section: HTMLElement;
+  rows: HTMLElement[];
   move: (targetId: string, position: ArrayDropPosition) => void;
-}): (() => void) | undefined {
+  drag: ReturnType<typeof createPointerDrag>;
+}): void {
   if (!params.canMove || params.event.button !== 0) {
-    return undefined;
+    return;
   }
   const grip = params.event.currentTarget;
   if (!(grip instanceof HTMLElement)) {
-    return undefined;
+    return;
   }
-  const row = grip.closest<HTMLElement>(".model-providers__profile");
-  const section = grip.closest<HTMLElement>(".model-providers__profiles");
-  if (!row || !section) {
-    return undefined;
-  }
+  const { row, section } = params;
   const sectionTop = section.getBoundingClientRect().top;
   // Use the original slots for hit testing. Measuring animated neighbors would
   // make the insertion point oscillate as they move out from under the pointer.
-  const slots = [...section.querySelectorAll<HTMLElement>(".model-providers__profile")]
+  const slots = params.rows
     .filter((candidate) => candidate.dataset.profileProvider === params.provider)
     .map((element) => ({ element, bounds: element.getBoundingClientRect() }));
   const source = slots.find((slot) => slot.element === row);
   if (!source) {
-    return undefined;
+    return;
   }
   const others = slots.filter((slot) => slot !== source);
   let target: (typeof slots)[number] | undefined;
@@ -221,16 +224,7 @@ function startPointerDrag(params: {
   params.event.preventDefault();
   section.classList.add(SORTING_CLASS);
   row.classList.add(DRAGGING_CLASS);
-  try {
-    grip.setPointerCapture?.(params.event.pointerId);
-  } catch {
-    // Synthetic pointers can lack the active pointer required for capture.
-  }
-
   const update = (event: PointerEvent) => {
-    if (event.pointerId !== params.event.pointerId) {
-      return;
-    }
     const scrollOffset = sectionTop - section.getBoundingClientRect().top;
     const deltaY = event.clientY - params.event.clientY + scrollOffset;
     row.style.translate = `${event.clientX - params.event.clientX}px ${deltaY}px`;
@@ -270,53 +264,34 @@ function startPointerDrag(params: {
       top += slot.bounds.height;
     }
   };
-  let active = true;
   const cleanup = () => {
-    if (!active) {
-      return;
-    }
-    active = false;
-    stops.forEach((stop) => stop());
+    stopKeydown();
     section.classList.remove(SORTING_CLASS);
     for (const { element } of slots) {
       element.classList.remove(DRAGGING_CLASS);
       element.style.removeProperty("translate");
     }
-    try {
-      grip.releasePointerCapture?.(params.event.pointerId);
-    } catch {
-      // Pointer cancellation may release capture before this cleanup runs.
-    }
   };
-  const finish = (event: PointerEvent, apply: boolean) => {
-    if (!active || event.pointerId !== params.event.pointerId) {
-      return;
-    }
+  const finish = (event: PointerEvent) => {
     update(event);
     const targetId = target?.element.dataset.profileId;
     cleanup();
-    if (apply && targetId) {
+    if (targetId) {
       params.move(targetId, position);
     }
   };
-  const handleUp = (event: PointerEvent) => finish(event, true);
-  const handleCancel = (event: PointerEvent) => finish(event, false);
   const handleKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      finish(params.event, false);
+      params.drag.cancel();
     }
   };
-  const stops = [
-    listen(grip, "pointermove", { handleEvent: update }),
-    listen(grip, "pointerup", { handleEvent: handleUp }),
-    listen(grip, "pointercancel", { handleEvent: handleCancel }),
-    listen(grip, "lostpointercapture", { handleEvent: handleCancel }),
-    // A drag owns Escape before the Settings shell handles its back shortcut.
-    listen(document, "keydown", { handleEvent: handleKeyDown }, true),
-  ];
-  return cleanup;
+  // A drag owns Escape before the Settings shell handles its back shortcut.
+  const stopKeydown = listen(document, "keydown", { handleEvent: handleKeyDown }, true);
+  if (!params.drag.start(params.event, grip, { move: update, end: finish, cancel: cleanup })) {
+    cleanup();
+  }
 }
 
 function profileIdentity(profile: ProviderProfile, index: number): string {
@@ -355,49 +330,56 @@ function ProfileIdentity(props: {
   );
 }
 
-export function renderProviderAccountSummary(
-  cards: ModelProviderCard[],
+export function ProviderAccountSummary(props: {
+  cards: ModelProviderCard[];
   recovery?: {
     authProvider: string;
     disabled: boolean;
     onUse: (profileId: string) => void;
-  },
-) {
-  const profiles = cards.flatMap((card) =>
-    card.profiles.map((profile) => ({
-      profile,
-      authRejected: card.catalogStatus === "auth-rejected",
-      // A display card can combine providers whose credentials are not interchangeable.
-      canUse:
-        card.profileProviderIds[profile.profileId] === recovery?.authProvider &&
-        (profile.source === "saved" || profile.source === "inherited"),
-    })),
+  };
+}) {
+  const profiles = createMemo(() =>
+    props.cards.flatMap((card) =>
+      card.profiles.map((profile) => ({
+        key: JSON.stringify([
+          card.id,
+          card.profileProviderIds[profile.profileId],
+          profile.profileId,
+        ]),
+        profile,
+        authRejected: card.catalogStatus === "auth-rejected",
+        // A display card can combine providers whose credentials are not interchangeable.
+        canUse:
+          card.profileProviderIds[profile.profileId] === props.recovery?.authProvider &&
+          (profile.source === "saved" || profile.source === "inherited"),
+      })),
+    ),
   );
-  const sources = [...new Set(cards.map(apiKeySource).filter(Boolean))];
+  const sources = createMemo(() => [...new Set(props.cards.map(apiKeySource).filter(Boolean))]);
   return (
     <section class="model-provider-login__accounts" aria-label={t("modelProviders.login.accounts")}>
       <h3>{t("modelProviders.login.accounts")}</h3>
-      {profiles.length ? (
+      {profiles().length ? (
         <div role="list">
-          <For each={profiles}>
+          <For each={profiles()} keyed={(entry) => entry.key}>
             {(entry, index) => (
               <div
                 class="model-provider-login__account"
                 role="listitem"
-                data-profile-id={entry.profile.profileId}
+                data-profile-id={entry().profile.profileId}
               >
                 <ProfileIdentity
-                  profile={entry.profile}
-                  identity={profileIdentity(entry.profile, index())}
+                  profile={entry().profile}
+                  identity={profileIdentity(entry().profile, index())}
                   showDetails={false}
                 />
-                {profileStatus(entry.profile, entry.authRejected)}
-                {entry.canUse && recovery ? (
+                {profileStatus(entry().profile, entry().authRejected)}
+                {entry().canUse && props.recovery ? (
                   <button
                     class="btn"
                     data-models-use-account
-                    disabled={recovery.disabled}
-                    onClick={() => recovery.onUse(entry.profile.profileId)}
+                    disabled={props.recovery.disabled}
+                    onClick={() => props.recovery?.onUse(entry().profile.profileId)}
                   >
                     {t("modelProviders.login.useAccount")}
                   </button>
@@ -407,8 +389,8 @@ export function renderProviderAccountSummary(
           </For>
         </div>
       ) : undefined}
-      <For each={sources}>{(source) => <p class="muted">{source}</p>}</For>
-      {!profiles.length && !sources.length ? (
+      <For each={sources()}>{(source) => <p class="muted">{source}</p>}</For>
+      {!profiles().length && !sources().length ? (
         <p class="muted">{t("modelProviders.login.noAccounts")}</p>
       ) : undefined}
     </section>
@@ -416,6 +398,8 @@ export function renderProviderAccountSummary(
 }
 
 export function ProviderProfiles(props: ProviderProfilesViewProps & { card: ModelProviderCard }) {
+  let section!: HTMLElement;
+  const rowElements = new Map<string, HTMLElement>();
   const card = () => props.card;
   const groups = createMemo(() => profileGroups(card(), props.profileOrders));
   // Account numbers follow the saved inventory, not the editable priority order.
@@ -441,6 +425,7 @@ export function ProviderProfiles(props: ProviderProfilesViewProps & { card: Mode
     <Show when={card().profiles.length > 0}>
       <section
         class="model-providers__profiles"
+        ref={(element) => (section = element)}
         aria-label={`${t("modelProviders.profiles.title")}: ${card().displayName}`}
       >
         <div class="model-providers__profiles-heading">
@@ -494,6 +479,8 @@ export function ProviderProfiles(props: ProviderProfilesViewProps & { card: Mode
               <ProviderProfileRow
                 {...props}
                 row={row()}
+                section={() => section}
+                rowElements={rowElements}
                 identity={identities().get(row().profile.profileId)!}
               />
             )}
@@ -509,15 +496,19 @@ function ProviderProfileRow(
     row: { profile: ProviderProfile; group: ReturnType<typeof profileGroups>[number] };
     card: ModelProviderCard;
     identity: string;
+    section: () => HTMLElement;
+    rowElements: Map<string, HTMLElement>;
   },
 ) {
-  let cancelDrag: (() => void) | undefined;
-  let releaseUsage: (() => void) | undefined;
-  onCleanup(() => {
-    cancelDrag?.();
-    releaseUsage?.();
-  });
+  let rowElement!: HTMLElement;
+  const drag = createPointerDrag();
   const profile = () => props.row.profile;
+  onSettled(() => {
+    const initialProfileId = profile().profileId;
+    const rowElements = props.rowElements;
+    rowElements.set(initialProfileId, rowElement);
+    return () => rowElements.delete(initialProfileId);
+  });
   const group = () => props.row.group;
   const provider = () => group().provider;
   const order = () => group().order;
@@ -564,6 +555,7 @@ function ProviderProfileRow(
   return (
     <div
       class="model-providers__profile"
+      ref={(element) => (rowElement = element)}
       role="listitem"
       data-profile-id={profile().profileId}
       data-profile-provider={provider()}
@@ -581,12 +573,19 @@ function ProviderProfileRow(
             aria-keyshortcuts={canMove() ? "ArrowUp ArrowDown" : undefined}
             title={reorderBlocked() || t("modelProviders.profiles.reorderHint")}
             onPointerDown={(event: PointerEvent) => {
-              cancelDrag?.();
-              cancelDrag = startPointerDrag({
+              drag.cancel();
+              startPointerDrag({
                 event,
                 canMove: canMove(),
                 provider: provider(),
+                row: rowElement,
+                section: props.section(),
+                rows: group().profiles.flatMap((entry) => {
+                  const element = props.rowElements.get(entry.profileId);
+                  return element ? [element] : [];
+                }),
                 move: reorder,
+                drag,
               });
             }}
             onKeyDown={(event: KeyboardEvent) => {
@@ -616,14 +615,20 @@ function ProviderProfileRow(
         ) : undefined}
       </span>
       <ProfileIdentity profile={profile()} identity={props.identity} showDetails />
-      {provider() === "openai" && profile().type !== "api_key" ? (
-        <openclaw-model-account-usage
-          ref={(element) => (releaseUsage = props.registerAccountUsage?.(element))}
-          prop:client={props.usageClient ?? null}
-          prop:agentId={props.usageAgentId ?? ""}
-          prop:profileId={profile().profileId}
-        />
-      ) : undefined}
+      <Show when={provider() === "openai" && profile().type !== "api_key"}>
+        {(_shown) => {
+          let usageElement!: ModelAccountUsageElement;
+          onSettled(() => props.registerAccountUsage?.(usageElement));
+          return (
+            <openclaw-model-account-usage
+              ref={(element) => (usageElement = element)}
+              prop:client={props.usageClient ?? null}
+              prop:agentId={props.usageAgentId ?? ""}
+              prop:profileId={profile().profileId}
+            />
+          );
+        }}
+      </Show>
       <span class="model-providers__profile-status">
         {profileStatus(profile(), props.card.catalogStatus === "auth-rejected")}
       </span>
@@ -634,7 +639,11 @@ function ProviderProfileRow(
             class="model-providers__profile-logout"
             aria-label={logoutLabel()}
             title={logoutBlocked()}
-            disabled={!props.canMutate || props.busy[`logout:${props.card.id}`]}
+            disabled={
+              props.logoutSaving?.[props.card.id] ||
+              !props.canMutate ||
+              props.busy[`logout:${props.card.id}`]
+            }
             onClick={() => {
               const targetProvider = logoutProvider();
               if (targetProvider) {
@@ -646,18 +655,11 @@ function ProviderProfileRow(
               }
             }}
           >
-            <svg
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
+            <StrokeIcon>
               <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
               <polyline points="16 17 21 12 16 7" />
               <line x1="21" x2="9" y1="12" y2="12" />
-            </svg>
+            </StrokeIcon>
           </button>
         ) : undefined}
       </span>

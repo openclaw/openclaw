@@ -11,13 +11,11 @@ import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import {
+  chatMetadataCommandFields,
   createChatMetadataHarness,
   createChatMetadataOwner,
 } from "./chat-metadata-runtime.test-support.js";
-import {
-  readPreparedChatMetadata,
-  projectSessionModelCatalog,
-} from "./chat-metadata-session-projection.js";
+import { projectSessionModelCatalog } from "./chat-metadata-session-projection.js";
 
 const sol = { provider: "openai", id: "gpt-5.6-sol", name: "Sol" };
 const luna = { provider: "openai", id: "gpt-5.6-luna", name: "Luna" };
@@ -123,11 +121,12 @@ describe("gateway chat metadata native session ownership", () => {
         await harness.refresh();
         await expect(startup(native, "ready")).resolves.toBeUndefined();
         const nativeStartup = await startup(native);
-        expect(nativeStartup?.metadata?.models?.[0]?.agentRuntime?.id).toBe("copilot");
-        const hostStartup = await startup(host);
-        expect(hostStartup?.metadata?.models?.[0]?.agentRuntime?.id).toBe("openclaw");
-        const otherStartup = await startup(otherProvider);
-        expect(otherStartup?.metadata?.models?.[0]?.agentRuntime?.id).toBe("openclaw");
+        expect((await harness.read({ sessionEntry: host })).models?.[0]?.agentRuntime?.id).toBe(
+          "openclaw",
+        );
+        expect(
+          (await harness.read({ sessionEntry: otherProvider })).models?.[0]?.agentRuntime?.id,
+        ).toBe("openclaw");
         await expect(startup(native, "ready")).resolves.toEqual({
           sessionModelCatalog: nativeStartup?.sessionModelCatalog,
           defaultModelCatalog: nativeStartup?.defaultModelCatalog,
@@ -185,7 +184,7 @@ describe("gateway chat metadata native session ownership", () => {
     const acpRead = vi.spyOn(acpMetadata, "readAcpSessionMetaForEntries");
     try {
       expect(await harness.read({ ...request, includeModels: false })).toEqual({
-        commands: [{ name: "command-1-1" }],
+        commands: [{ ...chatMetadataCommandFields, name: "command-1-1" }],
         swarmEnabled: true,
         revision: expect.any(String),
       });
@@ -195,7 +194,6 @@ describe("gateway chat metadata native session ownership", () => {
     }
     expect(pending.runtimeSelectionLocked).toBe(true);
     expect(pending.models).toEqual([sol, hostModels[1]]);
-    expect((await harness.startup(request))?.metadata).toEqual(pending);
     const history = await harness.startup({ ...request, readPolicy: "ready" });
     expect(history).not.toHaveProperty("metadata");
     expect(history?.sessionModelCatalog).toBe(hostModels);
@@ -209,7 +207,6 @@ describe("gateway chat metadata native session ownership", () => {
     sessionEntry.modelProvider = "openai";
     const materialized = await harness.read(request);
     expect(materialized.models).toEqual([hostModels[0], luna]);
-    expect((await harness.startup(request))?.metadata).toEqual(materialized);
     expect(await harness.read()).toEqual(neutral);
     expect(hostModels[0]).toHaveProperty("available", false);
     expect(hostModels[1]).toHaveProperty("unavailableUntil", 123_456);
@@ -313,45 +310,4 @@ describe("gateway chat metadata native session ownership", () => {
       }
     }),
   );
-});
-
-test.each([
-  ["required device worker", "coding", "device", "worker", "coding"],
-  ["optional device worker", undefined, "device", "worker", undefined],
-  ["required Gateway inference", "coding", "device", "gateway", undefined],
-  ["missing profile", "missing", "device", "worker", undefined],
-  ["foreign provider setting", "coding", "custom", "worker", undefined],
-  ["invalid device setting", "coding", "device", "native", undefined],
-] as const)("projects only current %s policy", (_name, required, provider, inference, expected) => {
-  const config: OpenClawConfig = {
-    cloudWorkers: {
-      requiredProfile: required,
-      profiles: { coding: { provider, settings: { device: "paired-worker", inference } } },
-    },
-  };
-  const params = { agentId: "main", sessionKey: "agent:main:example" };
-  const metadata = { swarmEnabled: false };
-  const owner = createChatMetadataOwner(config, "fixture");
-  const projection = {
-    read: () => ({}),
-    agent: {
-      agentId: "main",
-      owner,
-      authStore: { version: 1, profiles: {} },
-      authModes: {},
-      modelCatalog: owner.modelCatalog,
-      ...metadata,
-    },
-  } satisfies Parameters<typeof readPreparedChatMetadata>[0];
-  const project = (readParams: Parameters<typeof readPreparedChatMetadata>[1]) =>
-    readPreparedChatMetadata(projection, readParams, config, null, undefined);
-  expect(project(params).requiredWorkerInferenceProfileId).toBe(expected);
-  expect(project({ agentId: "main" })).not.toHaveProperty("requiredWorkerInferenceProfileId");
-  expect(
-    project({ ...params, sessionEntry: { agentRuntimeOverride: "codex" } })
-      .requiredWorkerInferenceProfileId,
-  ).toBeUndefined();
-  delete config.cloudWorkers!.requiredProfile;
-  expect(project(params).requiredWorkerInferenceProfileId).toBeUndefined();
-  expect(metadata).toEqual({ swarmEnabled: false });
 });

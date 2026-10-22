@@ -182,25 +182,15 @@ export type SessionTranscriptNavigationStorage<T> = {
 };
 
 export function scanSessionTranscriptTree<T>(entries: Iterable<T>): SessionTranscriptTree<T> {
-  return createSessionTranscriptTreeScanner<T>().append(entries);
-}
-
-/** Continue the canonical branch/reset scanner with committed append deltas. */
-export function createSessionTranscriptTreeScanner<T>() {
   const nodes: SessionTranscriptTreeNode<T>[] = [];
   const byId = new Map<string, SessionTranscriptTreeNode<T>>();
-  const cursor: SessionTranscriptNavigationCursor = {};
   const storage: SessionTranscriptNavigationStorage<T> = {
     byId,
     addNode: (node) => nodes.push(node),
     resetDescendantIds: new Set(),
     invalidLeafControlIds: new Set(),
   };
-  return {
-    append(entries: Iterable<T>): SessionTranscriptTree<T> {
-      return { nodes, byId, ...scanSessionTranscriptNavigation(entries, storage, cursor) };
-    },
-  };
+  return { nodes, byId, ...scanSessionTranscriptNavigation(entries, storage) };
 }
 
 /** Resolves the active branch leaf from the same transcript tree used by branch listing. */

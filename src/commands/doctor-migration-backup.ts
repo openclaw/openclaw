@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   closeSync,
   existsSync,
@@ -16,44 +16,133 @@ import { resolveStateDir } from "../config/paths.js";
 import { requireDirectorySync, syncDirectorySync } from "../infra/directory-durability.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { sameFileMutationFingerprint } from "../infra/file-descriptor.js";
+import { assertStateDatabaseAccessAllowed } from "../infra/gateway-state-owner.js";
 import { openNodeSqliteDatabase, resolveImmutableSqliteFileUri } from "../infra/node-sqlite.js";
 import { isPathInside } from "../infra/path-guards.js";
+import type { MigrationArtifactVerification } from "../infra/session-sqlite-migration-artifact.js";
 import { runSqliteIntegrityOperationInWorker } from "../infra/sqlite-integrity-operation.js";
 import { withSqliteIntegrityWorkerScope } from "../infra/sqlite-integrity-worker.js";
 import {
   assertSqliteIntegrity,
   isTerminalSqliteIntegrityError,
   sqliteIntegrityCheckSteps,
+  type SqliteIntegrityCheckOptions,
 } from "../infra/sqlite-integrity.js";
 import {
   createScopedMigrationSnapshot,
+  createScopedMigrationSnapshotSync,
   inspectScopedMigrationSnapshot,
   inspectScopedMigrationTables,
+  scopedMigrationTablesMatchFullBackup,
   ScopedMigrationSnapshotUnsupportedError,
   type ScopedMigrationInspection,
 } from "../infra/sqlite-migration-scoped-snapshot.js";
 import { resolveSqliteInspectionSignal } from "../infra/sqlite-readonly-worker.js";
+import { hashPublishedFileSync } from "../infra/sqlite-snapshot-file.js";
+import type { PublishedSqliteFileGuard } from "../infra/sqlite-snapshot.types.js";
 import type { AgentDatabaseMigrationTarget } from "../infra/state-migrations.media-persistence-targets.js";
 import type { MigrationMessages } from "../infra/state-migrations.types.js";
+import {
+  getDoctorMigrationFullBackup,
+  hasUpdateDoctorMigrationCapture,
+  recordDoctorMigrationFullBackup,
+} from "../infra/update-doctor-migration-attribution.js";
 import { DoctorMaintenanceRefusalError } from "../infra/update-doctor-result.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import { agentEngineInput } from "../state/openclaw-agent-db-engine.js";
+import { invalidateOpenClawAgentDatabaseIntegrityBeforeMutation } from "../state/openclaw-agent-db-lease.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../state/openclaw-database-preflight.types.js";
 import { getOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
+  CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
   OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
   OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db-contract.js";
 import { isStatePostgres, stateEngineInput } from "../state/openclaw-state-db-engine.js";
 import { needsOpenClawStateDatabaseSchemaRepair } from "../state/openclaw-state-db-fast-path.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { resolveSchemaMigrationBackupTables } from "../state/schema-migration-backup-scope.js";
+import {
+  resolveSchemaMigrationBackupTables,
+  resolveSchemaMigrationIntegrityCheck,
+} from "../state/schema-migration-backup-scope.js";
 import { resolveRuntimeServiceBuildId, resolveRuntimeServiceCommit, VERSION } from "../version.js";
 import type { BackupSqliteSnapshotFact } from "./backup-resource-inventory.js";
 import { recordDoctorMigrationBackups } from "./doctor-migration-backup-artifacts.js";
 import { createDoctorRehearsalDatabaseCoverage } from "./doctor-rehearsal-databases.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
 import { isUpdateDoctorLintPass } from "./doctor/shared/update-phase.js";
+
+/** A standalone retirement needs a fresh snapshot from the same source transaction. */
+export function captureFreshDoctorMigrationTables(
+  db: DatabaseSync,
+  options: { path: string; env: NodeJS.ProcessEnv; tables: readonly string[] },
+) {
+  const maintenance = getOpenClawDatabaseMaintenanceScope();
+  if (hasUpdateDoctorMigrationCapture()) {
+    throw new Error("Updater migration requires its captured source generation.");
+  }
+  if (!maintenance?.ownsSchemaMaintenance || !db.isTransaction) {
+    throw new Error(
+      "Fresh migration backup requires schema maintenance and its source transaction.",
+    );
+  }
+  const assertCurrent = () => {
+    maintenance.assertAdmission();
+    assertStateDatabaseAccessAllowed(options.path);
+    if (!db.isOpen || !db.isTransaction) {
+      throw new Error("Fresh migration backup lost its source transaction.");
+    }
+  };
+  assertCurrent();
+  const backupId = randomUUID();
+  let backup: { path: string; generation: string };
+  try {
+    backup = createScopedMigrationSnapshotSync(db, {
+      sourcePath: options.path,
+      targetPath: `${options.path}.pre-startup-migration-${backupId}.scoped.bak`,
+      tables: options.tables,
+      assertCurrent,
+    });
+  } catch (error) {
+    const full = getDoctorMigrationFullBackup(options.path);
+    if (!(error instanceof ScopedMigrationSnapshotUnsupportedError) || !full) {
+      throw error;
+    }
+    if (!scopedMigrationTablesMatchFullBackup(db, options.path, full.path, options.tables)) {
+      throw new DoctorMaintenanceRefusalError(
+        `Pre-migration backup no longer contains current credentials: ${full.path}. Preserve the database and its backup before retrying.`,
+        { kind: "data-at-risk", reason: "incomplete-migration" },
+      );
+    }
+    assertCurrent();
+    return {
+      capture: {
+        path: options.path,
+        generation:
+          full.generation ??
+          hashPublishedFileSync(full.path, lstatSync(full.path, { bigint: true })).sha256,
+        assertCurrent,
+      },
+      backupPath: full.path,
+    };
+  }
+  recordDoctorMigrationBackups(
+    options.env,
+    backupId,
+    [
+      {
+        path: options.path,
+        identity: statSync(options.path, { bigint: true }),
+        archivePath: backup.path,
+      },
+    ],
+    true,
+  );
+  return {
+    capture: { path: options.path, generation: backup.generation, assertCurrent },
+    backupPath: backup.path,
+  };
+}
 
 /** Preserve the old database generation before Doctor advances its schemas. */
 export async function backupDoctorMigrationDatabases(params: {
@@ -66,9 +155,11 @@ export async function backupDoctorMigrationDatabases(params: {
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
   /** Only the version-phase owner may select a table-scoped checkpoint. */
   versionMigrationsOnly?: boolean;
+  check?: "quick" | "full";
 }): Promise<
   MigrationMessages & {
     versionMigrations?: NonNullable<OpenClawDatabaseSchemaPreflight["pendingMigrations"]>;
+    postgresGenerations?: Record<string, string>;
   }
 > {
   const sharedPath = resolveOpenClawStateSqlitePath(params.env);
@@ -87,6 +178,41 @@ export async function backupDoctorMigrationDatabases(params: {
   if (!maintenance?.ownsSchemaMaintenance) {
     throw new Error("Pre-migration SQLite backups require Doctor maintenance ownership.");
   }
+  // Archive-only coverage cannot serve a fresh credential capture inside its transaction.
+  const verifiedSnapshots =
+    !hasUpdateDoctorMigrationCapture() &&
+    params.pendingMigrations?.some(
+      (migration) =>
+        migration.kind === "state" &&
+        migration.foundVersion < CLIENT_CREDENTIAL_CUTOVER_SCHEMA_VERSION,
+    )
+      ? params.verifiedSnapshots?.filter((snapshot) => snapshot.role !== "global")
+      : params.verifiedSnapshots;
+  const integrityChecks = new Map<string, SqliteIntegrityCheckOptions>();
+  for (const pathname of new Set([...pending, ...params.databasePaths, sharedPath])) {
+    const engine = pathname === sharedPath ? stateEngineInput() : agentEngineInput();
+    if (engine || !existsSync(pathname)) {
+      continue;
+    }
+    const migration = params.pendingMigrations?.find((entry) => entry.path === pathname);
+    if (
+      params.versionMigrationsOnly &&
+      migration?.kind === "agent" &&
+      params.agentDatabaseTargets?.some((target) => target.path === pathname)
+    ) {
+      // This custody checks current bytes once, before its version and additive phases.
+      invalidateOpenClawAgentDatabaseIntegrityBeforeMutation(pathname);
+    }
+    if (migration) {
+      integrityChecks.set(
+        realpathSync.native(pathname),
+        resolveSchemaMigrationIntegrityCheck(migration, params.check),
+      );
+    } else if (params.versionMigrationsOnly && !pending.has(pathname)) {
+      // Companion databases are preserved for rollback but no schema tables change.
+      integrityChecks.set(realpathSync.native(pathname), { check: params.check ?? "quick" });
+    }
+  }
   const postgresPaths = new Map(
     [
       ...new Set([...pending, ...params.databasePaths, ...(isStatePostgres() ? [sharedPath] : [])]),
@@ -98,8 +224,13 @@ export async function backupDoctorMigrationDatabases(params: {
   if (postgresPaths.size > 0) {
     const { backupDoctorPostgresMigration } = await import("./doctor-postgres-migration.js");
     const changes: string[] = [];
+    const postgresGenerations: Record<string, string> = {};
     for (const [pathname, input] of postgresPaths) {
-      changes.push(...(await backupDoctorPostgresMigration(pathname, input, maintenance)));
+      const backup = await backupDoctorPostgresMigration(pathname, input, maintenance);
+      changes.push(...backup.changes);
+      if (backup.generation !== undefined) {
+        postgresGenerations[pathname] = backup.generation;
+      }
     }
     const nativePaths = [...pending].filter((pathname) => !postgresPaths.has(pathname));
     if (!postgresPaths.has(sharedPath) && existsSync(sharedPath)) {
@@ -107,15 +238,18 @@ export async function backupDoctorMigrationDatabases(params: {
     }
     const native = await backupDoctorSqliteDatabases({
       ...params,
+      verifiedSnapshots,
       pendingDatabasePaths: nativePaths,
       databasePaths: params.databasePaths.filter((pathname) => !postgresPaths.has(pathname)),
       authority: { assertCurrent: () => maintenance.assertAdmission() },
       stateFamilyBackedUp: postgresPaths.has(sharedPath) ? true : undefined,
+      integrityChecks,
     });
     return {
       ...native,
       changes: [...changes, ...native.changes],
       versionMigrations: params.pendingMigrations,
+      ...(Object.keys(postgresGenerations).length > 0 ? { postgresGenerations } : {}),
     };
   }
   const migrationTables = new Map<string, readonly string[]>();
@@ -146,7 +280,12 @@ export async function backupDoctorMigrationDatabases(params: {
           for (const pathname of migrationTables.keys()) {
             using database = openNodeSqliteDatabase(pathname, { readOnly: true });
             await runSqliteIntegrityOperationInWorker(
-              sqliteIntegrityCheckSteps(database, pathname),
+              sqliteIntegrityCheckSteps(
+                database,
+                pathname,
+                undefined,
+                integrityChecks.get(pathname),
+              ),
               {
                 busyTimeoutMs: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
                 signal,
@@ -159,9 +298,11 @@ export async function backupDoctorMigrationDatabases(params: {
     }
     return backupDoctorSqliteDatabases({
       ...params,
+      verifiedSnapshots,
       pendingDatabasePaths: [...pending],
       authority: { assertCurrent: () => maintenance.assertAdmission() },
       migrationTables: migrationTables.size > 0 ? migrationTables : undefined,
+      integrityChecks,
     });
   };
   let result: MigrationMessages;
@@ -212,8 +353,11 @@ export async function backupDoctorSqliteDatabases(params: {
   repair?: { key: string; validate: (database: DatabaseSync) => void };
   verifiedSnapshots?: readonly BackupSqliteSnapshotFact[];
   migrationTables?: ReadonlyMap<string, readonly string[]>;
+  integrityChecks?: ReadonlyMap<string, SqliteIntegrityCheckOptions>;
   stateFamilyBackedUp?: true;
-}): Promise<MigrationMessages> {
+  /** Recovery must retain its own verified originals, including on disposable rehearsals. */
+  requireSnapshots?: true;
+}): Promise<MigrationMessages & { snapshots?: readonly { sourcePath: string; path: string }[] }> {
   const pending = new Set(params.pendingDatabasePaths);
   if (pending.size === 0) {
     return { changes: [], warnings: [] };
@@ -232,7 +376,9 @@ export async function backupDoctorSqliteDatabases(params: {
   }
   const { authority } = params;
   authority.assertCurrent();
-  const disposable = createDoctorRehearsalDatabaseCoverage(params.env);
+  const disposable = params.requireSnapshots
+    ? undefined
+    : createDoctorRehearsalDatabaseCoverage(params.env);
   disposable?.admit([...pending, ...params.databasePaths]);
   const retainedPaths = [...new Set([...pending, ...params.databasePaths])].filter(
     (pathname) => !disposable?.excludes(pathname),
@@ -254,6 +400,7 @@ export async function backupDoctorSqliteDatabases(params: {
     ),
   ];
   if (
+    !params.requireSnapshots &&
     sources.length > 0 &&
     sources.every((sourcePath) => {
       const { dev, ino } = statSync(sourcePath, { bigint: true });
@@ -411,6 +558,12 @@ export async function backupDoctorSqliteDatabases(params: {
       );
     }
   }
+  const verification: MigrationArtifactVerification = new Map();
+  const afterPublish = (guard: PublishedSqliteFileGuard) => {
+    const verified = guard.assertTargetUnchanged();
+    verification.set(`${verified.stat.dev}:${verified.stat.ino}`, verified);
+    return verified.content.sha256;
+  };
   for (const { path: sourcePath } of inventory) {
     assertCapture();
     const targetPath = targetFor(sourcePath);
@@ -432,7 +585,7 @@ export async function backupDoctorSqliteDatabases(params: {
           try {
             snapshot.exec("PRAGMA trusted_schema = OFF;");
             assertCapture();
-            assertSqliteIntegrity(snapshot, targetPath);
+            assertSqliteIntegrity(snapshot, targetPath, params.integrityChecks?.get(sourcePath));
             params.repair?.validate(snapshot);
           } finally {
             snapshot.close();
@@ -447,6 +600,9 @@ export async function backupDoctorSqliteDatabases(params: {
           { kind: "data-at-risk", reason: "incomplete-migration" },
           { cause },
         );
+      }
+      if (targetPath === fullTargetFor(sourcePath)) {
+        recordDoctorMigrationFullBackup(sourcePath, { path: targetPath });
       }
       changes.push(`Reused pre-migration SQLite backup: ${targetPath}`);
       continue;
@@ -465,13 +621,20 @@ export async function backupDoctorSqliteDatabases(params: {
           tables: inspection.tables.map((table) => table.name),
           inspection,
           beforePublish: assertCapture,
+          afterPublish,
         })
       : await createVerifiedSqliteSnapshot({
           sourcePath,
           targetPath,
           preserveRowIds: true,
+          integrity: params.integrityChecks?.get(sourcePath),
           transform: sanitizeOpenClawStateLeaseRows,
           beforePublish: assertCapture,
+          afterPublish: (guard) =>
+            recordDoctorMigrationFullBackup(sourcePath, {
+              path: targetPath,
+              generation: afterPublish(guard),
+            }),
           validate: params.repair?.validate,
         });
     assertCapture();
@@ -497,11 +660,19 @@ export async function backupDoctorSqliteDatabases(params: {
       backupId,
       inventory.map(({ path, identity }) => ({ path, identity, archivePath: targetFor(path) })),
       params.migrationTables !== undefined,
+      verification,
     );
   } catch (error) {
     warnings.push(
       `Migration backups remain protected; cleanup registration failed: ${formatErrorMessage(error)}`,
     );
   }
-  return { changes, warnings };
+  return {
+    changes,
+    warnings,
+    snapshots: inventory.map(({ path: sourcePath }) => ({
+      sourcePath,
+      path: targetFor(sourcePath),
+    })),
+  };
 }

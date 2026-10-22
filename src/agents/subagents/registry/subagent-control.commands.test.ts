@@ -10,7 +10,7 @@ import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../conf
 import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { withExecRequestTurn } from "../../../infra/exec-request-context.js";
 import { getProcessSupervisor } from "../../../process/supervisor/index.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { isPidDefinitelyDead } from "../../../shared/pid-alive.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { captureExecRequestCancellation } from "../../bash-process-control.js";
@@ -29,15 +29,16 @@ import {
   type SubagentRunRecordOverrides,
 } from "../../subagent-test-fixtures.test-helpers.js";
 import * as killSession from "./subagent-control-session.js";
+import { createControlRunFixture } from "./subagent-control.fixtures.test-support.js";
 import { killAllControlledSubagentRuns, killSubagentRunAdmin } from "./subagent-control.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
-import { registerSubagentRun, startQueuedSubagentRun } from "./subagent-registry.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import { startQueuedSubagentRun } from "./subagent-registry.js";
 import { resolveSubagentSessionStatus } from "./subagent-session-metrics.js";
 
 const fixture = useSubagentControlFixture();
+const runs = createControlRunFixture(() => fixture.stateDir);
 
 beforeEach(async () => {
   await captureRuntimeConfigAsyncReader()();
@@ -97,12 +98,9 @@ function controllerFor(controllerSessionKey: string) {
 }
 
 async function writeCommandSession(sessionKey: string, sessionId: string) {
-  return writeSubagentSessionEntry({
-    stateDir: fixture.stateDir,
-    agentId: "main",
+  return runs.writeSession(sessionId, `${sessionId}-revision`, {
     sessionKey,
     defaultSessionId: sessionId,
-    lifecycleRevision: `${sessionId}-revision`,
   });
 }
 
@@ -417,11 +415,8 @@ it.each([
     const sessionId = "active-command-session";
     const runId = "active-command-run";
     const storePath = await writeCommandSession(childSessionKey, sessionId);
-    await registerSubagentRun({
-      runId,
+    await runs.register(runId, storePath, {
       childSessionKey,
-      childAgentId: "main",
-      sessionEntry: { sessionId, lifecycleRevision: `${sessionId}-revision` },
       requesterSessionKey,
       requesterAgentId: "main",
       requesterDisplayKey: requesterSessionKey,
@@ -436,9 +431,10 @@ it.each([
     let callerAuthorized = true;
     const ready = createDeferred();
     const interrupted = createDeferred();
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [childSessionKey, sessionId],
+      run: { runId, sessionKey: childSessionKey, sessionId, agentId: "main" },
       assertAllowed: () => {},
       onInterrupt: (reason) => {
         // The native kill owner supplies the reason; the admitted command relays it.

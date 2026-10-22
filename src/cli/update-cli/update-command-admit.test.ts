@@ -147,6 +147,15 @@ afterEach(() => {
 });
 
 describe("candidate update admission", () => {
+  it("attests family config through existing admission without mutation", async () => {
+    writeConfig({ database: { families: { workboard: { engine: "sqlite" } } } });
+    const before = snapshotFiles();
+    await updateAdmitCommand(contextPath);
+    expect(process.exitCode).toBe(0);
+    expect(readVerdict().facts.checks).toContainEqual({ name: "database-families", status: "ok" });
+    expect(snapshotFiles()).toEqual(before);
+  });
+
   it("admits retained plugin config for Doctor without weakening normal validation", async () => {
     const pluginId = "pending-settings";
     const pluginDir = path.join(home, pluginId);
@@ -574,6 +583,7 @@ describe("candidate update admission", () => {
   });
 
   it("uses the explicit installed root and emits one JSON verdict without creating live state", async () => {
+    vi.spyOn(runtimeGuard, "nodeVersionSatisfiesEngine").mockReturnValue(true);
     const before = snapshotFiles();
     const program = new Command().name("openclaw");
     registerUpdateCli(program);

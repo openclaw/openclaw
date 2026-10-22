@@ -67,6 +67,8 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     /** Immutable original bytes for this invocation; never restoration authority. */
     originalRecoveryCapture?: UpdateRecoveryBaselineRef;
     defaultStepTimeoutMs?: number;
+    /** Retain the admitted SQLite writer allowance through finalization. */
+    busyTimeoutMs?: number;
     activationTimeoutMs?: number;
     /** Explicit operator budget, minted once by this invocation’s admission. */
     deadline?: import("../daemon-cli/restart-health-deadline.js").GatewayRestartDeadline;
@@ -86,6 +88,7 @@ export type UpdateCommandOptions = Pick<UpdateRunResult, "sourceRuntimePrepared"
     sourceArtifactLock?: import("@openclaw/fs-safe/file-lock").FileLockHandle;
   };
   acceptCapabilities?: boolean;
+  fullIntegrityCheck?: boolean;
   admission?: "auto" | "installed";
   json?: boolean;
   restart?: boolean;
@@ -110,7 +113,7 @@ export function usesCandidateUpdateAdmission(
 
 export type UpdateFinalizeOptions = Pick<
   UpdateCommandOptions,
-  "acceptCapabilities" | "json" | "channel" | "timeout" | "yes"
+  "acceptCapabilities" | "fullIntegrityCheck" | "json" | "channel" | "timeout" | "yes"
 > & {
   /** Internal external-supervisor handshake; public repair always leaves this false. */
   deferCompletionCache?: boolean;
@@ -118,7 +121,7 @@ export type UpdateFinalizeOptions = Pick<
 
 export type UpdateWizardOptions = Pick<
   UpdateCommandOptions,
-  "runtimeRecoveryEnv" | "acceptCapabilities" | "timeout"
+  "runtimeRecoveryEnv" | "acceptCapabilities" | "fullIntegrityCheck" | "timeout"
 >;
 
 /** Parse the shared timeout contract without exiting an owning operation. */
@@ -616,7 +619,7 @@ export async function confirmUpdateDowngrade(params: {
       status: "skipped",
       reason: decision === "cancelled" ? "cancelled" : "downgrade-confirmation-required",
     },
-    { env: run.env },
+    run,
   );
   if (decision === "confirmation-required") {
     defaultRuntime.error(

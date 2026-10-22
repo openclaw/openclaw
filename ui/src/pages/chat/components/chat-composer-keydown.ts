@@ -3,7 +3,7 @@ import { isMobileBrowserPlatform } from "../../../lib/browser-platform.ts";
 import { isComposingKeyboardEvent } from "../../../lib/ime.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
-import type { GoalComposerController } from "./chat-composer-goal-mode.tsx";
+import type { GoalComposer } from "./chat-composer-goal-mode.tsx";
 import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.tsx";
 import type { SkillMenuHost } from "./chat-composer-skill-menu.tsx";
 import type { SlashMenuHost } from "./chat-composer-slash-menu.tsx";
@@ -18,7 +18,6 @@ type ComposerKeyDownDeps = {
   skillMenuHost: SkillMenuHost;
   slashMenuHost: SlashMenuHost;
   mentionMenuHost: HumanMentionMenuHost;
-  requestUpdate: () => void;
   sendShortcut: ChatSendShortcut;
   canSubmitDraft: (draft: string) => boolean;
   submitDraft: (
@@ -28,7 +27,7 @@ type ComposerKeyDownDeps = {
   ) => void;
   showAbortableUi: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
-  goalComposer: GoalComposerController;
+  goalComposer: GoalComposer;
 };
 
 export function createComposerKeyDownHandler({
@@ -39,7 +38,6 @@ export function createComposerKeyDownHandler({
   skillMenuHost,
   slashMenuHost,
   mentionMenuHost,
-  requestUpdate,
   sendShortcut,
   canSubmitDraft,
   submitDraft,
@@ -132,9 +130,6 @@ export function createComposerKeyDownHandler({
         if (result.preventDefault) {
           event.preventDefault();
         }
-        // History navigation updates the renderer-owned draft outside a
-        // reactive property; commit it before placing the caret in the DOM.
-        requestUpdate();
         if (result.restoreCaret) {
           restoreHistoryCaret(target, result.restoreCaret);
         }

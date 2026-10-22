@@ -18,6 +18,7 @@ import type { CodexNativeSubagentCompletion } from "./native-subagent-notificati
 import type { CodexNativeSubagentAssignmentStore } from "./native-subagent-pending-assignments.js";
 import type {
   CodexNativeSubagentSubmission,
+  CodexNativeSubagentSubmissionAcknowledgement,
   CodexNativeSubagentSubmissionStore,
 } from "./native-subagent-submission.js";
 
@@ -129,6 +130,10 @@ export type NativePendingChild = {
 
 export type ParentRegistrationHandle = {
   ready: Promise<void>;
+  observeSubmissionAcknowledgement: (
+    receipt: CodexNativeSubagentSubmissionAcknowledgement,
+    assertCurrent: () => void,
+  ) => Promise<void>;
   bindTurn: (turnId: string, mapping?: NativeModelMapping) => void;
   /** Unsettled children of this requester's parent threads, including earlier turns'. */
   listPendingChildren: () => NativePendingChild[];
@@ -270,6 +275,8 @@ export type ThreadRecovery = {
 
 export type NativeDescendantCancellation = Parameters<DescendantCancellation>[0] & {
   parentThreadId: string;
+  /** Optional native binding guard; persistence compares the row inside its own mutation. */
+  assertBindingCurrent?: () => void;
 };
 
 export type MonitorOptions = {
@@ -280,9 +287,6 @@ export type MonitorOptions = {
     timeoutMs: number,
   ) => Promise<boolean>;
   interruptModelExecution?: (threadId: string, turnId: string) => void;
-  recoveryPollDelaysMs?: readonly number[];
-  completionDeliveryRetryDelaysMs?: readonly number[];
-  completionDeliveryMaxRetries?: number;
   retainClient?: () => (() => void) | undefined;
   retainParentThread?: (threadId: string) => (() => void) | undefined;
   hasObservationBacking?: (parentThreadId: string, childThreadId: string) => boolean;

@@ -155,7 +155,7 @@ async function* readBatches(
       rows = statement.iterate(...params);
     } else {
       const result = await endpoint.db.query(sql, params.map(binding));
-      rows = decodePostgresRows({ ...result, rowCount: result.rowCount ?? 0 }, true);
+      rows = decodePostgresRows(result, true);
     }
     let count = 0,
       bytes = 0;
@@ -340,6 +340,7 @@ async function scan(
   maxRowBytes: number,
   destination?: Endpoint,
   assertCurrent = () => {},
+  transformRow?: (table: string, row: PortRow) => PortRow | undefined,
 ) {
   const tables: PortVerification["tables"] = {};
   for (const table of copiedTables(descriptor)) {
@@ -361,7 +362,13 @@ async function scan(
         if (done) {
           break;
         }
-        for (const row of batch) {
+        const copied = transformRow
+          ? batch.flatMap((row) => {
+              const transformed = transformRow(table.name, row);
+              return transformed ? [transformed] : [];
+            })
+          : batch;
+        for (const row of copied) {
           hash.update(
             JSON.stringify(table.columns.map((c) => encodeSqliteValue(row[c.name]))) + "\n",
           );
@@ -372,8 +379,8 @@ async function scan(
         if (destination?.engine === "sqlite") {
           next = stream.next();
         }
-        if (destination) {
-          pending = insertBatch(destination, table, batch, assertCurrent);
+        if (destination && copied.length) {
+          pending = insertBatch(destination, table, copied, assertCurrent);
           void pending.catch(() => {});
         }
         if (destination?.engine !== "sqlite") {
@@ -570,6 +577,8 @@ export async function materializeDatabasePort(params: {
   maxRowBytes?: number;
   sourceAllocations?: PortVerification["allocations"];
   activeFragments?: readonly string[];
+  /** Export-only redaction before hashing/copying; retained rows preserve keys and column types. */
+  transformRow?: (table: string, row: PortRow) => PortRow | undefined;
 }): Promise<PortVerification> {
   const { source, destination, assertCurrent } = params;
   if (source.engine === destination.engine) {
@@ -637,7 +646,14 @@ export async function materializeDatabasePort(params: {
     }
     const facts =
       params.sourceAllocations ?? (await readDatabasePortAllocations(source, descriptor));
-    const tables = await scan(source, descriptor, maxRowBytes, destination, assertCurrent);
+    const tables = await scan(
+      source,
+      descriptor,
+      maxRowBytes,
+      destination,
+      assertCurrent,
+      params.transformRow,
+    );
     assertCurrent();
     await restoreAllocations(destination, descriptor, facts);
     for (const projection of descriptor.projections ?? []) {

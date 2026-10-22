@@ -216,7 +216,6 @@ export async function prepareWorkerTurnMedia(params: {
             logWarn("worker-media: Omitted an unavailable historical attachment source");
             continue;
           }
-          assertCurrent();
           const identity = createHash("sha256").update(source).digest("hex");
           remotePath = await stageFile(data, identity, path.basename(source));
           for (const alias of [ref.raw, ref.resolved, source, fact.path, fact.url]) {

@@ -3,6 +3,7 @@ import {
   extractAssistantTextForPhase,
   resolveAssistantMessagePhase,
 } from "../../../../src/shared/chat-message-content.js";
+import type { MessageGroup } from "../../lib/chat/chat-types.ts";
 import { extractTextCached } from "../../lib/chat/message-extract.ts";
 import { isKeyedAssistantStreamFallbackMessage } from "./chat-thread-run-identity.ts";
 import { extractMessageMediaText } from "./components/chat-message-media.ts";
@@ -73,4 +74,21 @@ export function assistantMessageCanOwnTurnActions(message: unknown, explicitOnly
     return false;
   }
   return !explicitOnly || phase === "final_answer" || stopReason === "stop";
+}
+
+export function assistantMessageKind(
+  message: unknown,
+  visibleContent: MessageGroup["visibleContent"],
+) {
+  if (isProviderVoiceTranscript(message)) {
+    return "voice-transcript";
+  }
+  return (
+    resolveAssistantReplyPhase(message) ??
+    (asRecord(message)?.stopReason === "toolUse"
+      ? "commentary"
+      : visibleContent === "none"
+        ? "activity"
+        : "reply")
+  );
 }

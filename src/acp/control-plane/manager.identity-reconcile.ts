@@ -126,20 +126,6 @@ export async function reconcileManagerRuntimeSessionIdentifiers(
   });
   const nextMeta = projectMeta(params.meta);
   assertCurrent();
-  if (!identityEquals(currentIdentity, nextIdentity)) {
-    const currentAgentSessionId = currentIdentity?.agentSessionId ?? "<none>";
-    const nextAgentSessionId = nextIdentity?.agentSessionId ?? "<none>";
-    const currentAcpxSessionId = currentIdentity?.acpxSessionId ?? "<none>";
-    const nextAcpxSessionId = nextIdentity?.acpxSessionId ?? "<none>";
-    const currentAcpxRecordId = currentIdentity?.acpxRecordId ?? "<none>";
-    const nextAcpxRecordId = nextIdentity?.acpxRecordId ?? "<none>";
-    logVerbose(
-      `acp-manager: session identity updated for ${params.sessionKey} ` +
-        `(agentSessionId ${currentAgentSessionId} -> ${nextAgentSessionId}, ` +
-        `acpxSessionId ${currentAcpxSessionId} -> ${nextAcpxSessionId}, ` +
-        `acpxRecordId ${currentAcpxRecordId} -> ${nextAcpxRecordId})`,
-    );
-  }
   await params.writeSessionMeta({
     cfg: params.cfg,
     sessionKey: params.sessionKey,

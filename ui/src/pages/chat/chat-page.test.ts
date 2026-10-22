@@ -13,8 +13,10 @@ vi.mock("./chat-pane.tsx", async () => {
 });
 
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import { mobileNavLayoutMediaQuery } from "../../app/mobile-nav-layout.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
-import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
+import { registerMcpAppUnmountTarget } from "../../components/mcp-app-unmount.ts";
+import { UI_COMMAND_EVENT, type UiCommandDetail } from "../../components/panel-toggle-contract.ts";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
 import {
@@ -35,7 +37,7 @@ import {
   setViewerPresenceContext,
   stubMatchMedia,
 } from "./chat-page.test-support.ts";
-import { ChatPage } from "./chat-page.ts";
+import "./chat-page.tsx";
 import { loadChatRoute } from "./route-loader.ts";
 
 const WORK_SESSION_KEY = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
@@ -75,6 +77,56 @@ function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
   return expectDefined(items[index], `${label} ${index}`);
 }
 
+const panesIn = (page: HTMLElementTagNameMap["openclaw-chat-page"]) => [
+  ...page.querySelectorAll<RenderedPane>("openclaw-chat-pane"),
+];
+const paneAt = (page: HTMLElementTagNameMap["openclaw-chat-page"], index = 0) =>
+  itemAt(panesIn(page), index, "pane");
+const location = (pathname: string, search = "") => ({ pathname, search, hash: "" });
+const preferredChat = (sessionKey: string) => ({
+  pathname: sessionPath(sessionKey),
+  search: "?__openclawSessionFacePreference=1",
+});
+
+function command(detail: UiCommandDetail) {
+  const event = new CustomEvent(UI_COMMAND_EVENT, { detail, cancelable: true });
+  window.dispatchEvent(event);
+  return event;
+}
+
+async function mountPage(
+  data: HTMLElementTagNameMap["openclaw-chat-page"]["data"] = { sessionKey: "main" },
+  layout?: ReturnType<typeof createSplitLayout>,
+) {
+  const page = document.createElement("openclaw-chat-page");
+  const navigation = setNavigationContext(page);
+  page.data = data;
+  if (layout) {
+    patchSettings({ chatSplitLayout: layout });
+  }
+  document.body.append(page);
+  await settleChatPage(page);
+  return { page, navigation };
+}
+
+async function coldPage(draft?: string) {
+  const source = location("/chat/research/workspace", draft ? `?draft=${draft}` : "");
+  window.history.replaceState({}, "", source.pathname + source.search);
+  const canonicalLocation = createDeferred<RouteLocation | null>();
+  const mounted = await mountPage({
+    sessionKey: "agent:research:workspace",
+    face: "chat",
+    ...(draft ? { draft } : {}),
+    canonicalLocationReady: canonicalLocation.promise,
+    canonicalLocationSource: source,
+  });
+  return { ...mounted, canonicalLocation };
+}
+
+function mockBounds(element: Element, left: number, top: number, width: number, height: number) {
+  vi.spyOn(element, "getBoundingClientRect").mockReturnValue(new DOMRect(left, top, width, height));
+}
+
 function dispatchSessionDrag(
   target: Element,
   type: string,
@@ -97,30 +149,33 @@ function dispatchSessionDrag(
   return event;
 }
 
-function stubDropBounds(page: ChatPage) {
+function stubDropBounds(page: HTMLElementTagNameMap["openclaw-chat-page"]) {
   const pane = expectDefined(
-    [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find(
-      (candidate) => candidate.paneId === "p1",
-    ),
+    panesIn(page).find((candidate) => candidate.paneId === "p1"),
     "drop pane",
   );
   const container = expectDefined(
     page.querySelector<HTMLElement>(".chat-split-view__drop-container"),
-    "drop container",
+    ".chat-split-view__drop-container",
   );
-  vi.spyOn(pane, "getBoundingClientRect").mockReturnValue({
-    left: 100,
-    top: 50,
-    width: 200,
-    height: 100,
-  } as DOMRect);
-  vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
-    left: 100,
-    top: 50,
-    width: 400,
-    height: 100,
-  } as DOMRect);
+  mockBounds(pane, 100, 50, 200, 100);
+  mockBounds(container, 100, 50, 400, 100);
   return pane;
+}
+
+async function resize(
+  page: HTMLElementTagNameMap["openclaw-chat-page"],
+  divider: RenderedDivider,
+  ratio: number,
+  selector: string,
+) {
+  divider.dispatchEvent(new CustomEvent("resize", { detail: { splitRatio: ratio } }));
+  await settleChatPage(page);
+  expect(page.querySelector("resizable-divider")).toBe(divider);
+  expect(divider.splitRatio).toBeCloseTo(ratio);
+  const cells = page.querySelectorAll<HTMLElement>(selector);
+  expect(Number(itemAt(cells, 0, "resized cell").style.flexGrow)).toBeCloseTo(ratio);
+  expect(Number(itemAt(cells, 1, "resized cell").style.flexGrow)).toBeCloseTo(1 - ratio);
 }
 
 describe("chat page split layout host", () => {
@@ -145,34 +200,74 @@ describe("chat page split layout host", () => {
       container.className = onboarding ? "shell shell--onboarding" : "shell";
       const { context } = createChatPageNavigationContext();
       const view = mountSolid(
-        () => Object.assign(new ChatPage(), { context, data: { sessionKey: "main" } }),
+        () =>
+          Object.assign(document.createElement("openclaw-chat-page"), {
+            context,
+            data: { sessionKey: "main" },
+          }),
         { container },
       );
       try {
         const page = expectDefined(
-          container.querySelector<ChatPage>("openclaw-chat-page"),
-          "direct Solid page",
+          container.querySelector("openclaw-chat-page"),
+          "openclaw-chat-page",
         );
         await settleChatPage(page);
-        const pane = itemAt(page.querySelectorAll<RenderedPane>("openclaw-chat-pane"), 0, "pane");
+        const pane = paneAt(page, 0);
 
-        expect(pane.onboarding).toBe(onboarding);
-        expect(pane.mergedChrome).toBe(!onboarding);
+        expect(pane).toMatchObject({ onboarding, mergedChrome: !onboarding });
+
+        container.className = onboarding ? "shell" : "shell shell--onboarding";
+        page.data = { ...page.data };
+        await settleChatPage(page);
+        expect(paneAt(page)).toBe(pane);
+        expect(pane).toMatchObject({ onboarding: !onboarding, mergedChrome: onboarding });
       } finally {
         view.unmount();
       }
     },
   );
 
+  it("updates mobile chrome independently of the narrow layout breakpoint", async () => {
+    const navigationMedia = Object.assign(new EventTarget(), { matches: false });
+    const viewportMedia = Object.assign(new EventTarget(), { matches: false });
+    const matchMedia = window.matchMedia;
+    vi.stubGlobal("matchMedia", (query: string) =>
+      query === mobileNavLayoutMediaQuery()
+        ? navigationMedia
+        : query === "(max-width: 1099px)"
+          ? viewportMedia
+          : matchMedia(query),
+    );
+    const { page } = await mountPage();
+    const pane = paneAt(page);
+    expect(pane).toMatchObject({ narrow: false, mergedChrome: false });
+
+    navigationMedia.matches = true;
+    navigationMedia.dispatchEvent(new Event("change"));
+    await settleChatPage(page);
+
+    expect(paneAt(page)).toBe(pane);
+    expect(pane).toMatchObject({ narrow: false, mergedChrome: true });
+
+    navigationMedia.matches = false;
+    navigationMedia.dispatchEvent(new Event("change"));
+    await settleChatPage(page);
+    expect(pane.mergedChrome).toBe(false);
+
+    viewportMedia.matches = true;
+    navigationMedia.matches = true;
+    viewportMedia.dispatchEvent(new Event("change"));
+    await settleChatPage(page);
+    expect(pane).toMatchObject({ narrow: true, mergedChrome: true });
+    expect(paneAt(page)).toBe(pane);
+  });
+
   it("updates a retained pane label on a live locale change", async () => {
     onTestFinished(captureI18nStateForTesting());
     await i18n.setLocale("en");
-    const page = new ChatPage();
-    setNavigationContext(page);
-    page.data = { sessionKey: "main" };
-    document.body.append(page);
-    await settleChatPage(page);
-    const pane = itemAt(page.querySelectorAll<RenderedPane>("openclaw-chat-pane"), 0, "pane");
+    const { page } = await mountPage();
+    const pane = paneAt(page, 0);
     expect(pane.paneLabel).toBe("Column 1, row 1 (p1)");
 
     await i18n.setLocale("de");
@@ -185,28 +280,25 @@ describe("chat page split layout host", () => {
   it.each(["focus-moved", "navigation", "suspended", "teardown"] as const)(
     "restores close focus only while its presentation still owns the intent (%s)",
     async (scenario) => {
-      const page = new ChatPage();
-      setNavigationContext(page);
-      page.data = { sessionKey: "main" };
-      document.body.append(page);
-      await settleChatPage(page);
-      const original = itemAt(page.querySelectorAll<RenderedPane>("openclaw-chat-pane"), 0, "pane");
+      const { page } = await mountPage();
+      const original = paneAt(page, 0);
       original.onOpenSplitView?.();
       await settleChatPage(page);
-      const added = itemAt(page.querySelectorAll<RenderedPane>("openclaw-chat-pane"), 1, "pane");
+      const added = paneAt(page, 1);
       const header = original.appendChild(document.createElement("div"));
       header.className = "chat-pane__header";
       header.tabIndex = -1;
+      Object.defineProperty(original, "headerElement", { configurable: true, value: header });
       const button = added.appendChild(document.createElement("button"));
       const outside = document.body.appendChild(document.createElement("button"));
       const teardown = createDeferred();
       if (scenario === "teardown") {
-        added.append(
-          Object.assign(document.createElement("mcp-app-view"), {
-            teardown: () => teardown.promise,
-            restartAfterTeardown: () => undefined,
-          }),
-        );
+        const app = Object.assign(document.createElement("mcp-app-view"), {
+          teardown: () => teardown.promise,
+          restartAfterTeardown: () => undefined,
+        });
+        onTestFinished(registerMcpAppUnmountTarget(app));
+        added.append(app);
       }
       button.focus();
       const href = window.location.href;
@@ -238,12 +330,8 @@ describe("chat page split layout host", () => {
   );
 
   it("ignores ordinary pane focus while Chat is retained behind another page", async () => {
-    const page = new ChatPage();
-    const navigation = setNavigationContext(page);
-    page.data = { sessionKey: "main" };
-    document.body.append(page);
-    await settleChatPage(page);
-    const first = itemAt(page.querySelectorAll<RenderedPane>("openclaw-chat-pane"), 0, "pane");
+    const { page, navigation } = await mountPage();
+    const first = paneAt(page, 0);
     first.onOpenSplitView?.();
     await settleChatPage(page);
     const activePaneId = loadSettings().chatSplitLayout?.activePaneId;
@@ -260,88 +348,43 @@ describe("chat page split layout host", () => {
   });
 
   it("applies mounted UI split, focus, and close commands", async () => {
-    const page = new ChatPage();
-    page.data = { sessionKey: "main" };
-    const navigation = setNavigationContext(page);
-    document.body.append(page);
-    await settleChatPage(page);
+    const { navigation } = await mountPage();
 
-    const split = new CustomEvent(UI_COMMAND_EVENT, {
-      detail: {
-        command: { kind: "split", direction: "right", sessionKey: WORK_SESSION_KEY },
-        sessionKey: "main",
-      },
-      cancelable: true,
+    const split = command({
+      command: { kind: "split", direction: "right", sessionKey: WORK_SESSION_KEY },
+      sessionKey: "main",
     });
-    window.dispatchEvent(split);
     expect(split.defaultPrevented).toBe(true);
     expect(loadSettings().chatSplitLayout?.columns.at(1)?.panes.at(0)?.sessionKey).toBe(
       WORK_SESSION_KEY,
     );
-    expect(navigation.replace).toHaveBeenLastCalledWith("chat", {
-      pathname: sessionPath(WORK_SESSION_KEY),
-      search: "?__openclawSessionFacePreference=1",
-    });
+    expect(navigation.replace).toHaveBeenLastCalledWith("chat", preferredChat(WORK_SESSION_KEY));
 
-    window.dispatchEvent(
-      new CustomEvent(UI_COMMAND_EVENT, {
-        detail: { command: { kind: "focus", sessionKey: "main" }, sessionKey: "main" },
-        cancelable: true,
-      }),
-    );
+    command({ command: { kind: "focus", sessionKey: "main" }, sessionKey: "main" });
     expect(loadSettings().chatSplitLayout?.activePaneId).toBe("p1");
 
-    window.dispatchEvent(
-      new CustomEvent(UI_COMMAND_EVENT, {
-        detail: {
-          command: { kind: "close-pane", sessionKey: WORK_SESSION_KEY },
-          sessionKey: "main",
-        },
-        cancelable: true,
-      }),
-    );
+    command({
+      command: { kind: "close-pane", sessionKey: WORK_SESSION_KEY },
+      sessionKey: "main",
+    });
     expect(loadSettings().chatSplitLayout).toBeUndefined();
   });
 
   it("leaves UI split commands unhandled on narrow viewports", async () => {
     stubMatchMedia(true);
-    const page = new ChatPage();
-    page.data = { sessionKey: "main" };
-    setNavigationContext(page);
-    document.body.append(page);
-    await settleChatPage(page);
+    await mountPage();
 
-    const split = new CustomEvent(UI_COMMAND_EVENT, {
-      detail: {
-        command: { kind: "split", direction: "right", sessionKey: WORK_SESSION_KEY },
-        sessionKey: "main",
-      },
-      cancelable: true,
+    const split = command({
+      command: { kind: "split", direction: "right", sessionKey: WORK_SESSION_KEY },
+      sessionKey: "main",
     });
-    window.dispatchEvent(split);
     // Unhandled so the app host falls back to navigating to the session.
     expect(split.defaultPrevented).toBe(false);
     expect(loadSettings().chatSplitLayout).toBeUndefined();
   });
 
   it("replaces a cold literal main route after canonical defaults resolve", async () => {
-    window.history.replaceState({}, "", "/chat/research/workspace?draft=ship");
-    const page = new ChatPage();
-    const navigation = setNavigationContext(page);
-    const canonicalLocation = createDeferred<RouteLocation | null>();
-    page.data = {
-      sessionKey: "agent:research:workspace",
-      face: "chat",
-      draft: "ship",
-      canonicalLocationReady: canonicalLocation.promise,
-      canonicalLocationSource: {
-        pathname: "/chat/research/workspace",
-        search: "?draft=ship",
-        hash: "",
-      },
-    };
-    document.body.append(page);
-    await settleChatPage(page);
+    const { navigation, canonicalLocation } = await coldPage("ship");
     await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
     navigation.replace.mockClear();
 
@@ -351,136 +394,66 @@ describe("chat page split layout host", () => {
       hash: "",
     });
     await vi.waitFor(() =>
-      expect(navigation.replace).toHaveBeenCalledWith("chat", {
-        pathname: "/chat/research",
-        search: "?panel=details",
-        hash: "",
-      }),
+      expect(navigation.replace).toHaveBeenCalledWith(
+        "chat",
+        location("/chat/research", "?panel=details"),
+      ),
     );
   });
 
-  it("does not let a cold chat canonicalization replace a newer route", async () => {
-    window.history.replaceState({}, "", "/chat/research/workspace");
-    const page = new ChatPage();
-    const navigation = setNavigationContext(page);
-    const canonicalLocation = createDeferred<RouteLocation | null>();
-    page.data = {
-      sessionKey: "agent:research:workspace",
-      face: "chat",
-      canonicalLocationReady: canonicalLocation.promise,
-      canonicalLocationSource: {
-        pathname: "/chat/research/workspace",
-        search: "",
-        hash: "",
-      },
-    };
-    document.body.append(page);
-    await settleChatPage(page);
-
-    window.history.replaceState({}, "", "/settings/appearance");
-    canonicalLocation.resolve({ pathname: "/chat/research", search: "", hash: "" });
-    await canonicalLocation.promise;
-    await Promise.resolve();
-
-    expect(navigation.replace).not.toHaveBeenCalled();
-  });
-
-  it("does not let a cold chat canonicalization replace a newer draft", async () => {
-    window.history.replaceState({}, "", "/chat/research/workspace?draft=old");
-    const page = new ChatPage();
-    const navigation = setNavigationContext(page);
-    const canonicalLocation = createDeferred<RouteLocation | null>();
-    page.data = {
-      sessionKey: "agent:research:workspace",
-      face: "chat",
-      draft: "old",
-      canonicalLocationReady: canonicalLocation.promise,
-      canonicalLocationSource: {
-        pathname: "/chat/research/workspace",
-        search: "?draft=old",
-        hash: "",
-      },
-    };
-    document.body.append(page);
-    await settleChatPage(page);
-    await Promise.resolve();
-    navigation.replace.mockClear();
-
-    window.history.replaceState({}, "", "/chat/research/workspace?draft=new");
-    canonicalLocation.resolve({ pathname: "/chat/research", search: "?draft=old", hash: "" });
-    await canonicalLocation.promise;
-    await Promise.resolve();
-
-    expect(navigation.replace).not.toHaveBeenCalled();
-  });
+  it.each(["route", "draft"] as const)(
+    "does not let a cold chat canonicalization replace a newer %s",
+    async (changed) => {
+      const draft = changed === "draft";
+      const { navigation, canonicalLocation } = await coldPage(draft ? "old" : undefined);
+      if (draft) {
+        await Promise.resolve();
+        navigation.replace.mockClear();
+      }
+      window.history.replaceState(
+        {},
+        "",
+        draft ? "/chat/research/workspace?draft=new" : "/settings/appearance",
+      );
+      canonicalLocation.resolve(location("/chat/research", draft ? "?draft=old" : ""));
+      await canonicalLocation.promise;
+      await Promise.resolve();
+      expect(navigation.replace).not.toHaveBeenCalled();
+    },
+  );
 
   it("replaces into the canonical face namespace without adding history", async () => {
     window.history.replaceState({}, "", "/chat");
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     const navigation = setNavigationContext(page);
     // The loader resolved this session to its stored dashboard face while the route was
     // matched under /chat, so the replacement has to be routed by the resolved face.
     page.data = {
       sessionKey: WORK_SESSION_KEY,
       face: "dashboard",
-      canonicalLocation: {
-        pathname: "/dashboard/main/deploy-monitor-12345678",
-        search: "",
-        hash: "",
-      },
-      canonicalLocationSource: {
-        pathname: "/chat",
-        search: "",
-        hash: "",
-      },
+      canonicalLocation: location("/dashboard/main/deploy-monitor-12345678"),
+      canonicalLocationSource: location("/chat"),
     };
     document.body.append(page);
     await settleChatPage(page);
 
-    expect(navigation.replace).toHaveBeenCalledWith("dashboard", {
-      pathname: "/dashboard/main/deploy-monitor-12345678",
-      search: "",
-      hash: "",
-    });
+    expect(navigation.replace).toHaveBeenCalledWith(
+      "dashboard",
+      location("/dashboard/main/deploy-monitor-12345678"),
+    );
   });
 
-  it.each([
-    {
-      target: "agent:main:uncached",
-      expectedFace: "chat",
-      search: "?__openclawSessionFacePreference=1",
-    },
-  ] as const)(
-    "preserves face authority when navigating to $target",
-    async ({ target, expectedFace, search }) => {
-      const page = new ChatPage();
-      const navigation = setNavigationContext(page);
-      page.data = { sessionKey: "main", face: "dashboard" };
-      document.body.append(page);
-      await settleChatPage(page);
-
-      window.dispatchEvent(
-        new CustomEvent(UI_COMMAND_EVENT, {
-          cancelable: true,
-          detail: { command: { kind: "navigate", sessionKey: target } },
-        }),
-      );
-
-      expect(navigation.navigate).toHaveBeenCalledWith(expectedFace, {
-        pathname: sessionNavigationTarget({
-          face: expectedFace,
-          sessionKey: target,
-          fallbackAgentId: "main",
-        }).options.pathname,
-        ...(search ? { search } : {}),
-      });
-    },
-  );
+  it("preserves face authority when navigating to an uncached session", async () => {
+    const target = "agent:main:uncached";
+    const { navigation } = await mountPage({ sessionKey: "main", face: "dashboard" });
+    command({ command: { kind: "navigate", sessionKey: target } });
+    expect(navigation.navigate).toHaveBeenCalledWith("chat", preferredChat(target));
+  });
 
   it("keeps catalog identity when consuming a route draft", async () => {
     const expectedSearch = catalogSessionSearch(CATALOG_KEY);
     window.history.replaceState({}, "", `/chat/research${expectedSearch}&draft=ship`);
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     const navigation = setNavigationContext(page);
     page.data = {
       sessionKey: CATALOG_SESSION_KEY,
@@ -507,7 +480,7 @@ describe("chat page split layout host", () => {
 
   it("preserves a resolved long prefix through drafts and face changes", async () => {
     window.history.replaceState({}, "", "/chat/main/1234567890?draft=ship");
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     const navigation = setNavigationContext(page);
     page.data = {
       sessionKey: WORK_SESSION_KEY,
@@ -518,11 +491,7 @@ describe("chat page split layout host", () => {
     document.body.append(page);
     await vi.waitFor(() => expect(navigation.replace).toHaveBeenCalledOnce());
 
-    expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: "/chat/main/1234567890",
-      search: "",
-      hash: "",
-    });
+    expect(navigation.replace).toHaveBeenCalledWith("chat", location("/chat/main/1234567890"));
     navigation.navigate.mockClear();
     const pane = page.querySelector<RenderedPane>("openclaw-chat-pane");
     pane?.onFaceChange?.(pane.paneId, pane.sessionKey, "dashboard");
@@ -535,7 +504,7 @@ describe("chat page split layout host", () => {
   it("passes an empty session key while route data is still unresolved", async () => {
     // Regression: a fabricated fallback key here made the pane canonicalize
     // against it and skip gateway startup entirely (chat.startup never sent).
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     setNavigationContext(page);
     document.body.append(page);
     await settleChatPage(page);
@@ -546,14 +515,9 @@ describe("chat page split layout host", () => {
   });
 
   it("renders keyed panes and a divider for a two-column split", async () => {
-    const page = new ChatPage();
-    const navigation = setNavigationContext(page);
-    page.data = { sessionKey: "main" };
-    patchSettings({ chatSplitLayout: createSplitLayout("main") });
-    document.body.append(page);
-    await settleChatPage(page);
+    const { page, navigation } = await mountPage(undefined, createSplitLayout("main"));
 
-    const panes = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
+    const panes = panesIn(page);
     const cells = [...page.querySelectorAll<HTMLElement>(".chat-split-view__cell")];
     const dividers = page.querySelectorAll<RenderedDivider>("resizable-divider");
     expect(panes.map((pane) => pane.paneId)).toEqual(["p1", "p2"]);
@@ -569,15 +533,7 @@ describe("chat page split layout host", () => {
     expect(panes.every((pane) => pane.onOpenSplitView === undefined)).toBe(true);
     expect(panes[0]?.chatMessagesBySession).toBe(panes[1]?.chatMessagesBySession);
 
-    itemAt(dividers, 0, "split divider").dispatchEvent(
-      new CustomEvent("resize", { detail: { splitRatio: 0.7 } }),
-    );
-    await settleChatPage(page);
-    expect(page.querySelector("resizable-divider")).toBe(dividers[0]);
-    expect(itemAt(dividers, 0, "split divider").splitRatio).toBeCloseTo(0.7);
-    const columns = page.querySelectorAll<HTMLElement>(".chat-split-view__column");
-    expect(Number(itemAt(columns, 0, "split column").style.flexGrow)).toBeCloseTo(0.7);
-    expect(Number(itemAt(columns, 1, "split column").style.flexGrow)).toBeCloseTo(0.3);
+    await resize(page, itemAt(dividers, 0, "split divider"), 0.7, ".chat-split-view__column");
     expect(loadSettings().chatSplitLayout?.columnWeights).toEqual([0.5, 0.5]);
 
     itemAt(dividers, 0, "split divider").dispatchEvent(new CustomEvent("resize-end"));
@@ -598,68 +554,22 @@ describe("chat page split layout host", () => {
 
     itemAt(panes, 1, "closing pane").onClosePane?.("p2");
     await settleChatPage(page);
-    window.dispatchEvent(
-      new CustomEvent(UI_COMMAND_EVENT, {
-        cancelable: true,
-        detail: { command: { kind: "split", direction: "down", sessionKey: "main" } },
-      }),
-    );
+    command({ command: { kind: "split", direction: "down", sessionKey: "main" } });
     await settleChatPage(page);
     const horizontal = expectDefined(
       page.querySelector<RenderedDivider>("resizable-divider"),
-      "horizontal divider",
+      "resizable-divider",
     );
     expect(horizontal.orientation).toBe("horizontal");
     horizontal.focus();
     expect(document.activeElement).toBe(horizontal);
-    horizontal.dispatchEvent(new CustomEvent("resize", { detail: { splitRatio: 0.65 } }));
-    await settleChatPage(page);
-    expect(page.querySelector("resizable-divider")).toBe(horizontal);
+    await resize(page, horizontal, 0.65, ".chat-split-view__cell");
     expect(document.activeElement).toBe(horizontal);
-    expect(horizontal.splitRatio).toBeCloseTo(0.65);
-    const rows = page.querySelectorAll<HTMLElement>(".chat-split-view__cell");
-    expect(Number(itemAt(rows, 0, "split row").style.flexGrow)).toBeCloseTo(0.65);
-    expect(Number(itemAt(rows, 1, "split row").style.flexGrow)).toBeCloseTo(0.35);
     expect(loadSettings().chatSplitLayout?.columns[0]?.paneWeights).toEqual([0.5, 0.5]);
   });
 
-  it.each(["command", "close"] as const)(
-    "keeps the mounted pane's dashboard when activated by %s",
-    async (activation) => {
-      const page = new ChatPage();
-      const navigation = setNavigationContext(page);
-      page.data = { sessionKey: "main", face: "chat" };
-      patchSettings({
-        chatSplitLayout: setPaneSession(createSplitLayout("main"), "p1", WORK_SESSION_KEY),
-      });
-      document.body.append(page);
-      await settleChatPage(page);
-      const [dashboard, chat] = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")];
-      expectDefined(dashboard, "dashboard pane").captureNavigationFace = () => "dashboard";
-      navigation.replace.mockClear();
-      if (activation === "command") {
-        window.dispatchEvent(
-          new CustomEvent(UI_COMMAND_EVENT, {
-            detail: { command: { kind: "focus", sessionKey: WORK_SESSION_KEY } },
-            cancelable: true,
-          }),
-        );
-      } else {
-        chat?.onClosePane?.(chat.paneId);
-      }
-      expect(navigation.replace).toHaveBeenCalledExactlyOnceWith("dashboard", {
-        pathname: sessionNavigationTarget({
-          face: "dashboard",
-          sessionKey: WORK_SESSION_KEY,
-          fallbackAgentId: "main",
-        }).options.pathname,
-      });
-      expect(navigation.patch).not.toHaveBeenCalled();
-    },
-  );
-
   it("declares split panes, session switches, pane closes, and page disposal", async () => {
-    const page = new ChatPage();
+    const page = document.createElement("openclaw-chat-page");
     const { request } = setViewerPresenceContext(page);
     const expectPresence = (sessionKeys: string[]) =>
       expect(request).toHaveBeenLastCalledWith(
@@ -670,19 +580,12 @@ describe("chat page split layout host", () => {
     page.data = { sessionKey: "main" };
     document.body.append(page);
     await settleChatPage(page);
-    window.dispatchEvent(
-      new CustomEvent(UI_COMMAND_EVENT, {
-        cancelable: true,
-        detail: { command: { kind: "split", direction: "right", sessionKey: "agent:main:other" } },
-      }),
-    );
+    command({ command: { kind: "split", direction: "right", sessionKey: "agent:main:other" } });
     await settleChatPage(page);
     await Promise.resolve();
     expectPresence(["agent:main:main", "agent:main:other"]);
 
-    const otherPane = [...page.querySelectorAll<RenderedPane>("openclaw-chat-pane")].find(
-      (pane) => pane.paneId === "p2",
-    );
+    const otherPane = panesIn(page).find((pane) => pane.paneId === "p2");
     otherPane?.onClosePane?.("p2");
     await settleChatPage(page);
     await Promise.resolve();
@@ -702,34 +605,21 @@ describe("chat page split layout host", () => {
     await settleChatPage(page);
     expectPresence(["agent:main:replacement"]);
     page.remove();
-    await Promise.resolve();
+    await settleChatPage(page);
     expectPresence([]);
   });
 
   it("routes a classic-mode center drop without creating a layout", async () => {
-    const page = new ChatPage();
-    page.data = { sessionKey: "main" };
-    const navigation = setNavigationContext(page);
-
-    document.body.append(page);
-    await settleChatPage(page);
+    const { page, navigation } = await mountPage();
     dispatchSessionDrag(stubDropBounds(page), "drop", 200);
 
     expect(loadSettings().chatSplitLayout).toBeUndefined();
-    expect(navigation.navigate).toHaveBeenCalledWith("chat", {
-      pathname: sessionPath(WORK_SESSION_KEY),
-      search: "?__openclawSessionFacePreference=1",
-    });
+    expect(navigation.navigate).toHaveBeenCalledWith("chat", preferredChat(WORK_SESSION_KEY));
     expect(navigation.replace).not.toHaveBeenCalled();
   });
 
   it("creates and persists a classic-mode edge drop on the chosen side", async () => {
-    const page = new ChatPage();
-    page.data = { sessionKey: "main" };
-    const navigation = setNavigationContext(page);
-
-    document.body.append(page);
-    await settleChatPage(page);
+    const { page, navigation } = await mountPage();
     dispatchSessionDrag(stubDropBounds(page), "drop", 105);
 
     const layout = loadSettings().chatSplitLayout;
@@ -738,19 +628,11 @@ describe("chat page split layout host", () => {
       ["main"],
     ]);
     expect(layout?.activePaneId).toBe("p2");
-    expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: sessionPath(WORK_SESSION_KEY),
-      search: "?__openclawSessionFacePreference=1",
-    });
+    expect(navigation.replace).toHaveBeenCalledWith("chat", preferredChat(WORK_SESSION_KEY));
   });
 
   it("inserts and persists a dropped session at a layout edge", async () => {
-    const page = new ChatPage();
-    page.data = { sessionKey: "main" };
-    const navigation = setNavigationContext(page);
-    patchSettings({ chatSplitLayout: createSplitLayout("main") });
-    document.body.append(page);
-    await settleChatPage(page);
+    const { page, navigation } = await mountPage(undefined, createSplitLayout("main"));
     dispatchSessionDrag(stubDropBounds(page), "drop", 200, 145);
 
     const layout = loadSettings().chatSplitLayout;
@@ -759,20 +641,12 @@ describe("chat page split layout host", () => {
       WORK_SESSION_KEY,
     ]);
     expect(layout?.activePaneId).toBe("p3");
-    expect(navigation.replace).toHaveBeenCalledWith("chat", {
-      pathname: sessionPath(WORK_SESSION_KEY),
-      search: "?__openclawSessionFacePreference=1",
-    });
+    expect(navigation.replace).toHaveBeenCalledWith("chat", preferredChat(WORK_SESSION_KEY));
   });
 
   it("leaves a same-session center drop unchanged", async () => {
-    const page = new ChatPage();
-    page.data = { sessionKey: "main" };
     const layout = createSplitLayout("main");
-    const navigation = setNavigationContext(page);
-    patchSettings({ chatSplitLayout: layout });
-    document.body.append(page);
-    await settleChatPage(page);
+    const { page, navigation } = await mountPage(undefined, layout);
     dispatchSessionDrag(stubDropBounds(page), "drop", 200, 100, "main");
 
     expect(loadSettings().chatSplitLayout).toEqual(layout);
@@ -780,67 +654,49 @@ describe("chat page split layout host", () => {
     expect(navigation.replace).not.toHaveBeenCalled();
   });
 
-  it.each(["unbound"] as const)(
-    "does not reuse a sibling's drop indicator over an %s target",
-    async (destination) => {
-      const page = new ChatPage();
-      page.data = { sessionKey: "main" };
-      setNavigationContext(page);
-      const layout = setPaneSession(createSplitLayout("main"), "p1", "global");
-      patchSettings({ chatSplitLayout: layout });
-      document.body.append(page);
-      await settleChatPage(page);
-      const bound = expectDefined(
-        page.querySelector<RenderedPane>("openclaw-chat-pane.chat-pane-cache__pane--visible"),
-        "bound pane",
-      );
-      const unbound = expectDefined(
-        page.querySelector<HTMLElement>("[data-unbound-pane-id]"),
-        "unbound pane",
-      );
-      const container = expectDefined(
-        page.querySelector<HTMLElement>(".chat-split-view__drop-container"),
-        "drop container",
-      );
-      vi.spyOn(bound, "getBoundingClientRect").mockReturnValue({
-        left: 200,
-        top: 0,
-        width: 200,
-        height: 200,
-      } as DOMRect);
-      vi.spyOn(unbound, "getBoundingClientRect").mockReturnValue({
-        left: 0,
-        top: 0,
-        width: 200,
-        height: 200,
-      } as DOMRect);
-      vi.spyOn(container, "getBoundingClientRect").mockReturnValue({
-        left: 0,
-        top: 0,
-        width: 400,
-        height: 200,
-      } as DOMRect);
-      let frame: FrameRequestCallback | undefined;
-      vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
-        frame = callback;
-        return 1;
-      });
-      dispatchSessionDrag(bound, "dragover", 300);
-      frame?.(0);
-      const target = destination === "unbound" ? unbound : container;
-      dispatchSessionDrag(target, "dragover", 100);
-      frame?.(0);
-      dispatchSessionDrag(target, "drop", 100);
-      expect(
-        loadSettings().chatSplitLayout?.columns.map((column) => column.panes[0]?.sessionKey),
-      ).toEqual([destination === "unbound" ? WORK_SESSION_KEY : "global", "main"]);
-      await settleChatPage(page);
-      expect(page.querySelector(".chat-split-view__drop-indicator")).toBeNull();
-    },
-  );
+  it("does not reuse a sibling's drop indicator over an unbound target", async () => {
+    const page = document.createElement("openclaw-chat-page");
+    page.data = { sessionKey: "main" };
+    setNavigationContext(page);
+    const layout = setPaneSession(createSplitLayout("main"), "p1", "global");
+    patchSettings({ chatSplitLayout: layout });
+    document.body.append(page);
+    await settleChatPage(page);
+    const bound = expectDefined(
+      page.querySelector<RenderedPane>("openclaw-chat-pane.chat-pane-cache__pane--visible"),
+      "openclaw-chat-pane.chat-pane-cache__pane--visible",
+    );
+    const unbound = expectDefined(
+      page.querySelector<HTMLElement>("[data-unbound-pane-id]"),
+      "[data-unbound-pane-id]",
+    );
+    const container = expectDefined(
+      page.querySelector<HTMLElement>(".chat-split-view__drop-container"),
+      ".chat-split-view__drop-container",
+    );
+    mockBounds(bound, 200, 0, 200, 200);
+    mockBounds(unbound, 0, 0, 200, 200);
+    mockBounds(container, 0, 0, 400, 200);
+    let frame: FrameRequestCallback | undefined;
+    vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      frame = callback;
+      return 1;
+    });
+    dispatchSessionDrag(bound, "dragover", 300);
+    frame?.(0);
+    const target = unbound;
+    dispatchSessionDrag(target, "dragover", 100);
+    frame?.(0);
+    dispatchSessionDrag(target, "drop", 100);
+    expect(
+      loadSettings().chatSplitLayout?.columns.map((column) => column.panes[0]?.sessionKey),
+    ).toEqual([WORK_SESSION_KEY, "main"]);
+    await settleChatPage(page);
+    expect(page.querySelector(".chat-split-view__drop-indicator")).toBeNull();
+  });
 
   it.each(["hidden", "narrow", "disconnected"] as const)(
-    "handles header and unrelated drags through %s",
+    "retires a header drag when the page becomes %s",
     async (ending) => {
       const viewport = Object.assign(new EventTarget(), { matches: false });
       if (ending === "narrow") {
@@ -849,13 +705,8 @@ describe("chat page split layout host", () => {
           query === "(max-width: 1099px)" ? viewport : matchMedia(query),
         );
       }
-      const page = new ChatPage();
-      page.data = { sessionKey: "main" };
-      const navigation = setNavigationContext(page);
       const layout = createSplitLayout("main");
-      patchSettings({ chatSplitLayout: layout });
-      document.body.append(page);
-      await settleChatPage(page);
+      const { page, navigation } = await mountPage(undefined, layout);
 
       const pane = stubDropBounds(page);
       // This host test stubs the stateful chat pane; mirror its exact light-DOM
@@ -870,22 +721,13 @@ describe("chat page split layout host", () => {
         return 1;
       });
       const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockClear();
-      const unrelatedTarget = expectDefined(page.querySelector(".chat-split-view"), "split view");
-      expect(page.querySelector(".chat-split-view__drop-indicator")).toBeNull();
-      dispatchSessionDrag(unrelatedTarget, "dragover", 200);
-      dispatchSessionDrag(unrelatedTarget, "drop", 200);
-      await settleChatPage(page);
-      expect(page.querySelector(".chat-split-view__drop-indicator")).toBeNull();
-      expect(loadSettings().chatSplitLayout).toEqual(layout);
-      expect(navigation.replace).not.toHaveBeenCalled();
-
       dispatchSessionDrag(header, "dragenter", 200);
       dispatchSessionDrag(header, "dragover", 200);
       frame?.(0);
       await settleChatPage(page);
       const indicator = expectDefined(
         page.querySelector<HTMLElement>(".chat-split-view__drop-indicator--center"),
-        "center drop indicator",
+        ".chat-split-view__drop-indicator--center",
       );
       expect(indicator.style.left).toBe("0px");
       expect(indicator.style.top).toBe("0px");

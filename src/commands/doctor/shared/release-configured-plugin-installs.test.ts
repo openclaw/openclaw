@@ -15,51 +15,43 @@ function useOfficialLobsterCatalog() {
   );
 }
 
-type MissingPluginInstallRepairCall = {
-  pluginIds: string[];
-  channelIds?: string[];
-  blockedPluginIds: string[];
-  env?: NodeJS.ProcessEnv;
-};
+type ReleaseParams = Parameters<typeof maybeRunConfiguredPluginInstallReleaseStep>[0];
+type MissingPluginInstallRepairCall = Parameters<
+  typeof import("./missing-configured-plugin-install.js").repairMissingPluginInstallsForIds
+>[0];
+
+function run(params: Partial<ReleaseParams>) {
+  return maybeRunConfiguredPluginInstallReleaseStep({
+    cfg: {},
+    env: {},
+    currentVersion: "2026.5.2",
+    touchedVersion: "2026.5.1",
+    ...params,
+  });
+}
 
 function readOnlyMissingPluginInstallRepairCall(): MissingPluginInstallRepairCall {
   expect(mocks.repairMissingPluginInstallsForIds).toHaveBeenCalledOnce();
-  const calls = mocks.repairMissingPluginInstallsForIds.mock.calls as unknown as Array<
-    [MissingPluginInstallRepairCall]
-  >;
-  const call = calls[0]?.[0];
+  const call: MissingPluginInstallRepairCall | undefined =
+    mocks.repairMissingPluginInstallsForIds.mock.calls[0]?.[0];
   if (!call) {
     throw new Error("Expected missing plugin install repair call");
   }
   return call;
 }
 
-async function shouldRunConfiguredPluginInstallReleaseStepThroughDoctor(params: {
-  currentVersion?: string | null;
-  touchedVersion?: string | null;
-}): Promise<boolean> {
-  const result = await maybeRunConfiguredPluginInstallReleaseStep({ cfg: {}, env: {}, ...params });
-  expect(result.touchedConfig).toBe(false);
-  expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
-  return result.completed;
-}
-
 async function collectReleaseConfiguredPluginIdsThroughDoctor(params: {
-  cfg: Parameters<typeof maybeRunConfiguredPluginInstallReleaseStep>[0]["cfg"];
+  cfg: ReleaseParams["cfg"];
   env?: NodeJS.ProcessEnv;
 }): Promise<{ pluginIds: string[]; channelIds: string[] }> {
   mocks.repairMissingPluginInstallsForIds.mockClear();
-  await maybeRunConfiguredPluginInstallReleaseStep({
-    env: {},
-    ...params,
-    currentVersion: "2026.5.2",
-    touchedVersion: "2026.5.1",
-  });
-  const calls = mocks.repairMissingPluginInstallsForIds.mock.calls as unknown as Array<
-    [MissingPluginInstallRepairCall]
-  >;
-  const call = calls[0]?.[0];
-  return { pluginIds: call?.pluginIds ?? [], channelIds: call?.channelIds ?? [] };
+  await run(params);
+  const call: MissingPluginInstallRepairCall | undefined =
+    mocks.repairMissingPluginInstallsForIds.mock.calls[0]?.[0];
+  return {
+    pluginIds: Array.from(call?.pluginIds ?? []),
+    channelIds: Array.from(call?.channelIds ?? []),
+  };
 }
 
 vi.mock("../../../config/plugin-auto-enable.js", () => ({
@@ -100,12 +92,10 @@ describe("configured plugin install release step", () => {
       ["2026.5.3", "2026.5.3", false],
       ["2026.5.2", "not-a-version", true],
     ] as const) {
-      expect(
-        await shouldRunConfiguredPluginInstallReleaseStepThroughDoctor({
-          currentVersion,
-          touchedVersion,
-        }),
-      ).toBe(expected);
+      const result = await run({ currentVersion, touchedVersion });
+      expect(result.touchedConfig).toBe(false);
+      expect(mocks.repairMissingPluginInstallsForIds).not.toHaveBeenCalled();
+      expect(result.completed).toBe(expected);
     }
   });
 
@@ -264,11 +254,9 @@ describe("configured plugin install release step", () => {
     const cfg: OpenClawConfigWithLegacyRoster = {
       agents: { defaults: { model: "openai/gpt-5.4", agentRuntime: { id: "codex" } } },
     };
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+    const result = await run({
       cfg,
       currentVersion: "2026.5.2-beta.1",
-      touchedVersion: "2026.5.1",
-      env: {},
     });
 
     const repairCall = readOnlyMissingPluginInstallRepairCall();
@@ -295,10 +283,9 @@ describe("configured plugin install release step", () => {
       warnings: [],
       deferredRepairDetails: details,
     });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+    const result = await run({
       cfg: { plugins: { entries: { discord: { enabled: true } } } },
       currentVersion: "2026.5.2-beta.1",
-      touchedVersion: "2026.5.1",
       env,
     });
 
@@ -324,11 +311,10 @@ describe("configured plugin install release step", () => {
       changes: ['Installed missing configured channel plugin "whatsapp".'],
       warnings: [],
     });
-    const result = await maybeRunConfiguredPluginInstallReleaseStep({
+    const result = await run({
       cfg: { channels: { whatsapp: { allowFrom: ["+15555550123"] } } },
       currentVersion: "2026.5.12",
       touchedVersion: "2026.5.12",
-      env: {},
     });
 
     const repairCall = readOnlyMissingPluginInstallRepairCall();

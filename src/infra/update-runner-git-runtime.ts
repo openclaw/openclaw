@@ -381,17 +381,6 @@ export async function prepareGitRuntimePromotion(
     // A completed effect must leave rollback custody before a later guard can fail.
     promoted.pop();
     assertCurrent();
-    assertDestination?.(entry.destination);
-    assertParents(entry);
-    if (
-      entry.previous &&
-      !sameRuntimeIdentity(
-        entry.identities?.previous,
-        fsSync.lstatSync(entry.destination, { bigint: true }),
-      )
-    ) {
-      throw new Error(`Restored Git runtime identity changed: ${entry.destination}`);
-    }
   };
   return {
     backupRoot: staged[0]?.temporary ?? root,
@@ -408,9 +397,6 @@ export async function prepareGitRuntimePromotion(
     }),
     async activate() {
       try {
-        for (const entry of staged) {
-          assertDestination?.(entry.destination);
-        }
         for (const entry of staged) {
           assertDestination?.(entry.destination);
           const parent = path.dirname(entry.destination);
@@ -441,7 +427,6 @@ export async function prepareGitRuntimePromotion(
             await fs.rename(path.join(entry.temporary, "candidate"), entry.destination);
             entry.activated = true;
           } catch (error) {
-            restoreStarted = true;
             if (hasCommandProcessCleanupError(error)) {
               throw error;
             }
@@ -464,9 +449,6 @@ export async function prepareGitRuntimePromotion(
     },
     async restore(assertCurrent = () => {}) {
       restoreStarted = true;
-      for (const entry of promoted) {
-        assertRetainedEntry(entry, assertCurrent);
-      }
       for (const entry of promoted.toReversed()) {
         await restoreEntry(entry, assertCurrent);
       }

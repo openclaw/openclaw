@@ -392,7 +392,7 @@ export async function prepareDispatchOperationContext(state: PrepareDispatchDeli
       if (!state.inboundDedupeReplayUnsafe && !state.turnAdoptionState?.adopted) {
         inboundDedupeClaim.release();
       }
-      onAbandoned?.();
+      return onAbandoned?.();
     };
   }
   const finishReplyOperationBusyDispatch = (opts?: {

@@ -189,10 +189,18 @@ describe("secrets runtime snapshot auth refresh failure", () => {
         listActiveDegradedSecretOwners().filter((owner) => owner.ownerId === "discord:ops"),
       ).toHaveLength(1);
       expect(expectActiveSecretsRuntimeSnapshot().warnings).toContainEqual(discordWarning);
+      const authWarningPath = `${agentDir}.auth-profiles.openai:default.key`;
+      expect(expectActiveSecretsRuntimeSnapshot().warnings).toContainEqual(
+        expect.objectContaining({ code: "SECRETS_OWNER_UNAVAILABLE", path: authWarningPath }),
+      );
       const profile = expectActiveSecretsRuntimeSnapshot().authStores.find(
         (entry) => entry.agentDir === agentDir,
       )?.store.profiles["openai:default"];
       expect(profile).toMatchObject({ type: "api_key", key: "second-fixture" });
+
+      await writeSecrets(true);
+      await expect(refreshActiveProviderAuthRuntimeSnapshot()).resolves.toBe(true);
+      expect(expectActiveSecretsRuntimeSnapshot().warnings).toEqual([discordWarning]);
     });
   });
 

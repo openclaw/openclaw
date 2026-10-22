@@ -23,7 +23,7 @@ on:
         type: choice
         options: [default, main]
       test_runtime_policy:
-        description: Opt-in Linux test runtime trial (bun-all or dual-all); empty preserves the current event policy.
+        description: Linux test runtime override (node, bun-all, or dual-all); empty uses Bun for daily CI and both runtimes for full validation.
         required: false
         default: ""
         type: string
@@ -108,10 +108,13 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  IOS_SCREENSHOT_FASTLANE_VERSION: "2.240.1"
-  IOS_SCREENSHOT_NODE_VERSION: "24.16.0"
+  IOS_SCREENSHOT_FASTLANE_VERSION: "2.241.0"
+  IOS_SCREENSHOT_NODE_VERSION: "24.22.1"
   IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"
-  NODE_VERSION: "24.21.0"
+  NODE_VERSION: "24.22.1"
+  # Type check with tsrs, except full release validation, which re-checks every
+  # type graph with tsgo (scripts/lib/local-check-runtime.mts).
+  OPENCLAW_TYPECHECKER: ${{ github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && 'tsgo' || '' }}
 
 jobs:
   preflight:
@@ -757,13 +760,15 @@ jobs:
                             depth=2, blobless=True, retry_failures=True)
                   except (FetchTimeout, GitFailure):
                       raise GitFailure(1)
-              run_git(workspace, "checkout", "--detach", "refs/remotes/origin/checkout")
+              # Materialize the full planner input tree with bounded checkout parallelism.
+              checkout_options = ("-c", "checkout.workers=2") if kind == "preflight" else ()
+              run_git(workspace, *checkout_options, "checkout", "--detach", "refs/remotes/origin/checkout")
 
 
           def checkout_harness(sha):
               action = ".github/actions/setup-node-env/action.yml"
               node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
-              evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh")
+              evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/ios-test-results.mjs", "scripts/lib/direct-run.mjs", "scripts/ci-static-step.sh", "scripts/ci-collect-checks.sh", "scripts/macos-native-runtime-artifact.mjs")
               platform_scripts = ("scripts/lib/swift-toolchain.sh", "scripts/lib/ci-ios-smoke-plan.mjs", "scripts/ci-xcodebuild.py", "scripts/swift-build-cache-metadata.py")
               upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs", "scripts/lib/canonical-json.mjs", "scripts/lib/upgrade-survivor-policy.mjs", "scripts/lib/upgrade-survivor-scenarios.json")
               # Preflight imports these siblings by file-relative paths.
@@ -1675,7 +1680,7 @@ jobs:
         id: node_setup
         if: ${{ !cancelled() && steps.diff_base.outcome == 'success' }}
         env:
-          REQUESTED_NODE_VERSION: "24.x"
+          REQUESTED_NODE_VERSION: "24.22.1"
         run: &ensure_node_run |
           set -euo pipefail
           source .ci-harness/.github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -1787,6 +1792,7 @@ jobs:
     outputs:
       published_driver_artifact_id: ${{ steps.published_driver_package_upload.outputs.artifact-id }}
       published_driver_sha256: ${{ steps.published_driver_package.outputs.sha256 }}
+      native_runtime_artifact_id: ${{ steps.native_runtime_upload.outputs.artifact-id }}
     # The measured hosted tail reached 898s before preflight and gate overhead.
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')))) || ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt > 1) && 'ubuntu-24.04' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && 'blacksmith-16vcpu-ubuntu-2404' || 'ubuntu-24.04')) }}
     # Hosted rows (github backend, hybrid retries, full-release dispatches, fork PRs) run slower.
@@ -1849,6 +1855,24 @@ jobs:
             # Their own build remains the available asset validation surface.
             echo "Selected release candidate predates plugins:assets:check; skipping unavailable check."
           fi
+
+      - name: Package runtime for native policy tests
+        id: native_runtime_package
+        if: ${{ needs.preflight.outputs.run_macos_swift == 'true' && hashFiles('apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift') != '' }}
+        env:
+          TARGET_SHA: *checkout_sha
+        run: node .ci-harness/scripts/macos-native-runtime-artifact.mjs pack .artifacts/macos-native-runtime "$TARGET_SHA"
+
+      - name: Upload runtime for native policy tests
+        id: native_runtime_upload
+        if: steps.native_runtime_package.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: macos-native-runtime-${{ needs.preflight.outputs.checkout_revision }}-${{ github.run_attempt }}
+          path: .artifacts/macos-native-runtime/runtime.tgz
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
 
       - name: Package published-driver candidate
         id: published_driver_package
@@ -2332,7 +2356,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           cache-mode: *cache_mode
-          node-version: "24.x"
+          node-version: "24.22.1"
           install-bun: "false"
           dependency-cache: *trusted_dependency_cache
           restore-test-caches: &restore_test_caches ${{ (needs.preflight.outputs.runner_profile == 'github' || needs.preflight.outputs.runner_profile == 'hybrid') && 'true' || 'false' }}
@@ -2347,7 +2371,7 @@ jobs:
 
       - name: Setup pinned Bun test runtime
         id: ui_bun
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && contains(fromJSON('["bun-compatible","dual","bun-all","dual-all"]'), needs.preflight.outputs.ui_test_runtime_policy) }}
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && contains(fromJSON('["bun-all","dual-all"]'), needs.preflight.outputs.ui_test_runtime_policy) }}
         uses: ./.ci-harness/.github/actions/setup-test-bun
 
       - name: Lint Control UI window.open usage
@@ -2418,7 +2442,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           cache-mode: *cache_mode
-          node-version: "24.x"
+          node-version: "24.22.1"
           install-bun: "false"
           dependency-cache: &trusted_first_attempt_dependency_cache ${{ ((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || runner.environment != 'self-hosted' || (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || (github.event_name == 'pull_request' && github.run_attempt > 1)) && 'false' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false') }}
           restore-test-caches: *restore_test_caches
@@ -2495,6 +2519,18 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
+      - name: Upload synthetic single-widget chrome failure evidence
+        if: failure() && matrix.task == 'control-ui' && hashFiles('.artifacts/control-ui-e2e/single-widget-chrome-*/widget-chrome*') != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: single-widget-chrome-${{ strategy.job-index }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/control-ui-e2e/single-widget-chrome-*/widget-chrome-state.json
+            .artifacts/control-ui-e2e/single-widget-chrome-*/widget-chrome.png
+            .artifacts/control-ui-e2e/single-widget-chrome-*/widget-chrome-trace.zip
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Upload synthetic desktop Picture-in-Picture proof
         if: always() && matrix.task == 'control-ui' && hashFiles('.artifacts/control-ui-e2e/desktop-picture-in-picture-*/native-pip-after-tab-switch.png') != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -2551,7 +2587,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           cache-mode: *cache_mode
-          node-version: "24.x"
+          node-version: "24.22.1"
           install-bun: "false"
           dependency-cache: *trusted_first_attempt_dependency_cache
 
@@ -2739,7 +2775,7 @@ jobs:
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           cache-mode: *cache_mode
-          node-version: "24.x"
+          node-version: "24.22.1"
           install-bun: "false"
           dependency-cache: *trusted_dependency_cache
 
@@ -2865,17 +2901,22 @@ jobs:
           fi
           source .ci-harness/scripts/ci-collect-checks.sh
           prepare_ratchet_base_args "$base_ref"
-          run_check max-lines pnpm check:max-lines-ratchet "${ratchet_base_args[@]}"
-          if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
-            run_check line-cap pnpm check:line-cap-ratchet "${ratchet_base_args[@]}"
+          if has_package_script check:baseline-ratchets; then
+            run_check baseline-ratchets pnpm check:baseline-ratchets "${ratchet_base_args[@]}"
+          else
+            # Frozen targets retain their original commands and parsers.
+            run_check max-lines pnpm check:max-lines-ratchet "${ratchet_base_args[@]}"
+            if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
+              run_check line-cap pnpm check:line-cap-ratchet "${ratchet_base_args[@]}"
+            fi
+            run_check assertion-safety pnpm check:assertion-safety "${ratchet_base_args[@]}"
+            run_check database-worker pnpm check:database-worker-ratchet "${ratchet_base_args[@]}"
+            run_check database-dialect pnpm check:database-dialect-ratchet "${ratchet_base_args[@]}"
+            run_check timeout-race pnpm check:test-timeout-race-ratchet "${ratchet_base_args[@]}"
+            run_check mock-exports pnpm check:test-mock-exports "${ratchet_base_args[@]}"
+            run_check config-docs pnpm config:docs:check
+            run_check plugin-inventory pnpm plugins:inventory:check
           fi
-          run_check assertion-safety pnpm check:assertion-safety "${ratchet_base_args[@]}"
-          run_check database-worker pnpm check:database-worker-ratchet "${ratchet_base_args[@]}"
-          run_check database-dialect pnpm check:database-dialect-ratchet "${ratchet_base_args[@]}"
-          run_check timeout-race pnpm check:test-timeout-race-ratchet "${ratchet_base_args[@]}"
-          run_check mock-exports pnpm check:test-mock-exports "${ratchet_base_args[@]}"
-          run_check config-docs pnpm config:docs:check
-          run_check plugin-inventory pnpm plugins:inventory:check
           finish_checks
 
   checks-fast-core:
@@ -3338,7 +3379,7 @@ jobs:
         with:
           semantic-checks: "true"
           cache-mode: *cache_mode
-          node-version: "24.16.0"
+          node-version: "24.22.1"
           install-bun: "false"
           build-all-cache-scope: full
 
@@ -3400,7 +3441,7 @@ jobs:
         with:
           semantic-checks: "true"
           cache-mode: *cache_mode
-          node-version: "${{ (matrix.runner == 'runson-c8i-8xlarge' || startsWith(matrix.check_name, 'checks-node-runson-cron-')) && env.NODE_VERSION || matrix.node_version || '24.x' }}"
+          node-version: "${{ (matrix.runner == 'runson-c8i-8xlarge' || startsWith(matrix.check_name, 'checks-node-runson-cron-')) && env.NODE_VERSION || matrix.node_version || '24.22.1' }}"
           install-bun: "false"
           # Only Node 24 consumes the trusted compile seed.
           dependency-cache: ${{ matrix.runner != 'runson-c8i-8xlarge' && (matrix.node_version == null || matrix.node_version == '24.x') && (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) != 'github' && runner.environment == 'self-hosted' && (github.event_name != 'workflow_dispatch' || ((needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true') && github.run_attempt == 1)) && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
@@ -3422,7 +3463,7 @@ jobs:
         if: matrix.requires_go == true
         uses: actions/setup-go@90ad2b35f69faf97585ad74d28fa006d2739b7af # v7.0.0 + post-release fixes
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.2"
           cache: false
 
       - name: Resolve docs i18n Go cache
@@ -3456,7 +3497,7 @@ jobs:
 
       - name: Verify docs i18n Go toolchain
         if: matrix.requires_go == true
-        run: test "$(go env GOVERSION)" = "go1.27.1"
+        run: test "$(go env GOVERSION)" = "go1.27.2"
 
       - name: Checkout trusted Node shard runner
         if: ${{ hashFiles('scripts/ci-run-node-test-shard.mts') == '' }}
@@ -3500,7 +3541,7 @@ jobs:
         if: matrix.requires_sandbox_image == true && runner.os == 'Linux'
         shell: bash
         run: |
-          if ! docker image inspect openclaw-sandbox:bookworm-slim >/dev/null 2>&1; then
+          if ! docker image inspect openclaw-sandbox:trixie-slim >/dev/null 2>&1; then
             scripts/sandbox-setup.sh
           fi
 
@@ -3642,7 +3683,6 @@ jobs:
         id: plan
         env:
           OPENCLAW_CI_CHECK_PLAN_INPUT_JSON: ${{ needs.preflight.outputs.check_plan_input_json }}
-          OPENCLAW_CI_TYPE_PLAN_SERIAL: ${{ github.event_name == 'pull_request' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.event.pull_request.head.repo.full_name == github.repository && github.run_attempt == 1 && needs.preflight.outputs.frozen_target != 'true' && '1' || vars.OPENCLAW_CI_TYPE_PLAN_SERIAL }}
         run: node scripts/ci-check-plan.mts
 
       - name: Check narrow PR global guards
@@ -4508,29 +4548,24 @@ jobs:
   postgres-conformance:
     permissions:
       contents: read
-    name: PostgreSQL conformance
+    name: PostgreSQL conformance (${{ matrix.shard }})
     needs: [preflight]
     if: needs.preflight.outputs.run_postgres_conformance == 'true'
     runs-on: *ubuntu_linux_runner
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        shard: [1/3, 2/3, 3/3]
     steps:
       - *linux_node_checkout_step
       - *linux_node_setup_step
-      - name: Start PostgreSQL service
-        run: |
-          docker run --detach --name openclaw-postgres --publish 127.0.0.1:5432:5432 \
-            --shm-size=1g --user postgres pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d bash -ec \
-            'initdb -A trust -U postgres -D /tmp/openclaw-pg >/dev/null;
-             echo "host all all all trust" >> /tmp/openclaw-pg/pg_hba.conf;
-             exec postgres -D /tmp/openclaw-pg -h 0.0.0.0'
-          timeout 60s docker exec openclaw-postgres bash -c 'until pg_isready -U postgres; do sleep 1; done'
-          docker exec openclaw-postgres psql -U postgres -v ON_ERROR_STOP=1 -c \
-            'CREATE EXTENSION unaccent WITH SCHEMA public; CREATE EXTENSION pg_trgm WITH SCHEMA public; CREATE EXTENSION vector WITH SCHEMA public;'
       - name: Run PostgreSQL conformance
-        run: node scripts/test-database-conformance.mjs --engine postgres --connection postgresql://postgres@127.0.0.1:5432/postgres
-      - name: Stop PostgreSQL service
-        if: always()
-        run: docker rm --force openclaw-postgres
+        uses: ./.ci-harness/.github/actions/postgres-conformance
+        with:
+          image: pgvector/pgvector:pg17@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+          shard: ${{ matrix.shard }}
 
   check-docs:
     permissions:
@@ -4547,6 +4582,14 @@ jobs:
       - name: Check formatting
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_format_check == 'true' }}
         run: pnpm format:check
+
+      - name: Check AGENTS.md bootstrap size
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' }}
+        run: |
+          # Historical release targets predate this guard.
+          if node -e 'process.exit(require("./package.json").scripts?.["check:agents-md-size"] ? 0 : 1)'; then
+            pnpm check:agents-md-size
+          fi
 
       - name: Check config docs baseline
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
@@ -4624,7 +4667,7 @@ jobs:
     timeout-minutes: 60
     env:
       # Node 24.20 fixes Windows scheduler shutdown (nodejs/node#61999).
-      NODE_VERSION: "24.21.0"
+      NODE_VERSION: "24.22.1"
       NODE_OPTIONS: --max-old-space-size=8192
       OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1
     defaults:
@@ -4756,7 +4799,12 @@ jobs:
     name: ${{ matrix.check_name || 'macos-node' }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_macos_node == 'true' }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND))) && 'macos-15' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || github.run_attempt > 1) && 'macos-15' || (github.repository == 'openclaw/openclaw' && 'blacksmith-6vcpu-macos-15' || 'macos-15')))) || (((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND))) && 'macos-15' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || github.run_attempt > 1) && 'macos-15' || (github.repository == 'openclaw/openclaw' && 'blacksmith-6vcpu-macos-15' || 'macos-15')) }}
+    runs-on: &hosted_xcode_runner >-
+      ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
+      'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
+      startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
+      '')), toJSON('xcode-27'))) || ('xcode-27') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -4794,25 +4842,21 @@ jobs:
     permissions:
       contents: read
     name: ${{ format('macos-swift ({0})', matrix.phase) }}
-    needs: [preflight]
-    if: needs.preflight.outputs.run_macos_swift == 'true'
+    needs: [preflight, build-artifacts]
+    if: ${{ !cancelled() && needs.preflight.outputs.run_macos_swift == 'true' && (needs.build-artifacts.result == 'success' || needs.build-artifacts.result == 'skipped') }}
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests","packages"]' || '["tests","packages"]') }}
-    runs-on: &hosted_xcode_runner >-
-      ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
-      'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
-      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
-      startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
-      '')), toJSON('xcode-27'))) || ('xcode-27') }}
+        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests"]' || '["tests"]') }}
+    runs-on: *hosted_xcode_runner
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && 75 || 30 }}
     env:
+      NATIVE_RUNTIME_ARTIFACT_ID: ${{ needs.build-artifacts.outputs.native_runtime_artifact_id }}
       HISTORICAL_TARGET: *historical_target
       MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
       OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
-    steps:
+    steps: &macos_swift_steps
       - name: Start Swift cache clock
         id: swift-cache-clock
         continue-on-error: true
@@ -4849,14 +4893,18 @@ jobs:
         if: hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
         env:
           CI: "true"
-        run: >-
-          pnpm install --frozen-lockfile --prefer-offline --optional
-          --filter '@openclaw/mermaid-renderer...'
-          --filter '@openclaw/gateway-protocol...'
-          --config.ignore-scripts=false
-          --config.engine-strict=false
-          --config.enable-pre-post-scripts=true
-          --config.side-effects-cache=true
+          MACOS_NATIVE_PHASE: ${{ matrix.phase }}
+        run: |
+          set -euo pipefail
+          native_install_args=(install --frozen-lockfile --prefer-offline --optional --filter '@openclaw/mermaid-renderer...' --filter '@openclaw/gateway-protocol...')
+          if [[ "$MACOS_NATIVE_PHASE" == "tests" && -f apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift ]]; then
+            native_install_args+=(--filter 'openclaw...')
+          fi
+          pnpm "${native_install_args[@]}" \
+            --config.ignore-scripts=false \
+            --config.engine-strict=false \
+            --config.enable-pre-post-scripts=true \
+            --config.side-effects-cache=true
 
       - name: Setup Node.js for native test tooling
         id: macos-node-tooling
@@ -5106,22 +5154,42 @@ jobs:
           trap 'rm -rf "$swabble_scratch"' EXIT
           swift test --package-path apps/swabble --scratch-path "$swabble_scratch" --build-system native --disable-index-store -Xswiftc -gline-tables-only --no-parallel
 
+      - name: Build Swift tests
+        id: swift-test-build
+        if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' && matrix.phase == 'tests' }}
+        run: |
+          set -euo pipefail
+          # SwiftPM's swiftbuild backend can omit the test-bundle rpath for Sparkle.
+          # Remove once runner toolchains pass with swiftlang/swift-package-manager#10394.
+          # CI needs coverage and line backtraces, not IDE indexes or debugger type metadata.
+          swift build --package-path apps/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --build-tests
+          echo "debug-tests-built=true" >> "$GITHUB_OUTPUT"
+
+      - name: Download runtime for native policy tests
+        id: native-runtime-download
+        if: ${{ !cancelled() && steps.swift-test-build.outcome == 'success' && matrix.phase == 'tests' && hashFiles('apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift') != '' }}
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ env.NATIVE_RUNTIME_ARTIFACT_ID }}
+          merge-multiple: true
+          path: .artifacts/macos-native-runtime
+
+      - name: Prepare native test CLI
+        id: native-test-cli
+        if: ${{ !cancelled() && steps.native-runtime-download.outcome == 'success' }}
+        env:
+          TARGET_SHA: *checkout_sha
+        run: node .ci-harness/scripts/macos-native-runtime-artifact.mjs restore .artifacts/macos-native-runtime "$TARGET_SHA" >> "$GITHUB_PATH"
+
       - name: Swift test
         id: swift-test
-        if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' && matrix.phase == 'tests' }}
+        if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.macos-native-assets.outcome == 'success' && matrix.phase == 'tests' && steps.swift-test-build.outcome == 'success' && (hashFiles('apps/macos/Sources/OpenClaw/NativeExecPolicyOwner.swift') == '' || steps.native-test-cli.outcome == 'success') }}
         run: |
           set -euo pipefail
           source .ci-harness/scripts/lib/swift-toolchain.sh
           native_test_log_dir="$RUNNER_TEMP/openclaw-native-test-logs"
           native_test_log_id="$(node -e 'process.stdout.write(require("node:crypto").randomUUID())')"
-          # SwiftPM's swiftbuild backend can omit the test-bundle rpath for Sparkle.
-          # Remove once runner toolchains pass with swiftlang/swift-package-manager#10394.
-          # Keep the release build above on the default backend.
-          # CI needs coverage and line backtraces, not IDE indexes or debugger type metadata.
-          swift_test_args=(--package-path apps/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only)
-          swift build "${swift_test_args[@]}" --build-tests
-          echo "debug-tests-built=true" >> "$GITHUB_OUTPUT"
-          swift_test_args+=(--skip-build)
+          swift_test_args=(--package-path apps/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only --skip-build)
           source .ci-harness/scripts/ci-collect-checks.sh
           if [[ -f scripts/test-macos-native.mts ]]; then
             logical_cpu="$(sysctl -n hw.logicalcpu)"
@@ -5189,7 +5257,7 @@ jobs:
 
       - name: Setup bundled recovery runtime build
         id: recovery-runtime-setup
-        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && hashFiles('scripts/test-macos-app-host.sh') != '' && steps.swift-test.outputs.debug-tests-built == 'true' && steps.swift-test.outcome == 'success' }}
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && hashFiles('scripts/test-macos-app-host.sh') != '' && steps.swift-test-build.outputs.debug-tests-built == 'true' && steps.swift-test.outcome == 'success' }}
         uses: ./.ci-harness/.github/actions/setup-node-env
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -5220,7 +5288,7 @@ jobs:
 
       - name: Render isolated macOS health fixtures
         id: health-render
-        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
+        if: ${{ !cancelled() && github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && steps.swift-test-build.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
         run: bash scripts/test-macos-health-render.sh
 
       - name: Upload macOS health component renders
@@ -5283,6 +5351,26 @@ jobs:
         with:
           path: apps/macos/.build
           key: ${{ steps.swift-build-cache.outputs.cache-primary-key }}
+
+  # Package tests do not consume the Linux runtime or wait for its runner.
+  macos-swift-packages:
+    permissions:
+      contents: read
+    name: ${{ format('macos-swift ({0})', matrix.phase) }}
+    needs: [preflight]
+    if: ${{ !cancelled() && needs.preflight.outputs.run_macos_swift == 'true' }}
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        phase: [packages]
+    runs-on: *hosted_xcode_runner
+    timeout-minutes: 30
+    env:
+      HISTORICAL_TARGET: *historical_target
+      MACOS_PRIMARY_PHASE: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && 'release' || 'tests' }}
+      OPENCLAWKIT_TEST_EXECUTION: ${{ (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && needs.preflight.outputs.ci_shape != 'main') || github.run_attempt > 1) && 'serial' || 'parallel' }}
+    steps: *macos_swift_steps
 
   ios-build:
     permissions:
@@ -5436,19 +5524,6 @@ jobs:
             exit 1
           fi
 
-      - name: Swift lint
-        if: ${{ !cancelled() && steps.ios-swift-tools.outcome == 'success' && (matrix.phase == 'smoke' || matrix.phase == 'tests') }}
-        run: |
-          source .ci-harness/scripts/ci-collect-checks.sh
-          if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
-            run_check "iOS Swift lint" ./scripts/lint-swift.sh ios
-            run_check "iOS Swift format" ./scripts/format-swift.sh ios
-          else
-            # Frozen release targets before the iOS lint lane have no equivalent target-owned step.
-            echo "Swift lint wrappers are absent; skipping iOS lint for this frozen target."
-          fi
-          finish_checks
-
       - name: Configure iOS build and report simulator selection
         id: ios-configure
         if: ${{ !cancelled() && steps.select-xcode.outcome == 'success' && steps.node-env.outcome == 'success' && (matrix.phase == 'smoke' || matrix.phase == 'tests') && needs.preflight.outputs.compatibility_target != 'true' }}
@@ -5553,6 +5628,21 @@ jobs:
                   print(log.read(), flush=True)
                   print(f"iOS build and simulator preparation: {time.monotonic() - started:.1f}s", flush=True)
           PY
+
+      - name: Swift lint
+        # Successful current builds already run both checks in Xcode's prebuild phases.
+        # Preserve standalone diagnostics when a build fails/skips or uses a frozen project.
+        if: ${{ !cancelled() && steps.ios-swift-tools.outcome == 'success' && (matrix.phase == 'smoke' || matrix.phase == 'tests') && (env.HISTORICAL_TARGET == 'true' || env.IOS_FROZEN_TARGET == 'true' || steps.ios-app-build.outcome != 'success') }}
+        run: |
+          source .ci-harness/scripts/ci-collect-checks.sh
+          if [[ -x ./scripts/lint-swift.sh && -x ./scripts/format-swift.sh ]]; then
+            run_check "iOS Swift lint" ./scripts/lint-swift.sh ios
+            run_check "iOS Swift format" ./scripts/format-swift.sh ios
+          else
+            # Frozen release targets before the iOS lint lane have no equivalent target-owned step.
+            echo "Swift lint wrappers are absent; skipping iOS lint for this frozen target."
+          fi
+          finish_checks
 
       - name: Build iOS app (Release)
         if: ${{ !cancelled() && steps.ios-swift-tools.outcome == 'success' && (steps.watch-rust-toolchain.outcome == 'success' || steps.watch-rust-toolchain.outcome == 'skipped') && matrix.phase == 'release' }}
@@ -5831,7 +5921,7 @@ jobs:
       - name: Setup Ruby
         uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
-          ruby-version: "3.4.11"
+          ruby-version: "4.0.7"
           bundler: "4.0.22"
           bundler-cache: false
           working-directory: apps/ios
@@ -5869,7 +5959,9 @@ jobs:
         id: device_screenshots
         env:
           OPENCLAW_SNAPSHOT_DIAGNOSTICS: "1"
-        run: pnpm ios:screenshots
+        run: |
+          node scripts/ios-resource-timeline.mjs --output "$RUNNER_TEMP/ios-resource-timeline.jsonl" -- \
+            pnpm ios:screenshots
 
       - name: Package iOS screenshot capture evidence
         id: package_screenshot_evidence
@@ -5915,7 +6007,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ios-release-screenshot-diagnostics-${{ needs.preflight.outputs.checkout_revision }}
-          path: apps/ios/build/screenshot-diagnostics.json
+          path: |
+            apps/ios/build/screenshot-diagnostics.json
+            ${{ runner.temp }}/ios-resource-timeline.jsonl
           if-no-files-found: warn
           retention-days: 14
 
@@ -6440,7 +6534,7 @@ jobs:
         with:
           build-all-cache-scope: full
           cache-mode: *cache_mode
-          node-version: "24.x"
+          node-version: "24.22.1"
           install-bun: "false"
           dependency-cache: *trusted_first_attempt_dependency_cache
 
@@ -6560,6 +6654,7 @@ jobs:
       - checks-windows
       - macos-node
       - macos-swift
+      - macos-swift-packages
       - ios-build
       - ios-release-e2e
       - ios-screenshot-capture
@@ -6637,6 +6732,7 @@ jobs:
       - checks-windows
       - macos-node
       - macos-swift
+      - macos-swift-packages
       - ios-build
       - ios-release-e2e
       - ios-screenshot-capture
@@ -6708,6 +6804,7 @@ jobs:
             checks-windows=${{ needs.checks-windows.result }}|${{ needs.preflight.outputs.run_checks_windows }}
             macos-node=${{ needs.macos-node.result }}|${{ needs.preflight.outputs.run_macos_node }}
             macos-swift=${{ needs.macos-swift.result }}|${{ needs.preflight.outputs.run_macos_swift }}
+            macos-swift-packages=${{ needs.macos-swift-packages.result }}|${{ needs.preflight.outputs.run_macos_swift }}
             ios-build=${{ needs.ios-build.result }}|${{ needs.preflight.outputs.run_ios_build }}
             ios-release-e2e=${{ needs.ios-release-e2e.result }}|${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.validation_tier == 'full' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.checkout_revision == github.sha && needs.preflight.outputs.compatibility_target != 'true' && needs.preflight.outputs.run_ios_build == 'true' }}
             ios-screenshot-capture=${{ needs.ios-screenshot-capture.result }}|${{ needs.preflight.outputs.validation_tier != 'main' && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && ((github.event_name == 'workflow_dispatch' && !inputs.release_gate) || needs.preflight.outputs.run_ios_screenshots == 'true') }}
@@ -6793,6 +6890,7 @@ jobs:
       - checks-windows
       - macos-node
       - macos-swift
+      - macos-swift-packages
       - ios-build
       - ios-release-e2e
       - ios-screenshot-capture

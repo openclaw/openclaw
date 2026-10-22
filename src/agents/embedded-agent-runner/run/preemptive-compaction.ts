@@ -14,7 +14,6 @@ import {
   estimateRenderedPromptTokens,
   estimateToolSchemaTokens,
 } from "../../sessions/context-token-pressure.js";
-import { log } from "../logger.js";
 import type { MeasuredRequestContext } from "../prompt-cache-request-observer.js";
 import { estimateToolResultReductionPotential } from "../tool-result-truncation.js";
 import { MidTurnPrecheckSignal, type MidTurnPrecheckRequest } from "./midturn-precheck.js";
@@ -301,15 +300,7 @@ export function resolveProjectedRequestPressure(params: {
       source: anchor ? "provider_context_usage" : "transcript_estimate",
     },
   });
-  const decision = precheck.compactionReplay ?? precheck;
-  log.debug(
-    `[context-overflow-midturn-precheck] provider-bound check route=${decision.route} ` +
-      `messages=${messages.length} pressureSource=${decision.pressureSource} ` +
-      `estimatedPromptTokens=${decision.estimatedPromptTokens} ` +
-      `promptBudgetBeforeReserve=${decision.promptBudgetBeforeReserve} ` +
-      `overflowTokens=${decision.overflowTokens}`,
-  );
-  return decision;
+  return precheck.compactionReplay ?? precheck;
 }
 
 /** Stop before a projected foreground request that no longer fits its budget. */

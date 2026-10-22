@@ -19,7 +19,7 @@ afterEach(() => {
   clearPluginMetadataLifecycleCaches();
 });
 
-it("materializes shared plugin metadata once across the fleet and retains its immutable facts", () => {
+it("materializes shared plugin metadata once across the fleet and retains its prepared facts", () => {
   const configSchema = { type: "object", properties: { label: { type: "string" } } };
   const source = createPluginMetadataSnapshotFixture({
     plugins: [{ id: "shared", providers: ["shared"], configSchema }],
@@ -38,7 +38,6 @@ it("materializes shared plugin metadata once across the fleet and retains its im
       ),
     },
   };
-  const freeze = vi.spyOn(Object, "freeze");
   withPluginCache(createPluginCache(), () => {
     const params = { config, env: {}, installRecords: {}, allowCurrent: false };
     const snapshot = resolveConfigWidePluginMetadataSnapshot(params);
@@ -46,14 +45,8 @@ it("materializes shared plugin metadata once across the fleet and retains its im
     expect(snapshot.owners.providers.get("shared")).toEqual(["shared"]);
     expect(snapshot.registryIndex.workspaceDir).toBe("/fleet/first");
     expect(snapshot.manifestRegistry.plugins[0]?.configSchema).toBe(configSchema);
-    expect(freeze.mock.calls.filter(([value]) => value === configSchema)).toHaveLength(1);
-    expect(Object.isFrozen(configSchema.properties.label)).toBe(true);
     expect(Object.isFrozen(source.index)).toBe(false);
-    expect(() => {
-      configSchema.properties.label.type = "number";
-    }).toThrow();
     expect(resolveConfigWidePluginMetadataSnapshot(params)).toBe(snapshot);
-    expect(freeze.mock.calls.filter(([value]) => value === configSchema)).toHaveLength(1);
     expect(loadRegistry).toHaveBeenCalledTimes(3);
   });
 });

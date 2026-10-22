@@ -1,4 +1,5 @@
 // Covers trusted system binary resolution across platform install roots.
+import fs from "node:fs";
 import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -30,30 +31,7 @@ let resolveSystemBin: ResolveSystemBin;
 let freshResolveSystemBinId = 0;
 
 let executables: Set<string>;
-
-vi.mock("node:fs", async () => {
-  const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
-  return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:fs")>("node:fs"),
-    {
-      accessSync: (candidate: import("node:fs").PathLike) => {
-        const candidatePath = String(candidate);
-        if (!executables.has(path.resolve(candidatePath))) {
-          throw Object.assign(new Error(`missing executable: ${candidatePath}`), {
-            code: "ENOENT",
-          });
-        }
-      },
-    },
-    { mirrorToDefault: true },
-  );
-});
-
-function addExecutables(...paths: string[]): void {
-  for (const candidate of paths) {
-    executables.add(candidate);
-  }
-}
+const addExecutables = (...paths: string[]) => paths.forEach((entry) => executables.add(entry));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -62,6 +40,14 @@ afterEach(() => {
 
 beforeEach(async () => {
   executables = new Set<string>();
+  vi.spyOn(fs, "accessSync").mockImplementation((candidate) => {
+    const candidatePath = String(candidate);
+    if (!executables.has(path.resolve(candidatePath))) {
+      throw Object.assign(new Error(`missing executable: ${candidatePath}`), {
+        code: "ENOENT",
+      });
+    }
+  });
   windowsRoots.systemRoot = "C:\\Windows";
   windowsRoots.programFilesRoots = ["C:\\Program Files", "C:\\Program Files (x86)"];
   ({ resolveSystemBin } = await importFreshModule<typeof import("./resolve-system-bin.js")>(
@@ -84,20 +70,19 @@ if (process.platform !== "win32") {
   });
 
   it("prefers /usr/bin over /usr/local/bin (first match wins)", () => {
-    executables.add("/usr/bin/openssl");
-    executables.add("/usr/local/bin/openssl");
+    addExecutables("/usr/bin/openssl", "/usr/local/bin/openssl");
     expect(resolveSystemBin("openssl")).toBe("/usr/bin/openssl");
   });
 
-  it("extraDirs results do not poison the cache for callers without extraDirs", () => {
-    const untrustedDir = "/home/user/.local/bin";
-    executables.add(`${untrustedDir}/ffmpeg`);
-
-    expect(resolveSystemBin("ffmpeg", { extraDirs: [untrustedDir] })).toBe(
-      `${untrustedDir}/ffmpeg`,
-    );
-    expect(resolveSystemBin("ffmpeg")).toBeNull();
-  });
+  it.each(["strict", "standard"] as const)(
+    "%s extraDirs results do not poison callers without extraDirs",
+    (trust) => {
+      const extra = "/home/user/.local/bin";
+      addExecutables(`${extra}/ffmpeg`);
+      expect(resolveSystemBin("ffmpeg", { trust, extraDirs: [extra] })).toBe(`${extra}/ffmpeg`);
+      expect(resolveSystemBin("ffmpeg", { trust })).toBeNull();
+    },
+  );
 }
 
 if (process.platform === "darwin" || process.platform === "linux") {
@@ -115,21 +100,14 @@ if (process.platform === "darwin" || process.platform === "linux") {
   });
 }
 
-if (process.platform === "darwin") {
-  it("standard trust results do not poison the strict cache", () => {
-    executables.add("/opt/homebrew/bin/ffmpeg");
+it.runIf(process.platform === "darwin")(
+  "standard trust results do not poison the strict cache",
+  () => {
+    addExecutables("/opt/homebrew/bin/ffmpeg");
     expect(resolveSystemBin("ffmpeg", { trust: "standard" })).toBe("/opt/homebrew/bin/ffmpeg");
     expect(resolveSystemBin("ffmpeg")).toBeNull();
-  });
-
-  it("extraDirs composes with standard trust", () => {
-    const customDir = "/opt/custom/bin";
-    executables.add(`${customDir}/mytool`);
-    expect(resolveSystemBin("mytool", { trust: "standard", extraDirs: [customDir] })).toBe(
-      `${customDir}/mytool`,
-    );
-  });
-}
+  },
+);
 
 it.each([
   ["linux", "strict", ""],

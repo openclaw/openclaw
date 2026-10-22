@@ -2,6 +2,7 @@ import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palett
 import { isMobileBrowserPlatform } from "./browser-platform.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
+  resolveNewSessionShortcut,
   type KeyboardShortcutCombo,
 } from "./keyboard-shortcut-contract.ts";
 
@@ -91,9 +92,6 @@ export function resolveKeyboardShortcutSections(
   sendShortcut: "enter" | "modifier-enter" = "enter",
 ): readonly KeyboardShortcutSection[] {
   const mobile = isMobileBrowserPlatform();
-  if (!mobile && sendShortcut !== "modifier-enter") {
-    return KEYBOARD_SHORTCUT_SECTIONS;
-  }
   return KEYBOARD_SHORTCUT_SECTIONS.map((section) =>
     keyboardShortcutSection(
       section.id,
@@ -111,9 +109,13 @@ export function resolveKeyboardShortcutSections(
         .map((entry) =>
           mobile && entry.id === "newline"
             ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.sendMessage)
-            : !mobile && SEND_PREFERENCE_ENTRY_IDS.has(entry.id)
-              ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.modifiedEnter)
-              : entry,
+            : entry.id === "newSession"
+              ? keyboardShortcutEntry(entry.id, resolveNewSessionShortcut())
+              : !mobile &&
+                  sendShortcut === "modifier-enter" &&
+                  SEND_PREFERENCE_ENTRY_IDS.has(entry.id)
+                ? keyboardShortcutEntry(entry.id, KEYBOARD_SHORTCUT_COMBOS.modifiedEnter)
+                : entry,
         ),
     ),
   );

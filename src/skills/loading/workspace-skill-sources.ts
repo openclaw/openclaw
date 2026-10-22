@@ -49,7 +49,6 @@ export function splitSkillSourcePlan(
       execution.executionWorkspaceFileHost === "gateway"
         ? undefined
         : execution.executionWorkspaceDir,
-    gatewayRoots,
     gatewayPlan: { ...plan, roots: gatewayRoots },
     workspacePlan: {
       ...plan,

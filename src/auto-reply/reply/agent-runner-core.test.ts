@@ -1,172 +1,130 @@
-import { describe, expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { createRestartRecoveryClaimChangedError } from "../../infra/agent-lifecycle-error.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import { resolveFallbackTransition } from "../fallback-state.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
-import type { TemplateContext } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import {
   buildSilentFallbackFailurePayload,
   handleReplyAgentRunError,
   resolveReplyRunDeliveryContext,
 } from "./agent-runner-core.js";
-import { createReplyOperation } from "./reply-run-registry.js";
 
-it.each([false, true])(
-  "awaits restart recovery before choosing the error reply (%s)",
-  async (armed) => {
-    const replyOperation = createReplyOperation({
-      sessionKey: `agent:main:restart-read-${armed}`,
-      sessionId: `restart-read-${armed}`,
-      turnKind: "visible",
-      resetTriggered: false,
-    });
+function runError(
+  error: unknown,
+  overrides: Partial<Parameters<typeof handleReplyAgentRunError>[1]> = {},
+  restart = false,
+) {
+  const replyOperation = createReplyOperation({
+    sessionKey: "agent:main:core-error",
+    sessionId: "core-error",
+    resetTriggered: false,
+  });
+  if (restart) {
     replyOperation.abortForRestart();
-    try {
-      const reply = await handleReplyAgentRunError(new Error("restart"), {
-        resolveVisibleReplyDelivery: async () => false,
-        isHeartbeat: false,
-        replyExpectation: "required",
-        isRestartRecoveryArmed: async () => armed,
-        replyOperation,
-        resolvedVerboseLevel: "off",
-        returnWithQueuedFollowupDrain: (value) => value,
-        sessionCtx: {},
-      });
-      expect(reply?.text).toBe(
-        armed ? undefined : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
-      );
-    } finally {
-      replyOperation.complete();
+  }
+  onTestFinished(() => replyOperation.complete());
+  return handleReplyAgentRunError(error, {
+    resolveVisibleReplyDelivery: async () => false,
+    isHeartbeat: false,
+    replyExpectation: "required",
+    isRestartRecoveryArmed: async () => false,
+    replyOperation,
+    resolvedVerboseLevel: "off",
+    returnWithQueuedFollowupDrain: (value) => value,
+    sessionCtx: {},
+    ...overrides,
+  });
+}
+
+it.each([{ armed: false }, { armed: true }, { claimChanged: true }])(
+  "resolves restart recovery before choosing guidance: %j",
+  async ({ armed, claimChanged }) => {
+    const reply = await runError(
+      claimChanged ? createRestartRecoveryClaimChangedError() : new Error("restart"),
+      { isRestartRecoveryArmed: async () => armed ?? false },
+      !claimChanged,
+    );
+    const expected = claimChanged
+      ? "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed."
+      : armed
+        ? undefined
+        : "⚠️ Gateway is restarting. Please wait a few seconds and try again.";
+    expect(reply?.text).toBe(expected);
+    if (claimChanged) {
+      expect(reply?.isError).toBe(true);
     }
   },
 );
-
-it("renders restart recovery ownership changes as session guidance", async () => {
-  const replyOperation = createReplyOperation({
-    sessionKey: "agent:main:restart-claim-changed",
-    sessionId: "restart-claim-changed",
-    turnKind: "visible",
-    resetTriggered: false,
-  });
-  try {
-    const reply = await handleReplyAgentRunError(createRestartRecoveryClaimChangedError(), {
-      resolveVisibleReplyDelivery: async () => false,
-      isHeartbeat: false,
-      replyExpectation: "required",
-      isRestartRecoveryArmed: async () => false,
-      replyOperation,
-      resolvedVerboseLevel: "off",
-      returnWithQueuedFollowupDrain: (value) => value,
-      sessionCtx: {},
-    });
-
-    expect(reply?.text).toBe(
-      "⚠️ This conversation changed before your message could start. Check the latest messages, then try again if needed.",
-    );
-    expect(reply?.text).not.toContain("restart recovery claim");
-  } finally {
-    replyOperation.complete();
-  }
-});
 
 it.each([false, true])(
   "keeps setup failures retryable only before durable acceptance (%s)",
   async (accepted) => {
-    const replyOperation = createReplyOperation({
-      sessionKey: `agent:main:input-acceptance-${accepted}`,
-      sessionId: `input-acceptance-${accepted}`,
-      turnKind: "visible",
-      resetTriggered: false,
-    });
     const failure = new Error("ENOSPC: turn preparation failed");
-    try {
-      const reply = handleReplyAgentRunError(failure, {
-        resolveVisibleReplyDelivery: async () => false,
-        isHeartbeat: false,
-        replyExpectation: "required",
-        userTurnAccepted: accepted,
-        isRestartRecoveryArmed: async () => false,
-        replyOperation,
-        resolvedVerboseLevel: "off",
-        returnWithQueuedFollowupDrain: (value) => value,
-        sessionCtx: {},
+    const reply = runError(failure, { userTurnAccepted: accepted });
+    if (accepted) {
+      await expect(reply).resolves.toMatchObject({
+        isError: true,
+        text: expect.not.stringContaining(SILENT_REPLY_TOKEN),
       });
-      if (accepted) {
-        await expect(reply).resolves.toMatchObject({
-          isError: true,
-          text: expect.not.stringContaining(SILENT_REPLY_TOKEN),
-        });
-      } else {
-        await expect(reply).rejects.toBe(failure);
-      }
-    } finally {
-      replyOperation.complete();
+    } else {
+      await expect(reply).rejects.toBe(failure);
     }
   },
 );
 
-describe("resolveReplyRunDeliveryContext", () => {
-  it.each([
-    { name: "string message topic", messageThreadId: "99", threadId: "99" },
-    { name: "session identity fallback", threadId: "12345:99" },
-  ])("preserves the $name", ({ messageThreadId, threadId }) => {
-    expect(
-      resolveReplyRunDeliveryContext({
-        cfg: {},
-        sessionCtx: {
-          Provider: "telegram",
-          OriginatingChannel: "telegram",
-          OriginatingTo: "telegram:12345",
-          AccountId: "work",
-          MessageThreadId: messageThreadId,
-          SessionKey: "agent:main:telegram:direct:12345:thread:12345:99",
-        } as TemplateContext,
-        sessionKey: "agent:main:telegram:direct:12345:thread:12345:99",
-      }),
-    ).toEqual({
-      channel: "telegram",
-      to: "telegram:12345",
-      accountId: "work",
-      threadId,
-    });
+it.each([
+  { name: "string message topic", messageThreadId: "99", threadId: "99" },
+  { name: "session identity fallback", threadId: "12345:99" },
+])("preserves the $name", ({ messageThreadId, threadId }) => {
+  const sessionKey = "agent:main:telegram:direct:12345:thread:12345:99";
+  expect(
+    resolveReplyRunDeliveryContext({
+      cfg: {},
+      sessionCtx: {
+        Provider: "telegram",
+        OriginatingChannel: "telegram",
+        OriginatingTo: "telegram:12345",
+        AccountId: "work",
+        MessageThreadId: messageThreadId,
+        SessionKey: sessionKey,
+      },
+      sessionKey,
+    }),
+  ).toEqual({
+    channel: "telegram",
+    to: "telegram:12345",
+    accountId: "work",
+    threadId,
   });
 });
-
-describe("buildSilentFallbackFailurePayload", () => {
-  const selected = { provider: "openai", model: "primary-model" };
-  const other = { provider: "anthropic", model: "fallback-model" };
-  const transition = resolveFallbackTransition({
-    selectedProvider: selected.provider,
-    selectedModel: selected.model,
-    activeProvider: other.provider,
-    activeModel: other.model,
-    attempts: [],
-  });
-  const base = {
+const transition = resolveFallbackTransition({
+  selectedProvider: "openai",
+  selectedModel: "primary-model",
+  activeProvider: "anthropic",
+  activeModel: "fallback-model",
+  attempts: [],
+});
+function fallbackPayload(fallbackFailureKnown: boolean) {
+  return buildSilentFallbackFailurePayload({
     fallbackTransition: transition,
-    fallbackFailureKnown: true,
+    fallbackFailureKnown,
     fallbackAttempts: [],
-    cfg: {},
+    cfg: fallbackFailureKnown ? { agents: { defaults: { silentReply: { group: "allow" } } } } : {},
     completion: resolveReplyCompletion("required", "empty"),
-  };
-
-  it("surfaces both model identities when a required fallback reply is missing", () => {
-    const payload = buildSilentFallbackFailurePayload({
-      ...base,
-      cfg: { agents: { defaults: { silentReply: { group: "allow" } } } },
-    });
-
-    expect(payload?.isError).toBe(true);
-    expect(payload?.text).toContain(transition.selectedModelRef);
-    expect(payload?.text).toContain(transition.activeModelRef);
-    expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
   });
+}
 
-  it.each([{ fallbackFailureKnown: false }])(
-    "requires an active failed fallback: %j",
-    (fallback) => {
-      expect(buildSilentFallbackFailurePayload({ ...base, ...fallback })).toBeUndefined();
-    },
-  );
+it("surfaces both model identities when a required fallback reply is missing", () => {
+  const payload = fallbackPayload(true);
+
+  expect(payload?.isError).toBe(true);
+  expect(payload?.text).toContain(transition.selectedModelRef);
+  expect(payload?.text).toContain(transition.activeModelRef);
+  expect(getReplyPayloadMetadata(payload ?? {})?.deliverDespiteSourceReplySuppression).toBe(true);
+});
+
+it("requires an active failed fallback", () => {
+  expect(fallbackPayload(false)).toBeUndefined();
 });

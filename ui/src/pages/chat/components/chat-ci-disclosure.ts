@@ -8,13 +8,15 @@ export type ChatCiDisclosureProps = {
   pullRequest?: ControlUiSessionPullRequest;
   sessionKey: string;
   presented: boolean;
+  /** An enclosing page owns visibility instead of a details disclosure. */
+  inline?: boolean;
 };
 
 /** The disclosure owns visibility; the two CI projections own their request fences. */
 export function createCiDisclosure(
-  host: HTMLElement & Pick<ChatCiDisclosureProps, "presented">,
+  host: HTMLElement & Pick<ChatCiDisclosureProps, "presented" | "inline">,
   onVisibility: () => void,
-  dispose: () => void,
+  connect: () => () => void,
 ) {
   let disclosure: HTMLDetailsElement | null = null;
   let active = false;
@@ -22,7 +24,7 @@ export function createCiDisclosure(
   const visible = () =>
     isConnected() &&
     host.presented &&
-    disclosure?.open === true &&
+    (host.inline || disclosure?.open === true) &&
     host.ownerDocument.visibilityState !== "hidden";
   onSettled(() => {
     active = true;
@@ -35,12 +37,13 @@ export function createCiDisclosure(
     };
     const stopToggle = disclosure && listen(disclosure, "toggle", toggle);
     const stopVisibility = listen(document, "visibilitychange", onVisibility);
+    const disconnect = connect();
     onVisibility();
     return () => {
       active = false;
       stopToggle?.();
       stopVisibility();
-      dispose();
+      disconnect();
     };
   });
   return {

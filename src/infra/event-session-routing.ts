@@ -143,24 +143,20 @@ export function resolveEventSessionRoutingPolicy(params: {
   sessionKey?: string | null;
   channel?: string | null;
   accountId?: string | null;
-  dmScope?: string | null;
-  allowFrom?: ReadonlyArray<string | number> | null;
 }): EventSessionRoutingPolicy {
   const target = parseDirectAgentSessionTarget(params.sessionKey);
   const channel = normalizeOptionalLowercaseString(params.channel ?? target?.channel);
   const accountId = normalizeOptionalLowercaseString(params.accountId ?? target?.accountId);
-  const allowFrom =
-    params.allowFrom ??
-    resolveEventSessionAllowFrom({
-      cfg: params.cfg,
-      target,
-      channel,
-      accountId,
-    });
+  const allowFrom = resolveEventSessionAllowFrom({
+    cfg: params.cfg,
+    target,
+    channel,
+    accountId,
+  });
   return {
     mainKey: params.cfg?.session?.mainKey,
     sessionScope: params.cfg?.session?.scope,
-    dmScope: params.dmScope ?? params.cfg?.session?.dmScope,
+    dmScope: params.cfg?.session?.dmScope,
     allowFrom,
     channel,
     accountId,

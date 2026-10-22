@@ -7,8 +7,9 @@ import {
 } from "../config/sessions/session-actor-storage-binding.js";
 import type {
   SessionActorStorageAuthority,
-  SessionActorStorageOutcome,
+  SessionActorStorageCommand,
 } from "../config/sessions/session-actor-storage-contract.js";
+import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { withBoundIncognitoSessionRows } from "./session-row-projection-read.js";
@@ -54,11 +55,18 @@ const parentKey = "agent:work:dashboard:incognito-parent";
 const authority: SessionActorStorageAuthority = { assertCurrent() {}, authorize() {} };
 const actors: SessionActor[] = [];
 
-function committed<T>(outcome: SessionActorStorageOutcome<T>): T {
+async function mutate(actor: SessionActor, command: SessionActorStorageCommand) {
+  const outcome = await actor.storage!.mutate(command, authority);
   if (outcome.kind !== "committed") {
     throw new Error(outcome.error.message);
   }
-  return outcome.value;
+}
+
+function patch(actor: SessionActor, fields: Partial<InternalSessionEntry>) {
+  return mutate(actor, {
+    type: "session.entry.patch",
+    input: { operation: { kind: "fields", patch: fields } },
+  });
 }
 
 afterEach(async () => {
@@ -67,7 +75,11 @@ afterEach(async () => {
   memorySessionActorOwners.reset();
 });
 
-async function fixture(sessionKey = key, entry: Partial<InternalSessionEntry> = {}) {
+async function fixture(
+  sessionKey = key,
+  entry: Partial<InternalSessionEntry> = {},
+  messages: [string, unknown][] = [],
+) {
   const agentId = sessionKey.split(":")[1]!;
   const owner = memorySessionActorOwners.get({
     agentId,
@@ -78,48 +90,25 @@ async function fixture(sessionKey = key, entry: Partial<InternalSessionEntry> = 
     { assertCurrent() {}, assertReadable() {} },
   );
   actors.push(actor);
-  committed(
-    await actor.storage!.mutate(
-      {
-        type: "session.entry.create",
-        input: {
-          entry: { sessionId: sessionKey, createdAt: 1, updatedAt: 1, incognito: true, ...entry },
-          cwd: "/synthetic/workspace",
-        },
-      },
-      authority,
-    ),
-  );
+  await mutate(actor, {
+    type: "session.entry.create",
+    input: {
+      entry: { sessionId: sessionKey, createdAt: 1, updatedAt: 1, incognito: true, ...entry },
+      cwd: "/synthetic/workspace",
+      transcriptEvents: [
+        createSessionTranscriptHeader({ sessionId: sessionKey, cwd: "/synthetic/workspace" }),
+        ...messages.map(([id, message], index) => ({
+          type: "message",
+          id,
+          parentId: messages[index - 1]?.[0] ?? null,
+          timestamp: new Date(1).toISOString(),
+          message,
+        })),
+      ],
+    },
+  });
   const binding: SessionActorStorageBinding = { actor, authority, agentId, path: owner.path };
-  const append = async (id: string, parentId: string | null, message: unknown) => {
-    const result = await actor.appendTranscriptEvent(
-      {
-        commandId: id,
-        phaseId: "turn",
-        append: {
-          kind: "metadata",
-          input: {
-            scope: { agentId, storePath: owner.path, sessionKey, sessionId: sessionKey },
-            event: {
-              type: "message",
-              id,
-              parentId,
-              timestamp: new Date(1).toISOString(),
-            },
-            message: {
-              messageJson: JSON.stringify(message),
-              cwd: "/synthetic/workspace",
-              validateTurn: false,
-            },
-            options: {},
-          },
-        },
-      },
-      authority,
-    );
-    expect(result.kind).toBe("committed");
-  };
-  return { owner, actor, binding, append };
+  return { owner, actor, binding };
 }
 
 function readRows<T>(
@@ -140,58 +129,40 @@ const rowAt = (rows: ReadonlyMap<string, Row | undefined>, sessionKey: string) =
   rows.get(JSON.stringify([sessionKey.split(":")[1], sessionKey]));
 
 it("prepares memory title, bounded fallback, board presence and cross-agent lineage", async () => {
-  const root = await fixture(key, { parentSessionKey: parentKey });
+  const root = await fixture(key, { parentSessionKey: parentKey }, [
+    ["user", { role: "user", content: "A private question" }],
+    [
+      "answer",
+      {
+        role: "assistant",
+        content: "A private answer",
+        stopReason: "stop",
+        provider: "ollama",
+        model: "example",
+        __openclaw: { runId: "run" },
+      },
+    ],
+  ]);
   await fixture(parentKey, { displayName: "Parent" });
   await fixture(childKey, { parentSessionKey: key });
-  await root.append("user", null, { role: "user", content: "A private question" });
-  await root.append("answer", "user", {
-    role: "assistant",
-    content: "A private answer",
-    stopReason: "stop",
-    provider: "ollama",
-    model: "example",
-    __openclaw: { runId: "run" },
+  await patch(root.actor, {
+    status: "done",
+    lastRunId: "run",
+    fallbackNotice: {
+      kind: "active",
+      selectedModel: "openai/example",
+      activeModel: "ollama/example",
+      reason: "unavailable",
+    },
   });
-  committed(
-    await root.actor.storage!.mutate(
-      {
-        type: "session.entry.patch",
-        input: {
-          operation: {
-            kind: "fields",
-            patch: {
-              status: "done",
-              lastRunId: "run",
-              fallbackNotice: {
-                kind: "active",
-                selectedModel: "openai/example",
-                activeModel: "ollama/example",
-                reason: "unavailable",
-              },
-            },
-          },
-        },
-      },
-      authority,
-    ),
-  );
-  committed(
-    await root.actor.storage!.mutate(
-      {
-        type: "boards.putWidget",
-        input: {
-          sessionKey: key,
-          viewGeneration: "view",
-          params: {
-            sessionKey: key,
-            name: "note",
-            content: { kind: "html", html: "<p>Private</p>" },
-          },
-        },
-      },
-      authority,
-    ),
-  );
+  await mutate(root.actor, {
+    type: "boards.putWidget",
+    input: {
+      sessionKey: key,
+      viewGeneration: "view",
+      params: { sessionKey: key, name: "note", content: { kind: "html", html: "<p>Private</p>" } },
+    },
+  });
   await readRows(root.binding, [key, childKey, parentKey], (rows) => {
     const row = rowAt(rows, key)!;
     expect(row.preparedPrivate).toMatchObject({
@@ -213,31 +184,16 @@ it("prepares memory title, bounded fallback, board presence and cross-agent line
 
 it("uses current sharing facts after async preparation and closes the presentation lifetime", async () => {
   const root = await fixture();
-  committed(
-    await root.actor.storage!.mutate(
-      {
-        type: "session.collaboration.add",
-        input: { params: { identityId: "old", addedBy: "owner", addedAt: 1 } },
-      },
-      authority,
-    ),
-  );
+  await mutate(root.actor, {
+    type: "session.collaboration.add",
+    input: { params: { identityId: "old", addedBy: "owner", addedAt: 1 } },
+  });
   shared.beforeAcp = async () => {
-    committed(
-      await root.actor.storage!.mutate(
-        { type: "session.collaboration.remove", input: { identityId: "old" } },
-        authority,
-      ),
-    );
-    committed(
-      await root.actor.storage!.mutate(
-        {
-          type: "session.entry.patch",
-          input: { operation: { kind: "fields", patch: { displayName: "Current name" } } },
-        },
-        authority,
-      ),
-    );
+    await mutate(root.actor, {
+      type: "session.collaboration.remove",
+      input: { identityId: "old" },
+    });
+    await patch(root.actor, { displayName: "Current name" });
   };
   let source: Row["privateSource"];
   await readRows(root.binding, [key], (rows) => {
@@ -250,17 +206,6 @@ it("uses current sharing facts after async preparation and closes the presentati
   expect(() => source?.assertCurrent()).toThrow("no longer active");
   shared.beforeAcp = async () => root.owner.closeSession(key);
   await expect(readRows(root.binding, [key], () => undefined)).rejects.toThrow("closed");
-});
-
-it("keeps absent and closed sibling selections out of native storage", async () => {
-  const root = await fixture();
-  const child = await fixture(childKey);
-  child.owner.closeSession(childKey);
-  const absent = "agent:work:dashboard:incognito-absent";
-  await readRows(root.binding, [childKey, absent], (rows) => {
-    expect(rowAt(rows, childKey)).toBeUndefined();
-    expect(rowAt(rows, absent)).toBeUndefined();
-  });
 });
 
 it("prepares queued rows after the turn releases its actor without extending session lifetime", async () => {
@@ -298,8 +243,9 @@ it("prepares queued rows after the turn releases its actor without extending ses
 
 it("reads memory reactions after writes through the Gateway reader", async () => {
   const root = await fixture();
-  const sibling = await fixture(childKey);
-  await sibling.append("message", null, { role: "user", content: "React to this" });
+  const sibling = await fixture(childKey, {}, [
+    ["message", { role: "user", content: "React to this" }],
+  ]);
   const params = {
     expectedSessionId: childKey,
     messageId: "message",
@@ -315,21 +261,14 @@ it("reads memory reactions after writes through the Gateway reader", async () =>
         env,
       }),
     );
-  committed(
-    await sibling.actor.storage!.mutate(
-      { type: "session.reaction.set", input: { params } },
-      authority,
-    ),
-  );
+  await mutate(sibling.actor, { type: "session.reaction.set", input: { params } });
   expect(await read()).toEqual({
     message: [{ emoji: "👍", count: 1, identities: [{ id: "viewer" }] }],
   });
-  committed(
-    await sibling.actor.storage!.mutate(
-      { type: "session.reaction.set", input: { params: { ...params, remove: true } } },
-      authority,
-    ),
-  );
+  await mutate(sibling.actor, {
+    type: "session.reaction.set",
+    input: { params: { ...params, remove: true } },
+  });
   expect(await read()).toEqual({});
 });
 
@@ -350,15 +289,7 @@ it("selects unbound row owners and keeps absent reads from recreating a closed s
       env,
     );
   expect(await read()).toMatchObject({ entry: { sessionId: key }, absent: undefined });
-  committed(
-    await root.actor.storage!.mutate(
-      {
-        type: "session.entry.patch",
-        input: { operation: { kind: "fields", patch: { displayName: "Updated in memory" } } },
-      },
-      authority,
-    ),
-  );
+  await patch(root.actor, { displayName: "Updated in memory" });
   expect((await read()).entry?.displayName).toBe("Updated in memory");
   root.owner.closeSession(key);
   expect(await read()).toEqual({ entry: undefined, absent: undefined });

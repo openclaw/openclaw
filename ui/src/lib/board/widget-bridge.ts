@@ -43,33 +43,26 @@ function requiredString(params: Record<string, unknown>, key: string): string {
 }
 
 /** Transport admission, ticket identity, and in-flight coalescing stay synchronous. */
-export class BoardWidgetBridgeController {
-  private frame: HTMLIFrameElement;
-  private ticket: string;
-  private readonly client: BoardWidgetBridgeGatewayClient;
-  private readonly rateKey: string;
-  private readonly confirmPrompt: (text: string) => boolean | Promise<boolean>;
+export class BoardWidgetBridgeOwner {
   private readonly recentStatePayloads = new Map<string, number>();
   private readonly pendingStates = new Map<string, Promise<unknown>>();
   private stateAttemptTimes: number[] = [];
 
-  constructor(options: {
-    frame: HTMLIFrameElement;
-    ticket: string;
-    client: BoardWidgetBridgeGatewayClient;
-    rateKey: string;
-    confirmPrompt: (text: string) => boolean | Promise<boolean>;
-  }) {
-    this.frame = options.frame;
-    this.ticket = options.ticket;
-    this.client = options.client;
-    this.rateKey = options.rateKey;
-    this.confirmPrompt = options.confirmPrompt;
+  constructor(
+    private readonly options: {
+      frame: HTMLIFrameElement;
+      ticket: string;
+      client: BoardWidgetBridgeGatewayClient;
+      rateKey: string;
+      confirmPrompt: (text: string) => boolean | Promise<boolean>;
+    },
+  ) {
+    this.options = { ...options };
   }
 
   updateIdentity(frame: HTMLIFrameElement, ticket: string): void {
-    this.frame = frame;
-    this.ticket = ticket;
+    this.options.frame = frame;
+    this.options.ticket = ticket;
   }
 
   private async emitState(payload: unknown): Promise<unknown> {
@@ -101,7 +94,8 @@ export class BoardWidgetBridgeController {
       throw new Error("widget state emission rate limit exceeded");
     }
     this.stateAttemptTimes.push(nowMs);
-    const request = this.client.request("board.event", { ticket: this.ticket, payload });
+    const { client, ticket } = this.options;
+    const request = client.request("board.event", { ticket, payload });
     this.pendingStates.set(serialized, request);
     try {
       const result = await request;
@@ -118,7 +112,7 @@ export class BoardWidgetBridgeController {
     request: BoardWidgetBridgeRequest,
     options: { promptUserActivated?: boolean; isCurrent?: () => boolean } = {},
   ): Promise<unknown> {
-    if (request.ticket !== this.ticket) {
+    if (request.ticket !== this.options.ticket) {
       throw new Error("widget view ticket does not match the active frame");
     }
     const params = request.params;
@@ -147,17 +141,17 @@ export class BoardWidgetBridgeController {
           throw new Error("widget prompt requires active user interaction");
         }
         const text = requiredString(params, "text");
-        const authorization = (await this.client.request("board.prompt.authorize", {
-          ticket: this.ticket,
+        const authorization = (await this.options.client.request("board.prompt.authorize", {
+          ticket: this.options.ticket,
         })) as { confirmationRequired?: boolean };
         if (options.isCurrent?.() === false) {
           throw new Error("widget prompt request is no longer current");
         }
         const accepted = await dispatchWidgetPrompt(
-          this.frame,
+          this.options.frame,
           text,
-          this.rateKey,
-          authorization.confirmationRequired === false ? undefined : this.confirmPrompt,
+          this.options.rateKey,
+          authorization.confirmationRequired === false ? undefined : this.options.confirmPrompt,
           options.isCurrent,
         );
         if (!accepted) {
@@ -178,15 +172,15 @@ export class BoardWidgetBridgeController {
             read ? "widget data binding params are invalid" : "widget action params are invalid",
           );
         }
-        return await this.client.request(read ? "board.data.read" : "board.action", {
-          ticket: this.ticket,
+        return await this.options.client.request(read ? "board.data.read" : "board.action", {
+          ticket: this.options.ticket,
           [key]: target,
           ...(read && callParams === undefined ? {} : { params: callParams ?? {} }),
         });
       }
       case "cron.trigger":
-        return await this.client.request("board.action", {
-          ticket: this.ticket,
+        return await this.options.client.request("board.action", {
+          ticket: this.options.ticket,
           action: "cron.trigger",
           jobId: requiredString(params, "jobId"),
         });

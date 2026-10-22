@@ -1,94 +1,127 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { createRoot, createSignal } from "solid-js";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.ts";
 import { getRenderedModalDialog } from "../test-helpers/modal-dialog.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { showConfirmChoiceDialog, showConfirmDialog } from "./confirm-dialog.ts";
-import { showInputDialog } from "./input-dialog.ts";
+import { showInputDialog } from "./input-dialog.tsx";
 import "../styles.css";
 
-const owners: AbortController[] = [];
-function owner() {
-  const controller = new AbortController();
-  owners.push(controller);
-  return controller.signal;
-}
-function opener() {
-  const trigger = document.createElement("button");
+let controller: AbortController;
+let trigger: HTMLButtonElement;
+beforeEach(() => {
+  controller = new AbortController();
+  trigger = document.body.appendChild(document.createElement("button"));
   trigger.textContent = "Edit synthetic session";
-  document.body.append(trigger);
   trigger.focus();
-  return trigger;
-}
+});
 function button(label: string) {
-  const result = [...document.querySelectorAll("openclaw-modal-dialog button")].find(
+  return [...document.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button")].find(
     (candidate) => candidate.textContent?.trim() === label,
-  );
-  if (!(result instanceof HTMLButtonElement)) {
-    throw new Error(`Missing ${label} button`);
-  }
-  return result;
+  )!;
 }
 
 afterEach(async () => {
-  for (const controller of owners.splice(0)) {
-    controller.abort();
-  }
+  controller.abort();
   await Promise.resolve();
   document.body.replaceChildren();
 });
 
 describe("promise dialog native focus and dismissal", () => {
-  it("keeps Cancel focused in a three-way choice and restores its opener", async () => {
-    const trigger = opener();
-    const pending = showConfirmChoiceDialog({
-      title: "Archive session?",
-      message: '"Synthetic session" has a nested session.',
-      confirmLabel: "Archive this session",
-      alternativeLabel: "Archive 2 sessions",
-      signal: owner(),
-    });
-    await getRenderedModalDialog(document.body);
-    expect(document.activeElement).toBe(button("Cancel"));
-    button("Archive 2 sessions").click();
-    expect(document.activeElement).toBe(trigger);
-    await expect(pending).resolves.toBe("alternative");
-  });
+  it.each(["confirmation", "input"] as const)(
+    "retains a %s dialog while live submission is unavailable",
+    async (kind) => {
+      const live = createRoot((dispose) => {
+        const [connected, setConnected] = createSignal(true);
+        return { connected, setConnected, dispose };
+      });
+      try {
+        const result =
+          kind === "input"
+            ? showInputDialog({
+                title: "Rename synthetic device",
+                defaultValue: "Retained device draft",
+                canSubmit: live.connected,
+                signal: controller.signal,
+              })
+            : showConfirmDialog({
+                title: "Remove synthetic device?",
+                message: "Synthetic confirmation",
+                canConfirm: live.connected,
+                signal: controller.signal,
+              });
+        const { dialog, modal } = await getRenderedModalDialog(document.body);
+        const submit = button(kind === "input" ? "Save" : "Confirm");
+        expect(submit.disabled).toBe(false);
+        live.setConnected(false);
+        flush();
+        expect(submit.disabled).toBe(true);
+        submit.click();
+        modal
+          .querySelector("form")
+          ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+        expect(dialog.open).toBe(true);
+        live.setConnected(true);
+        flush();
+        expect(submit.disabled).toBe(false);
+        if (kind === "input") {
+          expect(modal.querySelector<HTMLInputElement>('input[name="value"]')?.value).toBe(
+            "Retained device draft",
+          );
+        }
+        submit.click();
+        await expect(result).resolves.toBe(kind === "input" ? "Retained device draft" : true);
+      } finally {
+        live.dispose();
+      }
+    },
+  );
 
-  it("focuses the safe confirmation action, requires acknowledgement, and restores focus synchronously", async () => {
-    const trigger = opener();
-    const result = showConfirmDialog({
-      title: "Delete synthetic session?",
-      message: "This removes the synthetic session from your list.",
-      details: "synthetic-session",
-      requiredAcknowledgement: "I understand this cannot be undone",
-      danger: true,
-      confirmLabel: "Delete",
-      signal: owner(),
-    });
-    const { dialog } = await getRenderedModalDialog(document.body);
-    expect(dialog.open).toBe(true);
-    expect(document.activeElement).toBe(button("Cancel"));
-    expect(button("Delete").disabled).toBe(true);
-    const acknowledgement = document.querySelector<HTMLInputElement>('input[type="checkbox"]')!;
-    acknowledgement.click();
-    flush();
-    expect(button("Delete").disabled).toBe(false);
-    button("Cancel").click();
-    expect(document.activeElement).toBe(trigger);
-    await expect(result).resolves.toBe(false);
-  });
+  it.each(["acknowledgement", "alternative"] as const)(
+    "focuses Cancel and restores the opener: %s",
+    async (kind) => {
+      const options = {
+        title: "Synthetic session",
+        message: "Change this session?",
+        signal: controller.signal,
+      };
+      const result =
+        kind === "alternative"
+          ? showConfirmChoiceDialog({
+              ...options,
+              confirmLabel: "Archive this session",
+              alternativeLabel: "Archive 2 sessions",
+            })
+          : showConfirmDialog({
+              ...options,
+              details: "synthetic-session",
+              requiredAcknowledgement: "I understand this cannot be undone",
+              danger: true,
+              confirmLabel: "Delete",
+            });
+      const { dialog } = await getRenderedModalDialog(document.body);
+      expect(dialog.open).toBe(true);
+      expect(document.activeElement).toBe(button("Cancel"));
+      if (kind === "acknowledgement") {
+        expect(button("Delete").disabled).toBe(true);
+        document.querySelector<HTMLInputElement>('input[type="checkbox"]')!.click();
+        flush();
+        expect(button("Delete").disabled).toBe(false);
+      }
+      button(kind === "alternative" ? "Archive 2 sessions" : "Cancel").click();
+      expect(document.activeElement).toBe(trigger);
+      await expect(result).resolves.toBe(kind === "alternative" ? "alternative" : false);
+    },
+  );
 
   it("keeps a pending input operation visible through native cancellation and preserves its text after rejection", async () => {
-    const trigger = opener();
-    let settle!: (message: string | null) => void;
+    const pending = createDeferred<string | null>();
     const result = showInputDialog({
       title: "Rename synthetic session",
       defaultValue: "Synthetic session",
       requireChange: true,
-      signal: owner(),
-      submit: () =>
-        new Promise((resolve) => {
-          settle = resolve;
-        }),
+      signal: controller.signal,
+      submit: () => pending.promise,
     });
     const { dialog, modal } = await getRenderedModalDialog(document.body);
     const input = modal.querySelector<HTMLInputElement>('input[name="value"]')!;
@@ -101,7 +134,7 @@ describe("promise dialog native focus and dismissal", () => {
     expect(input.disabled).toBe(true);
     dialog.dispatchEvent(new Event("cancel", { cancelable: true }));
     expect(dialog.open).toBe(true);
-    settle("This name is already in use");
+    pending.resolve("This name is already in use");
     await Promise.resolve();
     flush();
     await Promise.resolve();

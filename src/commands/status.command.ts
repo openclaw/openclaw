@@ -1,11 +1,9 @@
-// Main `openclaw status` command orchestrator.
 // It routes all/json/deep modes, collects scan/runtime state, and delegates formatting to report builders.
 
 import {
   normalizePairingConnectRequestId,
   readConnectPairingRequiredMessage,
   readPairingConnectErrorDetails,
-  type ConnectPairingRequiredReason,
 } from "../../packages/gateway-protocol/src/connect-error-details.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { withProgress } from "../cli/progress.js";
@@ -24,51 +22,6 @@ import {
 import { buildStatusUpdateRows } from "./status-update-restart.ts";
 import { logGatewayConnectionDetails } from "./status.gateway-connection.ts";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
-
-/** Extracts device-pairing recovery context from structured gateway errors or legacy message text. */
-function resolvePairingRecoveryContext(params: {
-  error?: string | null;
-  closeReason?: string | null;
-  details?: unknown;
-}): {
-  requestId: string | null;
-  reason: ConnectPairingRequiredReason | null;
-  remediationHint: string | null;
-} | null {
-  const structured = readPairingConnectErrorDetails(params.details);
-  // Older gateways only exposed pairing details in close/error text; keep status recovery helpful there.
-  const pairing =
-    structured ??
-    readConnectPairingRequiredMessage(
-      [params.error, params.closeReason]
-        .filter((part) => typeof part === "string" && part.trim().length > 0)
-        .join(" "),
-    );
-  if (!pairing) {
-    return null;
-  }
-  return {
-    requestId: normalizePairingConnectRequestId(pairing.requestId) ?? null,
-    reason: pairing.reason ?? null,
-    remediationHint: structured?.remediationHint
-      ? sanitizeTerminalText(structured.remediationHint)
-      : null,
-  };
-}
-
-function resolveServiceWrapperContextHint(params: {
-  serviceWrapperPath?: string | null;
-  cliWrapperPath?: string | null;
-}): string | null {
-  const serviceWrapperPath = params.serviceWrapperPath?.trim();
-  if (!serviceWrapperPath) {
-    return null;
-  }
-  if (params.cliWrapperPath?.trim() === serviceWrapperPath) {
-    return null;
-  }
-  return `The installed gateway service uses ${OPENCLAW_WRAPPER_ENV_KEY} (${sanitizeTerminalText(serviceWrapperPath)}), but this CLI process is not running with that same wrapper. Missing-secret diagnostics may describe the current CLI process rather than the installed gateway service context.`;
-}
 
 function withStatusProgress<Input, Output>(
   label: string,
@@ -118,8 +71,15 @@ export async function statusCommand(
     .then(({ scanStatus }) => scanStatus({ ...probeBudget, deep: opts.deep }))
     .catch((error: unknown) => reportStatusScanFailure(error, runtime, opts.timeoutMs));
 
-  const { cfg, update, gatewayProbe, gatewayReachable, configDiagnostics, secretDiagnostics, env } =
-    scan;
+  const {
+    cfg,
+    update,
+    gatewayProbe,
+    gatewayReachable,
+    configDiagnostics,
+    secretDiagnostics: commandSecretDiagnostics,
+    env,
+  } = scan;
 
   if (configDiagnostics) {
     const { formatStatusConfigDiagnosticEntries, theme } =
@@ -160,8 +120,9 @@ export async function statusCommand(
   }
 
   const {
-    buildStatusCommandReportData,
     buildStatusCommandReportLines,
+    buildStatusSecretDiagnostics,
+    SECRET_DEGRADATION_RETRY_HINT,
     buildStatusUpdateSurface,
     formatUsageReportLines,
     getTerminalTableWidth,
@@ -188,18 +149,33 @@ export async function statusCommand(
 
   const tableWidth = getTerminalTableWidth();
 
+  const secretDiagnostics = buildStatusSecretDiagnostics(
+    scan.summary.degradedSecretOwners ?? [],
+    commandSecretDiagnostics,
+  );
   if (secretDiagnostics.length > 0) {
-    // Secret diagnostics are already redacted by the scanner; show them before the main report.
     runtime.log(theme.warn("Secret diagnostics:"));
-    for (const entry of secretDiagnostics) {
+    for (const entry of secretDiagnostics.slice(0, 10)) {
       runtime.log(`- ${entry}`);
     }
-    const wrapperContextHint = resolveServiceWrapperContextHint({
-      serviceWrapperPath: daemon.wrapperPath,
-      cliWrapperPath: process.env[OPENCLAW_WRAPPER_ENV_KEY],
-    });
-    if (wrapperContextHint) {
-      runtime.log(theme.warn(wrapperContextHint));
+    if (secretDiagnostics.length > 10) {
+      runtime.log(`… +${secretDiagnostics.length - 10} more`);
+    }
+    if (scan.summary.degradedSecretOwners?.length) {
+      runtime.log(`Retry: ${SECRET_DEGRADATION_RETRY_HINT}`);
+    }
+    const serviceWrapperPath = daemon.wrapperPath?.trim();
+    const cliWrapperPath = process.env[OPENCLAW_WRAPPER_ENV_KEY]?.trim();
+    if (
+      commandSecretDiagnostics.length > 0 &&
+      serviceWrapperPath &&
+      cliWrapperPath !== serviceWrapperPath
+    ) {
+      runtime.log(
+        theme.warn(
+          `The installed gateway service uses ${OPENCLAW_WRAPPER_ENV_KEY} (${sanitizeTerminalText(serviceWrapperPath)}), but this CLI process is not running with that same wrapper. Missing-secret diagnostics may describe the current CLI process rather than the installed gateway service context.`,
+        ),
+      );
     }
     runtime.log("");
   }
@@ -211,11 +187,24 @@ export async function statusCommand(
         node: nodeDaemon,
       }),
   );
-  const pairingRecovery = resolvePairingRecoveryContext({
-    error: gatewayProbe?.error ?? null,
-    closeReason: gatewayProbe?.close?.reason ?? null,
-    details: gatewayProbe?.connectErrorDetails,
-  });
+  const structured = readPairingConnectErrorDetails(gatewayProbe?.connectErrorDetails);
+  // Older gateways only exposed pairing details in close/error text; keep status recovery helpful there.
+  const pairing =
+    structured ??
+    readConnectPairingRequiredMessage(
+      [gatewayProbe?.error ?? null, gatewayProbe?.close?.reason ?? null]
+        .filter((part) => typeof part === "string" && part.trim().length > 0)
+        .join(" "),
+    );
+  const pairingRecovery = pairing
+    ? {
+        requestId: normalizePairingConnectRequestId(pairing.requestId) ?? null,
+        reason: pairing.reason ?? null,
+        remediationHint: structured?.remediationHint
+          ? sanitizeTerminalText(structured.remediationHint)
+          : null,
+      }
+    : null;
 
   const usageLines = usage ? formatUsageReportLines(usage) : undefined;
   const overviewSurface = {
@@ -234,23 +223,21 @@ export async function statusCommand(
       gatewayServer: gatewayProbe?.server,
     },
   );
-  const lines = await buildStatusCommandReportLines(
-    await buildStatusCommandReportData({
-      ...scan,
-      env: env ?? {},
-      opts,
-      surface: overviewSurface,
-      securityAudit,
-      health,
-      usageLines,
-      lastHeartbeat,
-      pairingRecovery,
-      tableWidth,
-      updateValue: updateSurface.updateAvailable
-        ? warn(`available · ${updateSurface.updateLine}`)
-        : updateSurface.updateLine,
-      updateRows,
-    }),
-  );
+  const lines = await buildStatusCommandReportLines({
+    ...scan,
+    env: env ?? {},
+    opts,
+    surface: overviewSurface,
+    securityAudit,
+    health,
+    usageLines,
+    lastHeartbeat,
+    pairingRecovery,
+    tableWidth,
+    updateValue: updateSurface.updateAvailable
+      ? warn(`available · ${updateSurface.updateLine}`)
+      : updateSurface.updateLine,
+    updateRows,
+  });
   runtime.log(lines.join("\n"));
 }

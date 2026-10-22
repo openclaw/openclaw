@@ -316,7 +316,6 @@ function observeContext(context: BrowserContext) {
   context.on("page", (page) => ensurePageState(page));
 }
 
-/** Ensure shared Playwright browser-context state. */
 export function ensureContextState(context: BrowserContext): ContextState {
   const existing = contextStates.get(context);
   if (existing) {
@@ -347,7 +346,7 @@ export async function connectBrowser(
     }
     const browser = await connectRelayBrowser(relay, normalized, relayReference);
     observeBrowser(browser);
-    return { browser, cdpUrl: normalized };
+    return { browser };
   }
   const cached = cachedByCdpUrl.get(normalized);
   if (cached) {
@@ -470,7 +469,6 @@ export async function connectBrowser(
         }
         const connected: ConnectedBrowser = {
           browser,
-          cdpUrl: normalized,
           onDisconnected,
           engine,
           headless,

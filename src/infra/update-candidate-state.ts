@@ -13,7 +13,9 @@ import {
   getOpenClawDatabaseMaintenanceScope,
   maintenanceOwnerHasSourceCustody,
 } from "../state/openclaw-state-maintenance-context.js";
-import { resolveClientCredentialStorePath } from "./client-credential-store.js";
+import { resolveClientCredentialStorePath } from "./client-credential-paths.js";
+import type { ClientCredentialRehearsalBinding } from "./client-credential-restore-contract.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { resolveStatePortRoots } from "./database-engine/state-port.js";
 import { resolveUserPath } from "./home-dir.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -45,7 +47,6 @@ import {
   type UpdateCandidatePluginCodeLink,
 } from "./update-candidate-plugin-code-links.js";
 import {
-  createUpdateStateIoReporter,
   createUpdateStateSnapshotReporter,
   type UpdateStateInspectionProgress,
 } from "./update-candidate-state.diagnostics.js";
@@ -56,7 +57,9 @@ import {
 import { withStateInspectionCleanup } from "./update-candidate-state.process.js";
 import {
   collectRegisteredPaths,
+  collectSupplementalStateDatabasePaths,
   readSharedDatabaseVersion,
+  readUpdateStoreSchemaVersion,
   type StateInput,
 } from "./update-candidate-state.shared.js";
 import {
@@ -78,18 +81,18 @@ export const UpdateCandidateStateSnapshotSchema = z.object({
   pluginPaths: z.record(z.string(), z.string()),
   pluginCodeLinks: UpdateCandidatePluginCodeLinkReceiptSchema.optional(),
 });
-type CandidateStateDatabase = Pick<
-  DB,
-  "agent_databases" | "agent_database_leases" | "state_leases"
->;
+const leaseTables = ["agent_database_leases", "state_leases"] as const;
+type CandidateStateDatabase = Pick<DB, "agent_databases" | (typeof leaseTables)[number]>;
 
-const UpdateCandidateStateInventorySchema = z
-  .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
-  .transform((entries) => new Map(entries));
 export const UpdateCandidateSnapshotInventorySchema = z.object({
-  databases: UpdateCandidateStateInventorySchema,
+  databases: z
+    .array(z.tuple([z.string(), StateDatabaseDiscoverySchema]))
+    .transform((entries) => new Map(entries)),
   pluginBytes: z.number().nonnegative(),
   pluginPlan: z.literal(UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME),
+  // The installed driver budgets the candidate worker's copy lifecycle.
+  // Omission retains the larger allowance used by released older workers.
+  snapshotSpace: z.literal("single-generation").optional(),
   // Published candidate workers before named snapshot warnings omit this field.
   warnings: z.array(z.string()).default([]),
 });
@@ -181,22 +184,6 @@ export async function collectStateDatabasePaths(
   );
 }
 
-async function collectUpdateCandidateDatabasePaths(input: StateInput) {
-  const files = await collectStateDatabasePaths(input);
-  const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
-  // The private snapshot below owns registry reads, including legacy schemas.
-  // Include declared retained plugin databases on either physical engine here.
-  for (const file of input.additionalPaths ??
-    (await discoverBackupDatabasePaths({ ...input, agentRegistry: [] }))) {
-    // Supplemental realpaths must not add aliases to the legacy versions inventory.
-    // Registry discovery below still preserves every explicitly recorded spelling.
-    if (!files.has(resolveUpdateCandidateStateIdentity(input.stateDir, file))) {
-      queueStateDatabaseSpelling(files, input.stateDir, file);
-    }
-  }
-  return files;
-}
-
 /** Read registrations and plugin ownership from one private shared copy before budgeting. */
 export async function readUpdateCandidateStateInventoryInProcess(
   input: StateInput & {
@@ -209,13 +196,7 @@ export async function readUpdateCandidateStateInventoryInProcess(
   const planPath = path.join(input.targetStateDir, UPDATE_CANDIDATE_PLUGIN_PLAN_FILENAME);
   await fs.writeFile(planPath, "", { mode: 0o600, flag: "wx" });
   let progressAt = Date.now();
-  const reportInventoryIo = createUpdateStateIoReporter(
-    input.stateDir,
-    "plugin inventory",
-    input.onProgress,
-  );
   const onProgress = async () => {
-    reportInventoryIo();
     const now = Date.now();
     if (now - progressAt < 1000) {
       return;
@@ -224,7 +205,10 @@ export async function readUpdateCandidateStateInventoryInProcess(
     await fs.utimes(planPath, new Date(now), new Date(now));
   };
   const { prepareUpdateCandidatePlugins } = await import("./update-candidate-plugins.js");
-  const files = await collectUpdateCandidateDatabasePaths(input);
+  const files = await collectSupplementalStateDatabasePaths(
+    input,
+    await collectStateDatabasePaths(input),
+  );
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   const measure = async (
     sharedStateDatabasePath?: string,
@@ -247,7 +231,7 @@ export async function readUpdateCandidateStateInventoryInProcess(
     };
   };
   if (await updateStateDatabaseExists(shared)) {
-    if (input.config.database?.engine === "postgres") {
+    if (resolveDatabaseFamilyEngines(input.config).state === "postgres") {
       const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
       const result = await readUpdatePostgresState(input, files);
       for (const [identity, discovery] of result.files) {
@@ -283,11 +267,14 @@ export async function discoverUpdateStateSchemaInspectionInProcess(
 ): Promise<UpdateStateSchemaInspectionPlan> {
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   input.onProgress?.({ phase: "shared database discovery", path: shared });
-  const files = await collectUpdateCandidateDatabasePaths(input);
+  const files = await collectSupplementalStateDatabasePaths(
+    input,
+    await collectStateDatabasePaths(input),
+  );
   if (!(await updateStateDatabaseExists(shared))) {
     return { files: [...files], sharedVersion: { path: shared, userVersion: null } };
   }
-  if (input.config.database?.engine === "postgres") {
+  if (resolveDatabaseFamilyEngines(input.config).state === "postgres") {
     const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
     const result = await readUpdatePostgresState(input, files);
     return { files: result.files, sharedVersion: { path: shared, ...result.version } };
@@ -317,7 +304,7 @@ export async function readUpdateStateSchemaVersionsInProcess(
   const shared = path.resolve(input.stateDir, "state", "openclaw.sqlite");
   const files = input.inspectionPlan
     ? new Map(input.inspectionPlan.files)
-    : await collectUpdateCandidateDatabasePaths(input);
+    : await collectSupplementalStateDatabasePaths(input, await collectStateDatabasePaths(input));
   const sharedIdentity = resolveUpdateCandidateStateIdentity(input.stateDir, shared);
   // Inspect each identity once, then publish every spelling for released rollback baselines.
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
@@ -344,7 +331,7 @@ export async function readUpdateStateSchemaVersionsInProcess(
       inspected.set(identity, { userVersion: null });
       continue;
     }
-    if (file === shared && input.config.database?.engine === "postgres") {
+    if (file === shared && resolveDatabaseFamilyEngines(input.config).state === "postgres") {
       const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
       const result = await readUpdatePostgresState(input, files);
       for (const [key, entry] of result.files) {
@@ -354,14 +341,7 @@ export async function readUpdateStateSchemaVersionsInProcess(
       continue;
     }
     if (file !== shared) {
-      // This child owns source access and any artifact-preserving copy.
-      const { userVersion } = await inspectSqliteSchemaHeaderInProcess(
-        file,
-        input.stagingRoot,
-        undefined,
-        input.preserveSourceArtifacts,
-      );
-      inspected.set(identity, { userVersion });
+      inspected.set(identity, await readUpdateStoreSchemaVersion(file, input));
       continue;
     }
     inspected.set(
@@ -578,6 +558,7 @@ export async function snapshotUpdateCandidateState(
     candidateRoot: string;
     pluginPlanPath: string;
     databaseInventory: string[];
+    fullIntegrityCheck?: boolean;
     onProgress?: (progress: UpdateStateInspectionProgress) => void;
   },
 ): Promise<z.infer<typeof UpdateCandidateStateSnapshotSchema>> {
@@ -590,6 +571,10 @@ export async function snapshotUpdateCandidateState(
   const admittedDatabases = new Set(input.databaseInventory);
   const sourceRoot = path.resolve(input.stateDir);
   const shared = path.join(sourceRoot, "state", "openclaw.sqlite");
+  const localCredentials = resolveClientCredentialStorePath({ OPENCLAW_STATE_DIR: sourceRoot });
+  const { readClientCredentialFileIdentity } = await import("./client-credential-receipt.js");
+  let copiedShared: Omit<ClientCredentialRehearsalBinding, "localPath"> | undefined;
+  let copiedCredentials: string | undefined;
   const { createUpdateCandidateExecApprovalsProjection } =
     await import("./update-candidate-exec-approvals.js");
   const targetPath = (source: string) =>
@@ -600,9 +585,15 @@ export async function snapshotUpdateCandidateState(
   const execApprovals = createUpdateCandidateExecApprovalsProjection(sourceRoot, targetPath);
   // Physical copies dedupe on projection identity; the published versions
   // keep every raw alias so released rollback baselines still match.
-  const files = await collectUpdateCandidateDatabasePaths(input);
+  const files = await collectSupplementalStateDatabasePaths(
+    input,
+    await collectStateDatabasePaths(input),
+  );
   const inspected = new Map<string, Omit<UpdateStateSchemaVersion, "path">>();
-  if (input.config.database?.engine === "postgres" && (await updateStateDatabaseExists(shared))) {
+  if (
+    resolveDatabaseFamilyEngines(input.config).state === "postgres" &&
+    (await updateStateDatabaseExists(shared))
+  ) {
     const { readUpdatePostgresState } = await import("./update-candidate-state.postgres.js");
     const discovered = await readUpdatePostgresState(input, files);
     for (const [identity, discovery] of discovered.files) {
@@ -621,30 +612,42 @@ export async function snapshotUpdateCandidateState(
       continue;
     }
     const target = targetPath(file);
+    const sourceSharedFile = file === shared ? readClientCredentialFileIdentity(file) : null;
     let contentVersion: number | undefined;
     await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
     const progress = createUpdateStateSnapshotReporter(file, "database snapshot", input.onProgress);
     let snapshotSource = file;
-    if (input.config.database?.engine === "postgres") {
-      const { capturePostgresBackup, readBackupEngine } =
-        await import("../snapshot/database-backup.js");
-      if (readBackupEngine(file).engine === "postgres") {
-        const directory = `${target}.postgres`;
-        await capturePostgresBackup({
-          sourcePath: file,
-          directory,
-          config: input.config,
-          profile: "exact",
-          assertCurrent() {},
-        });
-        // Rehearsal owns this portable image; the source engine never changes.
-        snapshotSource = path.join(directory, "database.sqlite");
-      }
+    const { capturePostgresBackup, readBackupEngine } =
+      await import("../snapshot/database-backup.js");
+    const { userVersion } = await inspectSqliteSchemaHeaderInProcess(file, input.targetStateDir);
+    // PostgreSQL anchors have header version zero; versioned SQLite uses online backup directly.
+    const engine = userVersion === 0 ? readBackupEngine(file) : undefined;
+    if (engine?.engine === "postgres") {
+      const directory = `${target}.postgres`;
+      await capturePostgresBackup({
+        sourcePath: file,
+        directory,
+        config: input.config,
+        profile: "exact",
+        assertCurrent() {},
+      });
+      // Rehearsal owns this portable image; the source engine never changes.
+      snapshotSource = path.join(directory, "database.sqlite");
     }
     const snapshot = await createVerifiedSqliteSnapshot({
       sourcePath: snapshotSource,
       targetPath: target,
       sourceAcquisition: { mode: "isolated-process", stagingRoot: input.targetStateDir },
+      integrity:
+        snapshotSource === file
+          ? {
+              check: input.fullIntegrityCheck ? "full" : "quick",
+              tables:
+                file === shared
+                  ? ["migration_sources", ...leaseTables, "agent_databases"]
+                  : undefined,
+            }
+          : undefined,
       // The rehearsal is private and disposable; compaction would create another
       // full image and alter implicit row IDs before candidate migrations run.
       preserveRowIds: true,
@@ -656,7 +659,7 @@ export async function snapshotUpdateCandidateState(
               const queries = getNodeSqliteKysely<CandidateStateDatabase>(db);
               execApprovals.rebaseReceipt(db);
               // Source process leases cannot own the independently opened rehearsal copy.
-              for (const table of ["agent_database_leases", "state_leases"] as const) {
+              for (const table of leaseTables) {
                 if (tableExists(db, table)) {
                   executeSqliteQuerySync(db, queries.deleteFrom(table));
                 }
@@ -710,6 +713,23 @@ export async function snapshotUpdateCandidateState(
       userVersion: snapshot.userVersion,
       ...(contentVersion === undefined ? {} : { contentVersion }),
     });
+    if (sourceSharedFile) {
+      copiedShared = {
+        sourceSharedFile,
+        sourceStateRoot: sourceRoot,
+        sharedPath: target,
+        ...(engine?.engine === "postgres"
+          ? { postgresStoreId: engine.storeId, postgresExportDirectory: `${target}.postgres` }
+          : {}),
+      };
+    }
+    if (file === localCredentials) {
+      copiedCredentials = target;
+    }
+  }
+  if (copiedShared && copiedCredentials) {
+    const { rebindRehearsalClientCredentials } = await import("./client-credential-restore.js");
+    rebindRehearsalClientCredentials({ ...copiedShared, localPath: copiedCredentials });
   }
   input.onProgress?.({ phase: "execution approvals snapshot", path: sourceRoot });
   await execApprovals.copySources();
@@ -718,7 +738,6 @@ export async function snapshotUpdateCandidateState(
   input.onProgress?.({ phase: "plugin snapshot", path: sourceRoot });
   const pluginPaths = await copyUpdateCandidatePlugins(plugins, {
     ...input,
-    onProgress: createUpdateStateIoReporter(sourceRoot, "plugin snapshot", input.onProgress),
     onCodeLink: (fact) => pluginCodeLinks.push(fact),
   });
   return {

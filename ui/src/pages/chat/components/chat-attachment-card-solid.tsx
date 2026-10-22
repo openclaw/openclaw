@@ -1,4 +1,5 @@
-import { createMemo } from "solid-js";
+import type { JSX } from "@solidjs/web";
+import { createMemo, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
@@ -8,6 +9,7 @@ import {
   prepareAttachmentCardHeader,
   type AttachmentCardHeaderOptions,
 } from "./chat-attachment-card.ts";
+import { attachmentContextCopyRef } from "./chat-attachment-context-copy.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 
 registerEnglishCatalog(registerChatMessageMetadataEnglish);
@@ -29,9 +31,13 @@ export function CompactAttachmentCard(
   },
 ) {
   const ref = attachmentAdmissionRef(() => props.elementRef);
+  const copyRef = attachmentContextCopyRef(() => ({
+    name: props.label,
+    href: props.onDownload || props.downloadPending ? undefined : props.downloadHref,
+  }));
   return (
     <div
-      ref={ref}
+      ref={[ref, copyRef]}
       onFocusIn={() => props.onFocus?.()}
       class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
       data-openable={props.onExpand ? "" : undefined}
@@ -42,7 +48,74 @@ export function CompactAttachmentCard(
   );
 }
 
-export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
+export function AttachmentStateCard(
+  props: AttachmentCardHeaderOptions & {
+    imagePreview: boolean;
+    children?: JSX.Element;
+    previewRatio?: string;
+    error?: string;
+    onRetry?: () => void;
+  },
+) {
+  const copyRef = attachmentContextCopyRef(() => ({
+    name: props.label,
+    href: props.onDownload || props.downloadPending ? undefined : props.downloadHref,
+  }));
+  return (
+    <div
+      ref={copyRef}
+      class={[
+        "chat-assistant-attachment-card",
+        `chat-assistant-attachment-card--${props.kind}`,
+        "sidebar-attachment-preview__state-card",
+      ]}
+      aria-busy={props.downloadPending ? "true" : undefined}
+    >
+      <AttachmentCardHeader {...props} visualMode="preview-with-favicon" />
+      <div
+        class="sidebar-attachment-preview__state"
+        style={{ "--preview-ratio": props.previewRatio }}
+      >
+        <Show when={props.downloadPending || props.imagePreview}>
+          <AttachmentPreviewSkeleton />
+        </Show>
+        <Show when={props.imagePreview && props.downloadHref} keyed>
+          {(src) => (
+            <img
+              class="sidebar-attachment-preview__image"
+              src={src}
+              alt={props.label}
+              onLoad={(event) => {
+                event.currentTarget.dataset.preview = "ready";
+              }}
+              onError={(event) => {
+                event.currentTarget.dataset.preview = "error";
+              }}
+            />
+          )}
+        </Show>
+        <Show when={!props.downloadPending}>
+          <div class="sidebar-attachment-preview__unavailable">
+            {t("chat.attachments.previewUnavailable")}
+            <Show when={props.error}>{(error) => <span>{error()}</span>}</Show>
+            <Show when={props.onRetry}>
+              {(retry) => (
+                <button class="btn btn--sm" type="button" onClick={() => retry()()}>
+                  {t("common.retry")}
+                </button>
+              )}
+            </Show>
+          </div>
+        </Show>
+      </div>
+      {props.children}
+    </div>
+  );
+}
+
+export function AttachmentCardHeader(
+  props: AttachmentCardHeaderOptions & { expandRef?: (element: HTMLButtonElement) => void },
+) {
   const view = createMemo(() => prepareAttachmentCardHeader(props, t));
   return (
     <div
@@ -129,6 +202,7 @@ export function AttachmentCardHeader(props: AttachmentCardHeaderOptions) {
                 "chat-assistant-attachment-card__action--labeled": !view().compactPreview,
               },
             ]}
+            ref={props.expandRef}
             aria-label={view().expandLabel}
             title={view().expandLabel}
             onClick={() => props.onExpand?.()}

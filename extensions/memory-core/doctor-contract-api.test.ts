@@ -268,6 +268,14 @@ function readMemoryCacheRows(agentPath: string) {
     .all();
 }
 
+function readMemoryIndexRevision(agentPath: string): number {
+  using db = new DatabaseSync(agentPath);
+  const row = db.prepare("SELECT revision FROM memory_index_state WHERE id = 1").get() as {
+    revision: number;
+  };
+  return row.revision;
+}
+
 function readMemoryFtsSql(agentPath: string): string | undefined {
   using db = new DatabaseSync(agentPath);
   const row = db
@@ -1291,10 +1299,12 @@ describe("memory-core doctor dreaming migration", () => {
     } finally {
       canonicalDb.close();
     }
+    const revision = readMemoryIndexRevision(agentPath);
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
     expect(result.warnings).toEqual([]);
+    expect(readMemoryIndexRevision(agentPath)).toBe(revision);
     expect(readMemoryRows(agentPath)).toEqual({
       sources: [{ path: "MEMORY.md", source: "memory", hash: "file-hash" }],
       chunks: [{ id: "chunk-1", text: "canonical memory remains authoritative" }],
@@ -1512,10 +1522,13 @@ describe("memory-core doctor dreaming migration", () => {
       legacyDb.close();
     }
     await createCanonicalMemoryIndex(agentPath, env, "matching", { ftsText: "stale text" });
+    const revision = readMemoryIndexRevision(agentPath);
 
     const result = await legacyMemoryIndexMigration().migrateLegacyState(migrationParams());
 
     expect(result.warnings).toEqual([]);
+    // Import and the subsequent provenance backfill each commit one index batch.
+    expect(readMemoryIndexRevision(agentPath)).toBe(revision + 2);
     expect(await searchMigratedKeywordRows(agentPath, "stale")).toEqual([]);
     expect((await searchMigratedKeywordRows(agentPath, "remember")).map((row) => row.id)).toEqual([
       "chunk-1",
@@ -1536,6 +1549,11 @@ describe("memory-core doctor dreaming migration", () => {
     });
     await expect(fs.access(legacyPath)).rejects.toThrow();
     await fs.access(`${legacyPath}.migrated`);
+    expect(await legacyMemoryIndexMigration().migrateLegacyState(migrationParams())).toEqual({
+      changes: [],
+      warnings: [],
+    });
+    expect(readMemoryIndexRevision(agentPath)).toBe(revision + 2);
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

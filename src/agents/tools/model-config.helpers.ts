@@ -7,7 +7,6 @@ import type { AgentToolModelConfig } from "../../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveProviderAuthScope } from "../../plugins/provider-auth-scope.js";
 import {
-  ensureAuthProfileStoreWithoutExternalProfiles,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
   listProfilesForProvider,
   resolveAuthProfileOrder,
@@ -148,14 +147,6 @@ export function hasAuthProfileForProvider(params: {
         }))
     );
   });
-}
-
-/**
- * @deprecated Direct synchronous tool factories retain directory discovery until
- * their next breaking API change. Runtime construction prepares the store asynchronously.
- */
-export function loadLegacyToolAuthProfileStore(agentDir: string): AuthProfileStore {
-  return ensureAuthProfileStoreWithoutExternalProfiles(agentDir, { allowKeychainPrompt: false });
 }
 
 /** Runtime callers prepare one owner snapshot before synchronous tool selection. */

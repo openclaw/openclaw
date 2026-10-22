@@ -37,17 +37,16 @@ it("keeps the focused work summary toggle through expansion updates", async () =
   const thread = createChatThreadHarness(container, transcript);
   const rerender = () => {
     thread.render(props);
-    transcript.hostUpdated();
+    transcript.update();
   };
-  props.onRequestUpdate = rerender;
   onTestFinished(() => {
     thread.unmount();
-    transcript.hostDisconnected();
+    transcript.dispose();
   });
   rerender();
   const toggleSelector = ".chat-group--work .chat-work-group > button";
-  transcript.hostConnected();
-  transcript.hostUpdated();
+  transcript.start();
+  transcript.update();
   await waitForSolid(() => expect(container.querySelector(toggleSelector)).not.toBeNull());
   const toggle = container.querySelector<HTMLButtonElement>(toggleSelector)!;
   toggle.focus();

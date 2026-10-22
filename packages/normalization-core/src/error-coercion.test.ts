@@ -4,6 +4,7 @@ import {
   coerceErrorMessage,
   collectNestedErrorCandidates,
   formatErrorMessage,
+  mapErrorCauseChain,
   ProviderAuthPersistenceError,
   stringifyNonErrorCause,
   toErrorObject,
@@ -13,36 +14,56 @@ import {
 
 const keepText = (text: string): string => text;
 const format = (value: unknown): string => formatErrorMessage(value, { redact: keepText });
+const throwRead = (): never => {
+  throw new Error("unexpected field read");
+};
+const withGetter = <T extends object>(value: T, key: PropertyKey, get: () => unknown = throwRead) =>
+  Object.defineProperty(value, key, { enumerable: true, get });
+const withCause = (message: string, cause: unknown) => new Error(message, { cause });
+const redactSecrets = (text: string) => text.replaceAll("secret", "[REDACTED]");
+
+it("maps only the root and eight ordered causes, including repeated cyclic frames", () => {
+  let error = new Error("beyond limit");
+  for (let index = 8; index >= 0; index -= 1) {
+    error = new Error(String(index), { cause: error });
+  }
+  expect(mapErrorCauseChain(error, (entry) => entry.message)).toEqual([
+    "0",
+    "1",
+    "2",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8",
+  ]);
+  const cycle = new Error("loop");
+  cycle.cause = cycle;
+  expect(mapErrorCauseChain(cycle, (entry) => entry.message)).toEqual(Array(9).fill("loop"));
+});
 
 describe("formatErrorMessage", () => {
   it("preserves error content when no diagnostic redaction policy is supplied", () => {
-    expect(
-      formatErrorMessage(
-        new Error("API_TOKEN = computeToken()", {
-          cause: new Error("sk-abc123456789012345678"),
-        }),
-      ),
-    ).toBe("API_TOKEN = computeToken() | sk-abc123456789012345678");
+    const error = withCause("API_TOKEN = computeToken()", new Error("sk-abc123456789012345678"));
+    expect(formatErrorMessage(error)).toBe("API_TOKEN = computeToken() | sk-abc123456789012345678");
   });
 
   it("keeps provider persistence diagnostics in initiating order without reordering other errors", () => {
-    const persistence = new Error("write secret", { cause: new Error("write root") });
+    const persistence = withCause("write secret", new Error("write root"));
     const cleanup = new AggregateError([new Error("cleanup root")], "cleanup secret");
     const failure = new ProviderAuthPersistenceError("persistence failed", persistence, {
       cause: cleanup,
     });
-    const redact = (text: string) => text.replaceAll("secret", "[REDACTED]");
-
-    expect(formatErrorMessage(new Error("outer", { cause: failure }), { redact })).toBe(
+    expect(formatErrorMessage(withCause("outer", failure), { redact: redactSecrets })).toBe(
       "outer | persistence failed | write [REDACTED] | cleanup [REDACTED] | write root | cleanup root",
     );
     expect(String(failure)).toBe("AggregateError: persistence failed");
-
     const plain = new AggregateError([persistence, cleanup], "persistence failed", {
       cause: cleanup,
     });
     plain.name = "ProviderAuthPersistenceError";
-    expect(formatErrorMessage(new Error("outer", { cause: plain }), { redact })).toBe(
+    expect(formatErrorMessage(withCause("outer", plain), { redact: redactSecrets })).toBe(
       "outer | persistence failed | cleanup [REDACTED] | write [REDACTED] | cleanup root | write root",
     );
   });
@@ -61,8 +82,7 @@ describe("formatErrorMessage", () => {
     };
     const failure: unknown = await run().catch((error: unknown) => error);
     expect(collectNestedErrorCandidates(failure)).toEqual([failure, cleanup, body]);
-    const redact = vi.fn((text: string) => text.replaceAll("secret", "[REDACTED]"));
-
+    const redact = vi.fn(redactSecrets);
     expect(formatErrorMessage(failure, { redact })).toContain(
       "cleanup [REDACTED] | body [REDACTED]",
     );
@@ -75,22 +95,16 @@ describe("formatErrorMessage", () => {
       error: new Error("cleanup failed"),
       suppressed,
     });
-
     expect(format(failure)).toBe(`disposal failed | cleanup failed | ${String(suppressed)}`);
   });
 
   it("isolates inaccessible messages on VM errors", () => {
     const error: unknown = runInNewContext("new Error('')");
-    Object.defineProperty(error, "message", {
-      get() {
-        throw new Error("diagnostic field unavailable");
-      },
-    });
+    Object.defineProperty(error, "message", { get: throwRead });
     const redact = vi.fn(keepText);
-
     expect(formatErrorMessage(error, { redact })).toBe("Error");
     expect(redact).toHaveBeenCalledExactlyOnceWith("Error");
-    expect(format(new Error("outer failure", { cause: error }))).toBe("outer failure");
+    expect(format(withCause("outer failure", error))).toBe("outer failure");
   });
 
   it("retains VM error messages, causes and aggregate branches", () => {
@@ -104,75 +118,48 @@ describe("formatErrorMessage", () => {
         cause: new Error("primary failure"),
       }), { name: "CustomCleanupError" });
     `);
-
     expect(format(foreign)).toBe("cleanup failed | primary failure | native close failed | EIO");
   });
 
   it("retains aggregate branches, nested causes and codes once despite cycles", () => {
-    const native = Object.assign(new Error("native close failed"), { code: "EIO" });
-    const cleanup = new AggregateError([native, native, "second failure"], "cleanup failed");
-    const outer = Object.assign(
-      new AggregateError([cleanup, native], "turn failed", {
-        cause: new Error("primary failure"),
-      }),
-      { code: "REQUEST_FAILED" },
-    );
+    const native = Object.assign(new Error("native"), { code: "EIO" });
+    const cleanup = new AggregateError([native, native, "second"], "cleanup");
+    const outer = new AggregateError([cleanup, native], "turn", { cause: new Error("primary") });
+    Object.assign(outer, { code: "REQUEST_FAILED" });
     native.cause = outer;
-
-    expect(format(outer)).toBe(
-      "turn failed | primary failure | cleanup failed | native close failed | EIO | second failure",
-    );
+    expect(format(outer)).toBe("turn | primary | cleanup | native | EIO | second");
     expect(formatErrorMessage(outer, { includeCode: true, redact: keepText })).toBe(
-      "turn failed | REQUEST_FAILED | primary failure | cleanup failed | native close failed | EIO | second failure",
+      "turn | REQUEST_FAILED | primary | cleanup | native | EIO | second",
     );
   });
 
   it("omits cause text the wrapper message already spells out", () => {
-    // Wrappers that embed the cause verbatim printed the whole sentence twice.
-    const parseFailure = new SyntaxError("JSON5: invalid character 'j' at 1:7");
-    const wrapped = new Error(`Failed to parse --file as JSON5: ${parseFailure.message}`, {
-      cause: parseFailure,
-    });
-    expect(format(wrapped)).toBe(
-      "Failed to parse --file as JSON5: JSON5: invalid character 'j' at 1:7",
-    );
-
-    // Codes keep their own segment even when the detail already names them.
-    const errno = Object.assign(
-      new Error("ENOENT: no such file or directory, open '/tmp/missing.json'"),
-      { code: "ENOENT" },
-    );
-    const notFound = new Error("--file not found: /tmp/missing.json.", { cause: errno });
-    expect(format(notFound)).toBe(
-      "--file not found: /tmp/missing.json. | ENOENT: no such file or directory, open '/tmp/missing.json' | ENOENT",
+    const wrapped = withCause("Parse failed: invalid", new SyntaxError("invalid"));
+    expect(format(wrapped)).toBe("Parse failed: invalid");
+    const errno = Object.assign(new Error("ENOENT: missing file"), { code: "ENOENT" });
+    expect(format(withCause("File not found", errno))).toBe(
+      "File not found | ENOENT: missing file | ENOENT",
     );
   });
 
-  it("formats status/code records and structured non-Error causes", () => {
-    expect(format({ status: 500, code: "EPIPE" })).toBe("status=500 code=EPIPE");
-    expect(format({ status: 404 })).toBe("status=404 code=unknown");
-    expect(format({ code: "ENOENT" })).toBe("status=unknown code=ENOENT");
-    expect(format({ code: 42, why: "boom" })).toBe('{"code":42,"why":"boom"}');
-    expect(format(new Error("request failed", { cause: { status: 429 } }))).toBe(
-      "request failed | status=429 code=unknown",
-    );
-    // Extra fields must survive when status/code formatting declines the cause.
-    expect(format(new Error("request failed", { cause: { statusCode: 429 } }))).toBe(
-      'request failed | {"statusCode":429}',
-    );
-    expect(
-      format(
-        new Error("request failed", {
-          cause: { status: 503, code: "UNAVAILABLE", requestId: "abc" },
-        }),
-      ),
-    ).toBe('request failed | {"status":503,"code":"UNAVAILABLE","requestId":"abc"}');
+  it.each([
+    [{ status: 500, code: "EPIPE" }, "status=500 code=EPIPE"],
+    [{ status: 404 }, "status=404 code=unknown"],
+    [{ code: "ENOENT" }, "status=unknown code=ENOENT"],
+    [{ code: 42, why: "boom" }, '{"code":42,"why":"boom"}'],
+    [withCause("request", { status: 429 }), "request | status=429 code=unknown"],
+    [withCause("request", { statusCode: 429 }), 'request | {"statusCode":429}'],
+    [
+      withCause("request", { status: 503, code: "E", id: "a" }),
+      'request | {"status":503,"code":"E","id":"a"}',
+    ],
+  ])("formats status/code records and structured causes: %j", (value, expected) => {
+    expect(format(value)).toBe(expected);
   });
 
   it("stringifies primitives and circular records without throwing", () => {
     const circular: { self?: unknown } = {};
     circular.self = circular;
-
     expect(format(null)).toBe("null");
     expect(format(undefined)).toBe("undefined");
     expect(format(123n)).toBe("123");
@@ -190,7 +177,6 @@ describe("toErrorObject", () => {
   it("preserves structured details from non-Error objects", () => {
     const value = { code: "EPIPE", status: 500 };
     const error = toErrorObject(value, "request failed");
-
     expect(error).toMatchObject({ message: "request failed", code: "EPIPE", status: 500 });
     expect(error.cause).toBe(value);
   });
@@ -199,20 +185,14 @@ describe("toErrorObject", () => {
 describe("toStructuredErrorObject", () => {
   it("preserves Error identity without coercing it", () => {
     class ThrowingToStringError extends Error {
-      override toString(): string {
-        throw new Error("unexpected stringification");
-      }
+      override toString = throwRead;
     }
-    const original = new ThrowingToStringError("request failed", {
-      cause: { code: "EIO" },
-    });
-
+    const original = new ThrowingToStringError("request failed", { cause: { code: "EIO" } });
     expect(toStructuredErrorObject(original)).toBe(original);
   });
 
   it("preserves primitive message and cause semantics", () => {
     const stringError = toStructuredErrorObject("request failed");
-
     expect(stringError).toMatchObject({ message: "request failed" });
     expect(stringError).not.toHaveProperty("cause");
     for (const value of [undefined, null, 503, false, 503n, Symbol("failure")]) {
@@ -226,76 +206,43 @@ describe("toStructuredErrorObject", () => {
   it("copies enumerable string and symbol details while retaining the original cause", () => {
     const detailKey = Symbol("detail");
     const throwingDetailKey = Symbol("throwing detail");
-    const cause = {
-      code: "EIO",
-      details: { retryable: true },
-      [detailKey]: "symbol detail",
-    };
+    const details = { code: "EIO", details: { retryable: true }, [detailKey]: "symbol detail" };
+    const cause = { ...details };
     Object.defineProperty(cause, "hidden", { value: "secret", enumerable: false });
-    Object.defineProperty(cause, throwingDetailKey, {
-      enumerable: true,
-      get() {
-        throw new Error("unexpected symbol field read");
-      },
-    });
-
+    withGetter(cause, throwingDetailKey);
+    const functionCause = Object.assign(function requestFailure() {}, details);
+    for (const [value, message] of [
+      [cause, "[object Object]"],
+      [functionCause, String(functionCause)],
+    ] as const) {
+      const error = toStructuredErrorObject(value);
+      expect(error).not.toBe(value);
+      expect(error.cause).toBe(value);
+      expect(error).toMatchObject({ message, ...details });
+      expect(Reflect.get(error, detailKey)).toBe("symbol detail");
+    }
     const error = toStructuredErrorObject(cause);
-
-    expect(error).not.toBe(cause);
-    expect(error.message).toBe("[object Object]");
-    expect(error.cause).toBe(cause);
-    expect(error).toMatchObject({ code: "EIO", details: { retryable: true } });
     expect(Object.getOwnPropertyDescriptor(error, "code")).toEqual({
       value: "EIO",
       writable: true,
       enumerable: true,
       configurable: true,
     });
-    expect(Reflect.get(error, detailKey)).toBe("symbol detail");
     expect(Object.hasOwn(error, throwingDetailKey)).toBe(false);
     expect(error).not.toHaveProperty("hidden");
-
-    const functionCause = Object.assign(function requestFailure() {}, {
-      code: "EFUNCTION",
-      [detailKey]: "function symbol detail",
-    });
-    const functionError = toStructuredErrorObject(functionCause);
-    expect(functionError.message).toBe(String(functionCause));
-    expect(functionError.cause).toBe(functionCause);
-    expect(functionError).toMatchObject({ code: "EFUNCTION" });
-    expect(Reflect.get(functionError, detailKey)).toBe("function symbol detail");
   });
 
   it("skips throwing fields and preserves the base Error for enumeration failures", () => {
-    const throwingGetter = {
-      get details(): never {
-        throw new Error("unexpected structured field read");
-      },
-      code: "EIO",
-    };
-    const ownKeysFailure = new Proxy(
-      { code: "EIO" },
-      {
-        ownKeys() {
-          throw new Error("unexpected ownKeys call");
-        },
-      },
-    );
+    const throwingGetter = withGetter({ code: "EIO" }, "details");
+    const ownKeysFailure = new Proxy({ code: "EIO" }, { ownKeys: throwRead });
     const descriptorFailure = new Proxy(
       { code: "EIO", status: 503 },
       {
-        ownKeys() {
-          return ["code", "status"];
-        },
         getOwnPropertyDescriptor(target, key) {
-          if (key === "status") {
-            throw new Error("unexpected descriptor read");
-          }
-          return Reflect.getOwnPropertyDescriptor(target, key);
+          return key === "status" ? throwRead() : Reflect.getOwnPropertyDescriptor(target, key);
         },
       },
     );
-
     expect(toStructuredErrorObject(throwingGetter)).toMatchObject({ code: "EIO" });
     for (const cause of [ownKeysFailure, descriptorFailure]) {
       const error = toStructuredErrorObject(cause);
@@ -307,72 +254,52 @@ describe("toStructuredErrorObject", () => {
   });
 
   it("protects Error-owned and prototype-mutating fields without reading them", () => {
-    let protectedReads = 0;
-    const cause = {
-      constructor: { polluted: true },
-      prototype: { polluted: true },
-      code: "EIO",
-    };
+    const cause = { constructor: {}, prototype: {}, code: "EIO" };
+    const readProtected = vi.fn(() => "spoofed");
     for (const key of ["name", "message", "cause", "stack"]) {
-      Object.defineProperty(cause, key, {
-        enumerable: true,
-        get() {
-          protectedReads += 1;
-          return "spoofed";
-        },
-      });
+      withGetter(cause, key, readProtected);
     }
     Object.defineProperty(cause, "__proto__", {
       value: { polluted: true },
       enumerable: true,
     });
-
     const error = toStructuredErrorObject(cause);
-
-    expect(protectedReads).toBe(0);
+    expect(readProtected).not.toHaveBeenCalled();
     expect(error).toMatchObject({ name: "Error", message: "[object Object]", code: "EIO" });
     expect(error.cause).toBe(cause);
     expect(Object.getPrototypeOf(error)).toBe(Error.prototype);
-    expect(Object.hasOwn(error, "__proto__")).toBe(false);
-    expect(Object.hasOwn(error, "constructor")).toBe(false);
-    expect(Object.hasOwn(error, "prototype")).toBe(false);
+    for (const key of ["__proto__", "constructor", "prototype"]) {
+      expect(Object.hasOwn(error, key)).toBe(false);
+    }
   });
 });
 
-describe("toStringifiedError", () => {
-  it("preserves Error identity and stringifies every other value", () => {
-    const error = new Error("boom");
-    const objectError = toStringifiedError({ ok: true });
-
-    expect(toStringifiedError(error)).toBe(error);
-    expect(toStringifiedError("failure")).toMatchObject({ message: "failure" });
-    expect(objectError).toMatchObject({ message: "[object Object]" });
-    expect(objectError).not.toHaveProperty("cause");
-    expect(objectError).not.toHaveProperty("ok");
-    expect(toStringifiedError(null)).toMatchObject({ message: "null" });
-  });
+it("toStringifiedError preserves Error identity and stringifies every other value", () => {
+  const error = new Error("boom");
+  const objectError = toStringifiedError({ ok: true });
+  expect(toStringifiedError(error)).toBe(error);
+  expect(toStringifiedError("failure")).toMatchObject({ message: "failure" });
+  expect(objectError).toMatchObject({ message: "[object Object]" });
+  expect(objectError).not.toHaveProperty("cause");
+  expect(objectError).not.toHaveProperty("ok");
+  expect(toStringifiedError(null)).toMatchObject({ message: "null" });
 });
 
-describe("coerceErrorMessage", () => {
-  it("preserves Error messages exactly and stringifies other values", () => {
-    expect(coerceErrorMessage(new Error(""))).toBe("");
-    expect(coerceErrorMessage(new Error(" boom "))).toBe(" boom ");
-    expect(coerceErrorMessage("failure")).toBe("failure");
-    expect(coerceErrorMessage(null)).toBe("null");
-  });
+it("coerceErrorMessage preserves Error messages exactly and stringifies other values", () => {
+  expect(coerceErrorMessage(new Error(""))).toBe("");
+  expect(coerceErrorMessage(new Error(" boom "))).toBe(" boom ");
+  expect(coerceErrorMessage("failure")).toBe("failure");
+  expect(coerceErrorMessage(null)).toBe("null");
 });
 
-describe("stringifyNonErrorCause", () => {
-  it("renders primitive and structured values", () => {
-    expect(stringifyNonErrorCause("hi")).toBe("hi");
-    expect(stringifyNonErrorCause(null)).toBe("null");
-    expect(stringifyNonErrorCause(42)).toBe("42");
-    expect(stringifyNonErrorCause({ ok: true })).toBe('{"ok":true}');
-  });
-
-  it("falls back to object tags when JSON has no string result", () => {
-    expect(stringifyNonErrorCause(undefined)).toBe("[object Undefined]");
-    expect(stringifyNonErrorCause(Symbol("value"))).toBe("[object Symbol]");
-    expect(stringifyNonErrorCause(() => {})).toBe("[object Function]");
-  });
+it.each([
+  ["hi", "hi"],
+  [null, "null"],
+  [42, "42"],
+  [{ ok: true }, '{"ok":true}'],
+  [undefined, "[object Undefined]"],
+  [Symbol("value"), "[object Symbol]"],
+  [() => {}, "[object Function]"],
+])("stringifyNonErrorCause renders %s", (value, expected) => {
+  expect(stringifyNonErrorCause(value)).toBe(expected);
 });

@@ -6,7 +6,6 @@ import { createApplicationContextProvider } from "../../../test-helpers/applicat
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../../test-helpers/solid-application-context.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
-import "./chat-html-preview-element.tsx";
 import { HtmlPreview } from "./chat-html-preview-view.tsx";
 import { ChatSvgAttachment } from "./chat-svg-attachment.tsx";
 
@@ -34,8 +33,6 @@ describe("Solid preview consumers", () => {
     const view = mountSolid(
       () => (
         <HtmlPreview
-          state={undefined}
-          onRetry={() => {}}
           content="<h1>Preview</h1>"
           sourceIdentity="preview.html"
           title="Preview"
@@ -58,7 +55,6 @@ describe("Solid preview consumers", () => {
   });
 
   it("loads an SVG image when mounted from a Solid parent", async () => {
-    vi.stubGlobal("IntersectionObserver", undefined);
     const fetchMock = vi.fn(
       async () => new Response('<svg xmlns="http://www.w3.org/2000/svg"><circle r="4"/></svg>'),
     );
@@ -80,5 +76,37 @@ describe("Solid preview consumers", () => {
     expect(revoke).toHaveBeenCalledWith("blob:solid-preview");
     view.unmount();
     expect(revoke).toHaveBeenCalledWith("blob:next-preview");
+  });
+
+  it("aborts a replaced SVG read without allocating its late result", async () => {
+    const requests: {
+      signal: AbortSignal | null | undefined;
+      resolve: (response: Response) => void;
+    }[] = [];
+    const fetchMock = vi.fn<typeof fetch>(
+      (_input, init) =>
+        new Promise((resolve) => {
+          requests.push({ signal: init?.signal, resolve });
+        }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const createUrl = vi.spyOn(URL, "createObjectURL").mockReturnValue("blob:current-preview");
+    const revoke = vi.spyOn(URL, "revokeObjectURL").mockImplementation(() => {});
+    const [src, setSrc] = createSignal(`${window.location.origin}/previous.svg`);
+    const view = mountSolid(() => <ChatSvgAttachment src={src()} label="preview.svg" />);
+    await waitForSolid(() => expect(fetchMock).toHaveBeenCalledOnce());
+
+    setSrc(`${window.location.origin}/current.svg`);
+    await waitForSolid(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(requests[0]?.signal?.aborted).toBe(true);
+    expect(view.container.querySelector("img")).toBeNull();
+    requests[0]?.resolve(new Response("<svg/>"));
+    requests[1]?.resolve(new Response("<svg/>"));
+    await waitForSolid(() =>
+      expect(view.container.querySelector("img")?.getAttribute("src")).toBe("blob:current-preview"),
+    );
+    expect(createUrl).toHaveBeenCalledOnce();
+    view.unmount();
+    expect(revoke).toHaveBeenCalledExactlyOnceWith("blob:current-preview");
   });
 });

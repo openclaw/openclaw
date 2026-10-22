@@ -1,18 +1,21 @@
 /* @vitest-environment jsdom */
 
+import { createComponent, createSignal } from "solid-js";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ControlUiSessionPullRequest,
-  ControlUiSessionPullRequestCheckDetails,
-} from "../../../../../src/gateway/control-ui-contract.js";
+import type { ControlUiSessionPullRequestCheckDetails } from "../../../../../src/gateway/control-ui-contract.js";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ApplicationGateway, ApplicationGatewaySnapshot } from "../../../app/gateway.ts";
+import { mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { flush } from "../../../test-helpers/solid-settle.ts";
 import type { ChatCiDetailsElement } from "./chat-ci-details.ts";
+import { ChatPullRequestChecks } from "./chat-pull-request-checks.tsx";
+import type { ChatPullRequestsProps } from "./chat-pull-request-shared.tsx";
 import {
   paintChatPullRequests,
   clearChatPullRequests,
   publication,
+  pullRequest,
   sessionBranch,
 } from "./chat-pull-requests.test-support.ts";
 import {
@@ -21,26 +24,6 @@ import {
   dismissChatPullRequest,
   listDismissedChatPullRequests,
 } from "./chat-pull-requests.ts";
-import type { ChatPullRequestsProps } from "./chat-pull-requests.tsx";
-
-function pullRequest(
-  overrides: Partial<ControlUiSessionPullRequest> = {},
-): ControlUiSessionPullRequest {
-  return {
-    number: 103469,
-    owner: "openclaw",
-    repo: "openclaw",
-    branch: "claude/browser-tabs-tighter-header",
-    title: "fix(macos): tighten the link-browser tab header",
-    url: "https://github.com/openclaw/openclaw/pull/103469",
-    state: "open",
-    additions: 4,
-    deletions: 3,
-    checks: { state: "passing", passed: 5, failed: 0, skipped: 1, running: 0 },
-    checksUrl: "https://github.com/openclaw/openclaw/pull/103469/checks",
-    ...overrides,
-  };
-}
 
 describe("ChatPullRequests", () => {
   let container: HTMLDivElement;
@@ -65,6 +48,59 @@ describe("ChatPullRequests", () => {
   afterEach(() => {
     clearChatPullRequests(container);
     container.remove();
+  });
+
+  it("keeps native disclosure intent through parking and clears it on dismissal", () => {
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+    let update!: (next: { presented: boolean; dismissed: boolean }) => void;
+    const mounted = mountSolid(
+      () => {
+        const [state, setState] = createSignal({ presented: true, dismissed: false });
+        update = setState;
+        return createComponent(ChatPullRequestChecks, {
+          label: "Checks passed",
+          checksState: "passing",
+          children: "All checks passed",
+          get presented() {
+            return state().presented;
+          },
+          get dismissed() {
+            return state().dismissed;
+          },
+        });
+      },
+      { container },
+    );
+    try {
+      flush();
+      const disclosure = container.querySelector<HTMLDetailsElement>("details")!;
+      const surface = container.querySelector<HTMLElement>("[popover]")!;
+      disclosure.open = true;
+      disclosure.dispatchEvent(new Event("toggle"));
+      expect(surface.matches(":popover-open")).toBe(true);
+      update({ presented: false, dismissed: false });
+      flush();
+      expect(disclosure.open).toBe(true);
+      expect(surface.matches(":popover-open")).toBe(false);
+      update({ presented: true, dismissed: false });
+      flush();
+      expect(surface.matches(":popover-open")).toBe(true);
+      expect(container.querySelector("details")).toBe(disclosure);
+      update({ presented: false, dismissed: true });
+      flush();
+      expect(disclosure.open).toBe(false);
+      expect(surface.matches(":popover-open")).toBe(false);
+      update({ presented: true, dismissed: false });
+      flush();
+      expect(disclosure.open).toBe(false);
+      expect(surface.matches(":popover-open")).toBe(false);
+      expect(
+        warnings.mock.calls.filter(([text]) => String(text).includes("STRICT_READ_UNTRACKED")),
+      ).toEqual([]);
+    } finally {
+      mounted.unmount();
+      warnings.mockRestore();
+    }
   });
 
   it("keeps unknown diff counts absent rather than inventing zeroes", () => {
@@ -608,6 +644,7 @@ describe("CI job details", () => {
       eventLogRevision: 0,
       loadSelfProfile: async () => null,
       connect() {},
+      defer: () => false,
       setSessionKey() {},
       start() {},
       stop() {},
@@ -702,6 +739,17 @@ describe("CI job details", () => {
     await h.element.updateComplete;
     expect(h.request).toHaveBeenCalledTimes(requestsBeforeRefresh + 1);
     expect(failed.open).toBe(false);
+    h.element.presented = false;
+    await settle(h.element);
+    const hiddenCount = h.request.mock.calls.length;
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(h.request).toHaveBeenCalledTimes(hiddenCount);
+    h.element.presented = true;
+    await settle(h.element);
+    expect(h.request).toHaveBeenCalledTimes(hiddenCount + 1);
+    expect(h.disclosure.open).toBe(true);
+    expect(container.querySelector('.chat-ci__job[data-check-id="3"]')).toBe(failed);
+    expect(failed.open).toBe(false);
     h.disclosure.open = false;
     await settle(h.element);
     const closedCount = h.request.mock.calls.length;
@@ -792,6 +840,31 @@ describe("CI job details", () => {
     expect(container.querySelector(".chat-ci__job")).toBeNull();
     expect(h.request).toHaveBeenCalledTimes(1);
   });
+
+  it.each(["session", "head", "gateway"] as const)(
+    "retires a pending request at native %s replacement before the next DOM commit",
+    async (change) => {
+      const h = harness();
+      const pending = createDeferred<ControlUiSessionPullRequestCheckDetails>();
+      h.request.mockReturnValueOnce(pending.promise).mockResolvedValue(details({ checks: [] }));
+      await settle(h.element);
+      h.disclosure.open = true;
+      await settle(h.element);
+      const signal = h.request.mock.calls[0]?.[2]?.signal;
+      if (change === "session") {
+        h.element.sessionKey = "agent:other:main";
+      } else if (change === "head") {
+        h.element.pullRequest = pullRequest({ headSha: "b".repeat(40) });
+      } else {
+        h.element.gateway = { ...h.props.gateway };
+      }
+      expect(signal?.aborted).toBe(true);
+      pending.resolve(details());
+      await settle(h.element);
+      expect(container.querySelector(".chat-ci__job")).toBeNull();
+      expect(h.disclosure.open).toBe(change !== "session");
+    },
+  );
 
   it("clears prior CI details and redacts the RPC error", async () => {
     const h = harness();

@@ -3,56 +3,13 @@ import { asDateTimestampMs } from "openclaw/plugin-sdk/number-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
 
-type DiscordProviderSessionRuntimeModule = typeof import("./provider-session.runtime.js");
+type DiscordProviderSessionRuntimeModule = Pick<
+  typeof import("./provider-session.runtime.js"),
+  "getAcpSessionManager" | "isAcpRuntimeError" | "rethrowIncognitoSessionError"
+>;
 
 const DISCORD_ACP_STATUS_PROBE_TIMEOUT_MS = 8_000;
 const DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS = 2 * 60 * 1000;
-
-function classifyAcpStatusProbeError(params: {
-  error: unknown;
-  isStaleRunning: boolean;
-  isAcpRuntimeError: DiscordProviderSessionRuntimeModule["isAcpRuntimeError"];
-}): {
-  status: "stale" | "uncertain";
-  reason: string;
-} {
-  if (
-    params.isAcpRuntimeError(params.error) &&
-    ["SESSION_OWNER_MIGRATION_REQUIRED", "SESSION_OWNER_UNSUPPORTED"].includes(
-      params.error.detailCode ?? "",
-    )
-  ) {
-    return { status: "uncertain", reason: formatErrorMessage(params.error) };
-  }
-  if (params.isAcpRuntimeError(params.error) && params.error.code === "ACP_SESSION_INIT_FAILED") {
-    return { status: "stale", reason: "session-init-failed" };
-  }
-
-  const message = formatErrorMessage(params.error);
-  if (
-    message.includes("Session is not ACP-enabled") ||
-    message.includes("ACP session metadata missing")
-  ) {
-    return { status: "stale", reason: "session-missing" };
-  }
-
-  return params.isStaleRunning
-    ? { status: "stale", reason: "status-error-running-stale" }
-    : { status: "uncertain", reason: "status-error" };
-}
-
-function resolveRunningActivityAgeMs(params: {
-  storedState?: "idle" | "running" | "error";
-  lastActivityAt?: number;
-}): number {
-  if (params.storedState !== "running") {
-    return 0;
-  }
-  const activityAtMs = asDateTimestampMs(params.lastActivityAt);
-  const boundedActivityAtMs =
-    activityAtMs === undefined ? 0 : Math.max(0, Math.floor(activityAtMs));
-  return Math.max(0, Date.now() - boundedActivityAtMs);
-}
 
 export async function probeDiscordAcpBindingHealth(params: {
   cfg: OpenClawConfig;
@@ -84,7 +41,13 @@ export async function probeDiscordAcpBindingHealth(params: {
   if (result.kind === "timeout") {
     statusProbeAbortController.abort();
   }
-  const runningForMs = resolveRunningActivityAgeMs(params);
+  let runningForMs = 0;
+  if (params.storedState === "running") {
+    const activityAtMs = asDateTimestampMs(params.lastActivityAt);
+    const boundedActivityAtMs =
+      activityAtMs === undefined ? 0 : Math.max(0, Math.floor(activityAtMs));
+    runningForMs = Math.max(0, Date.now() - boundedActivityAtMs);
+  }
   const isStaleRunning =
     params.storedState === "running" && runningForMs >= DISCORD_ACP_STALE_RUNNING_ACTIVITY_MS;
 
@@ -95,11 +58,28 @@ export async function probeDiscordAcpBindingHealth(params: {
   }
   if (result.kind === "error") {
     params.providerSessionRuntime.rethrowIncognitoSessionError(result.error);
-    return classifyAcpStatusProbeError({
-      error: result.error,
-      isStaleRunning,
-      isAcpRuntimeError,
-    });
+    const error = result.error;
+    if (
+      isAcpRuntimeError(error) &&
+      ["SESSION_OWNER_MIGRATION_REQUIRED", "SESSION_OWNER_UNSUPPORTED"].includes(
+        error.detailCode ?? "",
+      )
+    ) {
+      return { status: "uncertain", reason: formatErrorMessage(error) };
+    }
+    if (isAcpRuntimeError(error) && error.code === "ACP_SESSION_INIT_FAILED") {
+      return { status: "stale", reason: "session-init-failed" };
+    }
+    const message = formatErrorMessage(error);
+    if (
+      message.includes("Session is not ACP-enabled") ||
+      message.includes("ACP session metadata missing")
+    ) {
+      return { status: "stale", reason: "session-missing" };
+    }
+    return isStaleRunning
+      ? { status: "stale", reason: "status-error-running-stale" }
+      : { status: "uncertain", reason: "status-error" };
   }
   if (result.status.state === "error") {
     return { status: "uncertain", reason: "status-error-state" };

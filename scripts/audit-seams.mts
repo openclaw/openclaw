@@ -3,7 +3,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import type * as ts from "typescript/unstable/ast";
+import type * as ts from "typescript/ast";
 import {
   BUNDLED_PLUGIN_PATH_PREFIX,
   BUNDLED_PLUGIN_ROOT_DIR,

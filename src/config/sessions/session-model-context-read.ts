@@ -1,5 +1,6 @@
 import type { SessionTreeEntry } from "@openclaw/agent-core";
 import { iterateSessionContextEntries } from "../../../packages/agent-core/src/harness/session/session.js";
+import { isTranscriptArtifactProvider } from "../../../packages/agent-core/src/harness/session/transcript-model.js";
 import { isCompactionReplayCheckpoint } from "../../../packages/ai/src/transports/provider-compaction-checkpoint.js";
 import type { TranscriptEvent } from "./session-accessor.types.js";
 import type {
@@ -10,8 +11,23 @@ import {
   selectBoundedModelRequests,
   type ContextEntry,
   type ModelContextRequest,
+  type ModelContextPrefix,
 } from "./session-model-context-window.js";
 import type { SessionTranscriptContextVersion } from "./session-transcript-context-version.types.js";
+
+/** Canonical request membership is shared by cold reads and committed append deltas. */
+export function collectSessionModelContextRequests(entries: ContextEntry[]): ModelContextRequest[] {
+  const requests: ModelContextRequest[] = [];
+  for (const { entry, context } of iterateSessionContextEntries(entries)) {
+    const omitCheckpoint =
+      context !== "current" &&
+      entry.type === "message" &&
+      entry.message.role === "assistant" &&
+      isCompactionReplayCheckpoint(entry.message.providerReplay);
+    requests.push({ entry, omitCheckpoint });
+  }
+  return requests;
+}
 
 /** Select before reading payloads; durable and memory backends share context projection. */
 export function projectSessionModelContext(
@@ -21,7 +37,9 @@ export function projectSessionModelContext(
     readModelEntries,
     readModelEntrySizes,
     version,
+    prepared,
   }: {
+    prepared?: { requests: ModelContextRequest[]; prefix: ModelContextPrefix };
     header: TranscriptEvent;
     entries: ContextEntry[];
     version: SessionTranscriptContextVersion;
@@ -32,25 +50,19 @@ export function projectSessionModelContext(
   },
   limits?: SessionModelContextLimits,
 ): SessionTranscriptModelContext {
-  const requests: ModelContextRequest[] = [];
-  for (const { entry, context } of iterateSessionContextEntries(entries)) {
-    const omitCheckpoint =
-      context !== "current" &&
-      entry.type === "message" &&
-      entry.message.role === "assistant" &&
-      isCompactionReplayCheckpoint(entry.message.providerReplay);
-    requests.push({ entry, omitCheckpoint });
-  }
+  const requests = prepared?.requests ?? collectSessionModelContextRequests(entries);
   const selected = limits
-    ? selectBoundedModelRequests(requests, readModelEntrySizes, limits)
+    ? selectBoundedModelRequests(requests, readModelEntrySizes, limits, prepared?.prefix)
     : requests;
   const payloads = readModelEntries(selected);
   let contextEntries: SessionTreeEntry[];
   if (limits) {
     const model = entries.findLast(
       (entry) =>
-        entry.type === "model_change" ||
-        (entry.type === "message" && entry.message.role === "assistant"),
+        (entry.type === "model_change" && !isTranscriptArtifactProvider(entry.provider)) ||
+        (entry.type === "message" &&
+          entry.message.role === "assistant" &&
+          !isTranscriptArtifactProvider(entry.message.provider)),
     );
     const thinking = entries.findLast((entry) => entry.type === "thinking_level_change");
     const detached = entries.flatMap((entry) => {

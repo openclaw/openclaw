@@ -127,9 +127,7 @@ function cloneSecretsRuntimeRefreshContext(
     includeConfigRefs: context.includeConfigRefs ?? true,
     includeAuthStoreRefs: context.includeAuthStoreRefs,
     loadablePluginOrigins: new Map(context.loadablePluginOrigins),
-    ...(context.manifestRegistry
-      ? { manifestRegistry: structuredClone(context.manifestRegistry) }
-      : {}),
+    ...(context.manifestRegistry ? { manifestRegistry: context.manifestRegistry } : {}),
     ...(context.loadAuthStore ? { loadAuthStore: context.loadAuthStore } : {}),
   };
 }
@@ -1031,12 +1029,12 @@ export function prepareSecretsRuntimeDisplaySnapshot(
   if (params.config.ui === undefined) {
     delete snapshot.config.ui;
   } else {
-    snapshot.config.ui = structuredClone(params.config.ui);
+    snapshot.config.ui = snapshot.sourceConfig.ui;
   }
   if (params.config.meta === undefined) {
     delete snapshot.config.meta;
   } else {
-    snapshot.config.meta = structuredClone(params.config.meta);
+    snapshot.config.meta = snapshot.sourceConfig.meta;
   }
   return snapshot;
 }

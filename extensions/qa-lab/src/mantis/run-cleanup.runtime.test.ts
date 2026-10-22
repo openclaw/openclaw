@@ -44,7 +44,7 @@ describe("Mantis worktree cleanup", () => {
 
   function removeWorktree(
     runner: MantisCommandRunner,
-    ownership?: MantisDirectoryOwnership,
+    ownership: MantisDirectoryOwnership,
     timeoutMs = commandTimeouts["worktree-cleanup"],
   ) {
     return removeMantisWorktree({
@@ -79,51 +79,22 @@ describe("Mantis worktree cleanup", () => {
     await expect(fs.stat(displacedPath)).resolves.toBeDefined();
   });
 
-  it.each(["targetInode"] as const)(
-    "preserves a worktree when its Windows ownership receipt has unknown %s",
-    async (field) => {
-      const ownership = await captureOwnership();
-      const sentinelPath = path.join(worktreeDir, "preserve-me.txt");
-      await fs.writeFile(sentinelPath, "preserve", "utf8");
-      const runner = vi.fn(async () => successfulCommandResult());
-      const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
-      Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
-      try {
-        await expect(removeWorktree(runner, { ...ownership, [field]: 0n })).rejects.toThrow(
-          "replaced before cleanup",
-        );
-        expect(runner).not.toHaveBeenCalled();
-        await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("preserve");
-      } finally {
-        Object.defineProperty(process, "platform", platform);
-      }
-    },
-  );
-
-  it("does not remove an unregistered partial path without an ownership receipt", async () => {
-    const sentinelPath = path.join(worktreeDir, "partial.txt");
-    await fs.writeFile(sentinelPath, "partial", "utf8");
+  it("preserves a worktree when its Windows ownership receipt has unknown targetInode", async () => {
+    const ownership = await captureOwnership();
+    const sentinelPath = path.join(worktreeDir, "preserve-me.txt");
+    await fs.writeFile(sentinelPath, "preserve", "utf8");
     const runner = vi.fn(async () => successfulCommandResult());
-
-    await expect(removeWorktree(runner)).rejects.toThrow(
-      "Mantis preserved the path because Git no longer owns it",
-    );
-
-    await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("partial");
-  });
-
-  it("does not adopt an existing registered path without an ownership receipt", async () => {
-    const runner = vi.fn(async (_command: string, args: readonly string[]) => {
-      if (args[1] === "list") {
-        return successfulCommandResult(worktreeListOutput(worktreeDir));
-      }
-      throw new Error(`unexpected git command: ${args.join(" ")}`);
-    });
-
-    await expect(removeWorktree(runner)).rejects.toThrow(
-      "baseline worktree cleanup left registered path",
-    );
-    await expect(fs.lstat(worktreeDir)).resolves.toBeDefined();
+    const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { configurable: true, value: "win32" });
+    try {
+      await expect(removeWorktree(runner, { ...ownership, targetInode: 0n })).rejects.toThrow(
+        "replaced before cleanup",
+      );
+      expect(runner).not.toHaveBeenCalled();
+      await expect(fs.readFile(sentinelPath, "utf8")).resolves.toBe("preserve");
+    } finally {
+      Object.defineProperty(process, "platform", platform);
+    }
   });
 
   it("attributes a shared legacy deadline expiry to the active candidate lane", async () => {

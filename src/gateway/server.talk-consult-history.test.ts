@@ -6,7 +6,6 @@ import {
   afterEach,
   beforeAll,
   beforeEach,
-  describe,
   expect,
   it,
   vi,
@@ -32,8 +31,10 @@ import {
   toDatabaseOptions,
 } from "../config/sessions/session-accessor.sqlite-scope.js";
 import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { runWithRetainedGatewayRootWork } from "../process/gateway-work-admission.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { onInternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideAsyncWorkScope } from "../shared/async-work-scope.js";
 import {
@@ -175,7 +176,9 @@ beforeEach(async () => {
   releaseModel = createDeferred();
   runEmbeddedAgent.mockImplementation(async (params) => {
     modelStarted.resolve();
-    await releaseModel.promise;
+    const signal = params.abortSignal;
+    await racePromiseWithAbortSignal(releaseModel.promise, signal, (aborted) => aborted.reason);
+    signal?.throwIfAborted();
     return {
       payloads: [{ text: answer }],
       meta: {
@@ -197,7 +200,6 @@ beforeEach(async () => {
     broadcastToConnIds: broadcast,
     sessionEventSubscribers: { getAll: () => new Set([connectionId]) },
     sessionMessageSubscribers: { get: () => new Set([connectionId]) },
-    chatAbortControllers: context.chatAbortControllers,
   });
   unsubscribe = onInternalSessionTranscriptUpdate((update) => {
     if ((update.target?.sessionId ?? update.sessionId) !== sessionId) {
@@ -253,6 +255,64 @@ afterEach(async () => {
 });
 
 const scope = () => ({ agentId, sessionKey: canonicalKey, sessionId, storePath });
+const assistantMessage = (text: string) =>
+  makeAgentAssistantMessage({ content: [{ type: "text", text }] });
+const matchingTexts = (messages: unknown[], text: string) =>
+  messages.map(extractText).filter((value) => value === text);
+const generatedInputs = <T>(messages: T[]) =>
+  messages.filter((message) => extractText(message)?.includes(args.question));
+function transcriptMessages() {
+  return loadTranscriptEventsSync(scope()).flatMap((event) => {
+    const message = asOptionalRecord(asOptionalRecord(event)?.message);
+    return message ? [message] : [];
+  });
+}
+async function reopenTranscript() {
+  const databasePath = resolveOpenClawAgentSqlitePath(
+    toDatabaseOptions(resolveSqliteTranscriptReadScope(scope())),
+  );
+  expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
+  clearSessionStoreCacheForTest();
+}
+function transcriptManager(params: Parameters<typeof embeddedAgent.runEmbeddedAgent>[0]) {
+  return guardSessionManager(SessionManager.open(scope()), {
+    agentId: params.agentId,
+    sessionKey: params.sessionKey,
+    runId: params.runId,
+    prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
+  });
+}
+function parityFixture() {
+  return {
+    harness,
+    context,
+    client,
+    agentId,
+    sessionKey,
+    canonicalKey,
+    sessionId,
+    storePath,
+    voiceSessionId,
+    connectionId,
+    runEmbeddedAgent,
+    rpc,
+    consult,
+    waitForDispatchEnd,
+    scope,
+    drainPublications,
+    historyMessages,
+    liveMessages,
+    answer,
+    args,
+  };
+}
+const spokenTranscript = (role: "user" | "assistant" = "user") => ({
+  sessionKey,
+  voiceSessionId,
+  entryId: `spoken-${role}`,
+  role,
+  text: role === "user" ? spoken : answer,
+});
 async function rpc(method: string, params: Record<string, unknown>) {
   const respond = vi.fn<RespondFn>();
   await handleGatewayRequest({
@@ -268,12 +328,15 @@ async function rpc(method: string, params: Record<string, unknown>) {
   return expectDefined(asOptionalRecord(result), "Gateway RPC result");
 }
 async function waitForDispatchEnd() {
-  await getSessionWorkAdmissionRelease({ scope: storePath, identities: [canonicalKey, sessionId] });
-  // Admission release does not join the producer's remaining terminal writes.
+  await captureSessionControllerSettlement({
+    scope: storePath,
+    identities: [canonicalKey, sessionId],
+  });
+  // Controller settlement does not join the producer's remaining terminal writes.
   // Settle them before the next parity cell revokes its source or replaces its row.
   await requestExecution.waitForCompletion();
   await lifecycleWrites.drain();
-  expect(context.chatAbortControllers.size).toBe(0);
+  expect(rpcSourceTesting.size).toBe(0);
 }
 async function drainPublications() {
   await Promise.all(publications);
@@ -286,20 +349,17 @@ function liveMessages() {
   });
 }
 function expectNoGeneratedInput(messages: unknown[], surface: string) {
-  const markdown = buildChatMarkdown(messages, "Voice test assistant");
-  const serialized = JSON.stringify(messages);
-  expect
-    .soft(
-      syntheticMarkers.filter((marker) => serialized.includes(marker)),
-      surface,
-    )
-    .toEqual([]);
-  expect
-    .soft(
-      syntheticMarkers.filter((marker) => markdown?.includes(marker)),
-      `${surface} Markdown`,
-    )
-    .toEqual([]);
+  for (const [label, text] of [
+    [surface, JSON.stringify(messages)],
+    [`${surface} Markdown`, buildChatMarkdown(messages, "Voice test assistant")],
+  ] as const) {
+    expect
+      .soft(
+        syntheticMarkers.filter((marker) => text?.includes(marker)),
+        label,
+      )
+      .toEqual([]);
+  }
 }
 function expectVisibleSpeechOnly(messages: unknown[], surface: string, hasAnswer: boolean) {
   const users = messages.filter((message) => asOptionalRecord(message)?.role === "user");
@@ -311,10 +371,7 @@ function expectVisibleSpeechOnly(messages: unknown[], surface: string, hasAnswer
     .toHaveLength(1);
   expectNoGeneratedInput(messages, surface);
   expect
-    .soft(
-      messages.map(extractText).filter((text) => text === answer),
-      `${surface} spoken answer`,
-    )
+    .soft(matchingTexts(messages, answer), `${surface} spoken answer`)
     .toHaveLength(hasAnswer ? 1 : 0);
   expect
     .soft(markdown?.split(answer).length, `${surface} spoken answer in Markdown`)
@@ -328,13 +385,13 @@ async function historyMessages() {
   return result.messages as unknown[];
 }
 
-async function consult(question: string, callId: string) {
+async function consult(question: string | typeof args, callId: string) {
   return await rpc("talk.client.toolCall", {
     sessionKey,
     voiceSessionId,
     callId,
     name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-    args: { question },
+    args: typeof question === "string" ? { question } : question,
   });
 }
 
@@ -342,7 +399,7 @@ async function startHeldConsult() {
   const ack = await consult("Keep this task running until released.", "held-task");
   await Promise.race([
     modelStarted.promise,
-    getSessionWorkAdmissionRelease({ scope: storePath, identities: [canonicalKey, sessionId] }),
+    captureSessionControllerSettlement({ scope: storePath, identities: [canonicalKey, sessionId] }),
   ]);
   const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "held model invocation");
   const abortSignal = expectDefined(run.abortSignal, "admitted model cancellation signal");
@@ -350,517 +407,390 @@ async function startHeldConsult() {
   return { ack, run, abortSignal };
 }
 
-describe("Browser Talk consult target handoff", () => {
-  it.each([
-    { name: "new session", key: "main", fresh: true, expected: "agent:voice:main" },
-    { name: "scoped global", key: "agent:voice:main", global: true, expected: "global" },
-    { name: "explicit other agent", key: "agent:primary:chosen", expected: "agent:primary:chosen" },
-  ])(
-    "executes and cancels the exact $name target without changing voice identity",
-    async (entry) => {
-      await rpc("talk.client.close", { sessionKey, voiceSessionId });
-      voiceSessionId = undefined;
-      const previousConfig = getRuntimeConfig();
-      testState.sessionStorePath = undefined;
-      agentId = entry.key.startsWith("agent:primary:") ? "primary" : "voice";
-      sessionKey = entry.key;
-      canonicalKey = entry.expected;
-      storePath = resolveSessionStorePathCore(undefined, { agentId });
-      await writeSessionStore({
-        storePath,
-        agentId,
-        entries: entry.fresh
-          ? {}
-          : { [canonicalKey]: { sessionId, updatedAt: Date.now(), status: "done" } },
-      });
-      await prepareGatewayReplyRuntimeForTest({
-        force: true,
-        config: {
-          ...previousConfig,
-          agents: {
-            ownership: "explicit",
-            entries: { primary: {}, voice: {} },
-            defaults: {
-              ...previousConfig.agents?.defaults,
-            },
-          },
-          talk: { agentId: "voice" },
-          session: entry.global ? { scope: "global" } : {},
+it.each([
+  { name: "new session", key: "main", fresh: true, expected: "agent:voice:main" },
+  { name: "scoped global", key: "agent:voice:main", global: true, expected: "global" },
+  { name: "explicit other agent", key: "agent:primary:chosen", expected: "agent:primary:chosen" },
+])("executes and cancels the exact $name target without changing voice identity", async (entry) => {
+  await rpc("talk.client.close", { sessionKey, voiceSessionId });
+  voiceSessionId = undefined;
+  const previousConfig = getRuntimeConfig();
+  testState.sessionStorePath = undefined;
+  agentId = entry.key.startsWith("agent:primary:") ? "primary" : "voice";
+  sessionKey = entry.key;
+  canonicalKey = entry.expected;
+  storePath = resolveSessionStorePathCore(undefined, { agentId });
+  await writeSessionStore({
+    storePath,
+    agentId,
+    entries: entry.fresh
+      ? {}
+      : { [canonicalKey]: { sessionId, updatedAt: Date.now(), status: "done" } },
+  });
+  await prepareGatewayReplyRuntimeForTest({
+    force: true,
+    config: {
+      ...previousConfig,
+      agents: {
+        ownership: "explicit",
+        entries: { primary: {}, voice: {} },
+        defaults: {
+          ...previousConfig.agents?.defaults,
         },
-      });
-      voiceSessionId = await createOrResumeClientVoiceSession({
-        agentId,
-        sessionKey,
-        origin: "client",
-      });
-      if (!entry.fresh) {
-        await rpc("talk.client.transcript", {
-          sessionKey,
-          voiceSessionId,
-          entryId: "spoken-user",
-          role: "user",
-          text: spoken,
-        });
-      }
-      const { ack, run, abortSignal } = await startHeldConsult();
-      expect(run).toMatchObject({
-        agentId,
-        sessionKey: canonicalKey,
-        ...(!entry.fresh ? { sessionId } : {}),
-      });
-      if (entry.fresh) {
-        sessionId = run.sessionId;
-      }
-      expect(ack).toMatchObject({ agentId, agentSessionKey: canonicalKey });
-      expect(clientVoiceSessionTesting.readRecord(agentId, voiceSessionId)).toMatchObject({
-        sessionKey,
-        status: "open",
-        consultRunIds: [ack.runId],
-      });
-      expect(
-        listSessionEntriesReadOnly({ agentId, storePath }).map((row) => row.sessionKey),
-      ).toEqual([canonicalKey]);
-      expect(
-        await rpc("chat.abort", {
-          sessionKey: ack.agentSessionKey,
-          agentId: ack.agentId,
-          runId: ack.runId,
-        }),
-      ).toMatchObject({ aborted: true, runIds: [ack.runId] });
-      expect(abortSignal.aborted).toBe(true);
-      const history = await historyMessages();
-      if (entry.fresh) {
-        expectNoGeneratedInput(history, "new target history");
-      } else {
-        expectVisibleSpeechOnly(history, "canonical target history", false);
-      }
+      },
+      talk: { agentId: "voice" },
+      session: entry.global ? { scope: "global" } : {},
     },
+  });
+  voiceSessionId = await createOrResumeClientVoiceSession({
+    agentId,
+    sessionKey,
+    origin: "client",
+  });
+  if (!entry.fresh) {
+    await rpc("talk.client.transcript", spokenTranscript());
+  }
+  const { ack, run, abortSignal } = await startHeldConsult();
+  expect(run).toMatchObject({
+    agentId,
+    sessionKey: canonicalKey,
+    ...(!entry.fresh ? { sessionId } : {}),
+  });
+  if (entry.fresh) {
+    sessionId = run.sessionId;
+  }
+  expect(ack).toMatchObject({ agentId, agentSessionKey: canonicalKey });
+  expect(clientVoiceSessionTesting.readRecord(agentId, voiceSessionId)).toMatchObject({
+    sessionKey,
+    status: "open",
+    consultRunIds: [ack.runId],
+  });
+  expect(listSessionEntriesReadOnly({ agentId, storePath }).map((row) => row.sessionKey)).toEqual([
+    canonicalKey,
+  ]);
+  expect(
+    await rpc("chat.abort", {
+      sessionKey: ack.agentSessionKey,
+      agentId: ack.agentId,
+      runId: ack.runId,
+    }),
+  ).toMatchObject({ aborted: true, runIds: [ack.runId] });
+  expect(abortSignal.aborted).toBe(true);
+  const history = await historyMessages();
+  if (entry.fresh) {
+    expectNoGeneratedInput(history, "new target history");
+  } else {
+    expectVisibleSpeechOnly(history, "canonical target history", false);
+  }
+});
+
+it("does not turn a generated stop question into cancellation of the active consult", async () => {
+  const first = await startHeldConsult();
+  const ack = await consult("/stop", "literal-stop-during-task");
+  expect(ack.runId).not.toBe(first.ack.runId);
+  expect.soft(first.abortSignal.aborted, "generated input cancelled the existing task").toBe(false);
+  releaseModel.resolve();
+  await waitForDispatchEnd();
+  expect(runEmbeddedAgent.mock.calls.map(([run]) => run.prompt)).toEqual(
+    expect.arrayContaining([expect.stringContaining("/stop")]),
   );
 });
 
-describe("Browser Talk literal consult commands", () => {
-  it("does not turn a generated stop question into cancellation of the active consult", async () => {
-    const first = await startHeldConsult();
-    const ack = await consult("/stop", "literal-stop-during-task");
-    expect(ack.runId).not.toBe(first.ack.runId);
-    expect
-      .soft(first.abortSignal.aborted, "generated input cancelled the existing task")
-      .toBe(false);
-    releaseModel.resolve();
-    await waitForDispatchEnd();
-    expect(runEmbeddedAgent.mock.calls.map(([run]) => run.prompt)).toEqual(
-      expect.arrayContaining([expect.stringContaining("/stop")]),
-    );
+it("preserves an actual human stop command", async () => {
+  const first = await startHeldConsult();
+  const stopped = await rpc("chat.send", {
+    sessionKey,
+    message: "/stop",
+    idempotencyKey: "human-stop",
   });
-
-  it("preserves an actual human stop command", async () => {
-    const first = await startHeldConsult();
-    const stopped = await rpc("chat.send", {
-      sessionKey,
-      message: "/stop",
-      idempotencyKey: "human-stop",
-    });
-    expect(stopped).toMatchObject({ aborted: true, runIds: [first.ack.runId] });
-    expect(first.abortSignal.aborted).toBe(true);
-    expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-  });
+  expect(stopped).toMatchObject({ aborted: true, runIds: [first.ack.runId] });
+  expect(first.abortSignal.aborted).toBe(true);
+  expect(runEmbeddedAgent).toHaveBeenCalledOnce();
 });
 
-describe("Browser Talk consult input custody", () => {
-  it.each([
+it("keeps read-only Talk operator consult scaffolding out of chat and later context but in the raw archive", async () => {
+  client.connect.scopes = ["operator.read", "operator.talk"];
+  const completeModel = expectDefined(
+    runEmbeddedAgent.getMockImplementation(),
+    "held model implementation",
+  );
+  let modelReply = consultAnswer;
+  let modelMessages: Parameters<SessionManager["appendMessage"]>[0][] = [
+    Object.assign(assistantMessage(consultCommentary), {
+      openclawStreamFallback: {
+        replacementText: consultCommentary,
+        source: "segment",
+        itemId: "consult-commentary",
+      },
+    }),
+    makeAgentAssistantMessage({
+      content: [
+        { type: "toolCall", id: "consult-read", name: "read", arguments: { path: "note.txt" } },
+      ],
+      stopReason: "toolUse",
+    }),
     {
-      name: "read-only Talk operator",
-      scopes: ["operator.read", "operator.talk"],
-      tools: ["read", "web_search", "web_fetch", "x_search", "memory_search", "memory_get"],
+      role: "toolResult",
+      toolCallId: "consult-read",
+      toolName: "read",
+      content: [{ type: "text", text: consultToolResult }],
+      isError: false,
+      timestamp: 0,
     },
-  ])(
-    "keeps $name consult scaffolding out of chat and later context but in the raw archive",
-    async ({ scopes, tools }) => {
-      client.connect.scopes = scopes;
-      const completeModel = expectDefined(
-        runEmbeddedAgent.getMockImplementation(),
-        "held model implementation",
-      );
-      let modelReply = consultAnswer;
-      let modelMessages: Parameters<SessionManager["appendMessage"]>[0][] = [
-        Object.assign(
-          makeAgentAssistantMessage({
-            content: [{ type: "text", text: consultCommentary }],
-          }),
-          {
-            openclawStreamFallback: {
-              replacementText: consultCommentary,
-              source: "segment",
-              itemId: "consult-commentary",
-            },
-          },
-        ),
-        makeAgentAssistantMessage({
-          content: [
-            { type: "toolCall", id: "consult-read", name: "read", arguments: { path: "note.txt" } },
-          ],
-          stopReason: "toolUse",
-        }),
-        {
-          role: "toolResult",
-          toolCallId: "consult-read",
-          toolName: "read",
-          content: [{ type: "text", text: consultToolResult }],
-          isError: false,
-          timestamp: 0,
-        },
-        makeAgentAssistantMessage({ content: [{ type: "text", text: modelReply }] }),
-      ];
-      runEmbeddedAgent.mockImplementation(async (params) => {
-        await params.onAgentEvent?.({
-          stream: "lifecycle",
-          data: { phase: "start" },
-        });
-        params.onExecutionPhase?.({ phase: "model_call_started" });
-        const result = await completeModel(params);
-        params.abortSignal?.throwIfAborted();
-        const manager = guardSessionManager(SessionManager.open(scope()), {
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          runId: params.runId,
-          prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
-        });
-        for (const message of modelMessages) {
-          manager.appendMessage(message);
-        }
-        return { ...result, payloads: [{ text: modelReply }] };
-      });
-      const userTranscript = {
-        sessionKey,
-        voiceSessionId,
-        entryId: "spoken-user",
-        role: "user",
-        text: spoken,
-      };
-      await rpc("talk.client.transcript", userTranscript);
-      await rpc("talk.client.transcript", userTranscript);
-      await drainPublications();
-      const participantsBeforeConsult =
-        listSessionParticipantsReadOnly(scope()).get(sessionKey) ?? [];
-      const ack = await rpc("talk.client.toolCall", {
-        sessionKey,
-        voiceSessionId,
-        callId: "native-consult",
-        name: REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
-        args,
-      });
-      expect(ack.runId).toEqual(expect.any(String));
-      expect(ack.idempotencyKey).toBe(ack.runId);
-      await Promise.race([
-        modelStarted.promise,
-        getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey, sessionId] }),
-      ]);
-      expect(context.logGateway.error).not.toHaveBeenCalled();
-      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-      const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "consult model invocation");
-      expect(run.toolsAllow).toEqual(tools);
-      for (const marker of syntheticMarkers) {
-        expect(run.prompt).toContain(marker);
-      }
-      await drainPublications();
-      expectVisibleSpeechOnly(liveMessages(), "before model completion", false);
-      expectVisibleSpeechOnly(await historyMessages(), "model-held chat.history", false);
+    assistantMessage(modelReply),
+  ];
+  runEmbeddedAgent.mockImplementation(async (params) => {
+    const recorder = expectDefined(params.userTurnTranscriptRecorder, "consult input recorder");
+    await recorder.persistApproved();
+    expect(recorder.hasPersisted()).toBe(true);
+    await params.onAgentEvent?.({
+      stream: "lifecycle",
+      data: { phase: "start" },
+    });
+    params.onExecutionPhase?.({ phase: "model_call_started" });
+    const result = await completeModel(params);
+    params.abortSignal?.throwIfAborted();
+    const manager = transcriptManager(params);
+    for (const message of modelMessages) {
+      manager.appendMessage(message);
+    }
+    return { ...result, payloads: [{ text: modelReply }] };
+  });
+  const userTranscript = spokenTranscript();
+  await rpc("talk.client.transcript", userTranscript);
+  await rpc("talk.client.transcript", userTranscript);
+  await drainPublications();
+  const participantsBeforeConsult = listSessionParticipantsReadOnly(scope()).get(sessionKey) ?? [];
+  const ack = await consult(args, "native-consult");
+  expect(ack.runId).toEqual(expect.any(String));
+  expect(ack.idempotencyKey).toBe(ack.runId);
+  await Promise.race([
+    modelStarted.promise,
+    captureSessionControllerSettlement({ scope: storePath, identities: [sessionKey, sessionId] }),
+  ]);
+  expect(context.logGateway.error).not.toHaveBeenCalled();
+  expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+  const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "consult model invocation");
+  expect(run.toolsAllow).toEqual([
+    "read",
+    "web_search",
+    "web_fetch",
+    "x_search",
+    "memory_search",
+    "memory_get",
+  ]);
+  for (const marker of syntheticMarkers) {
+    expect(run.prompt).toContain(marker);
+  }
+  await drainPublications();
+  expectVisibleSpeechOnly(liveMessages(), "before model completion", false);
+  expectVisibleSpeechOnly(await historyMessages(), "model-held chat.history", false);
 
-      releaseModel.resolve();
-      await waitForDispatchEnd();
-      // The browser persists the provider's final spoken answer through this same RPC.
-      await rpc("talk.client.transcript", {
-        sessionKey,
-        voiceSessionId,
-        entryId: "spoken-assistant",
+  releaseModel.resolve();
+  await waitForDispatchEnd();
+  // The browser persists the provider's final spoken answer through this same RPC.
+  await rpc("talk.client.transcript", spokenTranscript("assistant"));
+  await drainPublications();
+  expectVisibleSpeechOnly(liveMessages(), "live session.message", true);
+  expectVisibleSpeechOnly(await historyMessages(), "chat.history", true);
+
+  const storedMessages = transcriptMessages();
+  const generated = generatedInputs(storedMessages);
+  expect(matchingTexts(storedMessages, consultAnswer)).toHaveLength(1);
+  const storedToolResult = storedMessages.find(
+    (message) => extractText(message) === consultToolResult,
+  );
+  for (const text of [consultCommentary, consultToolResult]) {
+    expect(storedMessages.find((message) => extractText(message) === text)).not.toHaveProperty(
+      "display",
+      false,
+    );
+  }
+  expect(storedToolResult).toMatchObject({
+    role: "toolResult",
+    toolCallId: "consult-read",
+  });
+  expect((await historyMessages()).map(extractText)).toContain(consultCommentary);
+  expect(generated).toHaveLength(1);
+  expect.soft(generated[0]).toMatchObject({
+    role: "user",
+    display: false,
+    excludeFromContext: true,
+    provenance: { kind: "internal_system" },
+  });
+  const metadata = asOptionalRecord(generated[0]?.["__openclaw"]);
+  expect.soft(metadata?.senderIdentity).toBeUndefined();
+  expect.soft(metadata?.senderIsOwner).not.toBe(true);
+  expect
+    .soft(listSessionParticipantsReadOnly(scope()).get(sessionKey) ?? [])
+    .toEqual(participantsBeforeConsult);
+
+  // Reopen only this fixture's transcript database after dispatch/publication have drained.
+  await reopenTranscript();
+  expectVisibleSpeechOnly(await historyMessages(), "reopened chat.history", true);
+  for (const manager of [SessionManager.open(scope()), SessionManager.openModelContext(scope())]) {
+    const messages = manager.buildSessionContext().messages;
+    expectNoGeneratedInput(messages, "reopened model context");
+    expect(messages.map(extractText)).toEqual(
+      expect.arrayContaining([spoken, answer, consultCommentary, consultToolResult, consultAnswer]),
+    );
+    expect(messages).toContainEqual(
+      expect.objectContaining({
         role: "assistant",
-        text: answer,
-      });
-      await drainPublications();
-      expectVisibleSpeechOnly(liveMessages(), "live session.message", true);
-      expectVisibleSpeechOnly(await historyMessages(), "chat.history", true);
+        content: expect.arrayContaining([
+          expect.objectContaining({ type: "toolCall", id: "consult-read" }),
+        ]),
+      }),
+    );
+  }
+  expect(loadTranscriptEventsSync(scope())).toEqual(
+    expect.arrayContaining([expect.objectContaining({ message: generated[0] })]),
+  );
 
-      const storedMessages = loadTranscriptEventsSync(scope()).flatMap((event) => {
-        const message = asOptionalRecord(asOptionalRecord(event)?.message);
-        return message ? [message] : [];
+  client.connect.scopes = ["operator.read", "operator.write", "operator.admin"];
+  const normalPrompt = "NORMAL_PROMPT_133855: What did you find?";
+  modelReply = "NORMAL_REPLY_133855: The saved note contains both labels.";
+  modelMessages = [assistantMessage(modelReply)];
+  await rpc("chat.send", {
+    sessionKey,
+    message: normalPrompt,
+    idempotencyKey: `normal-after-consult-${sessionId}`,
+  });
+  await waitForDispatchEnd();
+  await drainPublications();
+  expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
+  for (const messages of [liveMessages(), await historyMessages()]) {
+    expect(matchingTexts(messages, modelReply)).toEqual([modelReply]);
+    expect(messages.map(extractText)).toContain(normalPrompt);
+    expect(JSON.stringify(messages)).not.toContain(consultAnswer);
+  }
+});
+
+it.each(["before-final", "after-final"] as const)(
+  "retains the direct answer when the call closes %s without a spoken replacement",
+  async (ordering) => {
+    const callId = expectDefined(voiceSessionId, "direct voice session");
+    const directAnswer = "DIRECT_FINAL_134003: The requested note contains both labels.";
+    const finalCommitted = createDeferred();
+    const releaseResult = createDeferred();
+    const completeModel = expectDefined(
+      runEmbeddedAgent.getMockImplementation(),
+      "held model implementation",
+    );
+    runEmbeddedAgent.mockImplementation(async (params) => {
+      const recorder = expectDefined(params.userTurnTranscriptRecorder, "direct input recorder");
+      await recorder.persistApproved();
+      expect(recorder.hasPersisted()).toBe(true);
+      const result = await completeModel(params);
+      params.abortSignal?.throwIfAborted();
+      transcriptManager(params).appendMessage(assistantMessage(directAnswer));
+      finalCommitted.resolve();
+      await releaseResult.promise;
+      return { ...result, payloads: [{ text: directAnswer }] };
+    });
+    const runner = createTalkClientAgentConsultRunner({
+      config: getRuntimeConfig(),
+      context,
+      sessionTarget: await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey),
+      ownerConnId: connectionId,
+      getVoiceSessionId: () => callId,
+      initialItems: [],
+    });
+    const providerTask = new AbortController();
+    const directRun = runner.runArgs(args, providerTask.signal);
+    void directRun.catch(() => undefined);
+    try {
+      await Promise.race([modelStarted.promise, directRun]);
+      const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "direct core invocation");
+      const backingSignal = expectDefined(run.abortSignal, "direct backing signal");
+      expect(run).toMatchObject({ agentId, sessionId, sessionKey: canonicalKey });
+      expect(backingSignal.aborted).toBe(false);
+      if (ordering === "after-final") {
+        releaseModel.resolve();
+        await Promise.race([finalCommitted.promise, directRun]);
+      }
+      await rpc("talk.client.close", { sessionKey, voiceSessionId: callId });
+      expect(clientVoiceSessionTesting.readRecord(agentId, callId)).toMatchObject({
+        status: "closed",
+        consultRunIds: [run.runId],
       });
-      const generated = storedMessages.filter((message) =>
-        extractText(message)?.includes(args.question),
-      );
-      expect(
-        storedMessages.filter((message) => extractText(message) === consultAnswer),
-      ).toHaveLength(1);
-      expect(
-        storedMessages.find((message) => extractText(message) === consultCommentary),
-      ).not.toHaveProperty("display", false);
-      expect(
-        storedMessages.find((message) => extractText(message) === consultToolResult),
-      ).toMatchObject({
-        role: "toolResult",
-        toolCallId: "consult-read",
-      });
-      expect(
-        storedMessages.find((message) => extractText(message) === consultToolResult),
-      ).not.toHaveProperty("display", false);
-      expect((await historyMessages()).map(extractText)).toContain(consultCommentary);
+      expect(providerTask.signal.aborted).toBe(false);
+      expect(backingSignal.aborted).toBe(false);
+      await expect(runner.runArgs(args)).rejects.toThrow("voice session is closed");
+      releaseModel.resolve();
+      releaseResult.resolve();
+      await expect(directRun).resolves.toEqual({ text: directAnswer });
+      expect(runEmbeddedAgent).toHaveBeenCalledOnce();
+      await drainPublications();
+      expectNoGeneratedInput(liveMessages(), "direct live publication");
+
+      const storedMessages = transcriptMessages();
+      const generated = generatedInputs(storedMessages);
       expect(generated).toHaveLength(1);
-      expect.soft(generated[0]).toMatchObject({
+      expect(generated[0]).toMatchObject({
         role: "user",
         display: false,
         excludeFromContext: true,
-        provenance: { kind: "internal_system" },
       });
-      const metadata = asOptionalRecord(generated[0]?.["__openclaw"]);
-      expect.soft(metadata?.senderIdentity).toBeUndefined();
-      expect.soft(metadata?.senderIsOwner).not.toBe(true);
-      expect
-        .soft(listSessionParticipantsReadOnly(scope()).get(sessionKey) ?? [])
-        .toEqual(participantsBeforeConsult);
-
-      // Reopen only this fixture's transcript database after dispatch/publication have drained.
-      const databasePath = resolveOpenClawAgentSqlitePath(
-        toDatabaseOptions(resolveSqliteTranscriptReadScope(scope())),
-      );
-      expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
-      clearSessionStoreCacheForTest();
-      expectVisibleSpeechOnly(await historyMessages(), "reopened chat.history", true);
-      for (const manager of [
-        SessionManager.open(scope()),
-        SessionManager.openModelContext(scope()),
-      ]) {
-        const messages = manager.buildSessionContext().messages;
-        expectNoGeneratedInput(messages, "reopened model context");
-        expect(messages.map(extractText)).toEqual(
-          expect.arrayContaining([
-            spoken,
-            answer,
-            consultCommentary,
-            consultToolResult,
-            consultAnswer,
-          ]),
-        );
-        expect(messages).toContainEqual(
-          expect.objectContaining({
-            role: "assistant",
-            content: expect.arrayContaining([
-              expect.objectContaining({ type: "toolCall", id: "consult-read" }),
-            ]),
-          }),
-        );
+      expect(
+        storedMessages.filter((message) => message.role === "assistant").map(extractText),
+      ).toEqual([directAnswer]);
+      const history = await historyMessages();
+      await reopenTranscript();
+      for (const [view, messages] of [
+        ["chat.history", history],
+        ["reopened chat.history", await historyMessages()],
+      ] as const) {
+        expect.soft(matchingTexts(messages, directAnswer), view).toEqual([directAnswer]);
+        expectNoGeneratedInput(messages, `closed direct call ${view}`);
       }
-      expect(loadTranscriptEventsSync(scope())).toEqual(
-        expect.arrayContaining([expect.objectContaining({ message: generated[0] })]),
-      );
+      const modelContext = SessionManager.openModelContext(scope()).buildSessionContext().messages;
+      expectNoGeneratedInput(modelContext, "closed direct call model context");
+      expect(modelContext.map(extractText)).toContain(directAnswer);
+    } finally {
+      releaseModel.resolve();
+      releaseResult.resolve();
+      await directRun.catch(() => undefined);
+    }
+  },
+);
 
-      client.connect.scopes = ["operator.read", "operator.write", "operator.admin"];
-      const normalPrompt = "NORMAL_PROMPT_133855: What did you find?";
-      modelReply = "NORMAL_REPLY_133855: The saved note contains both labels.";
-      modelMessages = [
-        makeAgentAssistantMessage({ content: [{ type: "text", text: modelReply }] }),
-      ];
-      await rpc("chat.send", {
-        sessionKey,
-        message: normalPrompt,
-        idempotencyKey: `normal-after-consult-${sessionId}`,
-      });
-      await waitForDispatchEnd();
-      await drainPublications();
-      expect(runEmbeddedAgent).toHaveBeenCalledTimes(2);
-      for (const messages of [liveMessages(), await historyMessages()]) {
-        expect(messages.map(extractText).filter((text) => text === modelReply)).toEqual([
-          modelReply,
-        ]);
-        expect(messages.map(extractText)).toContain(normalPrompt);
-        expect(JSON.stringify(messages)).not.toContain(consultAnswer);
-      }
-    },
-  );
-});
-
-describe("Direct Talk consult history after call closure", () => {
-  it.each(["before-final", "after-final"] as const)(
-    "retains the direct answer when the call closes %s without a spoken replacement",
-    async (ordering) => {
-      const callId = expectDefined(voiceSessionId, "direct voice session");
-      const directAnswer = "DIRECT_FINAL_134003: The requested note contains both labels.";
-      const finalCommitted = createDeferred();
-      const releaseResult = createDeferred();
-      const completeModel = expectDefined(
-        runEmbeddedAgent.getMockImplementation(),
-        "held model implementation",
-      );
-      runEmbeddedAgent.mockImplementation(async (params) => {
-        const recorder = expectDefined(params.userTurnTranscriptRecorder, "direct input recorder");
-        await recorder.persistApproved();
-        expect(recorder.hasPersisted()).toBe(true);
-        const result = await completeModel(params);
-        params.abortSignal?.throwIfAborted();
-        const manager = guardSessionManager(SessionManager.open(scope()), {
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          runId: params.runId,
-          prepareAssistantTranscriptMessage: params.prepareAssistantTranscriptMessage,
-        });
-        manager.appendMessage(
-          makeAgentAssistantMessage({ content: [{ type: "text", text: directAnswer }] }),
-        );
-        finalCommitted.resolve();
-        await releaseResult.promise;
-        return { ...result, payloads: [{ text: directAnswer }] };
-      });
-      const runner = createTalkClientAgentConsultRunner({
-        config: getRuntimeConfig(),
-        context,
-        sessionTarget: await prepareTalkSessionTarget(getRuntimeConfig(), sessionKey),
-        ownerConnId: connectionId,
-        getVoiceSessionId: () => callId,
-        initialItems: [],
-      });
-      const providerTask = new AbortController();
-      const directRun = runner.runArgs(args, providerTask.signal);
-      void directRun.catch(() => undefined);
-      try {
-        await Promise.race([modelStarted.promise, directRun]);
-        const run = expectDefined(runEmbeddedAgent.mock.calls[0]?.[0], "direct core invocation");
-        const backingSignal = expectDefined(run.abortSignal, "direct backing signal");
-        expect(run).toMatchObject({ agentId, sessionId, sessionKey: canonicalKey });
-        expect(backingSignal.aborted).toBe(false);
-        if (ordering === "after-final") {
-          releaseModel.resolve();
-          await Promise.race([finalCommitted.promise, directRun]);
-        }
-        await rpc("talk.client.close", { sessionKey, voiceSessionId: callId });
-        expect(clientVoiceSessionTesting.readRecord(agentId, callId)).toMatchObject({
-          status: "closed",
-          consultRunIds: [run.runId],
-        });
-        expect(providerTask.signal.aborted).toBe(false);
-        expect(backingSignal.aborted).toBe(false);
-        await expect(runner.runArgs(args)).rejects.toThrow("voice session is closed");
-        releaseModel.resolve();
-        releaseResult.resolve();
-        await expect(directRun).resolves.toEqual({ text: directAnswer });
-        expect(runEmbeddedAgent).toHaveBeenCalledOnce();
-        await drainPublications();
-        expectNoGeneratedInput(liveMessages(), "direct live publication");
-
-        const storedMessages = loadTranscriptEventsSync(scope()).flatMap((event) => {
-          const message = asOptionalRecord(asOptionalRecord(event)?.message);
-          return message ? [message] : [];
-        });
-        const generated = storedMessages.filter((message) =>
-          extractText(message)?.includes(args.question),
-        );
-        expect(generated).toHaveLength(1);
-        expect(generated[0]).toMatchObject({
-          role: "user",
-          display: false,
-          excludeFromContext: true,
-        });
-        expect(
-          storedMessages.filter((message) => message.role === "assistant").map(extractText),
-        ).toEqual([directAnswer]);
-        const history = await historyMessages();
-        const databasePath = resolveOpenClawAgentSqlitePath(
-          toDatabaseOptions(resolveSqliteTranscriptReadScope(scope())),
-        );
-        expect(await closeOpenClawAgentDatabaseByPathAsync(databasePath)).toBe(true);
-        clearSessionStoreCacheForTest();
-        for (const [view, messages] of [
-          ["chat.history", history],
-          ["reopened chat.history", await historyMessages()],
-        ] as const) {
-          expect
-            .soft(
-              messages.map(extractText).filter((text) => text === directAnswer),
-              view,
-            )
-            .toEqual([directAnswer]);
-          expectNoGeneratedInput(messages, `closed direct call ${view}`);
-        }
-        const modelContext =
-          SessionManager.openModelContext(scope()).buildSessionContext().messages;
-        expectNoGeneratedInput(modelContext, "closed direct call model context");
-        expect(modelContext.map(extractText)).toContain(directAnswer);
-      } finally {
-        releaseModel.resolve();
-        releaseResult.resolve();
-        await directRun.catch(() => undefined);
-      }
-    },
-  );
-});
-
-describe("Gateway-relay Talk consult history after call closure", () => {
-  it.each([
-    [undefined, false, false, false, undefined],
-    ["abort", false, false, false, undefined],
-    ["detach", false, false, false, undefined],
-    ["detach", true, false, false, undefined],
-    ["detach", true, true, false, undefined],
-    ["detach", true, false, true, undefined],
-    ["detach", true, true, true, undefined],
-    ["detach", true, false, false, "before"],
-    ["detach", true, false, false, "after"],
-  ] as const)(
-    "settles close disposition %s (after final: %s; spoken transcript: %s; second consult: %s; unknown append: %s)",
-    async (disposition, afterFinal, spokenReplacement, pendingFollowUp, unknownAppendOutcome) => {
-      const { runTalkRelayCloseHistory } =
-        await import("./server.talk-relay-history.test-support.js");
-      await runTalkRelayCloseHistory({
-        disposition,
-        afterFinal,
-        spokenReplacement,
-        pendingFollowUp,
-        unknownAppendOutcome,
-        scope,
-        sessionKey,
-        connectionId,
-        context,
-        runEmbeddedAgent,
-        rpc,
-        waitForDispatchEnd,
-        drainPublications,
-        historyMessages,
-        liveMessages,
-        answer,
-        args,
-      });
-    },
-  );
-});
+it.each([
+  [undefined, false, false, false, undefined],
+  ["abort", false, false, false, undefined],
+  ["detach", false, false, false, undefined],
+  ["detach", true, false, false, undefined],
+  ["detach", true, true, false, undefined],
+  ["detach", true, false, true, undefined],
+  ["detach", true, true, true, undefined],
+  ["detach", true, false, false, "before"],
+  ["detach", true, false, false, "after"],
+] as const)(
+  "settles close disposition %s (after final: %s; spoken transcript: %s; second consult: %s; unknown append: %s)",
+  async (disposition, afterFinal, spokenReplacement, pendingFollowUp, unknownAppendOutcome) => {
+    const { runTalkRelayCloseHistory } =
+      await import("./server.talk-relay-history.test-support.js");
+    await runTalkRelayCloseHistory({
+      ...parityFixture(),
+      disposition,
+      afterFinal,
+      spokenReplacement,
+      pendingFollowUp,
+      unknownAppendOutcome,
+    });
+  },
+);
 
 // Fixed model action through the real text and both Talk admission paths.
 it("dispatches permitted native actions once per logical request across text and Talk", async () => {
   const { runTalkNativeActionParity } = await import("./server.talk-native-action.test-support.js");
-  await runTalkNativeActionParity({
-    context,
-    client,
-    agentId,
-    sessionKey,
-    canonicalKey,
-    sessionId,
-    storePath,
-    voiceSessionId,
-    connectionId,
-    runEmbeddedAgent,
-    rpc,
-    consult,
-    waitForDispatchEnd,
-  });
+  await runTalkNativeActionParity(parityFixture());
 });
 
 it("preserves the original operator source through chat-backed capability adaptation", async () => {
   const { runTalkOperatorSourceParity } =
     await import("./server.talk-permission-parity.test-support.js");
-  await runTalkOperatorSourceParity({
-    context,
-    client,
-    sessionKey,
-    voiceSessionId,
-    runEmbeddedAgent,
-    waitForDispatchEnd,
-  });
+  await runTalkOperatorSourceParity(parityFixture());
 });
 
 // The isolated native cell uses Linux executables; protocol/policy siblings remain portable.
@@ -870,20 +800,8 @@ it.runIf(process.platform === "linux").each([false, true])(
     const { runTalkNodePermissionParity } =
       await import("./server.talk-permission-parity.test-support.js");
     await runTalkNodePermissionParity({
+      ...parityFixture(),
       publicOnly,
-      harness,
-      client,
-      context,
-      agentId,
-      sessionKey,
-      canonicalKey,
-      sessionId,
-      storePath,
-      voiceSessionId,
-      connectionId,
-      runEmbeddedAgent,
-      rpc,
-      waitForDispatchEnd,
       expectRevokedWriter: (runId, isCurrent) => expectedRevokedWriters.set(runId, isCurrent),
     });
   },
@@ -892,13 +810,9 @@ it.runIf(process.platform === "linux").each([false, true])(
 it.runIf(process.platform === "linux")(
   "isolates registered Talk replay across authenticated callers",
   async () => {
-    const { runTalkCallerReplay } = await import("./server.talk-caller-replay.test-support.js");
+    const { runTalkCallerReplay } = await import("./server.talk-native-action.test-support.js");
     await runTalkCallerReplay({
-      harness,
-      runEmbeddedAgent,
-      sessionId,
-      sessionKey,
-      storePath,
+      ...parityFixture(),
       voiceSessionId: expectDefined(voiceSessionId, "shared voice identity"),
     });
   },

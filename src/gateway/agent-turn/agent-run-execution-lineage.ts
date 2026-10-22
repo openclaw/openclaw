@@ -1,22 +1,66 @@
-import type { ExecutionIdentityAdmissionFacts } from "../../audit/execution-identity-admission.js";
+import {
+  attachAgentCommandAdmissionFacts,
+  attachAgentCommandRecoveryAdmissionFacts,
+} from "../../agents/agent-command-admission-facts.js";
+import type { AgentCommandExecutionIdentitySpawnFacts } from "../../agents/agent-command-execution-identity-spawn.js";
 import { executionIdentitySpawnAdmission } from "../../audit/execution-identity-spawn-admission.js";
 import {
   consumeAgentRuntimeExecutionLineage,
   readAgentRuntimeExecutionLineage,
 } from "../agent-runtime-execution-lineage.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
+import { getGatewayLocalUserIngress } from "../local-user-ingress.js";
+import type { StartAgentRunExecutionParams } from "./agent-run-execution-types.js";
 
-type ExecutionIdentitySpawnFacts = Pick<
-  ExecutionIdentityAdmissionFacts,
-  "applicableGrants" | "assurance" | "ingress" | "invoker"
-> & {
-  spawnAdmission: string;
-};
+export function prepareAgentRunExecutionIdentityFacts(
+  params: {
+    client: Pick<NonNullable<StartAgentRunExecutionParams["client"]>, "internal"> | null;
+    context: Pick<StartAgentRunExecutionParams["context"], "validateAgentRuntimeApprovalAuthority">;
+    isRestartRecoveryResumeRun: boolean;
+  },
+  runContext: object,
+  representedProfileId?: string,
+): AgentCommandExecutionIdentitySpawnFacts | undefined {
+  const agentRuntimeIdentity = params.client?.internal?.agentRuntimeIdentity;
+  const currentAgentRuntimeIdentity =
+    agentRuntimeIdentity &&
+    params.context.validateAgentRuntimeApprovalAuthority?.(agentRuntimeIdentity) === true
+      ? agentRuntimeIdentity
+      : undefined;
+  const spawnFacts = resolveExecutionIdentitySpawnFacts(
+    currentAgentRuntimeIdentity,
+    representedProfileId,
+  );
+  const localUserIngress = getGatewayLocalUserIngress(params.client);
+  const invokingAgentId =
+    params.client?.internal?.agentToolCaller?.agentId ?? currentAgentRuntimeIdentity?.agentId;
+  if (params.isRestartRecoveryResumeRun) {
+    attachAgentCommandRecoveryAdmissionFacts(runContext);
+  } else if (invokingAgentId) {
+    attachAgentCommandAdmissionFacts(runContext, {
+      ingress: { kind: "api", boundary: "gateway.agent-tool", state: "present" },
+      invoker: { state: "present", kind: "agent", rawPrincipalRef: invokingAgentId },
+      ...(representedProfileId !== undefined
+        ? {
+            representedSubject: {
+              state: "present",
+              kind: "person",
+              rawPrincipalRef: representedProfileId,
+            },
+          }
+        : {}),
+    });
+  } else if (localUserIngress) {
+    attachAgentCommandAdmissionFacts(runContext, localUserIngress.facts);
+  }
+  return spawnFacts;
+}
 
 /** Consume authenticated spawn provenance once, at the child admission owner. */
-export function resolveExecutionIdentitySpawnFacts(
+function resolveExecutionIdentitySpawnFacts(
   identity: AgentRuntimeIdentity | undefined,
-): ExecutionIdentitySpawnFacts | undefined {
+  representedProfileId?: string,
+): AgentCommandExecutionIdentitySpawnFacts | undefined {
   const lineage = readAgentRuntimeExecutionLineage(identity?.sessionSpawnContext);
   if (!identity || !lineage || !consumeAgentRuntimeExecutionLineage(identity)) {
     return undefined;
@@ -29,6 +73,15 @@ export function resolveExecutionIdentitySpawnFacts(
       state: "present",
     },
     invoker: { state: "present", kind: "agent", rawPrincipalRef: identity.agentId },
+    ...(representedProfileId
+      ? {
+          representedSubject: {
+            state: "present" as const,
+            kind: "person" as const,
+            rawPrincipalRef: representedProfileId,
+          },
+        }
+      : {}),
     applicableGrants: lineage.applicableGrantRefs.map((rawGrantRef) => ({
       rawGrantRef,
       state: "present",

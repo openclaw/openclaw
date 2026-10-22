@@ -34,7 +34,7 @@ import { isSessionHistoryWorkerCold } from "../config/sessions/session-transcrip
 import { CURRENT_SESSION_VERSION } from "../config/sessions/version.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { registerAgentRunContext } from "../infra/agent-run-registry.js";
-import { withTimeout } from "../utils/with-timeout.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import { prewarmGatewaySessionHistory } from "./server-history-prewarm.js";
 import { environmentsHandlers } from "./server-methods/environments.js";
 import type { GatewayRequestHandlerOptions, RespondFn } from "./server-methods/types.js";

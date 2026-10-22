@@ -1,3 +1,4 @@
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   normalizeToolParameterSchema,
   shouldOmitEmptyArrayItems,
@@ -16,10 +17,7 @@ type ToolSchemaCompatInput = {
   omitEmptyArrayItems?: unknown;
 };
 
-const MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA = 8;
-const strictOpenAISchemaCache = createToolSchemaNormalizationCache<unknown>(
-  MAX_STRICT_SCHEMA_CACHE_ENTRIES_PER_SCHEMA,
-);
+const strictOpenAISchemaCache = createToolSchemaNormalizationCache<unknown>();
 const publishedStrictCompatibility = new WeakMap<object, boolean>();
 
 function resolveToolSchemaModelCompat(
@@ -28,11 +26,7 @@ function resolveToolSchemaModelCompat(
   if (!compat) {
     return undefined;
   }
-  const unsupportedToolSchemaKeywords = Array.isArray(compat.unsupportedToolSchemaKeywords)
-    ? compat.unsupportedToolSchemaKeywords.filter(
-        (keyword): keyword is string => typeof keyword === "string",
-      )
-    : [];
+  const unsupportedToolSchemaKeywords = filterStringEntries(compat.unsupportedToolSchemaKeywords);
   if (unsupportedToolSchemaKeywords.length === 0 && compat.omitEmptyArrayItems !== true) {
     return undefined;
   }

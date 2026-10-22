@@ -26,23 +26,20 @@ import {
   type StreamCausalBoundaryState,
 } from "./stream-causal-boundary.ts";
 import { readLiveTerminalRunId } from "./terminal-message-identity.ts";
-import type { LiveToolStreamState } from "./tool-stream-contract.ts";
+import type { ToolStreamState } from "./tool-stream-contract.ts";
 import {
   extractToolMessageRefs,
   resolveLiveToolStreamRefs,
   resolveMatchingLiveToolIdentity,
 } from "./tool-stream-identity.ts";
-import { canResetToolStream, resetToolStream, resetToolStreamRun } from "./tool-stream-state.ts";
 
 type StreamReconciliationState = StreamCausalBoundaryState &
-  LiveToolStreamState & {
+  ToolStreamState & {
     chatStream: string | null;
     chatStreamStartedAt: number | null;
   };
 
-export type ToolStreamReconciliationState = StreamReconciliationState & {
-  chatToolMessages?: unknown[];
-};
+export type ToolStreamReconciliationState = StreamReconciliationState;
 
 type VisibleAssistantStreamPart = {
   afterUserSendId?: string;
@@ -67,38 +64,6 @@ type MaterializeVisibleStreamOptions = {
   isHiddenStreamText: StreamVisibility;
 };
 
-export function maybeResetToolStream(
-  state: StreamReconciliationState,
-  opts?: { preserveStreamSegments?: boolean },
-) {
-  if (!canResetToolStream(state)) {
-    return;
-  }
-  const preservedStreamSegments = opts?.preserveStreamSegments
-    ? [...state.chatStreamSegments]
-    : null;
-  resetToolStream(state);
-  if (preservedStreamSegments) {
-    state.chatStreamSegments = preservedStreamSegments;
-  }
-}
-
-export function maybeResetToolStreamRun(state: StreamReconciliationState, runId: string) {
-  if (canResetToolStream(state)) {
-    resetToolStreamRun(state, runId);
-  }
-}
-
-export function clearToolStreamSegments(state: StreamReconciliationState) {
-  if (Array.isArray(state.chatStreamSegments)) {
-    state.chatStreamSegments = [];
-  }
-}
-
-function streamFallbackMetadata(message: unknown): Record<string, unknown> | null {
-  return asNullableRecord(asNullableRecord(message)?.openclawStreamFallback);
-}
-
 export function appendTerminalAssistantMessage(messages: unknown[], message: unknown): unknown[] {
   const identity = readSessionMessageIdentity(message);
   const terminalRunId =
@@ -110,7 +75,7 @@ export function appendTerminalAssistantMessage(messages: unknown[], message: unk
   let terminalCursor = 0;
   for (let index = interval.start; index < interval.end; index += 1) {
     const existing = messages[index];
-    const fallback = streamFallbackMetadata(existing);
+    const fallback = asNullableRecord(asNullableRecord(existing)?.openclawStreamFallback);
     if (!fallback) {
       continue;
     }
@@ -164,12 +129,9 @@ export function visibleAssistantStreamParts(
   const liveToolRefs = resolveLiveToolStreamRefs(state);
   const parts: VisibleAssistantStreamPart[] = [];
   let previousText: string | null = null;
-  const segments = Array.isArray(state.chatStreamSegments) ? state.chatStreamSegments : [];
+  const segments = state.chatStreamSegments;
   let toolIndexedSegmentIndex = 0;
   for (const [segmentIndex, segment] of segments.entries()) {
-    if (!segment || typeof segment.text !== "string") {
-      continue;
-    }
     const explicitToolCallId = normalizeOptionalString(segment.toolCallId);
     const usesItemId = streamSegmentHasItemId(segment);
     const itemId =
@@ -226,7 +188,7 @@ export function visibleCurrentAssistantStreamTail(
   if (typeof state.chatStream !== "string") {
     return null;
   }
-  const segments = Array.isArray(state.chatStreamSegments) ? state.chatStreamSegments : [];
+  const segments = state.chatStreamSegments;
   const previousText = accumulatedStreamText(segments);
   return visibleAssistantStreamText(
     trimAccumulatedStreamPrefix(state.chatStream, previousText),

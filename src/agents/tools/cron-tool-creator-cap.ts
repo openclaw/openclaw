@@ -1,3 +1,8 @@
+import {
+  cronCreateRequiresStreamExecAuthority,
+  cronUpdateNeedsCurrentJobForStreamAuthority,
+  cronUpdateRequiresStreamExecAuthority,
+} from "../../cron/stream-exec-authority.js";
 import { isRecord } from "../../utils.js";
 import { readCronScheduledToolProjection } from "../exec-tool-target-pinning.js";
 import { createToolPolicyMatcher } from "../tool-policy-match.js";
@@ -5,6 +10,7 @@ import {
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
   expandToolGroups,
+  normalizeToolList,
   normalizeToolPolicyName,
 } from "../tool-policy.js";
 import type { CronCreatorToolAllowlistEntry, CronToolsAllowCaptureRef } from "./cron-tool.types.js";
@@ -41,6 +47,7 @@ const NATIVE_CRON_CREATOR_CAPABILITIES: ReadonlySet<string> = new Set([
   "process",
   "web_search",
   "web_fetch",
+  "ask_user",
 ]);
 
 /** Fails closed on any backend-projected name outside the exact canonical vocabulary. */
@@ -120,6 +127,7 @@ export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: s
       name,
       ...(pluginId ? { pluginId } : {}),
       ...(aliasName && aliasName !== name ? { aliasName } : {}),
+      ...(name === "exec" ? { execOrigin: "openclaw" as const } : {}),
       ...(projection?.execTarget ? { execTarget: { ...projection.execTarget } } : {}),
     });
   }
@@ -134,8 +142,12 @@ export function replaceWithEffectiveCronCreatorToolAllowlist<T extends { name: s
     }
     captured.set(
       name,
-      name === "exec" && options.nativeExecTarget
-        ? { name, execTarget: { ...options.nativeExecTarget } }
+      name === "exec"
+        ? {
+            name,
+            execOrigin: "native" as const,
+            ...(options.nativeExecTarget ? { execTarget: { ...options.nativeExecTarget } } : {}),
+          }
         : { name },
     );
   }
@@ -170,6 +182,8 @@ function normalizeCronCreatorToolsAllow(
       typeof tool.pluginId === "string" ? normalizeToolPolicyName(tool.pluginId) : undefined;
     const aliasName =
       typeof tool.aliasName === "string" ? normalizeToolPolicyName(tool.aliasName) : undefined;
+    const execOrigin: NormalizedCronCreatorTool["execOrigin"] =
+      tool.execOrigin === "openclaw" || tool.execOrigin === "native" ? tool.execOrigin : undefined;
     const execTarget: NormalizedCronCreatorTool["execTarget"] =
       tool.execTarget?.host === "gateway"
         ? {
@@ -181,6 +195,7 @@ function normalizeCronCreatorToolsAllow(
       name,
       ...(pluginId ? { pluginId } : {}),
       ...(aliasName && aliasName !== name ? { aliasName } : {}),
+      ...(execOrigin ? { execOrigin } : {}),
       ...(execTarget ? { execTarget } : {}),
     });
   }
@@ -195,6 +210,27 @@ export function resolveCronCreatorExecToolTarget(
     (tool) => tool.name === "exec",
   );
   return execEntry?.execTarget ? { ...execEntry.execTarget } : undefined;
+}
+
+/** Requires exec authority whose captured runtime can actually target the Gateway. */
+export function hasCronCreatorGatewayExecTool(
+  entries: readonly CronCreatorToolAllowlistEntry[] | undefined,
+): boolean {
+  return normalizeCronCreatorToolsAllow(entries ?? []).some(
+    (tool) =>
+      tool.name === "exec" &&
+      (tool.execOrigin === "openclaw" ||
+        (tool.execOrigin === "native" && tool.execTarget?.host === "gateway")),
+  );
+}
+
+/** A native or Gateway-pinned shell cannot grant execution inside an OpenClaw sandbox. */
+export function hasCronCreatorSandboxExecTool(
+  entries: readonly CronCreatorToolAllowlistEntry[] | undefined,
+): boolean {
+  return normalizeCronCreatorToolsAllow(entries ?? []).some(
+    (tool) => tool.name === "exec" && tool.execOrigin === "openclaw" && !tool.execTarget,
+  );
 }
 
 function hasCronTriggerScript(value: unknown): boolean {
@@ -251,6 +287,9 @@ export function cronCreateRequiresCreatorAuthority(
   if (!isRecord(value)) {
     return false;
   }
+  if (cronCreateRequiresStreamExecAuthority(value)) {
+    return true;
+  }
   const payload = isRecord(value.payload) ? value.payload : undefined;
   const explicitToolsAllow = classifyExplicitToolsAllow(payload);
   if (explicitToolsAllow === "empty") {
@@ -288,7 +327,7 @@ function capCronJobToolsAllow(params: {
   const creatorToolsAllow = normalizeCronCreatorToolsAllow(params.creatorToolAllowlist);
   const requestedRaw = writesToolsAllow ? params.payload.toolsAllow : params.defaultToolsAllow;
   const requestedToolsAllow = Array.isArray(requestedRaw)
-    ? expandToolGroups(requestedRaw.filter((entry): entry is string => typeof entry === "string"))
+    ? normalizeToolList(requestedRaw.filter((entry): entry is string => typeof entry === "string"))
     : ["*"];
   if (requestedToolsAllow.includes("*")) {
     // A default agent turn gets what its owner conversation gets, like operator jobs.
@@ -307,27 +346,30 @@ function capCronJobToolsAllow(params: {
     }
     return;
   }
-  if (requestedToolsAllow.length === 0 || creatorToolsAllow.length === 0) {
-    params.payload.toolsAllow = [];
-    delete params.payload.toolsAllowIsDefault;
-    return;
-  }
-
   const pluginGroups = buildPluginToolGroups({
     tools: creatorToolsAllow,
     toolMeta: (tool) => (tool.pluginId ? { pluginId: tool.pluginId } : undefined),
   });
-  const requestedPolicy = expandPolicyWithPluginGroups(
-    { allow: requestedToolsAllow },
-    pluginGroups,
+  const selected = new Set(
+    requestedToolsAllow.flatMap((entry) => {
+      const matches = createToolPolicyMatcher(
+        expandPolicyWithPluginGroups({ allow: [entry] }, pluginGroups),
+      );
+      const tools = creatorToolsAllow.filter(
+        (tool) => matches(tool.name) || (tool.aliasName !== undefined && matches(tool.aliasName)),
+      );
+      if (tools.length === 0) {
+        throw new Error(
+          `Requested automation tool ${JSON.stringify(entry)} cannot be carried from this creator turn. No automation changes were saved. Use a supported tool name and creator runtime, or explicitly remove it from toolsAllow.`,
+        );
+      }
+      return tools;
+    }),
   );
-  const matches = createToolPolicyMatcher(requestedPolicy);
   // A creator tool matches under its canonical name or the runtime alias the
   // creating surface presented; the persisted cap always holds canonical names.
   params.payload.toolsAllow = creatorToolsAllow
-    .filter(
-      (tool) => matches(tool.name) || (tool.aliasName !== undefined && matches(tool.aliasName)),
-    )
+    .filter((tool) => selected.has(tool))
     .map((tool) => tool.name);
   delete params.payload.toolsAllowIsDefault;
 }
@@ -364,6 +406,16 @@ export function planCronJobUpdatePatch(params: {
   const payload = isRecord(patch.payload) ? { ...patch.payload } : undefined;
   if (payload) {
     patch.payload = payload;
+  }
+  if (cronUpdateNeedsCurrentJobForStreamAuthority(patch) && !params.currentJob) {
+    return { kind: "needs-current-job" };
+  }
+  if (
+    params.creatorAuthorityComplete === false &&
+    params.currentJob &&
+    cronUpdateRequiresStreamExecAuthority(patch, params.currentJob)
+  ) {
+    return { kind: "needs-creator-authority" };
   }
   const explicitPayloadKind = readCronPayloadKind(payload);
   const explicitToolsAllow = classifyExplicitToolsAllow(payload);

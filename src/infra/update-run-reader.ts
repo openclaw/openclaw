@@ -3,8 +3,8 @@ import type {
   OpenClawStateSchemaReadAdmission,
 } from "../state/openclaw-state-db-contract.js";
 import { createOpenClawStateCurrentWarmReader } from "../state/openclaw-state-db-current-reader.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
 import {
-  withExistingOpenClawStateDatabaseArtifactPreservingReadOnly,
   executeExistingOpenClawStateRead,
   withArtifactPreservingStateReads,
   readCurrentOpenClawStateDatabaseContentVersion,
@@ -13,6 +13,7 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateReadOptions } from "../state/openclaw-state-read.types.js";
 import { getNodeSqliteKysely, iterateSqliteQuerySync } from "./kysely-sync.js";
+import { withUpdateRunRead } from "./update-run-admission.js";
 import {
   decodeRun,
   readActiveUpdateRun,
@@ -30,7 +31,7 @@ export function getUpdateRun(
   runId: string,
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRunRecord | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+  return withUpdateRunRead(
     ({ db }) => (tableExists(db, "update_runs") ? readUpdateRunRecord(db, runId) : undefined),
     options,
   );
@@ -39,10 +40,7 @@ export function getUpdateRun(
 export function findActiveUpdateRun(
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateRunRecord | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
-    ({ db }) => readActiveUpdateRun(db),
-    options,
-  );
+  return withUpdateRunRead(({ db }) => readActiveUpdateRun(db), options);
 }
 
 /** Previews and acknowledged abandonment cannot replace failure or completion evidence. */
@@ -51,7 +49,7 @@ export function readUpdateRunResolutionHistory(options: OpenClawStateDatabaseOpt
   outcome?: UpdateRunRecord;
 } {
   return (
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+    withUpdateRunRead(({ db }) => {
       if (!tableExists(db, "update_runs")) {
         return {};
       }
@@ -117,7 +115,7 @@ export function listUpdateRuns(
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission,
 ): UpdateRunRecord[] {
   return (
-    withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(
+    withUpdateRunRead(
       ({ db }) => readUpdateRuns(db, input),
       options,
       openStateSchemaReadAdmission,
@@ -133,14 +131,18 @@ export function createUpdateRunAdmissionReader(
   options: OpenClawStateDatabaseOptions,
   openStateSchemaReadAdmission: OpenClawStateSchemaReadAdmission,
 ): () => UpdateRunRecord[] {
-  const query = { ...input };
   const readWarm = createOpenClawStateCurrentWarmReader(
-    ({ db }) => readUpdateRuns(db, query),
+    ({ db }) => readUpdateRuns(db, input),
     options,
     openStateSchemaReadAdmission,
   );
   let previous: { version: string; runs: UpdateRunRecord[] } | undefined;
   return () => {
+    // PostgreSQL ledger writes do not change the SQLite anchor's content fingerprint.
+    if (isStatePostgres()) {
+      previous = undefined;
+      return listUpdateRuns(input, options, openStateSchemaReadAdmission);
+    }
     const warm = readWarm();
     if (warm.available) {
       previous = undefined;
@@ -148,15 +150,15 @@ export function createUpdateRunAdmissionReader(
     }
     const version = readCurrentOpenClawStateDatabaseContentVersion(options);
     if (version !== undefined && previous?.version === version) {
-      return structuredClone(previous.runs);
+      return previous.runs;
     }
     previous = undefined;
-    const runs = listUpdateRuns(query, options, openStateSchemaReadAdmission);
+    const runs = listUpdateRuns(input, options, openStateSchemaReadAdmission);
     if (
       version !== undefined &&
       version === readCurrentOpenClawStateDatabaseContentVersion(options)
     ) {
-      previous = { version, runs: structuredClone(runs) };
+      previous = { version, runs };
     }
     return runs;
   };
@@ -214,7 +216,7 @@ export async function listUpdateRunsAsync(
 export function getLatestUpdateFetchFailure(
   options: OpenClawStateDatabaseOptions = {},
 ): UpdateFetchFailure | undefined {
-  return withExistingOpenClawStateDatabaseArtifactPreservingReadOnly(({ db }) => {
+  return withUpdateRunRead(({ db }) => {
     if (!tableExists(db, "update_runs")) {
       return undefined;
     }

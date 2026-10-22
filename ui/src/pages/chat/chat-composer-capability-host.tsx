@@ -1,11 +1,13 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { createMemo, Show } from "solid-js";
+import { createMemo, lazy, Loading, Show } from "solid-js";
+import { createChangeListeners } from "../../../../src/shared/listeners.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ConfigSnapshot, GatewaySessionRow, ToolsEffectiveResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import type { McpServerForm } from "../../components/mcp-server-form.ts";
-import "../../components/modal-dialog.ts";
+import "../../components/modal-dialog.tsx";
+import { LoadingState } from "../../components/solid/loading-state.tsx";
 import { registerMcpEnglish } from "../../i18n/locales/en-mcp.ts";
 import { buildToolsEffectiveRequestKey } from "../../lib/agents/tools-effective.ts";
 import { currentDisplayRuntimeConfig } from "../../lib/config/config-state-model.ts";
@@ -27,11 +29,9 @@ import {
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { nextBooleanToolOverrides } from "../../lib/sessions/tool-overrides.ts";
-import { LibraryPinRead } from "../skills/library-detail.tsx";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import { patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { ComposerAddServerDialog } from "./components/chat-composer-add-server-dialog.tsx";
 import type { ChatComposerCapabilityMenuProps } from "./components/chat-composer-plus-menu.types.ts";
 import {
   ComposerSkillCatalog,
@@ -40,6 +40,17 @@ import {
 import { ComposerLibrarySession } from "./composer-library-session.ts";
 
 registerMcpEnglish();
+
+// Capability dialogs are interaction-only; ordinary chat boot needs neither renderer.
+const LibraryPinRead = lazy(() => import("../skills/library-detail.tsx"), {
+  export: "LibraryPinRead",
+});
+const ComposerAddServerDialog = lazy(
+  () => import("./components/chat-composer-add-server-dialog.tsx"),
+  {
+    export: "ComposerAddServerDialog",
+  },
+);
 
 type ComposerMcpServerScope = "session" | "everywhere";
 
@@ -57,8 +68,9 @@ function activeConfigFingerprint(
 }
 
 export class ChatComposerCapabilityHost {
-  private readonly skillCatalog: ComposerSkillCatalog;
-  private readonly library: ComposerLibrarySession;
+  private readonly listeners = createChangeListeners();
+  private readonly skillCatalog = new ComposerSkillCatalog(() => this.publish());
+  private readonly library = new ComposerLibrarySession(() => this.publish());
   private readonly patchTokens = new Map<string, symbol>();
   private effectiveTools: { key: string; result: ToolsEffectiveResult } | null = null;
   private effectiveToolsErrorKey: string | null = null;
@@ -70,10 +82,8 @@ export class ChatComposerCapabilityHost {
   private addBusy = false;
   private addError: string | null = null;
 
-  constructor(private readonly notify: () => void) {
-    this.skillCatalog = new ComposerSkillCatalog(notify);
-    this.library = new ComposerLibrarySession(notify);
-  }
+  readonly subscribe = this.listeners.subscribe;
+  private readonly publish = this.listeners.publish;
 
   private effectiveToolsKeys(
     context: ApplicationContext,
@@ -128,7 +138,7 @@ export class ChatComposerCapabilityHost {
       state.sessionKey === sessionKey &&
       this.effectiveToolsKeys(context, state, agentId) === cacheKey;
     this.effectiveToolsErrorKey = null;
-    this.notify();
+    this.publish();
     void client
       .request<ToolsEffectiveResult>("tools.effective", {
         agentId: agentId.trim(),
@@ -148,7 +158,7 @@ export class ChatComposerCapabilityHost {
         if (this.effectiveToolsRequest === request) {
           this.effectiveToolsRequest = null;
           if (this.client === client && this.connectionEpoch === connectionEpoch) {
-            this.notify();
+            this.publish();
           }
         }
       });
@@ -183,7 +193,7 @@ export class ChatComposerCapabilityHost {
       this.patchTokens.get(sessionKey) === patchToken;
     state.lastError = null;
     state.chatError = null;
-    this.notify();
+    this.publish();
     try {
       const result = await patchChatSessionSettings(
         state,
@@ -213,19 +223,10 @@ export class ChatComposerCapabilityHost {
       if (this.patchTokens.get(sessionKey) === patchToken) {
         this.patchTokens.delete(sessionKey);
         if (this.client === client) {
-          this.notify();
+          this.publish();
         }
       }
     }
-  }
-
-  private closeAddDialog(): void {
-    if (this.addBusy) {
-      return;
-    }
-    this.addDialogOpen = false;
-    this.addError = null;
-    this.notify();
   }
 
   private addServerBlockedReason(
@@ -290,24 +291,24 @@ export class ChatComposerCapabilityHost {
     const blockedReason = this.addServerBlockedReason(context, state, session, this.addScope);
     if (blockedReason) {
       this.addError = blockedReason;
-      this.notify();
+      this.publish();
       return;
     }
     const name = form.name.trim();
     if (!MCP_SERVER_NAME_PATTERN.test(name)) {
       this.addError = t("mcpServers.nameInvalid");
-      this.notify();
+      this.publish();
       return;
     }
     const config = parseMcpTarget(form.target, form.transport);
     if (!config) {
       this.addError = t("mcpServers.targetInvalid");
-      this.notify();
+      this.publish();
       return;
     }
     this.addBusy = true;
     this.addError = null;
-    this.notify();
+    this.publish();
     const sessionKey = state.sessionKey;
     const agentId = scopedAgentListParamsForSession(state, sessionKey).agentId;
     const scope = this.addScope;
@@ -333,11 +334,11 @@ export class ChatComposerCapabilityHost {
     if (failure !== undefined) {
       const error = formatUiExternalText(failure);
       this.addError = stage === "session" ? t("mcpServers.sessionEnableFailed", { error }) : error;
-      this.notify();
+      this.publish();
       return;
     }
     this.addDialogOpen = false;
-    this.notify();
+    this.publish();
   }
 
   dialogView(
@@ -352,17 +353,18 @@ export class ChatComposerCapabilityHost {
       error: this.addError,
       scopeBlockedReason: this.addServerBlockedReason(context, state, session, "everywhere"),
       submitBlockedReason: this.addServerBlockedReason(context, state, session, this.addScope),
-      onCancel: (event?: Event) => {
+      onCancel: () => {
         if (this.addBusy) {
-          event?.preventDefault();
           return;
         }
-        this.closeAddDialog();
+        this.addDialogOpen = false;
+        this.addError = null;
+        this.publish();
       },
       onScopeChange: (scope: ComposerMcpServerScope) => {
         this.addScope = scope;
         this.addError = null;
-        this.notify();
+        this.publish();
       },
       onSubmit: (form: McpServerForm) => {
         void this.submitAddServer(context, state, session, form);
@@ -373,11 +375,11 @@ export class ChatComposerCapabilityHost {
             file: this.library.selectedFile,
             onFile: (file: string) => {
               this.library.selectedFile = file;
-              this.notify();
+              this.publish();
             },
             onClose: () => {
               this.library.closeRead();
-              this.notify();
+              this.publish();
             },
           }
         : null,
@@ -389,8 +391,6 @@ export class ChatComposerCapabilityHost {
     state: ChatPageHost,
     session: GatewaySessionRow | undefined,
     agentId: string,
-    toolAccessOpen = false,
-    skillsOpen = false,
   ): ChatComposerCapabilityMenuProps {
     if (this.client !== state.client || this.connectionEpoch !== state.connectionEpoch) {
       this.client = state.client;
@@ -414,9 +414,6 @@ export class ChatComposerCapabilityHost {
         ? { client, connectionEpoch, sessionKey, agentId, isCurrent: current }
         : null,
     );
-    if (skillsOpen && !this.library.result && !this.library.loading && !this.library.error) {
-      void this.library.load();
-    }
     const canWriteLibrary = canCallGatewayMethod(
       context.gateway.snapshot,
       "skills.library.activate",
@@ -430,11 +427,6 @@ export class ChatComposerCapabilityHost {
     const gatewayAvailable = state.connected && Boolean(state.client);
     const effectiveToolsAvailable =
       isGatewayMethodAdvertised(context.gateway.snapshot, "tools.effective") === true;
-    // Start before projecting loading state; a notification during render
-    // cannot schedule the second render that the old menu callback relied on.
-    if (effectiveToolsAvailable && toolAccessOpen) {
-      this.loadEffectiveTools(context, state, agentId);
-    }
     const effectiveToolsKey = effectiveToolsAvailable
       ? this.effectiveToolsKeys(context, state, agentId)
       : null;
@@ -475,8 +467,7 @@ export class ChatComposerCapabilityHost {
     return {
       basePath: state.basePath,
       skills: this.skillCatalog.rows(agentId, session?.toolOverrides),
-      skillsLoading: this.skillCatalog.isLoading(agentId),
-      skillsError: this.skillCatalog.hasError(agentId),
+      skillsRead: this.skillCatalog.read(agentId),
       mcpServers: summarizeMcpServers(runtimeConfig) ?? [],
       toolsEffectiveResult,
       toolsEffectiveLoading,
@@ -528,6 +519,22 @@ export class ChatComposerCapabilityHost {
         );
         void this.library.load(true);
       },
+      onLoadView: (view) => {
+        if (!current()) {
+          return;
+        }
+        if (
+          (view === "skills" || view.startsWith("library:")) &&
+          !this.library.result &&
+          !this.library.loading &&
+          !this.library.error
+        ) {
+          void this.library.load();
+        }
+        if (effectiveToolsAvailable && view.startsWith("tools:")) {
+          this.loadEffectiveTools(context, state, agentId);
+        }
+      },
       onPatchToolOverrides: (next) => void this.patch(context, state, next),
       onNavigate: (routeId, options) => context.navigate(routeId, options),
       onAddServer: () => {
@@ -537,7 +544,7 @@ export class ChatComposerCapabilityHost {
         this.addDialogOpen = true;
         this.addScope = "session";
         this.addError = null;
-        this.notify();
+        this.publish();
       },
       ...(effectiveToolsAvailable
         ? {
@@ -550,18 +557,24 @@ export class ChatComposerCapabilityHost {
 
 export type ChatComposerCapabilityDialogsProps = {
   read: () => ReturnType<ChatComposerCapabilityHost["dialogView"]>;
-  revision: object;
 };
 
 export function ChatComposerCapabilityDialogs(props: ChatComposerCapabilityDialogsProps) {
-  const view = createMemo(() => {
-    void props.revision;
-    return props.read();
-  });
+  const view = createMemo(() => props.read());
   return (
     <>
-      <ComposerAddServerDialog {...view()} />
-      <Show when={view().library}>{(library) => <LibraryPinRead {...library()} />}</Show>
+      <Show when={view().open}>
+        <Loading fallback={<LoadingState />}>
+          <ComposerAddServerDialog {...view()} />
+        </Loading>
+      </Show>
+      <Show when={view().library}>
+        {(library) => (
+          <Loading fallback={<LoadingState />}>
+            <LibraryPinRead {...library()} />
+          </Loading>
+        )}
+      </Show>
     </>
   );
 }

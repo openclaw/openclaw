@@ -1,14 +1,29 @@
+import { getRuntimeConfig } from "../../../config/config.js";
 import type { SessionEntryCurrentFacts } from "../../../config/sessions/session-entry-current.types.js";
 import type { SessionSourceAssertion } from "../../../config/sessions/session-source-authority.js";
-import { prepareSqliteTargetFromSessionStorePath } from "../../../config/sessions/session-sqlite-target.js";
+import { bindInProcessSessionRun } from "../../../gateway/in-process-session-run.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
+import type { AgentRunRequest } from "../../../gateway/server-methods/agent-request-types.js";
+import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-authority.js";
+import { readSessionMessagesAsync } from "../../../gateway/session-transcript-readers.js";
+import { resolveWorkerPlacementSessionRuntimeAsync } from "../../../gateway/worker-environments/placement-session-runtime.js";
 import * as agentEvents from "../../../infra/agent-events.js";
 import { listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
-import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { isSessionWorkAdmissionActive } from "../../../sessions/session-lifecycle-admission.js";
+import {
+  getGatewayContextResolver,
+  getPluginRuntimeGatewayRequestScope,
+} from "../../../plugins/runtime/gateway-request-scope.js";
+import { isSessionControllerWorkActive } from "../../../sessions/session-controller.lifecycle.js";
+import { formatSystemTurnPrompt } from "../../../sessions/system-turn-prompt.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
+import { resolveExecDefaultsAsync } from "../../exec-defaults.js";
+import { resolveMainSessionResumePolicy } from "../../main-session-recovery/main-session-restart-recovery-resume-policy.js";
+import { isCliProvider } from "../../model-selection-cli.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
-import { isQuietSubagentRestartContinuation } from "./subagent-recovery-state.js";
+import {
+  isQuietSubagentRestartContinuation,
+  isRestartInterruptedSubagent,
+} from "./subagent-recovery-state.js";
 import { getUnrestorableSubagentCompletionSourceReason } from "./subagent-registry-gateway-owner.js";
 import {
   getSubagentRunsForRequesterSession,
@@ -20,7 +35,10 @@ import {
   isRestartRecoveryLifecycleCurrent,
   ownsSubagentSessionExecution,
 } from "./subagent-registry-restart-recovery-helpers.js";
-import { loadSubagentRecoverySession } from "./subagent-registry-restart-recovery-session.js";
+import {
+  loadSubagentRecoverySession,
+  markSubagentRecoverySessionInterrupted,
+} from "./subagent-registry-restart-recovery-session.js";
 import type {
   RestartRecoveryParams,
   RestartRecoveryResult,
@@ -61,6 +79,7 @@ function findRequesterSettleWakeRecoveryBatch(
     const wake = child.requesterSettleWake;
     if (
       !(wake?.status === "dispatching" || (allowPending && wake?.status === "pending")) ||
+      wake.attemptCount < 1 ||
       !(hasRequesterCompletionCohort(child) || isQuietSubagentRestartContinuation(child)) ||
       !isRequesterSettleWakeForRun({
         entry: child,
@@ -128,8 +147,7 @@ export async function captureRequesterSettleWakeRecoverySource(
 > {
   assertSubagentRegistryWriteSourceCurrent(params.context);
   const lifecycleGeneration = agentEvents.getAgentEventLifecycleGeneration();
-  // Observing the admitted recovery can put its wake into backoff. That progress
-  // transition does not revoke the still-executing input's source custody.
+  // A retry can return the wake to pending without revoking its admitted source.
   const batch = findRequesterSettleWakeRecoveryBatch(params, true, true);
   if (!batch) {
     if (findRequesterSettleWakeRecoveryBatch(params, false, true)) {
@@ -251,7 +269,7 @@ export async function recoverInterruptedSubagentRow(
     return { status: "ignored" };
   }
   try {
-    const session = await loadSubagentRecoverySession({ entry, isOwnerCurrent: isCurrent }).catch(
+    let session = await loadSubagentRecoverySession({ entry, isOwnerCurrent: isCurrent }).catch(
       (error: unknown) => {
         if (!replayTerminal) {
           throw error;
@@ -286,23 +304,10 @@ export async function recoverInterruptedSubagentRow(
     if (!replayTerminal && session?.retained?.isCurrent()) {
       return { status: "handled", retained: session.retained };
     }
-    // Registry custody stores the physical locator; session configuration may
-    // still name its logical sessions.json alias. Let the store owner resolve it.
-    const physicalStorePath =
-      session && !replayTerminal && !entry.execution.restartRecovery
-        ? (
-            await prepareSqliteTargetFromSessionStorePath(session.storePath, {
-              agentId: session.agentId,
-            })
-          ).path
-        : undefined;
-    if (!isCurrent()) {
-      return { status: "deferred" };
-    }
-    const sessionEntry = session?.sessionEntry;
-    const sessionId = sessionEntry?.sessionId;
-    const lifecycleRevision = sessionEntry?.lifecycleRevision;
-    const lifecycleRunId = sessionEntry?.lifecycleRunId;
+    const physicalStorePath = session?.currentRead.source?.path;
+    const sessionId = session?.sessionEntry?.sessionId;
+    const lifecycleRevision = session?.sessionEntry?.lifecycleRevision;
+    const lifecycleRunId = session?.sessionEntry?.lifecycleRunId;
     const sessionAgentId = session?.agentId;
     const target = { sessionKey: childSessionKey, sessionId };
     // A requester can itself be a subagent. Its incoming continuation batch,
@@ -335,6 +340,17 @@ export async function recoverInterruptedSubagentRow(
     if (!replayTerminal && hasPendingRequesterSettleWake()) {
       return { status: "handled" };
     }
+    if (session && !legacy && !replayTerminal) {
+      session = await markSubagentRecoverySessionInterrupted({
+        entry,
+        session,
+        isOwnerCurrent: () => isCurrent() && !hasPendingRequesterSettleWake(),
+      });
+      if (!session || !isCurrent()) {
+        return { status: "deferred" };
+      }
+    }
+    const sessionEntry = session?.sessionEntry;
     const currentRead = session?.currentRead;
     const storePath = session?.storePath;
     const matches = (current: SessionEntryCurrentFacts | undefined) =>
@@ -348,7 +364,7 @@ export async function recoverInterruptedSubagentRow(
         !storePath ||
         !isGatewayCurrent() ||
         listAgentRunsForSession(target).length !== 0 ||
-        isSessionWorkAdmissionActive(storePath, [childSessionKey, sessionId])
+        isSessionControllerWorkActive(storePath, [childSessionKey, sessionId])
       ) {
         throw new Error("Subagent child session effects owner changed");
       }
@@ -410,6 +426,156 @@ export async function recoverInterruptedSubagentRow(
       return { status: "ignored" };
     }
     const receipt = entry.execution.restartRecovery;
+    if (
+      !legacy &&
+      !replayTerminal &&
+      !receipt &&
+      isRestartInterruptedSubagent(entry) &&
+      sessionEntry?.status === "interrupted" &&
+      sessionEntry.lastRunId === runId &&
+      params.gatewayRuntime &&
+      !getUnrestorableSubagentCompletionSourceReason(entry)
+    ) {
+      // Keep the task and its parent delivery with the registry. Ordinary admission
+      // transfers that custody to the continuation before executing any model work.
+      const continuationRunId = `subagent-restart:${runId}`;
+      const { continuation, agentToolCaller } = await subagentRuns.runWithCompletionAuthority(
+        entry,
+        async () => ({
+          continuation: await captureOperatorToolGatewayContinuationContext(),
+          agentToolCaller: getPluginRuntimeGatewayRequestScope()?.client?.internal?.agentToolCaller,
+        }),
+      );
+      try {
+        const operatorAuthority = continuation?.operatorAuthority;
+        if (!continuation) {
+          return { status: "deferred" };
+        }
+        const assertAdmissionCurrent = () => {
+          continuation.assertCurrent();
+          agentToolCaller?.assertCurrent?.();
+          const successor = subagentRuns.get(continuationRunId);
+          const ownsSuccessor =
+            successor?.taskRunId === (entry.taskRunId ?? runId) &&
+            successor.childSessionKey === childSessionKey &&
+            successor.childAgentId === entry.childAgentId &&
+            successor.execution.status === "running" &&
+            !successor.killIntent &&
+            !successor.killReconciliation;
+          if (!isGatewayCurrent() || (!ownsSuccessor && !isCurrent())) {
+            throw new Error("Subagent restart continuation owner changed");
+          }
+        };
+        const cfg = getRuntimeConfig();
+        const scope = {
+          agentId: authority.childAgentId,
+          sessionKey: childSessionKey,
+          sessionId: sessionEntry.sessionId,
+          sessionEntry,
+          storePath,
+        };
+        const messages = await readSessionMessagesAsync(scope, {
+          mode: "recent",
+          maxMessages: 20,
+          maxBytes: 256 * 1024,
+        });
+        if (messages.length === 0) {
+          throw new Error(
+            "Child transcript is missing; restore it before resuming subagent recovery",
+          );
+        }
+        const execPolicy = await resolveExecDefaultsAsync({ cfg, ...scope });
+        const fullAccess =
+          execPolicy.mode === "full" &&
+          execPolicy.security === "full" &&
+          execPolicy.ask === "off" &&
+          sessionEntry.restartRecoveryDeliveryMediaUrls === undefined &&
+          sessionEntry.restartRecoveryDisableMessageTool !== true &&
+          sessionEntry.restartRecoverySuppressTextDelivery !== true;
+        const retainedSafeTools =
+          sessionEntry.restartRecoveryForceSafeTools === true && !fullAccess;
+        const policy = resolveMainSessionResumePolicy(
+          messages,
+          retainedSafeTools,
+          sessionEntry.restartRecoveryDeliverySourceRunId,
+          sessionEntry.restartRecoveryBeforeAgentReplyState,
+          sessionEntry.restartRecoveryDeliveryReceiptState,
+          sessionEntry.restartRecoveryDeliveryToolCallId,
+          fullAccess,
+        );
+        const forceRestartSafeTools =
+          retainedSafeTools || policy.action === "complete" || policy.forceRestartSafeTools;
+        if (forceRestartSafeTools) {
+          const runtime = await resolveWorkerPlacementSessionRuntimeAsync({
+            cfg,
+            entry: sessionEntry,
+            agentId: authority.childAgentId,
+            sessionKey: childSessionKey,
+            assertCurrent: assertAdmissionCurrent,
+          });
+          if (isCliProvider(runtime, cfg)) {
+            throw new Error(
+              "CLI runtime cannot enforce restart-safe tools; child recovery remains pending",
+            );
+          }
+        }
+        assertAdmissionCurrent();
+        await params.gatewayRuntime.dispatchAgent(
+          bindInProcessSessionRun(
+            {
+              agentId: authority.childAgentId,
+              sessionKey: childSessionKey,
+              idempotencyKey: continuationRunId,
+              message: formatSystemTurnPrompt(
+                "A Gateway restart interrupted this task. Continue from the retained transcript " +
+                  "and finish the original request. Check recorded state before repeating any " +
+                  "tool action with an uncertain outcome. The original parent still receives your result.",
+              ),
+              deliver: false,
+              forceRestartSafeTools,
+              ...(policy.action === "resume" && policy.forceCodeModeTools
+                ? { forceCodeModeTools: true }
+                : {}),
+              inputProvenance: {
+                kind: "internal_system",
+                sourceSessionKey: childSessionKey,
+                sourceTool: "subagent_restart_recovery",
+              },
+            } satisfies AgentRunRequest,
+            {
+              sessionKey: childSessionKey,
+              sessionId: sessionEntry.sessionId,
+              lifecycleRevision: lifecycleRevision ?? null,
+              runId: continuationRunId,
+            },
+          ),
+          undefined,
+          {
+            operatorRunAuthority: operatorAuthority,
+            agentToolCaller,
+            scopes: continuation.scopes,
+            assertAdmissionCurrent,
+            prepareDispatchCurrent: async () => {
+              assertAdmissionCurrent();
+              const current = await currentRead?.readCurrent();
+              if (
+                current?.sessionId !== sessionId ||
+                current?.lifecycleRevision !== lifecycleRevision ||
+                (current?.lifecycleRunId !== undefined &&
+                  current.lifecycleRunId !== runId &&
+                  current.lifecycleRunId !== continuationRunId)
+              ) {
+                throw new Error("Subagent restart continuation session changed");
+              }
+              assertAdmissionCurrent();
+            },
+          },
+        );
+        return { status: "handled" };
+      } finally {
+        continuation?.release();
+      }
+    }
     if (
       !legacy &&
       !replayTerminal &&

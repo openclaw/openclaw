@@ -26,8 +26,7 @@ describe("FaceTime driver setup", () => {
     const runCommandWithTimeout = vi
       .fn()
       .mockResolvedValueOnce({ code: 0, stdout: "missing\n", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "Installed\n", stderr: "" })
-      .mockResolvedValueOnce({ code: 0, stdout: "current\n", stderr: "" });
+      .mockResolvedValueOnce({ code: 0, stdout: "Installed\n", stderr: "" });
 
     await expect(
       installFaceTimeDriver({
@@ -36,6 +35,7 @@ describe("FaceTime driver setup", () => {
         signal: abortController.signal,
       }),
     ).resolves.toEqual({ changed: true, status: "current" });
+    expect(runCommandWithTimeout).toHaveBeenCalledTimes(2);
     expect(runCommandWithTimeout).toHaveBeenNthCalledWith(
       2,
       ["/bin/sh", "/tmp/facetime/scripts/install-driver.sh", "--ensure"],

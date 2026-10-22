@@ -42,6 +42,9 @@ type QaChannelPayloadSendContext = Pick<
   | "mediaAccess"
   | "mediaLocalRoots"
   | "mediaReadFile"
+  | "signal"
+  | "onPlatformSendDispatch"
+  | "assertDirectAdapterHandoff"
 >;
 
 function createQaChannelMessageReceipt(
@@ -75,6 +78,9 @@ async function sendQaChannelMessagePayload(
     isError: ctx.payload.isError,
     threadId: ctx.threadId,
     replyToId: ctx.replyToId,
+    signal: ctx.signal,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
   };
   const result =
     mediaUrls.length === 0

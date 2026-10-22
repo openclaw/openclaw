@@ -121,6 +121,7 @@ suite.define(() => {
         name: "Start new session in background",
         exact: true,
       });
+      await expect.poll(() => images.count()).toBe(2);
       await expect.poll(() => start.isEnabled()).toBe(true);
       await gateway.deferNext("sessions.create");
       await input.press("ControlOrMeta+Enter");

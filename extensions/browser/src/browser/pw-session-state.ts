@@ -3,7 +3,7 @@ import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-run
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ConsoleMessage, Dialog, Frame, Page, Request, Response } from "playwright-core";
-import { saveBrowserDownload, type BrowserDownloadCaptureOptions } from "./pw-download-capture.js";
+import { saveBrowserDownload } from "./pw-download-capture.js";
 import {
   MAX_CONSOLE_MESSAGES,
   MAX_NETWORK_REQUESTS,
@@ -60,7 +60,6 @@ export function bindRoleRefsTarget(page: Page, cdpUrl: string, targetId?: string
   state.roleRefsTargetKey = key;
 }
 
-/** Store role refs on the page and target cache. */
 export function storeRoleRefsForTarget(opts: {
   page: Page;
   cdpUrl: string;
@@ -114,7 +113,6 @@ function currentTargetRoleRefsMode(
   return roleRefsByTarget.get(state.roleRefsTargetKey)?.mode;
 }
 
-/** Restore cached role refs onto a newly resolved page. */
 export function restoreRoleRefsForTarget(opts: {
   cdpUrl: string;
   targetId?: string;
@@ -134,12 +132,10 @@ export function restoreRoleRefsForTarget(opts: {
   if (state.roleRefs) {
     return;
   }
-  state.roleRefsTargetKey = cacheKey;
   state.roleRefs = cached.refs;
   state.roleRefsMode = cached.mode;
 }
 
-/** Ensure and attach state listeners for a Playwright page. */
 export function ensurePageState(page: Page): PageState {
   const existing = pageStates.get(page);
   if (existing) {
@@ -226,18 +222,7 @@ export function ensurePageState(page: Page): PageState {
       return;
     }
     const actionCapture = state.actionDownloadCapture;
-    const beforeSave = actionCapture?.beforeSave;
-    const captureOptions: BrowserDownloadCaptureOptions | undefined =
-      actionCapture && beforeSave
-        ? {
-            beforeSave: (candidate) => {
-              const validation = Promise.resolve().then(() => beforeSave(candidate));
-              actionCapture.validations.push(validation);
-              return validation;
-            },
-          }
-        : undefined;
-    const managedSave = saveBrowserDownload(download, captureOptions);
+    const managedSave = saveBrowserDownload(download, actionCapture);
     managedSave.catch(() => {});
     download.path = async () => (await managedSave).path;
     if (actionCapture) {
@@ -279,7 +264,6 @@ export function ensurePageState(page: Page): PageState {
   return state;
 }
 
-/** Read observed dialog state from a Playwright page. */
 export function getObservedBrowserStateForPage(page: Page): BrowserObservedState {
   const state = ensurePageState(page);
   return serializeObservedBrowserState(state);
@@ -306,7 +290,6 @@ export async function respondToObservedDialogOnPage(opts: {
   });
 }
 
-/** Mark pending observed dialogs as handled by a remote/browser-side hook. */
 export function markObservedDialogsHandledRemotelyForPage(
   page: Page,
   dialogs: readonly BrowserObservedDialogRecord[],
@@ -323,7 +306,6 @@ export function markObservedDialogsHandledRemotelyForPage(
   return serializeObservedBrowserState(state);
 }
 
-/** Arm a one-shot automatic dialog response for a page. */
 export function armObservedDialogResponseOnPage(opts: {
   page: Page;
   accept: boolean;
@@ -343,14 +325,11 @@ export function armObservedDialogResponseOnPage(opts: {
     ...(opts.promptText !== undefined ? { promptText: opts.promptText } : {}),
   };
   response.timer = setTimeout(() => {
-    if (state.armedDialogResponse === response) {
-      state.armedDialogResponse = undefined;
-    }
+    state.armedDialogResponse = undefined;
   }, timeoutMs);
   state.armedDialogResponse = response;
 }
 
-/** Create an abort signal that fires while a dialog blocks the page. */
 export function createObservedDialogAbortSignalForPage(opts: {
   page: Page;
   parentSignal?: AbortSignal;
@@ -362,30 +341,17 @@ export function createObservedDialogAbortSignalForPage(opts: {
       controller.abort(new BrowserObservedDialogBlockedError(serializeObservedBrowserState(state)));
     }
   };
-  const abortForParent = () => {
-    if (!controller.signal.aborted) {
-      controller.abort(opts.parentSignal?.reason ?? new Error("aborted"));
-    }
-  };
-
   if (state.pendingDialogs.length > 0) {
     abortForCurrentDialog();
   } else {
     state.dialogAbortControllers.add(controller);
   }
-  if (opts.parentSignal) {
-    if (opts.parentSignal.aborted) {
-      abortForParent();
-    } else {
-      opts.parentSignal.addEventListener("abort", abortForParent, { once: true });
-    }
-  }
-
   return {
-    signal: controller.signal,
+    signal: opts.parentSignal
+      ? AbortSignal.any([controller.signal, opts.parentSignal])
+      : controller.signal,
     cleanup: () => {
       state.dialogAbortControllers.delete(controller);
-      opts.parentSignal?.removeEventListener("abort", abortForParent);
     },
   };
 }

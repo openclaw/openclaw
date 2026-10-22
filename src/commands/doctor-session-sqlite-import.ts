@@ -20,6 +20,7 @@ import {
   readSessionSqliteMigrationManifest,
   updateMigrationManifestTarget,
   type ActiveSessionSqliteMigrationRun,
+  type SessionSqliteMigrationTargetManifest,
 } from "../infra/session-sqlite-migration-manifest.js";
 import {
   countTranscriptEventsForPath,
@@ -168,6 +169,15 @@ function prepareRestoredSessionIndex(
   const storePath = canonicalMigrationFilePath(target.storePath);
   const sqlitePath = resolveTargetSqlitePath(target, params.env);
   const evidence = new Map<string, MigrationArtifactIdentity>();
+  const completedMoves = new Map<SessionSqliteMigrationTargetManifest, Set<string>>();
+  const hasCompletedMove = (owner: SessionSqliteMigrationTargetManifest, key: string) => {
+    let keys = completedMoves.get(owner);
+    if (!keys) {
+      keys = new Set(owner.completedMoves.map(migrationMoveKey));
+      completedMoves.set(owner, keys);
+    }
+    return keys.has(key);
+  };
   let hasSelectedOwner = false;
   for (const refs of recoveryInventory.references.values()) {
     for (const ref of refs) {
@@ -176,9 +186,7 @@ function prepareRestoredSessionIndex(
         ref.move.sourcePath !== storePath ||
         (!ref.consumedByRestore &&
           !ref.run.manifest.restore?.restoredFiles.includes(storePath) &&
-          !ref.target.completedMoves.some(
-            (move) => migrationMoveKey(move) === migrationMoveKey(ref.move),
-          ))
+          !hasCompletedMove(ref.target, migrationMoveKey(ref.move)))
       ) {
         continue;
       }

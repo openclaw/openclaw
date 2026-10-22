@@ -23,6 +23,8 @@ const enUpdateActions = {
     },
     confirm: {
       message: "Installs the available update on the connected Gateway and restarts it.",
+      noKnownUpdateMessage:
+        "Runs the Gateway updater and restarts it. The current version may be reinstalled.",
       macMessage:
         "Hands this update to the OpenClaw Mac app, which installs it and restarts the Gateway it manages.",
       impact:

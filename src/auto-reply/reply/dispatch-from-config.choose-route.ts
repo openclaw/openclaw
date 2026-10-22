@@ -32,6 +32,10 @@ import {
   runWithDispatchAbortSignal,
 } from "./dispatch-from-config.abort.js";
 import { createDispatchCommentaryProgress } from "./dispatch-from-config.commentary.js";
+import {
+  acquireAcpDispatchTurn,
+  acquireDispatchTurn,
+} from "./dispatch-from-config.dispatch-admission.js";
 import { admittedSessionSettingsRestrictRuntime } from "./dispatch-from-config.events.js";
 import {
   hasExecApprovalPayload,
@@ -653,6 +657,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
     };
   }
 
+  const acpRefusal = state.dispatchKind === "acp" ? await acquireAcpDispatchTurn(state) : undefined;
+  if (acpRefusal) {
+    return acpRefusal;
+  }
   const replyDispatchTakeover = await runReplyDispatchHook(state, {
     shouldSendToolSummaries,
     shouldSendToolSummariesAsync,
@@ -668,19 +676,10 @@ export async function chooseDispatchRoute(state: PrepareDispatchOperationReadySt
       }),
     };
   }
-
-  const dispatchPhase = state.activeRunSafeCommandTurn ? "command_resolution" : "dispatch";
-  const dispatchAcquisition = await traceReplyPhase(`reply.admit_${dispatchPhase}`, () =>
-    state.ensureDispatchReplyOperation(dispatchPhase),
-  );
-  if (dispatchAcquisition.status === "aborted") {
-    return { status: "complete" as const, result: state.finishReplyOperationAbortedDispatch() };
-  }
-  if (dispatchAcquisition.status === "busy") {
-    return {
-      status: "complete" as const,
-      result: state.finishReplyOperationBusyDispatch({ dedupeDisposition: "release" }),
-    };
+  const dispatchRefusal =
+    state.dispatchKind === "acp" ? undefined : await acquireDispatchTurn(state);
+  if (dispatchRefusal) {
+    return dispatchRefusal;
   }
   const nextState = Object.assign(state, {
     shouldSuppressProgressDelivery,

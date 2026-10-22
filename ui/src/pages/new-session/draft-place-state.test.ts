@@ -1,14 +1,15 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewayAgentRow } from "../../api/types.ts";
-import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
 import { createRepositoryFixture } from "./draft-place-state.test-support.ts";
 import type { NewSessionRouteData } from "./location.ts";
-import { renderControl } from "./model-control.test-support.ts";
+import { waitForModelControl } from "./model-control.test-support.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 
 const REMOTE_PROJECT = {
@@ -119,7 +120,7 @@ describe("DraftPlaceState repository selection", () => {
       const settled = nextChange(f.changed, () => f.state.worktree && f.state.worktreeAvailable());
       f.state.adoptAgentDefaults();
       f.state.restorePreferenceSelections();
-      await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
+      await loadModelCatalog(f.context.gateway.snapshot.client!, { agentId: "main" });
       f.state.modelControl.selectModel("example/selected");
       f.state.modelControl.thinkingLevel = "high";
       expect(f.state.folderSubmissionBlocked()).toBe(true);
@@ -259,6 +260,8 @@ describe("DraftPlaceState repository selection", () => {
   });
 
   it("keeps a route-selected model in the unsent composer instead of restoring a remembered model", async () => {
+    // This test owns draft selection; settle lazy code loading before the interaction deadline.
+    await import("../chat/components/chat-model-picker-panel.tsx");
     const { state, context, readPreference, persistPreference, request } = createRepositoryFixture({
       data: routeData({ requestedModel: "example/first" }),
       models: models("first", "second", "remembered"),
@@ -266,29 +269,37 @@ describe("DraftPlaceState repository selection", () => {
     onTestFinished(() => state.modelControl.reset());
     readPreference.mockReturnValue({ model: "example/remembered" });
     state.adoptAgentDefaults();
-    await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId: "main" });
-    const view = renderControl(state.modelControl, context, "main", state.selectedAgent());
+    await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
+    const view = await waitForModelControl(
+      state.modelControl,
+      context,
+      "main",
+      state.selectedAgent(),
+    );
     expect(state.modelControl.modelForSubmission()).toBe("example/first");
     expect(createParams(state).model).toBe("example/first");
     expect(persistPreference).not.toHaveBeenCalled();
 
-    const choice = view.querySelector<HTMLButtonElement>(
-      '[data-chat-model-option="example/second"]',
-    );
-    expect(choice).not.toBeNull();
-    choice!.click();
+    const choice = await vi.waitFor(() => {
+      const option = view.querySelector<HTMLButtonElement>(
+        '[data-chat-model-option="example/second"]',
+      );
+      expect(option).not.toBeNull();
+      return option!;
+    });
+    choice.click();
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
     state.modelControl.load(context, "main", true, { agent: state.selectedAgent() });
     state.adoptAgentDefaults();
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
     state.modelControl.invalidate();
     state.adoptAgentDefaults();
-    await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId: "main" });
+    await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
     Object.assign(context.gateway.snapshot, { hello: { ...context.gateway.snapshot.hello } });
     state.invalidateGatewayDiscovery(false);
     state.adoptAgentDefaults();
-    await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId: "main" });
+    await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
     expect(persistPreference).toHaveBeenCalledExactlyOnceWith(
       "main",
@@ -301,15 +312,14 @@ describe("DraftPlaceState repository selection", () => {
     }));
     const selectAgent = async (agentId: string, model: string) => {
       state.selectAgentId(agentId);
-      await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId });
-      expect(state.modelControl.modelForSubmission()).toBe(model);
+      await vi.waitFor(() => expect(state.modelControl.modelForSubmission()).toBe(model));
     };
     await selectAgent("scout", "example/remembered");
     await selectAgent("main", "example/second");
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
     state.resetDraft();
     state.adoptAgentDefaults();
-    await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId: "main" });
+    await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
     expect(state.modelControl.modelForSubmission()).toBe("example/first");
 
     expect(
@@ -465,13 +475,17 @@ describe("DraftPlaceState repository selection", () => {
     },
   );
 
-  it.each(["git", "unavailable", "rejected"] as const)(
+  it.each(["git", "unavailable", "rejected", "forbidden"] as const)(
     "keeps edited branch through %s reconnect",
     async (result) => {
-      const { state, request, persistPreference } = createRepositoryFixture({ workspaceGit: true });
+      const { state, request, persistPreference, readPreference } = createRepositoryFixture({
+        workspaceGit: true,
+      });
+      readPreference.mockReturnValue({ worktree: false });
       request.mockResolvedValue(GIT);
       state.adoptAgentDefaults();
       await repositoryReady(state);
+      state.selectWorktree(true);
       state.setBaseRef("my-branch");
       state.setWorktreeName("my-checkout");
 
@@ -481,13 +495,25 @@ describe("DraftPlaceState repository selection", () => {
       request.mockReturnValue(discovery.promise);
       state.adoptAgentDefaults();
       expect(state.baseRef).toBe("my-branch");
-      if (result === "rejected") {
+      if (result === "forbidden") {
+        discovery.reject(
+          new GatewayRequestError({ code: "FORBIDDEN", message: "missing scope: operator.write" }),
+        );
+      } else if (result === "rejected") {
         discovery.reject(new Error("Git unavailable"));
       } else {
         discovery.resolve({ ...GIT, repositoryStatus: result });
       }
-      await repositoryReady(state, result === "git" ? "git" : "unavailable");
-      expect(state).toMatchObject({ baseRef: "my-branch", worktreeName: "my-checkout" });
+      await repositoryReady(
+        state,
+        result === "git" ? "git" : result === "forbidden" ? "forbidden" : "unavailable",
+      );
+      expect(state).toMatchObject({
+        worktree: true,
+        baseRef: "my-branch",
+        worktreeName: "my-checkout",
+      });
+      expect(state.preferenceSelection().worktree).toBe(true);
 
       state.invalidateGatewayDiscovery(false);
       request.mockResolvedValue(GIT);
@@ -639,7 +665,9 @@ describe("DraftPlaceState repository selection", () => {
     await currentPublished;
     state.selectWorktree(true);
 
-    previous.reject(new Error("old repository unavailable"));
+    previous.reject(
+      new GatewayRequestError({ code: "FORBIDDEN", message: "missing scope: operator.write" }),
+    );
     await previous.promise.catch(() => undefined);
 
     expect(state.repository).toMatchObject({ kind: "git", repoRoot: "/new-repo" });
@@ -970,7 +998,7 @@ describe("device folder selection", () => {
     f.state.selectDevice("desktop");
     f.state.selectDeviceFolder();
     f.state.setDeviceFolderPath("/srv/project");
-    f.gateway.environments![0]!.workerHost = { deviceFolders: false };
+    f.gateway.environments![0]!.workerHost = {};
     expect(f.state.folderSubmissionBlocked()).toBe(true);
     expect(f.state.deviceFolder).toEqual({ deviceId: "desktop", path: "/srv/project" });
     f.state.selectNewWorkspace();

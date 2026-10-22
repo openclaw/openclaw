@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex as digestText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { formatIMessageChatTarget } from "../targets.js";
 
 type SelfChatCacheKeyParts = {
@@ -21,11 +21,6 @@ type SelfChatCacheEntry = {
   rememberedAt: number;
 };
 
-export type SelfChatCache = {
-  remember: (lookup: SelfChatLookup) => void;
-  has: (lookup: SelfChatLookup) => boolean;
-};
-
 const SELF_CHAT_TTL_MS = 10_000;
 const SELF_CHAT_CREATED_AT_TOLERANCE_MS = 1_000;
 const MAX_SELF_CHAT_CACHE_ENTRIES = 512;
@@ -43,10 +38,6 @@ function isUsableTimestamp(createdAt: number | undefined): createdAt is number {
   return typeof createdAt === "number" && Number.isFinite(createdAt);
 }
 
-function digestText(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}
-
 function buildScope(parts: SelfChatCacheKeyParts): string {
   if (!parts.isGroup) {
     return `${parts.accountId}:imessage:${parts.sender}`;
@@ -55,7 +46,7 @@ function buildScope(parts: SelfChatCacheKeyParts): string {
   return `${parts.accountId}:${chatTarget}:imessage:${parts.sender}`;
 }
 
-class DefaultSelfChatCache implements SelfChatCache {
+export class SelfChatCache {
   private entries: SelfChatCacheEntry[] = [];
   private lastCleanupAt = 0;
 
@@ -109,8 +100,4 @@ class DefaultSelfChatCache implements SelfChatCache {
       .filter((entry) => now - entry.rememberedAt <= SELF_CHAT_TTL_MS)
       .slice(-MAX_SELF_CHAT_CACHE_ENTRIES);
   }
-}
-
-export function createSelfChatCache(): SelfChatCache {
-  return new DefaultSelfChatCache();
 }

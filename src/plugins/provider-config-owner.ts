@@ -1,4 +1,3 @@
-// Resolves provider config ownership between core and plugins.
 import {
   findNormalizedProviderValue,
   normalizeProviderId,
@@ -103,12 +102,12 @@ export function resolveProviderConfigApiOwnerHint(params: {
   return api;
 }
 
-/** Resolves provider/model refs used to scope model catalog discovery. */
+/** Resolves model refs used to scope model catalog discovery. */
 export function resolveModelCatalogScope(params: {
   cfg?: OpenClawConfig;
   provider: string;
   model: string;
-}): { providerRefs: string[]; modelRefs: string[] } {
+}): string[] {
   const provider = params.provider.trim();
   const model = params.model.trim();
   const providerConfig = findNormalizedProviderValue(params.cfg?.models?.providers, provider);
@@ -118,8 +117,5 @@ export function resolveModelCatalogScope(params: {
       ? [qualifiedModel]
       : [qualifiedModel, model];
   // Scope ordering feeds deterministic discovery and prompt/cache inputs.
-  return {
-    providerRefs: normalizeUniqueSingleOrTrimmedStringList([provider, providerConfig?.api]),
-    modelRefs: normalizeUniqueSingleOrTrimmedStringList(modelRefs),
-  };
+  return normalizeUniqueSingleOrTrimmedStringList(modelRefs);
 }

@@ -118,7 +118,7 @@ jobs:
       cache_write_allowed: ${{ steps.candidate_trust.outputs.cache_write_allowed }}
     steps:
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout target metadata
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -136,7 +136,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Resolve OpenClaw target ref
@@ -363,7 +363,7 @@ jobs:
 
       - name: Prepare Git owner
         if: steps.lane.outputs.run == 'true'
-        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout OpenClaw
         if: steps.lane.outputs.run == 'true'
@@ -778,7 +778,7 @@ jobs:
       REQUESTED_REPEAT: ${{ inputs.repeat || '3' }}
     steps:
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout OpenClaw source target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -979,9 +979,15 @@ jobs:
           if rg -q 'catalogRefresh:' src/config/zod-schema.core.ts; then
             catalog_refresh_config='    "models": { "catalogRefresh": { "enabled": false } },'
           fi
+          # Candidates before heartbeat moved to Automations still schedule one
+          # unless the retired agents.defaults.heartbeat key disables it.
+          heartbeat_config=""
+          if rg -q 'heartbeat:' src/config/zod-schema.agent-defaults.ts; then
+            heartbeat_config='    "agents": { "defaults": { "heartbeat": { "every": "0m" } } },'
+          fi
           cat > "$gateway_config" <<EOF
           {
-            "agents": { "defaults": { "heartbeat": { "every": "0m" } } },
+          ${heartbeat_config}
             "browser": { "enabled": false },
           ${catalog_refresh_config}
             "update": { "checkOnStart": false },
@@ -1164,7 +1170,7 @@ jobs:
 
       - name: Prepare Git owner
         if: steps.lane.outputs.run == 'true'
-        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout performance publisher helper
         if: steps.lane.outputs.run == 'true'
@@ -1263,7 +1269,7 @@ jobs:
         if: steps.download.outcome == 'success'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Prepare clawgrit report commit
@@ -1631,7 +1637,7 @@ jobs:
           fi
 
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@a379bbd73e30b84a89aca4d54744ab9ca19082e7
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout Gateway concurrency target
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1821,7 +1827,7 @@ jobs:
       - name: Set up benchmark Node
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.21.0
+          node-version: 24.22.1
           check-latest: false
 
       - name: Install benchmark pnpm
@@ -1830,9 +1836,9 @@ jobs:
           set -euo pipefail
           pnpm_prefix="$RUNNER_TEMP/vitest-pair-pnpm"
           npm_config_cache="$RUNNER_TEMP/vitest-pair-npm-cache" \
-            npm install --global --prefix "$pnpm_prefix" pnpm@12.11.1
+            npm install --global --prefix "$pnpm_prefix" pnpm@12.15.0
           pnpm_bin="$pnpm_prefix/bin/pnpm"
-          [[ "$("$pnpm_bin" --version)" == "12.11.1" ]]
+          [[ "$("$pnpm_bin" --version)" == "12.15.0" ]]
           echo "VITEST_PAIR_PNPM_BIN=$pnpm_bin" >> "$GITHUB_ENV"
 
       - name: Run Vitest pair benchmark

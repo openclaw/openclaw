@@ -1,36 +1,16 @@
 import { createSignal, onSettled } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { AgentsFilesListResult, SkillStatusReport } from "../../api/types.ts";
+import type { AgentsFilesListResult } from "../../api/types.ts";
 import { pathForAgentPanel } from "../../app-route-paths.ts";
 import { togglePinnedAgent } from "../../app/bootstrap-navigation-preferences.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import {
-  beginPanelRefresh,
-  completePanelRefresh,
-  createPanelRefreshStatus,
-  failPanelRefresh,
-} from "../../components/panel-refresh-status.ts";
-import { createGitHubIdentity } from "../../features/github-connections/github-identity.ts";
 import { t } from "../../i18n/index.ts";
 import { selectableAgentsList } from "../../lib/agents/display.ts";
-import {
-  loadToolsCatalog,
-  loadToolsEffective,
-  buildToolsEffectiveRequestKey,
-  refreshVisibleToolsEffectiveForCurrentSession,
-  resetToolsEffectiveState,
-  setDefaultAgent,
-  type AgentsState,
-} from "../../lib/agents/index.ts";
+import { buildToolsEffectiveRequestKey, type AgentsState } from "../../lib/agents/index.ts";
+import { setDefaultAgent } from "../../lib/agents/mutations.ts";
 import { DEFAULT_AGENT_PANEL, type AgentsPanel } from "../../lib/agents/panels.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
-import {
-  createInitialCronState,
-  loadCronJobsPage,
-  loadCronScopeStats,
-  loadCronStatus,
-  runCronJob,
-} from "../../lib/cron/index.ts";
+import { createInitialCronState } from "../../lib/cron/index.ts";
 import type { CronState } from "../../lib/cron/types.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import {
@@ -38,32 +18,35 @@ import {
   type GatewayMethodOperatorScope,
 } from "../../lib/gateway-methods.ts";
 import { GatewayPageBinding } from "../../lib/gateway-page-binding.ts";
-import {
-  loadModelCatalog,
-  modelCatalogRefreshError,
-  readAgentModelCatalog,
-  subscribeModelCatalogCache,
-  subscribeModelCatalogChanges,
-} from "../../lib/model-catalog-store.ts";
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { ModelCatalogReader } from "../../lib/model-catalog-reader.ts";
+import { modelCatalogRefreshError, readAgentModelCatalog } from "../../lib/model-catalog-store.ts";
+import { createGitHubIdentityView } from "../../lib/reactive/domain-github-identity.ts";
+import { observeState } from "../../lib/reactive/observe-state.ts";
+import { projectOwner } from "../../lib/reactive/projection.ts";
+import { createTimeout } from "../../lib/reactive/timers.ts";
 import { parseAgentSessionKey } from "../../lib/sessions/session-key.ts";
+import { createAgentConfigActions } from "./agent-config-actions.ts";
+import { createAgentCronPresenter } from "./agent-cron-presenter.ts";
+import { createAgentsPageLifetime } from "./agents-page-lifetime.ts";
+import { createAgentsPagePresentation } from "./agents-page-presentation.ts";
+import type { GeneratedAvatar } from "./avatar-picker.tsx";
 import {
   loadAgentFileContent,
-  overwriteAgentFile,
-  reloadAgentFile,
-  resetAgentFile,
+  createAgentFileActions,
   resetAgentFiles,
-  saveAgentFile,
   type AgentFilesState,
 } from "./files.ts";
 import {
+  type AgentIdentityDraft,
+  type AgentIdentityOutcome,
+  identityDraftStatus,
   resetIdentityDraft,
   saveIdentityDraft,
   selectIdentityAvatar,
+  setIdentityAvatar,
   setIdentityDraftField,
 } from "./identity-actions.ts";
-import { createAgentModelActions } from "./model-config.ts";
-import type { AgentIdentityDraft } from "./panels-overview.tsx";
+import type { AgentMemoryTarget } from "./memory/memory-panel-state.ts";
 import {
   navigateToAgent,
   navigateToAgentPanel,
@@ -71,32 +54,38 @@ import {
 } from "./route-navigation.ts";
 import type { AgentsRouteData } from "./route.ts";
 import { createAgentSelectionDrafts } from "./selection-drafts.ts";
-import { clearAgentSkillFilter, createAgentSkillActions, loadAgentSkills } from "./skills.ts";
-import { createAgentToolActions } from "./tool-config.ts";
-import type { AgentsProps } from "./view.tsx";
-
-type AgentsRequestSources = Partial<Pick<ApplicationContext, "agents" | "agentIdentity">>;
+import {
+  createAgentSkillsReset,
+  createAgentSkillsReader,
+  type AgentSkillsState,
+} from "./skills.ts";
+import { createAgentToolsCatalog, createAgentEffectiveTools } from "./tools.ts";
 
 type AgentsPageData = Omit<AgentsState, "agentsLoading" | "agentsError"> &
-  AgentFilesState & {
-    chatModelCatalogStatus: ReturnType<typeof createPanelRefreshStatus>;
+  AgentFilesState &
+  AgentSkillsState & {
+    chatModelCatalogRead: Promise<void> | null;
     agentFilesList: AgentsFilesListResult | null;
     agentFileActive: string | null;
-    agentIdentityLoading: boolean;
     identityDraft: AgentIdentityDraft;
     identitySaving: boolean;
-    identityError: string | null;
-    agentSkillsLoading: boolean;
-    agentSkillsError: string | null;
-    agentSkillsReport: SkillStatusReport | null;
-    agentSkillsAgentId: string | null;
+    identityOutcome: Promise<AgentIdentityOutcome> | null;
     cron: CronState;
     sessionKey: string;
     agentsPanel: AgentsPanel;
   };
-type AgentsOwnerView = Omit<AgentsProps, "agentSkills"> & {
-  agentSkills: Omit<AgentsProps["agentSkills"], "filter">;
-};
+type AgentsViewData = Omit<
+  AgentsPageData,
+  | "client"
+  | "connected"
+  | "agents"
+  | "sessions"
+  | "sessionsResult"
+  | "sessionKey"
+  | "agentFileWriteRevisions"
+>;
+
+export type AgentsPageView = ReturnType<ReturnType<typeof createAgentsPageState>["read"]>;
 
 export function createAgentsPageState(
   context: ApplicationContext,
@@ -104,99 +93,120 @@ export function createAgentsPageState(
 ) {
   let routeData = initialRouteData;
   let active = true;
-  let publish = () => {};
+  const presentation = createAgentsPageLifetime();
+  const identityPresentation = createAgentsPagePresentation(presentation.retired);
   const [skillsFilter, setSkillsFilter] = createSignal("");
+  const identities = projectOwner(context.agentIdentity, (identity) => identity.entries());
+  const channels = projectOwner(context.channels, (source) => source.state);
+  const navigation = projectOwner(context.navigation, (source) => source.snapshot);
   // The domain helpers mutate then read their state synchronously; Solid only observes it.
-  const state = new Proxy<AgentsPageData>(
-    {
-      agentsList: null,
-      agentsSelectedId: null,
-      toolsCatalogLoading: false,
-      toolsCatalogLoadingAgentId: null,
-      toolsCatalogError: null,
-      toolsCatalogResult: null,
-      toolsEffectiveLoading: false,
-      toolsEffectiveLoadingKey: null,
-      toolsEffectiveResultKey: null,
-      toolsEffectiveError: null,
-      toolsEffectiveResult: null,
-      chatModelCatalogStatus: createPanelRefreshStatus(),
-      agentFilesLoading: false,
-      agentFilesError: null,
-      agentFilesList: null,
-      agentFileEditors: {},
-      agentFileConflict: null,
-      agentFileActive: null,
-      agentFileSaving: false,
-      agentIdentityLoading: false,
-      identityDraft: { name: null, emoji: null, avatar: null },
-      identitySaving: false,
-      identityError: null,
-      agentSkillsLoading: false,
-      agentSkillsError: null,
-      agentSkillsReport: null,
-      agentSkillsAgentId: null,
-      cron: createInitialCronState(),
-      agentFileWriteRevisions: new Map(),
-      get agents() {
-        return context.agents;
-      },
-      get sessions() {
-        return context.sessions;
-      },
-      get sessionsResult() {
-        return context.sessions.state.result;
-      },
-      get client() {
-        return gateway.client;
-      },
-      get connected() {
-        return gateway.connected;
-      },
-      get requestGeneration() {
-        return gateway.epoch;
-      },
-      get sessionKey() {
-        return context.gateway.snapshot.sessionKey;
-      },
-      get agentsPanel() {
-        return routeData?.panel ?? DEFAULT_AGENT_PANEL;
-      },
+  const observation = observeState<AgentsPageData>({
+    agentsList: null,
+    agentsSelectedId: null,
+    chatModelCatalogRead: null,
+    agentFilesLoading: false,
+    agentFileRead: null,
+    agentFileOutcome: null,
+    agentFilesList: null,
+    agentFileEditors: {},
+    agentFileConflict: null,
+    agentFileActive: null,
+    agentFileSaving: false,
+    identityDraft: { name: null, emoji: null, avatar: null },
+    identitySaving: false,
+    identityOutcome: null,
+    agentSkillsRead: null,
+    agentSkillsReport: null,
+    agentSkillsAgentId: null,
+    cron: createInitialCronState(),
+    agentFileWriteRevisions: new Map(),
+    get agents() {
+      return context.agents;
     },
-    {
-      set(target, key, value) {
-        if (!Object.is(Reflect.get(target, key), value)) {
-          Reflect.set(target, key, value);
-          publish();
-        }
-        return true;
-      },
+    get sessions() {
+      return context.sessions;
     },
-  );
+    get sessionsResult() {
+      return context.sessions.state.result;
+    },
+    get client() {
+      return gateway.client;
+    },
+    get connected() {
+      return gateway.connected;
+    },
+    get requestGeneration() {
+      return gateway.epoch;
+    },
+    get sessionKey() {
+      return context.gateway.snapshot.sessionKey;
+    },
+    get agentsPanel() {
+      return routeData?.panel ?? DEFAULT_AGENT_PANEL;
+    },
+  });
+  const state = observation.state;
+  const readData: () => AgentsViewData = observation.read;
+  const readChannels: () => Pick<
+    ReturnType<typeof channels.read>,
+    "channelsSnapshot" | "channelsRead" | "channelsError" | "channelsLastSuccess"
+  > = channels.read;
+  const publish = observation.invalidate;
+  const cron = createAgentCronPresenter({
+    currentState: () => state.cron,
+    readState: () => readData().cron,
+    canCall: (method, scope) => active && canCall(method, scope),
+    publish,
+  });
   const selectionDrafts = createAgentSelectionDrafts(state, resetSelectionState);
-  let chatModelCatalogPending: Promise<unknown> | null = null;
-  let chatModelCatalogRequest: AbortController | null = null;
-  let catalogClient: GatewayBrowserClient | null = null;
-  let stopCatalog: (() => void) | undefined;
+  let identitySaves = selectionDrafts.bindContext(context);
+  const identityAutosave = createTimeout(() => void saveSelectedIdentity(), 550);
+  const skills = createAgentSkillsReader(state);
+  const skillReset = createAgentSkillsReset({
+    retired: presentation.retired,
+    state,
+    context,
+    canReset: () => canCall("config.patch", "operator.admin"),
+    isCurrent: (client, generation, agentId, agents) =>
+      isCurrentRequest(client, generation, agentId, { agents }),
+    onUpdated: (agentId) => skills.refresh(agentId),
+  });
+  let catalogRecoveryPending = false;
+  let catalogNeedsRecovery = false;
+  const modelReader = new ModelCatalogReader(publish, {
+    onRead: (read) => {
+      const completion = read.then((result) => {
+        const error = result && modelCatalogRefreshError(result);
+        if (error) {
+          throw new Error(error);
+        }
+      });
+      // The notice can be absent while another agent panel is selected.
+      void completion.catch(() => undefined);
+      state.chatModelCatalogRead = completion;
+    },
+    onResult: (result) => settleModelCatalog(Boolean(modelCatalogRefreshError(result))),
+    onError: () => settleModelCatalog(true),
+  });
   let routeDataInitialized = false;
   let applyingRouteSelection = false;
   let routeSelectionSuperseded = false;
-  let chatModelCatalogSubscription: {
-    isCurrent: () => boolean;
-    unsubscribe: () => void;
-  } | null = null;
   let normalizedLocation = "";
-  const configEditor = {
+  const configActions = createAgentConfigActions({
     getRuntimeConfig: () => context.runtimeConfig,
     canUpdate: (agentId: string) =>
       agentId === state.agentsSelectedId && canCall("config.set", "operator.admin"),
-  };
-  const githubIdentity = createGitHubIdentity({
+    getReport: () => state.agentSkillsReport,
+    onPrimaryChanged: () => refreshEffectiveToolsForCurrentSession(),
+  });
+  const githubIdentity = createGitHubIdentityView({
     runExternalMutation: (task, options) =>
       context.runtimeConfig.runExternalMutation(task, options),
   });
   const gateway = new GatewayPageBinding(() => publish(), {
     getGateway: () => context.gateway,
+    // A new source or client owns a new set of drafts. A same-client reconnect
+    // only invalidates in-flight requests below and keeps its drafts visible.
     onIdentityChange: () => resetForSourceChange(),
     invalidateRequests: (change) => {
       if (change.identityChanged) {
@@ -206,34 +216,36 @@ export function createAgentsPageState(
       resetModelCatalog();
     },
     onSnapshot: ({ snapshot: gatewaySnapshot, becameAvailable, becameConnected }) => {
+      identitySaves = selectionDrafts.bindContext(context);
       selectionDrafts.observeGateway(gatewaySnapshot);
       syncGatewayState();
-      if (catalogClient !== state.client) {
-        stopCatalog?.();
-        catalogClient = state.client;
-        stopCatalog = catalogClient
-          ? subscribeModelCatalogCache(catalogClient, () => publish())
-          : undefined;
+      if (becameConnected && Object.values(state.identityDraft).some((value) => value !== null)) {
+        scheduleIdentitySave();
       }
       syncGitHubIdentity(state.agentsSelectedId);
       if (becameAvailable && !becameConnected) {
-        const subscription = chatModelCatalogSubscription;
-        void Promise.resolve(chatModelCatalogPending).then(() => {
-          const snapshot = gateway.snapshot;
-          const status = state.chatModelCatalogStatus;
-          if (
-            subscription?.isCurrent() &&
-            snapshot &&
-            isGatewayAvailable(snapshot) &&
-            (status.awaitingGateway || status.error !== null)
-          ) {
-            ensureModelCatalog({ refresh: true });
-          }
-        });
+        if (modelReader.pending) {
+          catalogRecoveryPending = true;
+        } else {
+          recoverModelCatalog();
+        }
       }
     },
     ensureInitialData: () => ensureInitialData(),
   });
+  const isCurrentToolsRead = (client: GatewayBrowserClient, generation: number, agentId: string) =>
+    isCurrentRequest(client, generation, agentId, {});
+  const toolsCatalog = createAgentToolsCatalog({
+    scope: () => state,
+    isCurrent: isCurrentToolsRead,
+  });
+  const effectiveTools = createAgentEffectiveTools({
+    scope: () => state,
+    isCurrent: isCurrentToolsRead,
+    key: (agentId, sessionKey) => buildToolsEffectiveRequestKey(state, { agentId, sessionKey }),
+    changed: publish,
+  });
+
   function applyRoute() {
     applyRouteData();
     syncCanonicalLocation();
@@ -244,6 +256,7 @@ export function createAgentsPageState(
     if (state.cron.client !== state.client || state.cron.connected !== state.connected) {
       // In-flight cron loaders mutate their captured state; same-client
       // snapshots must retain it or loading never clears in the visible state.
+      cron.retire();
       state.cron = { ...state.cron, client: state.client, connected: state.connected };
     }
   }
@@ -261,12 +274,13 @@ export function createAgentsPageState(
 
   function syncSettingsSelection() {
     const selection = context.settingsAgentSelection;
-    selectionDrafts.select({
+    const restoredIdentity = selectionDrafts.select({
       selectedId: selection.state.selectedId,
-      intentRevision: selection.intentRevision,
-      awaitingRoster: !selection.state.selectedId && !context.agents.state.agentsList,
       profileId: context.gateway.snapshot.selfUser?.id ?? null,
     });
+    if (restoredIdentity) {
+      scheduleIdentitySave(0);
+    }
     syncGitHubIdentity(state.agentsSelectedId);
   }
 
@@ -288,7 +302,7 @@ export function createAgentsPageState(
     if (!state.agentFileActive || !files.some((file) => file.name === state.agentFileActive)) {
       state.agentFileActive = files.find((file) => file.name === "AGENTS.md")?.name ?? null;
     }
-    if (state.agentFileActive) {
+    if (state.agentFileActive && !context.agents.files(agentId).loading) {
       await loadAgentFileContent(state, agentId, state.agentFileActive, {
         force,
       });
@@ -296,22 +310,26 @@ export function createAgentsPageState(
   }
 
   function resetForSourceChange() {
+    identityAutosave.cancel();
     selectionDrafts.clear();
+    identitySaves = selectionDrafts.bindContext(context);
     state.agentsList = null;
     state.agentsSelectedId = null;
     resetSelectionState();
   }
 
   function invalidateTransientRequests() {
+    presentation.retire();
     gateway.invalidate();
     state.agentFilesLoading = false;
+    state.agentFileRead = null;
+    state.agentFileOutcome = null;
     state.agentFileSaving = false;
     state.identitySaving = false;
-    state.agentIdentityLoading = false;
-    state.agentSkillsLoading = false;
-    state.toolsCatalogLoading = false;
-    state.toolsCatalogLoadingAgentId = null;
-    resetToolsEffectiveState(state);
+    skills.reset();
+    toolsCatalog.invalidate();
+    effectiveTools.reset();
+    cron.retire();
     state.cron = {
       ...state.cron,
       cronLoading: false,
@@ -396,7 +414,7 @@ export function createAgentsPageState(
     client: GatewayBrowserClient,
     generation: number,
     agentId: string | undefined,
-    sources: AgentsRequestSources,
+    sources: Partial<Pick<ApplicationContext, "agents" | "agentIdentity">>,
   ): boolean {
     return (
       active &&
@@ -410,24 +428,7 @@ export function createAgentsPageState(
   }
 
   function ensureAgentIdentities() {
-    const client = state.client;
-    const agentIdentity = context.agentIdentity;
-    const ids =
-      state.agentsList?.agents.map((entry) => entry.id).filter((id) => !agentIdentity.get(id)) ??
-      [];
-    if (!client || !state.connected || ids.length === 0 || state.agentIdentityLoading) {
-      return;
-    }
-    const generation = state.requestGeneration;
-    state.agentIdentityLoading = true;
-    void agentIdentity
-      .ensure(ids)
-      .catch(() => undefined)
-      .finally(() => {
-        if (isCurrentRequest(client, generation, undefined, { agentIdentity })) {
-          state.agentIdentityLoading = false;
-        }
-      });
+    void context.agentIdentity.ensure(state.agentsList?.agents.map((entry) => entry.id) ?? []);
   }
 
   function loadActivePanelData() {
@@ -448,14 +449,12 @@ export function createAgentsPageState(
       return;
     }
     if (state.agentsPanel === "skills" && state.agentSkillsAgentId !== agentId) {
-      void loadAgentSkills(state, agentId);
+      skills.refresh(agentId);
       return;
     }
     if (state.agentsPanel === "tools") {
       syncGitHubIdentity(agentId);
-      if (state.toolsCatalogResult?.agentId !== agentId && !state.toolsCatalogLoading) {
-        void loadToolsCatalog(state, agentId);
-      }
+      toolsCatalog.ensure(agentId);
       loadEffectiveToolsForAgent(agentId);
       githubIdentity.ensureVerified();
       return;
@@ -466,6 +465,7 @@ export function createAgentsPageState(
     }
     if (state.agentsPanel === "cron") {
       if (state.cron.cronAgentId !== agentId) {
+        cron.retire();
         state.cron = createInitialCronState({
           client: state.client,
           connected: state.connected,
@@ -473,7 +473,7 @@ export function createAgentsPageState(
         state.cron.cronAgentId = agentId;
       }
       if (!state.cron.cronLoading && !state.cron.cronStatus) {
-        void refreshCron();
+        cron.onRefresh();
       }
     }
   }
@@ -486,6 +486,7 @@ export function createAgentsPageState(
     githubIdentity.sync({
       client: state.client,
       connected: state.connected,
+      permissionsReady: snapshot.phase === "connected" && Boolean(snapshot.hello),
       target: agentId
         ? {
             kind: "shared",
@@ -507,159 +508,103 @@ export function createAgentsPageState(
   }
 
   function resetModelCatalog() {
-    chatModelCatalogRequest?.abort();
-    chatModelCatalogRequest = null;
-    chatModelCatalogSubscription?.unsubscribe();
-    chatModelCatalogSubscription = null;
-    state.chatModelCatalogStatus = createPanelRefreshStatus();
-    chatModelCatalogPending = null;
+    modelReader.clear();
+    catalogRecoveryPending = false;
+    catalogNeedsRecovery = false;
+    state.chatModelCatalogRead = null;
+  }
+
+  function settleModelCatalog(needsRecovery: boolean) {
+    catalogNeedsRecovery = needsRecovery;
+    if (catalogRecoveryPending) {
+      catalogRecoveryPending = false;
+      recoverModelCatalog();
+    }
+  }
+
+  function recoverModelCatalog() {
+    if (isGatewayAvailable(context.gateway.snapshot) && catalogNeedsRecovery) {
+      ensureModelCatalog({ refresh: true });
+    }
   }
 
   function ensureModelCatalog(options: { refresh?: boolean } = {}) {
-    const client = state.client;
     const agentId = state.agentsSelectedId;
-    if (!client || !state.connected || !agentId) {
+    if (!state.client || !state.connected || !agentId) {
       return;
     }
-    if (!chatModelCatalogSubscription?.isCurrent()) {
-      resetModelCatalog();
-      const generation = state.requestGeneration;
-      const requestGateway = context.gateway;
-      const agents = context.agents;
-      const subscription = {
-        isCurrent: () =>
-          chatModelCatalogSubscription === subscription &&
-          context.gateway === requestGateway &&
-          isCurrentRequest(client, generation, agentId, { agents }),
-        unsubscribe: subscribeModelCatalogChanges(
-          context.gateway,
-          () => {
-            if (!subscription.isCurrent()) {
-              return;
-            }
-            chatModelCatalogRequest?.abort();
-            chatModelCatalogRequest = null;
-            chatModelCatalogPending = null;
-            ensureModelCatalog({ refresh: true });
-          },
-          { agentId },
-        ),
-      };
-      chatModelCatalogSubscription = subscription;
+    if (modelReader.bind(context.gateway, { agentId })) {
+      catalogNeedsRecovery = false;
+      state.chatModelCatalogRead = null;
     }
-    if (chatModelCatalogPending || (!options.refresh && state.chatModelCatalogStatus.hasLoaded)) {
-      return;
+    if (
+      !modelReader.pending &&
+      (options.refresh || !state.chatModelCatalogRead || modelReader.failed)
+    ) {
+      void modelReader.read();
     }
-    const subscription = chatModelCatalogSubscription;
-    const controller = new AbortController();
-    chatModelCatalogRequest = controller;
-    const ownsRequest = () => subscription?.isCurrent() && chatModelCatalogRequest === controller;
-    state.chatModelCatalogStatus = beginPanelRefresh(state.chatModelCatalogStatus);
-    const pending = loadModelCatalog(client, { agentId, signal: controller.signal })
-      .then(
-        (result) => {
-          if (!ownsRequest()) {
-            return;
-          }
-          const error = modelCatalogRefreshError(result);
-          state.chatModelCatalogStatus = error
-            ? failPanelRefresh(completePanelRefresh(), new Error(error), gateway.snapshot)
-            : completePanelRefresh();
-        },
-        (error: unknown) => {
-          if (ownsRequest()) {
-            state.chatModelCatalogStatus = failPanelRefresh(
-              state.chatModelCatalogStatus,
-              error,
-              gateway.snapshot,
-            );
-          }
-        },
-      )
-      .finally(() => {
-        if (chatModelCatalogPending === pending) {
-          chatModelCatalogPending = null;
-          chatModelCatalogRequest = null;
-        }
-      });
-    chatModelCatalogPending = pending;
   }
 
   async function loadAgentFiles(agentId: string, force = false) {
     const client = state.client;
     const agents = context.agents;
-    if (!client || !state.connected || state.agentFilesLoading) {
+    const cached = agents.files(agentId);
+    if (!client || !state.connected || state.agentFilesLoading || cached.loading) {
       return;
     }
-    const cached = agents.files(agentId);
     if (cached.list && !force) {
       syncCurrentAgentFiles(agents);
       return;
     }
-    const generation = state.requestGeneration;
-    state.agentFilesLoading = true;
-    state.agentFilesError = null;
-    try {
-      const list = force ? await agents.refreshFiles(agentId) : await agents.ensureFiles(agentId);
-      if (!isCurrentRequest(client, generation, agentId, { agents })) {
-        return;
-      }
-      state.agentFilesList = list ?? agents.files(agentId).list;
-    } finally {
-      if (isCurrentRequest(client, generation, agentId, { agents })) {
-        state.agentFilesLoading = false;
-      }
+    // Keep an initial failure visible until explicit retry or owner retirement.
+    if (cached.read && !force) {
+      return;
     }
-    if (isCurrentRequest(client, generation, agentId, { agents })) {
+    const generation = state.requestGeneration;
+    state.agentFileOutcome = null;
+    const list = force ? await agents.refreshFiles(agentId) : await agents.ensureFiles(agentId);
+    if (!isCurrentRequest(client, generation, agentId, { agents })) {
+      return;
+    }
+    state.agentFilesList = list ?? agents.files(agentId).list;
+    if (list) {
       await selectDefaultAgentFile(agentId, force);
     }
   }
 
-  async function refreshCron() {
-    const cronState = state.cron;
-    if (
-      !cronState.connected ||
-      !cronState.client ||
-      cronState.cronLoading ||
-      !canCall("cron.list", "operator.read")
-    ) {
+  function scheduleIdentitySave(delay = 550) {
+    identityAutosave.cancel();
+    if (identityDraftStatus(state.identityDraft) !== "ready") {
       return;
     }
-    await Promise.all([
-      runCronTask(loadCronStatus),
-      runCronTask(loadCronScopeStats),
-      runCronTask((current) => loadCronJobsPage(current, { tableFilters: true })),
-    ]);
+    identityAutosave.schedule(delay);
   }
 
-  async function runCronTask<T>(task: (cronState: CronState) => Promise<T>): Promise<T> {
-    const cronState = state.cron;
-    try {
-      const result = task(cronState);
-      if (state.cron === cronState) {
-        publish();
-      }
-      return await result;
-    } finally {
-      if (state.cron === cronState) {
-        publish();
-      }
-    }
-  }
-
-  function saveSelectedIdentity() {
+  async function saveSelectedIdentity() {
     if (!canCall("agents.update", "operator.admin")) {
       return;
     }
     const client = state.client;
     const agentId = state.agentsSelectedId;
-    if (!client || !agentId || state.identitySaving) {
+    if (!client || !agentId) {
+      return;
+    }
+    const activeSave = identitySaves.get(agentId);
+    if (activeSave?.client === client && activeSave.snapshot === gateway.snapshot) {
+      await activeSave.promise;
+      if (state.client === client && state.agentsSelectedId === agentId) {
+        scheduleIdentitySave(0);
+      }
+      return;
+    }
+    if (state.identitySaving) {
       return;
     }
     const generation = state.requestGeneration;
     const agents = context.agents;
     const agentIdentity = context.agentIdentity;
-    void saveIdentityDraft({
+    const draftAtStart = state.identityDraft;
+    const save = saveIdentityDraft({
       host: state,
       config: context.config,
       expectedClient: client,
@@ -673,54 +618,64 @@ export function createAgentsPageState(
       isCurrent: () => isCurrentRequest(client, generation, agentId, { agents, agentIdentity }),
       onSaved: () => syncAgentState(agents),
     });
+    identitySaves.set(agentId, { client, snapshot: gateway.snapshot, promise: save });
+    identityPresentation.saveIdentity(save);
+    try {
+      await save;
+    } finally {
+      if (identitySaves.get(agentId)?.promise === save) {
+        identitySaves.delete(agentId);
+      }
+    }
+    if (
+      isCurrentRequest(client, generation, agentId, { agents, agentIdentity }) &&
+      state.identityDraft !== draftAtStart
+    ) {
+      scheduleIdentitySave(0);
+    }
   }
 
   function resetSelectionState() {
+    presentation.retire();
+    identityAutosave.cancel();
     gateway.invalidate();
     resetModelCatalog();
     resetAgentFiles(state);
     state.agentSkillsReport = null;
-    state.agentSkillsLoading = false;
-    state.agentSkillsError = null;
+    skills.reset();
     state.agentSkillsAgentId = null;
-    state.agentIdentityLoading = false;
     resetIdentityDraft(state);
-    state.toolsCatalogResult = null;
-    state.toolsCatalogError = null;
-    state.toolsCatalogLoading = false;
-    state.toolsCatalogLoadingAgentId = null;
-    resetToolsEffectiveState(state);
+    toolsCatalog.reset();
+    effectiveTools.reset();
+    cron.retire();
     state.cron = createInitialCronState({
       client: state.client,
       connected: state.connected,
     });
   }
 
-  function loadEffectiveToolsForAgent(agentId: string) {
+  function loadEffectiveToolsForAgent(agentId: string, refresh = false) {
     if (agentId !== chatAgentId()) {
-      resetToolsEffectiveState(state);
+      effectiveTools.reset();
       return;
     }
-    const requestKey = buildToolsEffectiveRequestKey(state, {
-      agentId,
-      sessionKey: state.sessionKey,
-    });
-    if (state.toolsEffectiveResultKey === requestKey && !state.toolsEffectiveError) {
-      return;
+    effectiveTools.ensure(agentId, state.sessionKey, refresh);
+  }
+
+  function refreshEffectiveToolsForCurrentSession() {
+    const agentId = state.agentsSelectedId;
+    if (state.agentsPanel === "tools" && agentId) {
+      loadEffectiveToolsForAgent(agentId, true);
     }
-    void loadToolsEffective(state, { agentId, sessionKey: state.sessionKey });
   }
 
   async function refreshAgents(mode: "ensure" | "refresh" | "save" = "refresh") {
     const client = state.client;
-    if (mode === "save" && (!client || !canCall("config.set", "operator.admin"))) {
+    if (!client || (mode === "save" && !canCall("config.set", "operator.admin"))) {
       return;
     }
     const generation = state.requestGeneration;
     const agents = context.agents;
-    if (!client) {
-      return;
-    }
     if (mode === "save" && !(await context.runtimeConfig.save())) {
       return;
     }
@@ -729,7 +684,7 @@ export function createAgentsPageState(
       return;
     }
     if (mode === "save") {
-      resetToolsEffectiveState(state);
+      effectiveTools.reset();
     }
     syncAgentState(agents);
     if (mode !== "refresh") {
@@ -739,16 +694,13 @@ export function createAgentsPageState(
   }
 
   async function selectDefaultAgent(agentId: string) {
-    if (!canCall("config.set", "operator.admin")) {
+    const client = state.client;
+    if (!client || !canCall("config.set", "operator.admin")) {
       return;
     }
-    const client = state.client;
     const generation = state.requestGeneration;
     const agents = context.agents;
     const runtimeConfig = context.runtimeConfig;
-    if (!client) {
-      return;
-    }
     const canDispatch = () =>
       context.runtimeConfig === runtimeConfig &&
       isCurrentRequest(client, generation, undefined, { agents }) &&
@@ -757,64 +709,11 @@ export function createAgentsPageState(
     if (!canDispatch()) {
       return;
     }
-    await setDefaultAgent(runtimeConfig, agentId, () => agents.refreshList(), canDispatch);
+    return setDefaultAgent(runtimeConfig, agentId, () => agents.refreshList(), canDispatch);
   }
 
-  function saveSelectedAgentFile(agentId: string, name: string, write = saveAgentFile) {
-    if (agentId !== state.agentsSelectedId || !canCall("agents.files.set", "operator.admin")) {
-      return;
-    }
-    void write(
-      state,
-      agentId,
-      name,
-      state.agentFileEditors[name]?.draft ?? state.agentFileEditors[name]?.content ?? "",
-    );
-  }
-
-  function clearAgentSkills(agentId: string) {
-    if (!canCall("config.patch", "operator.admin")) {
-      return;
-    }
-    const client = state.client;
-    const generation = state.requestGeneration;
-    const agents = context.agents;
-    const runtimeConfig = context.runtimeConfig;
-    if (!client) {
-      return;
-    }
-    const canDispatch = () =>
-      context.runtimeConfig === runtimeConfig &&
-      isCurrentRequest(client, generation, agentId, { agents }) &&
-      canCall("config.patch", "operator.admin");
-    void clearAgentSkillFilter(runtimeConfig, agentId, canDispatch).then((updated) => {
-      if (!canDispatch()) {
-        return;
-      }
-      if (!updated) {
-        state.agentSkillsError =
-          runtimeConfig.state.lastError ?? t("agents.skillsPanel.updateError");
-        return;
-      }
-      state.agentSkillsError = null;
-      void loadAgentSkills(state, agentId);
-    });
-  }
-
-  function runCronJobNow(jobId: string) {
-    if (
-      !canCall("cron.run", "operator.admin") ||
-      !state.cron.cronJobs.some((entry) => entry.id === jobId)
-    ) {
-      return;
-    }
-    void runCronTask((cronState) => runCronJob(cronState, jobId, "force"));
-  }
-
-  function viewProps(): AgentsOwnerView {
+  function viewProps() {
     const configState = context.runtimeConfig.state;
-    const channels = context.channels.state;
-    const agentsState = context.agents.state;
     const selectedAgentId = state.agentsSelectedId;
     const canEditIdentity = () =>
       selectedAgentId === state.agentsSelectedId && canCall("agents.update", "operator.admin");
@@ -826,181 +725,145 @@ export function createAgentsPageState(
       canWriteFiles: canCall("agents.files.set", "operator.admin"),
       canRunCron: canCall("cron.run", "operator.admin"),
     };
-    const agentFilesListError = context.agents.files(selectedAgentId).error;
     const modelCatalog = readAgentModelCatalog(
       state.connected ? state.client : null,
       state.agentsSelectedId,
     );
     return {
       access,
+      readData,
+      presentationRetired: presentation.retired,
+      readChannels,
       basePath: context.basePath,
-      loading: agentsState.agentsLoading,
-      error: agentsState.agentsError,
-      agentsList: state.agentsList,
+      listRead: context.agents.listRead,
       selectedAgentId,
-      activePanel: state.agentsPanel,
+      memoryTarget,
       config: configState,
       channels: {
-        snapshot: channels.channelsSnapshot,
-        loading: channels.channelsLoading,
-        error: channels.channelsError,
-        lastSuccess: channels.channelsLastSuccess,
         onRefresh: () => void context.channels.refresh(false),
       },
       cron: {
-        jobs: state.cron.cronJobs,
-        jobsTotal: state.cron.cronJobsTotal,
-        jobsHasMore: state.cron.cronJobsHasMore,
-        jobsLoadingMore: state.cron.cronJobsLoadingMore,
-        status: state.cron.cronStatus,
-        scopedTotal: state.cron.cronScopedTotal,
-        scopedNextWakeAtMs: state.cron.cronScopedNextWakeAtMs,
-        loading: state.cron.cronLoading,
-        error: state.cron.cronError,
-        onRefresh: () => void refreshCron(),
-        onLoadMore: () =>
-          void runCronTask((cronState) =>
-            loadCronJobsPage(cronState, { append: true, tableFilters: true }),
-          ),
-        onRunNow: (jobId) => runCronJobNow(jobId),
+        read: cron.read,
+        onRefresh: cron.onRefresh,
+        onLoadMore: cron.onLoadMore,
+        onRunNow: cron.onRunNow,
       },
       agentFiles: {
-        agentFilesList: state.agentFilesList,
-        agentFilesLoading: state.agentFilesLoading,
-        agentFilesError: state.agentFilesError ?? agentFilesListError,
-        agentFileActive: state.agentFileActive,
-        agentFileEditors: state.agentFileEditors,
-        agentFileSaving: state.agentFileSaving,
-        agentFileConflict: state.agentFileConflict,
-        onLoadFiles: (agentId) => void loadAgentFiles(agentId, true),
-        onSelectFile: (name) => {
-          state.agentFileActive = name;
-          if (selectedAgentId) {
-            void loadAgentFileContent(state, selectedAgentId, name);
-          }
-        },
-        onFileDraftChange: (name, content) => {
-          if (selectedAgentId !== state.agentsSelectedId) {
-            return;
-          }
-          state.agentFileEditors = {
-            ...state.agentFileEditors,
-            [name]: { ...state.agentFileEditors[name], draft: content },
-          };
-        },
-        onFileReset: (name) => {
-          if (selectedAgentId === state.agentsSelectedId) {
-            resetAgentFile(state, name);
-          }
-        },
-        onFileSave: (name) => {
-          if (selectedAgentId) {
-            saveSelectedAgentFile(selectedAgentId, name);
-          }
-        },
-        onFileReload: (name) => {
-          if (selectedAgentId) {
-            void reloadAgentFile(state, selectedAgentId, name);
-          }
-        },
-        onFileOverwrite: (name) => {
-          if (selectedAgentId) {
-            saveSelectedAgentFile(selectedAgentId, name, overwriteAgentFile);
-          }
-        },
+        listRead: context.agents.files(selectedAgentId).read,
+        onLoadFiles: (agentId: string) => void loadAgentFiles(agentId, true),
+        ...createAgentFileActions(state, selectedAgentId, () =>
+          canCall("agents.files.set", "operator.admin"),
+        ),
       },
       agentIdentityById: Object.fromEntries(
-        context.agentIdentity.entries().map((entry) => [entry.agentId, entry]),
+        identities.read().map((entry) => [entry.agentId, entry]),
       ),
       overview: {
-        applicationConfig: context.config,
-        identityDraft: state.identityDraft,
-        identitySaving: state.identitySaving,
-        identityError: state.identityError,
         modelCatalog: modelCatalog.models,
         decisionModels: modelCatalog.decisionModels ?? [],
         modelSelectionPolicy: modelCatalog.modelSelectionPolicy,
         modelCatalogRetired: modelCatalog.retired,
-        modelCatalogStatus: state.chatModelCatalogStatus,
-        onIdentityFieldChange: (field, value) => {
+        modelCatalogHasSnapshot: modelCatalog.hasSnapshot,
+        modelCatalogGateway: context.gateway.snapshot,
+        onIdentityFieldChange: (field: "name" | "emoji", value: string) => {
           if (canEditIdentity()) {
             setIdentityDraftField(state, field, value);
+            scheduleIdentitySave();
           }
         },
-        onIdentityAvatarSelect: (file) => {
+        onIdentityAvatarSelect: (file: File) => {
           if (canEditIdentity()) {
-            selectIdentityAvatar(state, file, context.config);
+            selectIdentityAvatar(state, file, context.config, () => scheduleIdentitySave(0));
           }
         },
-        onIdentitySave: () => saveSelectedIdentity(),
-        ...createAgentModelActions({
-          ...configEditor,
-          onPrimaryChanged: () => void refreshVisibleToolsEffectiveForCurrentSession(state),
-        }),
+        onIdentityAvatarSet: (dataUrl: string) => {
+          if (canEditIdentity()) {
+            setIdentityAvatar(state, dataUrl, context.config);
+            scheduleIdentitySave(0);
+          }
+        },
+        onIdentityAvatarGenerate: async (prompt: string) => {
+          const client = state.client;
+          const generation = state.requestGeneration;
+          if (
+            !client ||
+            !selectedAgentId ||
+            !canEditIdentity() ||
+            !canCall("agents.avatar.generate", "operator.admin")
+          ) {
+            throw new Error(t("agents.identity.avatarPermission"));
+          }
+          const result = await client.request<GeneratedAvatar>(
+            "agents.avatar.generate",
+            { agentId: selectedAgentId, prompt },
+            { timeoutMs: 100_000 },
+          );
+          if (!isCurrentRequest(client, generation, selectedAgentId, {})) {
+            throw new Error(t("agents.identity.avatarContextChanged"));
+          }
+          return result;
+        },
+        onIdentitySave: () => scheduleIdentitySave(0),
+        ...configActions.models,
         // Availability facts (provider keys added/removed, new models) go
         // stale in the per-agent cache; opening the picker re-reads them,
         // mirroring the chat composer's on-open refresh.
         onModelCatalogOpen: () => ensureModelCatalog({ refresh: true }),
       },
       agentSkills: {
-        report: state.agentSkillsReport,
-        loading: state.agentSkillsLoading,
-        error: state.agentSkillsError,
-        activeAgentId: state.agentSkillsAgentId,
-        onFilterChange: (next) => setSkillsFilter(next),
+        filter: skillsFilter(),
+        onFilterChange: (next: string) => {
+          setSkillsFilter(next);
+        },
         onRefresh: () => {
           if (selectedAgentId) {
-            void loadAgentSkills(state, selectedAgentId);
+            skills.refresh(selectedAgentId);
           }
         },
-        ...createAgentSkillActions({
-          ...configEditor,
-          getReport: () => state.agentSkillsReport,
-        }),
-        onClear: (agentId) => clearAgentSkills(agentId),
+        ...configActions.skills,
+        onClear: (agentId: string) => skillReset.clear(agentId),
       },
       tools: {
-        toolsCatalogLoading: state.toolsCatalogLoading,
-        toolsCatalogError: state.toolsCatalogError,
-        toolsCatalogResult: state.toolsCatalogResult,
-        toolsEffectiveLoading: state.toolsEffectiveLoading,
-        toolsEffectiveError: state.toolsEffectiveError,
-        toolsEffectiveResult: state.toolsEffectiveResult,
+        readCatalog: toolsCatalog.read,
+        catalogRequest: toolsCatalog.request(),
+        readEffective: effectiveTools.read,
+        effectivePreview: effectiveTools.cached,
+        effectiveRequest: effectiveTools.request(),
+        onRetryCatalog: () => {
+          if (state.agentsSelectedId) {
+            toolsCatalog.ensure(state.agentsSelectedId);
+          }
+        },
         githubIdentity,
         onOpenGitHubConnections: () =>
           context.navigate("profile", { hash: "#settings-profile-github-connections" }),
         runtimeSessionKey: state.sessionKey,
         runtimeSessionMatchesSelectedAgent: selectedAgentId === chatAgentId(),
-        ...createAgentToolActions(configEditor),
+        ...configActions.tools,
       },
-      pinnedAgentIds: context.navigation.snapshot.pinnedAgentIds,
-      onTogglePinnedAgent: (agentId) => togglePinnedAgent(context.navigation, agentId),
+      pinnedAgentIds: navigation.read().pinnedAgentIds,
+      onTogglePinnedAgent: (agentId: string) => togglePinnedAgent(context.navigation, agentId),
       onRefresh: () => void refreshAgents(),
       onCreateAgent: () => {
         if (canCall("openclaw.chat", "operator.admin")) {
           context.navigate("custodian", { search: "?intent=new-agent" });
         }
       },
-      onSelectPanel: (panel) =>
+      onSelectPanel: (panel: AgentsPanel) =>
         navigateToAgentPanel(context, selectedAgentId, state.agentsPanel, panel),
-      onConfigReload: () => void context.runtimeConfig.discardDraft({ reloadOnly: true }),
-      onConfigSave: () => void refreshAgents("save"),
+      onConfigReload: () => context.runtimeConfig.discardDraft({ reloadOnly: true }),
+      onConfigSave: () => refreshAgents("save"),
       onOpenMemoryImport: () => context.navigate("memory-import"),
       onOpenMemorySettings: () => context.navigate("memory"),
       onOpenAgentDefaults: () => context.navigate("ai-agents"),
-      onSetDefault: (agentId) => void selectDefaultAgent(agentId),
+      onSetDefault: selectDefaultAgent,
     };
   }
-  const projection = projectSource(context, {
-    read: viewProps,
-    subscribe: (_source, notify) => {
-      publish = notify;
-      return () => {
-        publish = () => {};
-      };
-    },
-    equality: "revision",
-  });
+
+  const memoryTarget: AgentMemoryTarget = {
+    read: () => state.agentsSelectedId,
+    subscribe: observation.subscribe,
+  };
   onSettled(() => {
     gateway.connect();
     syncAgentState();
@@ -1008,7 +871,7 @@ export function createAgentsPageState(
     const selection = context.settingsAgentSelection;
     let intentRevision = selection.intentRevision;
     const stops = [
-      context.config.subscribe(() => publish()),
+      // Selection receipts transfer draft custody and retire prior-agent work synchronously.
       selection.subscribe(() => {
         const explicitSelection = selection.intentRevision !== intentRevision;
         intentRevision = selection.intentRevision;
@@ -1030,44 +893,51 @@ export function createAgentsPageState(
         loadActivePanelData();
         publish();
       }),
+      // Roster and file publications adopt metadata before dependent file reads can settle.
       context.agents.subscribe(() => {
         syncAgentState();
         ensureAgentIdentities();
         loadActivePanelData();
         publish();
       }),
-      context.agentIdentity.subscribe(() => publish()),
-      context.channels.subscribe(() => publish()),
-      context.navigation.subscribe(() => publish()),
+      // Config receipts retire obsolete GitHub authorization before the next tool action.
       context.runtimeConfig.subscribe(() => {
         syncGitHubIdentity(state.agentsSelectedId);
         publish();
       }),
+      // Session model receipts replace the tools.effective request key before older results settle.
       context.sessions.subscribe(() => {
-        void refreshVisibleToolsEffectiveForCurrentSession(state);
+        refreshEffectiveToolsForCurrentSession();
         publish();
       }),
     ];
     applyRoute();
     return () => {
+      selectionDrafts.retainCurrentIdentity();
+      identityAutosave.cancel();
       active = false;
-      publish = () => {};
+      presentation.retire();
+      cron.retire();
+      observation.dispose();
       for (const stop of stops) {
         stop();
       }
-      stopCatalog?.();
       resetModelCatalog();
       gateway.dispose();
     };
   });
   return {
-    read(): AgentsProps {
-      const view = projection.read();
-      return { ...view, agentSkills: { ...view.agentSkills, filter: skillsFilter() } };
+    identitySavePending: () => identityPresentation.identitySaving() || readData().identitySaving,
+    read() {
+      observation.read();
+      return viewProps();
     },
     setRouteData(next?: AgentsRouteData) {
       if (next === routeData) {
         return;
+      }
+      if (next?.panel !== routeData?.panel) {
+        presentation.retire();
       }
       routeData = next;
       applyRoute();

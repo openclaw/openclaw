@@ -3,15 +3,11 @@ import {
   LazyHovercardBootstrap,
   type HovercardBootstrapTrigger,
 } from "./lazy-hovercard-registration.ts";
-import {
-  SESSION_TITLE_TARGET_SELECTOR,
-  sessionProgressHoverTargetFromEvent,
-} from "./session-progress-hovercard-target.ts";
+import { sessionProgressHoverTargetFromEvent } from "./session-progress-hovercard-target.ts";
 import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
+import { installSessionTitleRegistrar } from "./session-title-target-registration.ts";
 
 const HOVERCARD_TAG = "openclaw-session-progress-hovercard-provider";
-
-let bootstrapObserver: MutationObserver | null = null;
 
 const bootstrap = new LazyHovercardBootstrap<SessionProgressHovercardProvider>({
   tag: HOVERCARD_TAG,
@@ -19,28 +15,26 @@ const bootstrap = new LazyHovercardBootstrap<SessionProgressHovercardProvider>({
     await import("./session-progress-hovercard.runtime.tsx");
     return customElements.get(HOVERCARD_TAG)!;
   },
-  onDefined: () => {
-    bootstrapObserver?.disconnect();
-    bootstrapObserver = null;
-  },
 });
 
-function handleBootstrapMutations(records: MutationRecord[]): void {
-  for (const record of records) {
-    for (const node of record.addedNodes) {
-      if (!(node instanceof Element)) {
-        continue;
+installSessionTitleRegistrar((target, label) => {
+  let active = true;
+  let release: (() => void) | undefined;
+  // The registrar promise lets producers finish mounting before this lookup.
+  const provider = bootstrap.providerFor(target);
+  if (provider) {
+    void bootstrap.define().then(async () => {
+      await provider.updateComplete;
+      if (active && target.isConnected && bootstrap.providerFor(target) === provider) {
+        release = provider.registerSessionTitleTarget(target, label);
       }
-      if (
-        node.matches(SESSION_TITLE_TARGET_SELECTOR) ||
-        node.querySelector(SESSION_TITLE_TARGET_SELECTOR)
-      ) {
-        void bootstrap.define();
-        return;
-      }
-    }
+    });
   }
-}
+  return () => {
+    active = false;
+    release?.();
+  };
+});
 
 async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigger): Promise<void> {
   if (
@@ -72,10 +66,3 @@ async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigge
 }
 
 bootstrap.install(activateHovercard);
-if (!customElements.get(HOVERCARD_TAG)) {
-  bootstrapObserver = new MutationObserver(handleBootstrapMutations);
-  bootstrapObserver.observe(document, { childList: true, subtree: true });
-  if (document.querySelector(SESSION_TITLE_TARGET_SELECTOR)) {
-    void bootstrap.define();
-  }
-}

@@ -10,7 +10,7 @@ function resolveDiagnosticFlags(
   cfg?: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  const configFlags = Array.isArray(cfg?.diagnostics?.flags) ? cfg?.diagnostics?.flags : [];
+  const configFlags = cfg?.diagnostics?.flags ?? [];
   const envFlags = parseDiagnosticEnvFlags(env[DIAGNOSTICS_ENV]);
   if (envFlags.disablesAll) {
     return [];

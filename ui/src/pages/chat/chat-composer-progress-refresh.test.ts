@@ -2,6 +2,7 @@
 
 import { flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   renderComposerFixture as renderComposer,
   resetComposerFixture,
@@ -35,11 +36,10 @@ describe("progress card refresh admission", () => {
         disposeComposer(view.container);
         view.container.remove();
       });
-      const refresh = view.container.querySelector<HTMLButtonElement>(
-        ".session-progress-card__refresh",
+      await vi.dynamicImportSettled();
+      await waitForSolid(() =>
+        expect(view.container.querySelector(".session-progress-card--composer")).not.toBeNull(),
       );
-      expect(Boolean(refresh)).toBe(visible);
-      await Promise.resolve();
       const options = view.container.querySelector<HTMLButtonElement>(
         ".session-progress-card__options",
       );
@@ -48,6 +48,10 @@ describe("progress card refresh admission", () => {
       if (options) {
         await vi.waitFor(() => expect(options.getAttribute("aria-expanded")).toBe("true"));
       }
+      const refresh = view.container.querySelector<HTMLButtonElement>(
+        ".session-progress-card__refresh",
+      );
+      expect(Boolean(refresh)).toBe(visible);
       refresh?.click();
       expect(onRefresh).toHaveBeenCalledTimes(visible ? 1 : 0);
       expect(view.props.onSend).not.toHaveBeenCalled();

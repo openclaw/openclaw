@@ -6,7 +6,12 @@ import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { ChatPaneRuntime } from "../chat-pane-render.ts";
 import { createPaneTestHost } from "../chat-pane.test-support.ts";
-import { saveChatSessionScrollPosition } from "../scroll.ts";
+import {
+  handleChatScroll,
+  lockChatScroll,
+  saveChatSessionScrollPosition,
+  type ChatScrollHost,
+} from "../scroll.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
 import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import { ChatSessionVirtualizerHost } from "./chat-transcript-virtualizer-host.ts";
@@ -17,27 +22,25 @@ vi.mock("../chat-pane-layout-view.tsx", () => import("../chat-pane-layout.test-s
 class GeometryPane extends ChatPaneRuntime {
   session: ChatSessionVirtualizerHost | undefined;
   readonly renderedRects: Array<{ width: number; height: number } | null> = [];
-  private rows: TranscriptRow[] = Array.from({ length: 100 }, (_, index) => ({
-    kind: "content",
-    key: `row-${index}`,
-    content: <div style="height: 120px">Row {index}</div>,
-  }));
+  private rows: TranscriptRow[] = [];
 
   initialize(context: ApplicationContext, followEnd = false) {
     this.context = context;
     this.paneId = "geometry-render";
     this.sessionKey = "agent:main:geometry-render";
-    if (followEnd) {
-      this.rows = this.rows.map((row, index) => ({
-        kind: "content",
-        key: row.key,
-        content: <div style="height: 360px">Row {index}</div>,
-      }));
-    }
+    this.rows = Array.from({ length: 100 }, (_, index) => ({
+      kind: "content",
+      key: `row-${index}`,
+      content: <div style={{ height: `${followEnd ? 360 : 120}px` }}>Row {index}</div>,
+    }));
     saveChatSessionScrollPosition(this.paneId, this.sessionKey, {
       scrollTop: 0,
       anchorToEnd: followEnd,
     });
+  }
+
+  get scrollState() {
+    return expectDefined(this.state, "mounted pane state");
   }
 
   renderGeometry() {
@@ -59,7 +62,13 @@ class GeometryPane extends ChatPaneRuntime {
       };
     });
     return {
-      layout: { component: GeometryLayout, props: layout },
+      layout: {
+        component: GeometryLayout,
+        props: {
+          ...layout,
+          scroll: this.scrollState,
+        },
+      },
       dialog: undefined,
       capabilityDialogs: undefined,
       providerReviewSource: undefined,
@@ -67,12 +76,26 @@ class GeometryPane extends ChatPaneRuntime {
   }
 }
 
-function GeometryLayout(props: { contents: HTMLDivElement; size: number }) {
+function GeometryLayout(props: {
+  contents: HTMLDivElement;
+  size: number;
+  scroll: Pick<
+    ChatScrollHost,
+    "chatReadingHistory" | "chatNewMessagesBelow" | "chatFollowLocked" | "chatUserNearBottom"
+  >;
+}) {
   return (
     <div class="chat-thread-viewport" style="height: 400px; flex: none; padding: 20px 0">
       <div class="chat-thread" style="overflow-anchor: none">
         {props.contents}
-        <output>{props.size}</output>
+        <output
+          data-reading-history={String(props.scroll.chatReadingHistory)}
+          data-new-messages-below={String(props.scroll.chatNewMessagesBelow)}
+          data-follow-locked={String(props.scroll.chatFollowLocked)}
+          data-near-bottom={String(props.scroll.chatUserNearBottom)}
+        >
+          {props.size}
+        </output>
       </div>
     </div>
   );
@@ -114,7 +137,13 @@ async function mountPane(followEnd = false) {
   await settleLayout();
   const session = expectDefined(pane.session, "mounted transcript session");
   const viewport = expectDefined(session.scrollElement, "mounted transcript viewport");
-  return { host: pane, session, viewport };
+  return {
+    host: pane,
+    session,
+    viewport,
+    slot: expectDefined(viewport.parentElement, "viewport slot"),
+    virtualizer: session["virtualizer"],
+  };
 }
 
 it("keeps the initial tail rows mounted while their estimated sizes settle", async () => {
@@ -171,11 +200,46 @@ it("commits each settled pane width with its new transcript rect in exactly one 
   console.info(`Settled width render counts: ${counts.join(", ")}`);
 });
 
+it("publishes reader policy and the tail indicator through the pane state", async () => {
+  const { host } = await mountPane();
+  const state = host.scrollState;
+  const updates = vi.spyOn(host, "render");
+  const scroll = (scrollTop: number) => {
+    const event = new Event("scroll");
+    Object.defineProperty(event, "currentTarget", {
+      value: { scrollHeight: 2000, clientHeight: 400, scrollTop },
+    });
+    handleChatScroll(state, event);
+  };
+  expect(state.chatReadingHistory).toBe(true);
+  scroll(1600);
+  await settleLayout();
+  expect(host.querySelector("output")?.dataset).toMatchObject({
+    readingHistory: "false",
+    newMessagesBelow: "false",
+    followLocked: "false",
+    nearBottom: "true",
+  });
+  expect(updates).not.toHaveBeenCalled();
+
+  updates.mockClear();
+  state.chatLastScrollTop = 600;
+  lockChatScroll(state);
+  scroll(500);
+  await settleLayout();
+  expect(host.querySelector("output")?.dataset).toMatchObject({
+    readingHistory: "true",
+    newMessagesBelow: "true",
+    followLocked: "true",
+    nearBottom: "false",
+  });
+  expect(updates).not.toHaveBeenCalled();
+});
+
 it.each(["pending", "committed"] as const)(
   "commits a non-sync measurement before paint with a %s pane update",
   async (phase) => {
-    const { host, session } = await mountPane();
-    const virtualizer = session["virtualizer"];
+    const { host, session, virtualizer } = await mountPane();
     const notification = vi.spyOn(virtualizer.options, "onChange");
     const updates = vi.spyOn(host, "render");
     const paint = vi.fn();
@@ -188,7 +252,9 @@ it.each(["pending", "committed"] as const)(
         measure();
       });
     }
-    host.invalidate();
+    host.style.width = "780px";
+    session.syncViewportGeometry();
+    notification.mockClear();
     if (phase === "pending") {
       measure();
     }
@@ -214,8 +280,7 @@ it.each([
 ])(
   "consumes the unscaled $boxSizing rect once at scale $scale",
   async ({ scale, boxSizing, width, height }) => {
-    const { host, session, viewport } = await mountPane();
-    const slot = expectDefined(viewport.parentElement, "viewport slot");
+    const { host, session, viewport, slot } = await mountPane();
     const observed: Array<{ width: number; height: number }> = [];
     const observer = new ResizeObserver(([entry]) => {
       const size = expectDefined(entry?.borderBoxSize[0], "viewport border box");
@@ -229,11 +294,10 @@ it.each([
       const rect = { width: Math.round(width), height: Math.round(height) };
       expect(session["virtualizer"].scrollRect).toEqual(rect);
       await host.updateComplete;
-      const requests = vi.spyOn(host, "invalidate");
+      expect(updates).toHaveBeenCalledTimes(1);
       await settleLayout();
       expect(observed).toEqual([{ width, height }]);
       expect(session["virtualizer"].scrollRect).toEqual(rect);
-      expect(requests).not.toHaveBeenCalled();
       expect(updates).toHaveBeenCalledTimes(1);
     } finally {
       observer.disconnect();
@@ -242,9 +306,7 @@ it.each([
 );
 
 it("synchronizes padding changes even when the viewport's outer rect stays the same", async () => {
-  const { session, viewport } = await mountPane();
-  const slot = expectDefined(viewport.parentElement, "viewport slot");
-  const virtualizer = session["virtualizer"];
+  const { session, viewport, slot, virtualizer } = await mountPane();
   const rect = virtualizer.scrollRect;
   expect(virtualizer.options.scrollMargin).toBe(20);
   slot.style.paddingTop = "24px";
@@ -258,8 +320,7 @@ it("synchronizes padding changes even when the viewport's outer rect stays the s
 it.each(["border-box", "content-box"])(
   "syncs the unscaled %s viewport idempotently and publishes its native clamp once",
   async (boxSizing) => {
-    const { session, viewport } = await mountPane();
-    const slot = expectDefined(viewport.parentElement, "viewport slot");
+    const { session, viewport, slot } = await mountPane();
     viewport.scrollTop = viewport.scrollHeight;
     const before = viewport.scrollTop;
     const resized = vi.fn();
@@ -293,8 +354,7 @@ it.each(["border-box", "content-box"])(
 );
 
 it("retains measured viewport geometry while its slot is hidden", async () => {
-  const { session, viewport } = await mountPane();
-  const slot = expectDefined(viewport.parentElement, "viewport slot");
+  const { session, viewport, slot } = await mountPane();
   const before = viewport.style.cssText;
   const rect = session["virtualizer"].scrollRect;
   slot.style.display = "none";

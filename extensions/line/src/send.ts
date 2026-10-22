@@ -3,7 +3,7 @@ import { HTTPFetchError, messagingApi } from "@line/bot-sdk";
 import lineBotSdkPackage from "@line/bot-sdk/package.json" with { type: "json" };
 import { recordChannelActivity } from "openclaw/plugin-sdk/channel-activity-runtime";
 import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
-import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
+import { createStaleWhileRevalidateCache } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
@@ -36,67 +36,26 @@ type QuickReplyItem = messagingApi.QuickReplyItem;
 type LineLocation = NonNullable<LineChannelData["location"]>;
 
 type LineUserProfile = { displayName: string; pictureUrl?: string };
-type LineIdentityCache<T> = {
-  values: Map<string, { value: T; fetchedAt: number }>;
-  pending: Map<string, Promise<T>>;
-};
-
-const profileCache: LineIdentityCache<LineUserProfile | null> = {
-  values: new Map(),
-  pending: new Map(),
-};
-const groupNameCache: LineIdentityCache<string | undefined> = {
-  values: new Map(),
-  pending: new Map(),
-};
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_CACHE_MAX_ENTRIES = 1000;
+const profileCache = createStaleWhileRevalidateCache<LineUserProfile | null>({
+  maxEntries: PROFILE_CACHE_MAX_ENTRIES,
+  ttlMs: PROFILE_CACHE_TTL_MS,
+});
+const groupNameCache = createStaleWhileRevalidateCache<string | undefined>({
+  maxEntries: PROFILE_CACHE_MAX_ENTRIES,
+  ttlMs: PROFILE_CACHE_TTL_MS,
+});
 const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
 const LINE_LOCATION_LABEL_LIMIT = 100;
 // This cap bounds receipts and diagnostics: overflow after acceptance becomes no-retry partial
 // delivery, while rejected responses keep their status with prefix-only diagnostics.
 const LINE_PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024;
 
-// Completion order also orders expiry; evict the oldest fetch on overflow.
-function rememberLineIdentity<T>(cache: LineIdentityCache<T>, key: string, value: T): void {
-  cache.values.delete(key);
-  cache.values.set(key, { value, fetchedAt: Date.now() });
-  pruneMapToMaxSize(cache.values, PROFILE_CACHE_MAX_ENTRIES);
-}
-
-async function loadLineIdentity<T>(
-  cache: LineIdentityCache<T>,
-  key: string,
-  load: () => Promise<T>,
-): Promise<T> {
-  const cached = cache.values.get(key);
-  if (cached && Date.now() - cached.fetchedAt < PROFILE_CACHE_TTL_MS) {
-    return cached.value;
-  }
-  const pending = cache.pending.get(key);
-  if (pending) {
-    return await pending;
-  }
-  const lookup = load().then((value) => {
-    rememberLineIdentity(cache, key, value);
-    return value;
-  });
-  cache.pending.set(key, lookup);
-  pruneMapToMaxSize(cache.pending, PROFILE_CACHE_MAX_ENTRIES);
-  try {
-    return await lookup;
-  } finally {
-    if (cache.pending.get(key) === lookup) {
-      cache.pending.delete(key);
-    }
-  }
-}
-
 interface LineSendOpts {
   cfg: OpenClawConfig;
   channelAccessToken?: string;
   accountId?: string;
-  verbose?: boolean;
   mediaUrl?: string;
   mediaKind?: LineOutboundMediaKind;
   previewImageUrl?: string;
@@ -114,7 +73,6 @@ type LinePushOpts = Pick<
   | "cfg"
   | "channelAccessToken"
   | "accountId"
-  | "verbose"
   | "quoteToken"
   | "authorize"
   | "assertDirectAdapterHandoff"
@@ -377,7 +335,6 @@ async function pushLineMessages(
     messageId,
     chatId,
     receipt: createLineSendReceipt({
-      messageId,
       messageIds,
       chatId,
       kind: resolveLineReceiptKind(messages),
@@ -511,17 +468,14 @@ export function createQuickReplyItems(labels: string[]): QuickReply {
   return { items };
 }
 
-export async function showLoadingAnimation(
-  chatId: string,
-  opts: LineClientOpts & { loadingSeconds?: number },
-): Promise<void> {
+export async function showLoadingAnimation(chatId: string, opts: LineClientOpts): Promise<void> {
   const { token } = resolveLineMessagingAccount(opts);
   const client = new messagingApi.MessagingApiClient({ channelAccessToken: token });
 
   try {
     await client.showLoadingAnimation({
       chatId: normalizeTarget(chatId),
-      loadingSeconds: opts.loadingSeconds ?? 20,
+      loadingSeconds: 20,
     });
   } catch (err) {
     logVerbose(`line: loading animation failed (non-fatal): ${String(err)}`);
@@ -580,7 +534,7 @@ export async function getUserProfile(
         return null;
       }
     };
-    return await loadLineIdentity(profileCache, cacheKey, load);
+    return (await profileCache.read(cacheKey, load, { allowStale: false })).value;
   } catch (err) {
     logVerbose(`line: failed to fetch profile for ${userId}: ${String(err)}`);
     return null;
@@ -604,16 +558,22 @@ export async function getLineGroupName(
   try {
     const { account, token } = resolveLineMessagingAccount(opts);
     const cacheKey = JSON.stringify([account.accountId, "group", groupId]);
-    return await loadLineIdentity(groupNameCache, cacheKey, async () => {
-      try {
-        const client = new messagingApi.MessagingApiClient({ channelAccessToken: token });
-        const summary = await client.getGroupSummary(groupId);
-        return summary.groupName.trim() || undefined;
-      } catch (err) {
-        logVerbose(`line: failed to fetch group summary for ${groupId}: ${String(err)}`);
-        return undefined;
-      }
-    });
+    return (
+      await groupNameCache.read(
+        cacheKey,
+        async () => {
+          try {
+            const client = new messagingApi.MessagingApiClient({ channelAccessToken: token });
+            const summary = await client.getGroupSummary(groupId);
+            return summary.groupName.trim() || undefined;
+          } catch (err) {
+            logVerbose(`line: failed to fetch group summary for ${groupId}: ${String(err)}`);
+            return undefined;
+          }
+        },
+        { allowStale: false },
+      )
+    ).value;
   } catch (err) {
     logVerbose(`line: failed to fetch group summary for ${groupId}: ${String(err)}`);
     return undefined;

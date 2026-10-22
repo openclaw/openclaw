@@ -32,11 +32,6 @@ const STATE_PERSIST_DEBOUNCE_MS = 5000;
 const NOSTR_INGRESS_ENVELOPE_OVERHEAD_BYTES = 16 * 1024;
 const NOSTR_INGRESS_MAX_PENDING_EVENTS = 1_000;
 
-const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
-const CIRCUIT_BREAKER_RESET_MS = 30000; // 30 seconds before half-open
-
-const HEALTH_WINDOW_MS = 60000;
-
 type NostrEventRejection =
   | "self_message"
   | "future"
@@ -77,7 +72,6 @@ interface NostrBusOptions {
   /** Called on EOSE (end of stored events) for initial sync (optional) */
   onEose?: (relay: string) => void;
   onRejected?: (reason: NostrEventRejection) => void;
-  onCircuitBreakerChange?: (relay: string, state: "open" | "closed") => void;
   /** Test seam for awaiting relay callbacks that the transport intentionally ignores. */
   trackIngressTask?: (task: Promise<void>) => void;
 }
@@ -89,128 +83,6 @@ type NostrDmSendOptions = Pick<
 
 export type NostrBusHandle = Awaited<ReturnType<typeof startNostrBus>>;
 
-interface CircuitBreakerState {
-  state: "closed" | "open" | "half_open";
-  failures: number;
-  lastFailure: number;
-}
-
-type CircuitBreaker = ReturnType<typeof createCircuitBreaker>;
-
-function createCircuitBreaker(relay: string, onChange: NostrBusOptions["onCircuitBreakerChange"]) {
-  const state: CircuitBreakerState = {
-    state: "closed",
-    failures: 0,
-    lastFailure: 0,
-  };
-
-  return {
-    canAttempt(): boolean {
-      if (state.state === "open") {
-        if (Date.now() - state.lastFailure >= CIRCUIT_BREAKER_RESET_MS) {
-          state.state = "half_open";
-          return true;
-        }
-        return false;
-      }
-
-      return true;
-    },
-
-    recordSuccess(): void {
-      if (state.state === "half_open") {
-        state.state = "closed";
-        state.failures = 0;
-        onChange?.(relay, "closed");
-      } else if (state.state === "closed") {
-        state.failures = 0;
-      }
-    },
-
-    recordFailure(): void {
-      state.failures++;
-      state.lastFailure = Date.now();
-
-      if (
-        state.state === "half_open" ||
-        (state.state === "closed" && state.failures >= CIRCUIT_BREAKER_THRESHOLD)
-      ) {
-        state.state = "open";
-        onChange?.(relay, "open");
-      }
-    },
-  };
-}
-
-interface RelayHealthStats {
-  successCount: number;
-  failureCount: number;
-  latencySum: number;
-  lastSuccess: number;
-  lastFailure: number;
-}
-
-function createRelayHealthTracker() {
-  const stats = new Map<string, RelayHealthStats>();
-
-  function getOrCreate(relay: string): RelayHealthStats {
-    let s = stats.get(relay);
-    if (!s) {
-      s = {
-        successCount: 0,
-        failureCount: 0,
-        latencySum: 0,
-        lastSuccess: 0,
-        lastFailure: 0,
-      };
-      stats.set(relay, s);
-    }
-    return s;
-  }
-
-  return {
-    recordSuccess(relay: string, latencyMs: number): void {
-      const s = getOrCreate(relay);
-      s.successCount++;
-      s.latencySum += latencyMs;
-      s.lastSuccess = Date.now();
-    },
-
-    recordFailure(relay: string): void {
-      const s = getOrCreate(relay);
-      s.failureCount++;
-      s.lastFailure = Date.now();
-    },
-
-    getScore(relay: string): number {
-      const s = stats.get(relay);
-      if (!s) {
-        return 0.5;
-      } // Unknown relay gets neutral score
-
-      const total = s.successCount + s.failureCount;
-      const successRate = s.successCount / total;
-
-      // Recency bonus (prefer recently successful relays)
-      const now = Date.now();
-      const recencyBonus =
-        s.lastSuccess > s.lastFailure
-          ? Math.max(0, 1 - (now - s.lastSuccess) / HEALTH_WINDOW_MS) * 0.2
-          : 0;
-
-      // Latency penalty (lower is better)
-      const avgLatency = s.successCount > 0 ? s.latencySum / s.successCount : 1000;
-      const latencyPenalty = Math.min(0.2, avgLatency / 10000);
-
-      return Math.max(0, Math.min(1, successRate + recencyBonus - latencyPenalty));
-    },
-
-    getSortedRelays(relays: string[]): string[] {
-      return relays.toSorted((a, b) => this.getScore(b) - this.getScore(a));
-    },
-  };
-}
-
 /** Subscribe to NIP-04 encrypted DMs. */
 export async function startNostrBus(options: NostrBusOptions) {
   const {
@@ -221,7 +93,6 @@ export async function startNostrBus(options: NostrBusOptions) {
     onError,
     onEose,
     onRejected,
-    onCircuitBreakerChange,
   } = options;
 
   const sk = validatePrivateKey(privateKey);
@@ -233,12 +104,7 @@ export async function startNostrBus(options: NostrBusOptions) {
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
   const guardPolicy = createDirectDmPreCryptoGuardPolicy(options.guardPolicy);
 
-  const circuitBreakers = new Map<string, CircuitBreaker>();
-  const healthTracker = createRelayHealthTracker();
-
-  for (const relay of relays) {
-    circuitBreakers.set(relay, createCircuitBreaker(relay, onCircuitBreakerChange));
-  }
+  let preferredRelay: string | undefined;
 
   const state = await readNostrBusState({ accountId });
   const baseSince = computeSinceTimestamp(state, gatewayStartedAt);
@@ -590,22 +456,16 @@ export async function startNostrBus(options: NostrBusOptions) {
       sk,
     );
 
-    const sortedRelays = healthTracker.getSortedRelays(relays);
+    // Prefer the last working relay; each explicit send may retry failed relays.
+    const sortedRelays = relays.toSorted(
+      (left, right) => Number(right === preferredRelay) - Number(left === preferredRelay),
+    );
 
     let lastError: Error | undefined;
     for (const relay of sortedRelays) {
       sendOptions?.assertDirectAdapterHandoff?.();
-      const cb = circuitBreakers.get(relay);
-
-      if (cb && !cb.canAttempt()) {
-        continue;
-      }
-
-      const startTime = Date.now();
       const recordFailure = (err: unknown) => {
         lastError = err instanceof Error ? err : new Error(String(err));
-        cb?.recordFailure();
-        healthTracker.recordFailure(relay);
         onError?.(lastError, `publish to ${relay}`);
       };
       // Keep connection preparation separate from the recipient-visible EVENT handoff.
@@ -629,10 +489,7 @@ export async function startNostrBus(options: NostrBusOptions) {
           initiated = true;
           return connection.publish(reply);
         });
-        const latency = Date.now() - startTime;
-
-        cb?.recordSuccess();
-        healthTracker.recordSuccess(relay, latency);
+        preferredRelay = relay;
 
         return reply.id;
       } catch (err) {

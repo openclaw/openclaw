@@ -578,7 +578,23 @@ pr_meta_json() {
 write_pr_meta_files() {
   local json="$1"
 
-  printf '%s\n' "$json" > .local/pr-meta.json
+  # A fresh hosted review must not destroy the incoming identity still bound to
+  # a retained correction. Finish and verify the snapshot before either write.
+  local archive="" artifact
+  for artifact in .local/pr-meta.json .local/pr-meta.env .local/review.json .local/review.md; do
+    [ -e "$artifact" ] || [ -L "$artifact" ] || continue
+    if [ ! -f "$artifact" ] || [ -L "$artifact" ]; then
+      echo "Cannot retain review identity at $artifact: expected a regular file." >&2
+      return 1
+    fi
+    if [ -z "$archive" ]; then
+      archive=$(mktemp -d .local/review-evidence.XXXXXX) || return 1
+    fi
+    cp -p "$artifact" "$archive/" || return 1
+    cmp -s "$artifact" "$archive/${artifact##*/}" || return 1
+  done
+
+  printf '%s\n' "$json" > .local/pr-meta.json || return 1
 
   # Security: shell-escape all values with printf %q to prevent command injection
   # via malicious branch names containing $() or backticks. See GHSA-xxxx-xxxx-xxxx.

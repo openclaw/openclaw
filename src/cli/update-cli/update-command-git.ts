@@ -175,21 +175,6 @@ type RemoteRevisionResolution =
   | { status: "missing" }
   | { status: "unreadable"; reason: string; failureCode?: "target-git-cache-stale" };
 
-async function listGitRemotes(
-  params: GitInspectionParams,
-): Promise<{ remotes?: string[]; metadataUnreadable?: string }> {
-  const result = await runReadOnlyGitCommand({ ...params, args: ["remote"] });
-  if (result?.code !== 0) {
-    return { metadataUnreadable: "could not inspect configured Git remotes" };
-  }
-  return {
-    remotes: result.stdout
-      .split("\n")
-      .map((value) => value.trim())
-      .filter(Boolean),
-  };
-}
-
 async function resolveCurrentRemoteBranchRevision(
   params: GitInspectionParams & { useDevDefault: boolean },
 ): Promise<RemoteRevisionResolution> {
@@ -259,11 +244,14 @@ function readRemoteTagRevisions(stdout: string): Map<string, string> | null {
 async function resolveCurrentRemoteTagRevision(
   params: GitInspectionParams & { channel: Exclude<UpdateChannel, "dev" | "extended-stable"> },
 ): Promise<{ revision?: string; metadataUnreadable?: string }> {
-  const remoteList = await listGitRemotes(params);
-  if (remoteList.metadataUnreadable) {
-    return { metadataUnreadable: remoteList.metadataUnreadable };
+  const remoteList = await runReadOnlyGitCommand({ ...params, args: ["remote"] });
+  if (remoteList?.code !== 0) {
+    return { metadataUnreadable: "could not inspect configured Git remotes" };
   }
-  const remotes = remoteList.remotes ?? [];
+  const remotes = remoteList.stdout
+    .split("\n")
+    .map((value) => value.trim())
+    .filter(Boolean);
   if (remotes.length === 0) {
     return { metadataUnreadable: "could not resolve a remote for the selected Git release" };
   }
@@ -301,13 +289,12 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
   metadataUnreadable?: string;
   failureCode?: "target-git-cache-stale";
 }> {
-  const runCommand: GlobalCommandRunner = (argv, options) =>
-    runCommandWithTimeout(argv, {
+  const { runCommand: runUpdateCommand } = await buildUpdateCommandRunner();
+  const runCommand: UpdateRunnerCommandRunner = (argv, options) =>
+    runUpdateCommand(argv, {
       ...options,
       env: { ...options.env, GIT_OPTIONAL_LOCKS: "0", GIT_NO_LAZY_FETCH: "1" },
     });
-  const runTargetCommand: UpdateRunnerCommandRunner = (argv, options) =>
-    runCommand(argv, { ...options, timeoutMs: options.timeoutMs ?? params.timeoutMs });
   let revision: string | null = null;
   if (params.channel === "extended-stable") {
     return { metadataUnreadable: "extended-stable is unavailable for Git updates" };
@@ -330,7 +317,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
     }
     revision = selected;
   } else {
-    const branch = await readBranchName(runTargetCommand, params.root, params.timeoutMs);
+    const branch = await readBranchName(runCommand, params.root, params.timeoutMs);
     const resolved = await resolveCurrentRemoteBranchRevision({
       runCommand,
       root: params.root,
@@ -347,7 +334,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
     return { metadataUnreadable: "could not resolve the selected Git target" };
   }
   const target = await readGitTargetSchemaVersions({
-    runCommand: runTargetCommand,
+    runCommand,
     root: params.root,
     revision,
     timeoutMs: params.timeoutMs,
@@ -366,6 +353,7 @@ export async function inspectGitDryRunTargetSchemaVersions(params: {
 
 export async function updateGitInstall(params: {
   root: string;
+  fullIntegrityCheck?: boolean;
   restart?: boolean;
   sourceRuntimePrepared?: boolean;
   switchToGit: boolean;
@@ -494,7 +482,7 @@ export async function updateGitInstall(params: {
     gitArtifactStorageRoot?: string,
   ) =>
     updateGitCheckout({
-      ...(await buildUpdateCommandRunner()),
+      ...(await buildUpdateCommandRunner(undefined, params.assertCurrent)),
       gitRoot,
       timeoutMs: params.timeoutMs ?? UPDATE_RUNNER_TIMEOUT_MS,
       startedAt: params.startedAt,

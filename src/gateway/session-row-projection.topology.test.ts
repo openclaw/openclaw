@@ -23,7 +23,6 @@ import {
   openOpenClawAgentDatabase,
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
-import { applyOpenClawDatabaseVerificationResults } from "../state/openclaw-database-verify.impl.js";
 import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
@@ -35,15 +34,17 @@ import {
   requestContext,
   sessionReadHandlers,
 } from "./server-methods/sessions-read-cache.test-support.js";
-import {
-  createLifecycleEventBroadcastHandler,
-  createTranscriptUpdateBroadcastHandler,
-} from "./server-session-events.js";
+import { createTranscriptUpdateBroadcastHandler } from "./server-session-events.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
 import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { ready } from "./session-row-projection-record.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
-import { seedRow, waitForRead } from "./session-row-projection.read-fixture.test-support.js";
+import {
+  createTestProjection,
+  seedRow,
+  waitForRead,
+} from "./session-row-projection.read-fixture.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -148,10 +149,18 @@ it("reconciles a resident reset while a topology store snapshot awaits its worke
       sessionKey: "agent:main:topology-reset",
       storePath: database.path,
     };
-    const entry = { sessionId: "topology-reset", updatedAt: 1, label: "Retained" };
+    const entry = {
+      sessionId: "topology-reset",
+      lifecycleRevision: "original",
+      updatedAt: 1,
+      label: "Retained",
+    };
     replaceSessionEntrySync(scope, entry);
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     await projection.ensureMaterialized();
+    const publishedEntry = { ...entry, updatedAt: 2, label: "Published metadata" };
+    replaceSessionEntrySync(scope, publishedEntry);
+    const identity = readOpenClawAgentDatabaseIdentity(database).identity;
     const entered = createDeferredCore();
     const release = createDeferredCore();
     const readDatabases = history.withSessionHistoryWorkerDatabases;
@@ -178,22 +187,34 @@ it("reconciles a resident reset while a topology store snapshot awaits its worke
       await waitForRead(entered.promise, pending, signal, "Topology bypassed its store worker");
       const query = { agentId: scope.agentId, key: scope.sessionKey };
       const captured = projection.capture(query);
+      expect(captured?.entry).toMatchObject(publishedEntry);
+      expect(captured?.publishedSource?.identity).toBe(identity);
+      expect(projection.isCurrent(captured!)).toBe(true);
       emitSessionIdentityMutation({
         kind: "reset",
         agentId: scope.agentId,
-        databaseIdentity: readOpenClawAgentDatabaseIdentity(database).identity,
+        databaseIdentity: identity,
         previous: { sessionId: entry.sessionId, sessionKeys: [scope.sessionKey] },
         current: { sessionId: entry.sessionId, sessionKeys: [scope.sessionKey] },
       });
-      expect(projection.capture(query)?.entry).toBeUndefined();
+      const invalidated = projection.capture(query);
+      expect(invalidated).toBeDefined();
+      expect(invalidated?.generation).not.toBe(captured?.generation);
+      expect([
+        invalidated?.entry,
+        invalidated?.storedEntry,
+        invalidated?.retainedDatabaseFacts,
+        invalidated?.pendingDatabaseFacts,
+      ]).toEqual([undefined, undefined, undefined, undefined]);
       expect(projection.isCurrent(captured!)).toBe(false);
       release.resolve();
       await pending;
       await projection.ensureMaterialized();
       expect(projection.snapshot(query).row).toMatchObject({
         sessionId: entry.sessionId,
-        label: entry.label,
+        label: publishedEntry.label,
       });
+      expect(projection.isCurrent(captured!)).toBe(false);
     } finally {
       release.resolve();
       await settled;
@@ -226,42 +247,37 @@ it("publishes an initially unseen retired-agent event from its default store", a
       session: { store: path.join(state.root, "configured", "{agentId}", "sessions.json") },
     };
     setRuntimeConfigSnapshot(cfg);
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
     const query = { agentId: "retired", key: "agent:retired:original" };
     const storePath = resolveSessionStorePathCore(undefined, {
       agentId: query.agentId,
       env: state.env,
     });
-    try {
-      replaceSessionEntrySync(
-        { agentId: query.agentId, sessionKey: query.key, storePath },
-        { sessionId: "retired-original", updatedAt: 1 },
-      );
-      sessionChanges.emit({ all: true, scope: "stores" });
-      expect(projection.capture(query)).toBeUndefined();
-      const broadcastToConnIds = vi.fn();
-      await createLifecycleEventBroadcastHandler({
-        broadcastToConnIds,
-        sessionEventSubscribers: { getAll: () => new Set(["subscriber"]) },
-        chatAbortControllers: new Map(),
-        getSessionRowProjection: () => projection,
-      })({ agentId: query.agentId, sessionKey: query.key, reason: "reactivated" });
-      expect(projection.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
-        "retired-original",
-      ]);
-      expect(broadcastToConnIds).toHaveBeenCalledWith(
-        "sessions.changed",
-        expect.objectContaining({
-          sessionKey: query.key,
-          reason: "updated",
-          session: expect.objectContaining({ sessionId: "retired-original" }),
-        }),
-        new Set(["subscriber"]),
-        expect.anything(),
-      );
-    } finally {
-      projection.dispose();
-    }
+    replaceSessionEntrySync(
+      { agentId: query.agentId, sessionKey: query.key, storePath },
+      { sessionId: "retired-original", updatedAt: 1 },
+    );
+    sessionChanges.emit({ all: true, scope: "stores" });
+    expect(projection.capture(query)).toBeUndefined();
+    const broadcastToConnIds = vi.fn();
+    await createLifecycleEventBroadcastHandler({
+      broadcastToConnIds,
+      sessionEventSubscribers: { getAll: () => new Set(["subscriber"]) },
+      getSessionRowProjection: () => projection,
+    })({ agentId: query.agentId, sessionKey: query.key, reason: "reactivated" });
+    expect(projection.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
+      "retired-original",
+    ]);
+    expect(broadcastToConnIds).toHaveBeenCalledWith(
+      "sessions.changed",
+      expect.objectContaining({
+        sessionKey: query.key,
+        reason: "updated",
+        session: expect.objectContaining({ sessionId: "retired-original" }),
+      }),
+      new Set(["subscriber"]),
+      expect.anything(),
+    );
   });
 });
 
@@ -298,7 +314,6 @@ it("admits a committed update without host SQL while a marker awaits prepared me
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["subscriber"]) },
       sessionMessageSubscribers: { get: () => new Set<string>() },
-      chatAbortControllers: new Map(),
       getSessionRowProjection: () => projection,
     });
     const marker = handler({
@@ -411,7 +426,6 @@ it.for([
         broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => new Set(["subscriber"]) },
         sessionMessageSubscribers: { get: () => new Set<string>() },
-        chatAbortControllers: new Map(),
         getSessionRowProjection: () => projection,
       };
       const pending =
@@ -508,7 +522,7 @@ it.for([
   },
 );
 
-it.for(["dispose", "source", "integrity confirmation"] as const)(
+it.for(["dispose", "source", "owner close"] as const)(
   "does not publish a topology snapshot after its %s changes while reading",
   async (change, { signal }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
@@ -524,9 +538,7 @@ it.for(["dispose", "source", "integrity confirmation"] as const)(
         modelCatalog: [],
       });
       const verifiedDatabase =
-        change === "integrity confirmation"
-          ? openOpenClawStateDatabase({ env: state.env })
-          : undefined;
+        change === "owner close" ? openOpenClawStateDatabase({ env: state.env }) : undefined;
       const { entered, release } = holdTopologyRead();
       const captured = projection.capture(query);
       sessionChanges.emit({ all: true, scope: "stores" });
@@ -542,26 +554,8 @@ it.for(["dispose", "source", "integrity confirmation"] as const)(
         expect(projection.capture(query)).toBe(captured);
         if (change === "dispose") {
           projection.dispose();
-        } else if (change === "integrity confirmation") {
-          await applyOpenClawDatabaseVerificationResults({
-            env: state.env,
-            targets: [
-              {
-                kind: "state",
-                label: "OpenClaw state database",
-                path: verifiedDatabase!.path,
-                check: "quick",
-              },
-            ],
-            results: [
-              {
-                path: verifiedDatabase!.path,
-                ok: false,
-                error: "stale terminal result",
-                terminal: true,
-              },
-            ],
-          });
+        } else if (change === "owner close") {
+          await closeOpenClawStateDatabaseByPathAsync(verifiedDatabase!.path);
           expect(verifiedDatabase!.db.isOpen).toBe(false);
         } else {
           const database = openOpenClawStateDatabase({ env: state.env });
@@ -572,9 +566,9 @@ it.for(["dispose", "source", "integrity confirmation"] as const)(
           openOpenClawStateDatabase({ env: state.env });
         }
         release.resolve();
-        if (change === "source" || change === "integrity confirmation") {
+        if (change === "source" || change === "owner close") {
           expect(await settled).toEqual([{ status: "rejected", reason: expect.any(Error) }]);
-          if (change === "integrity confirmation") {
+          if (change === "owner close") {
             await expect(projection.prepareMembership()).resolves.toBeUndefined();
             await projection.prepareSelection();
             expect(projection.selectEntries(query).map((row) => row.entry.sessionId)).toEqual([
@@ -681,61 +675,45 @@ it("retains physical sentinels and stable store precedence after a primary updat
       );
       registerOpenClawAgentDatabase({ agentId: "main", path: storePath });
     }
-    const projection = await createSessionRowProjection({ cfg });
+    using projection = await createTestProjection({ cfg });
+    const query = { agentId: "main", key: "global" };
+    const snapshot = (storePath?: string) => projection.snapshot({ ...query, storePath }).row;
     await projection.ensureMaterialized();
-    try {
-      expect(projection.selectEntries().filter(ready).length).toBe(2);
-      expect(
-        projection.snapshot({ agentId: "main", key: "global", storePath: secondary }).row
-          ?.sessionId,
-      ).toBe("secondary");
-      const selected = projection.describe({ agentId: "main", key: "global" })!;
-      expect(
-        projection
-          .findBySessionId({
-            agentId: "main",
-            sessionId: selected.entry.sessionId,
-            federated: true,
-          })
-          .map((row) => row.key),
-      ).toEqual(["global"]);
-      const shadowedId = selected.entry.sessionId === "primary" ? "secondary" : "primary";
-      expect(
-        projection.findBySessionId({ agentId: "main", sessionId: shadowedId, federated: true }),
-      ).toEqual([]);
-      replaceSessionEntrySync(
-        { ...selected.storeTarget, sessionKey: "global" },
-        { ...selected.entry, label: "updated" },
-      );
-      await projection.ensureMaterialized();
-      expect(projection.snapshot({ agentId: "main", key: "global" }).row?.sessionId).toBe(
-        selected.entry.sessionId,
-      );
-      expect(projection.snapshot({ agentId: "main", key: "global" }).row?.label).toBe("updated");
-      const childKey = "agent:main:qualified-child";
-      replaceSessionEntrySync(
-        { ...selected.storeTarget, sessionKey: childKey },
-        {
-          sessionId: "qualified-child",
-          updatedAt: Date.now(),
-          parentSessionKey: "global",
-        },
-      );
-      await projection.ensureMaterialized();
-      expect(
-        projection.snapshot({
+    projection.describe({ ...query, storePath: primary });
+    expect(snapshot(secondary)?.sessionId).toBe("secondary");
+    const selected = projection.describe(query)!;
+    expect(projection.selectEntries().filter(ready).length).toBe(2);
+    expect(
+      projection
+        .findBySessionId({
           agentId: "main",
-          key: "global",
-          storePath: selected.storeTarget.storePath,
-        }).row?.childSessions,
-      ).toEqual([childKey]);
-      const otherPath = selected.storeTarget.storePath === primary ? secondary : primary;
-      expect(
-        projection.snapshot({ agentId: "main", key: "global", storePath: otherPath }).row
-          ?.childSessions,
-      ).toBeUndefined();
-    } finally {
-      projection.dispose();
-    }
+          sessionId: selected.entry.sessionId,
+          federated: true,
+        })
+        .map((row) => row.key),
+    ).toEqual(["global"]);
+    const shadowedId = selected.entry.sessionId === "primary" ? "secondary" : "primary";
+    expect(
+      projection.findBySessionId({ agentId: "main", sessionId: shadowedId, federated: true }),
+    ).toEqual([]);
+    replaceSessionEntrySync(
+      { ...selected.storeTarget, sessionKey: "global" },
+      { ...selected.entry, label: "updated" },
+    );
+    await projection.ensureMaterialized();
+    expect(snapshot()).toMatchObject({ sessionId: selected.entry.sessionId, label: "updated" });
+    const childKey = "agent:main:qualified-child";
+    replaceSessionEntrySync(
+      { ...selected.storeTarget, sessionKey: childKey },
+      {
+        sessionId: "qualified-child",
+        updatedAt: Date.now(),
+        parentSessionKey: "global",
+      },
+    );
+    await projection.ensureMaterialized();
+    expect(snapshot(selected.storeTarget.storePath)?.childSessions).toEqual([childKey]);
+    const otherPath = selected.storeTarget.storePath === primary ? secondary : primary;
+    expect(snapshot(otherPath)?.childSessions).toBeUndefined();
   });
 });

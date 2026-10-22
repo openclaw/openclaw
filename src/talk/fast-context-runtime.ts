@@ -1,6 +1,4 @@
 /**
- * Fast context lookup for realtime voice consults.
- *
  * When memory/session search can answer quickly, Talk can return concise
  * context without launching a full agent consult; otherwise callers may fall
  * back to the normal consult flow.
@@ -9,8 +7,8 @@ import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coerc
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import { withTimeout } from "../infra/fs-safe.js";
 import type { MemoryCallerContext, MemorySearchHit } from "../plugins/memory-provider-types.js";
-import { withTimeout } from "../utils/with-timeout.js";
 import type { RealtimeVoiceAgentConsultResult } from "./agent-consult-runtime.js";
 import { parseRealtimeVoiceAgentConsultArgs } from "./agent-consult-tool.js";
 

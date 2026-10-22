@@ -235,7 +235,7 @@ export function createStatusReactionController(params: {
       return;
     }
 
-    for (const emoji of Array.from(activeEmojis)) {
+    for (const emoji of activeEmojis) {
       if (emoji === options.keepEmoji) {
         continue;
       }
@@ -250,10 +250,6 @@ export function createStatusReactionController(params: {
   }
 
   async function applyEmoji(newEmoji: string): Promise<void> {
-    if (!enabled) {
-      return;
-    }
-
     try {
       if (!adapter.removeReaction || !activeEmojis.has(newEmoji)) {
         await adapter.setReaction(newEmoji);
@@ -340,7 +336,7 @@ export function createStatusReactionController(params: {
         } finally {
           activeEmojis.clear();
         }
-      } else if (adapter.removeReaction) {
+      } else {
         await removeActiveEmojis();
       }
       currentEmoji = "";
@@ -356,7 +352,7 @@ export function createStatusReactionController(params: {
     const alreadyInitial = currentEmoji === initialEmoji;
     const pendingBeforeClear = pendingEmoji;
     const hadDebouncedPending = debounceTimer !== null;
-    const hasExtraActiveEmoji = Array.from(activeEmojis).some((emoji) => emoji !== initialEmoji);
+    const hasExtraActiveEmoji = activeEmojis.size > (activeEmojis.has(initialEmoji) ? 1 : 0);
     clearActivityTimers();
     if (
       !finished &&

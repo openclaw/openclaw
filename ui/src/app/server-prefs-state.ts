@@ -58,7 +58,7 @@ const optionalPrefSpec = <
   prefSpec<UiSettings[K]>({
     configSync,
     extract: normalize,
-    local: (settings) => normalize(settings[key]),
+    local: (settings) => settings[key],
     write: (value) => ({ [key]: value }),
   });
 
@@ -93,7 +93,7 @@ export const SYNCED_PREFS = {
   background: prefSpec<BackgroundPreference>({
     configSync: false,
     extract: normalizeBackgroundPreference,
-    local: (settings) => normalizeBackgroundPreference(settings.background),
+    local: (settings) => settings.background,
     write: (value) => ({ background: value }),
   }),
   locale: prefSpec<string>({

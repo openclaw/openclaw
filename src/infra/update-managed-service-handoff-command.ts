@@ -12,6 +12,7 @@ export function resolveUpdateCliArgv(params: {
   channel?: UpdateChannel;
   tag?: string;
   acceptCapabilities?: boolean;
+  fullIntegrityCheck?: boolean;
   admission?: "auto" | "installed";
   reapplyLocalOverrides?: boolean;
   execPath?: string;
@@ -23,6 +24,7 @@ export function resolveUpdateCliArgv(params: {
     "--json",
     ...(params.reapplyLocalOverrides ? ["--reapply-local-overrides"] : []),
     ...(params.acceptCapabilities ? ["--accept-capabilities"] : []),
+    ...(params.fullIntegrityCheck ? ["--full-integrity-check"] : []),
     ...(params.admission ? ["--admission", params.admission] : []),
     ...(params.channel ? ["--channel", params.channel] : []),
     ...(params.tag ? ["--tag", params.tag] : []),

@@ -1,7 +1,10 @@
-import { expect, it, vi } from "vitest";
+import { serialize } from "node:v8";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { assert, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { prepareSessionCostUsageRefreshLock } from "../../infra/session-cost-usage-cache.sqlite.js";
 import { runSqliteImmediateTransactionSync } from "../../infra/sqlite-transaction.js";
+import { createSqliteWorkerTransferCollector } from "../../infra/sqlite-worker-transfer.js";
 import { readSessionTranscriptBoundedActiveContextCore } from "./session-accessor.sqlite-active-context.js";
 import * as participantCache from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
@@ -27,11 +30,15 @@ import {
   type Fixture,
   type Mutation,
 } from "./session-actor-worker.test-support.js";
-import type { SessionEntryPatchGuard } from "./session-entry-patch.types.js";
+import type {
+  SessionEntryPatchCommitted,
+  SessionEntryPatchGuard,
+} from "./session-entry-patch.types.js";
 import { readSessionEntryPatchSnapshot } from "./session-entry-patch.worker.js";
 import { readSessionTranscriptAccountingFromProjection } from "./session-transcript-accounting.js";
 import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcript-index.js";
 import { withSessionTranscriptProjectionReceipt } from "./session-transcript-projection-facts-scope.js";
+import { buildRestartRecoveryExpectedState } from "./session-transcript-turn-state.js";
 
 // mock-isolation: Actor ownership proof must not schedule unrelated background maintenance.
 vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
@@ -39,6 +46,97 @@ vi.mock("./session-accessor.sqlite-maintenance-kick.js", () => ({
 }));
 // mock-isolation: The fixture owns its database lifetime without background history eviction.
 vi.mock("./session-history-eviction.js", () => ({ kickSessionHistoryDiskBudgetMaintenance() {} }));
+
+it("persists run adoption and its reducers once, then skips an unchanged hydrated row", async () => {
+  await withActor(async (f) => {
+    const initial = f.read();
+    const command: Mutation = {
+      type: "session.actor.adoptRun",
+      input: {
+        target: f.target,
+        expected: initial.version,
+        commandId: "adopt-with-activity",
+        phaseId: "adoption",
+        sessionId: f.scope.sessionId,
+        expectedState: buildRestartRecoveryExpectedState(initial.entry!),
+        runId: "current-run",
+        lifecycle: { startedAt: 2 },
+        reducers: [{ kind: "activity", updatedAt: 20 }],
+      },
+    };
+    await f.prepare(command);
+    const writes = trackSqliteStatementExecutions(f.database.db, ["nodes", "windows"], (sql) => {
+      const table = /^(?:insert into|update|delete from) "([^"]+)"/iu.exec(sql)?.[1];
+      return table === "session_nodes" ? "nodes" : table === "session_windows" ? "windows" : null;
+    });
+    try {
+      expect(f.mutate(command)).toMatchObject({
+        kind: "committed",
+        receipt: {
+          postimage: { entry: { activeWriterRunId: "current-run", startedAt: 2, updatedAt: 20 } },
+        },
+      });
+      expect(writes.counts).toEqual({ nodes: 1, windows: 1 });
+      writes.counts.nodes = 0;
+      writes.counts.windows = 0;
+      f.restartActor();
+      const hydrated = f.read();
+      expect(hydrated.entry).toMatchObject({
+        activeWriterRunId: "current-run",
+        startedAt: 2,
+        updatedAt: 20,
+      });
+      expect(
+        f.mutate({
+          ...command,
+          input: {
+            ...command.input,
+            expected: hydrated.version,
+            commandId: "unchanged-after-hydration",
+            expectedState: buildRestartRecoveryExpectedState(hydrated.entry!),
+            // Clearing an absent optional field changes the in-memory shape, not the stored row.
+            lifecycle: { endedAt: undefined },
+            reducers: [],
+          },
+        }),
+      ).toMatchObject({ kind: "committed" });
+      expect(writes.counts).toEqual({ nodes: 0, windows: 0 });
+      expect(f.nativeEntry()).toEqual(hydrated.entry);
+
+      runSqliteImmediateTransactionSync(f.database.db, () =>
+        f.database.db
+          .prepare("UPDATE session_nodes SET label = ? WHERE session_key = ?")
+          .run("stale-derived-label", f.target.sessionKey),
+      );
+      f.restartActor();
+      const repair = f.read();
+      expect(repair.entry?.label).toBe("initial");
+      writes.counts.nodes = 0;
+      writes.counts.windows = 0;
+      expect(
+        f.mutate({
+          ...command,
+          input: {
+            ...command.input,
+            expected: repair.version,
+            commandId: "repair-hydrated-column",
+            expectedState: buildRestartRecoveryExpectedState(repair.entry!),
+            lifecycle: { endedAt: undefined },
+            reducers: [],
+          },
+        }),
+      ).toMatchObject({ kind: "committed" });
+      expect(writes.counts).toEqual({ nodes: 1, windows: 0 });
+      expect(
+        f.database.db
+          .prepare("SELECT label FROM session_nodes WHERE session_key = ?")
+          .get(f.target.sessionKey),
+      ).toMatchObject({ label: "initial" });
+    } finally {
+      writes.restore();
+    }
+  });
+});
 
 it("reads committed participant counts and ordering in the same and next turn without SQL", async () => {
   await withActor((f) => {
@@ -253,6 +351,13 @@ it("keeps transcript residency across entry patches without losing either owner'
     );
     f.writeEntry({
       ...f.nativeEntry()!,
+      skillsSnapshot: {
+        prompt: "synthetic snapshot",
+        skills: Array.from({ length: 256 }, (_, index) => ({
+          name: `fixture-${index}`,
+          requiredEnv: [`SYNTHETIC_${index}`],
+        })),
+      },
       activitySummary: {
         version: 1,
         text: "Retained input",
@@ -296,7 +401,28 @@ it("keeps transcript residency across entry patches without losing either owner'
           : null,
     );
     try {
+      let candidate: SessionEntryPatchCommitted | undefined;
+      const transfer = createSqliteWorkerTransferCollector("patch", (value) => {
+        // The real patch kernel owns this candidate; the collector decodes its wire bytes.
+        candidate = value as SessionEntryPatchCommitted;
+      });
+      f.hooks.admit = (_stage, facts) => {
+        if (isRecord(facts) && facts.transfer) {
+          transfer.accept(facts.transfer);
+        }
+      };
       entryPatch({ label: "entry owner committed", model: "updated-model" });
+      delete f.hooks.admit;
+      assert(transfer.completed && candidate?.entry?.skillsSnapshot);
+      // The mutable caller result and retained publication each need one snapshot copy.
+      expect(serialize(candidate).byteLength).toBeLessThan(
+        serialize(candidate.entry).byteLength * 2.5,
+      );
+      candidate.entry.skillsSnapshot.prompt = "caller-owned edit";
+      expect(
+        candidate.publication?.fullEntries?.get(f.target.sessionKey)?.skillsSnapshot?.prompt,
+      ).toBe("synthetic snapshot");
+      expect(f.read().entry?.skillsSnapshot?.prompt).toBe("synthetic snapshot");
       expect(reads.counts.watermark).toBe(0);
       expect(reads.counts.select).toBe(0);
       runSqliteImmediateTransactionSync(f.database.db, () =>

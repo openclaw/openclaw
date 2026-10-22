@@ -16,7 +16,6 @@ import type { Settings } from "./sessions/settings-storage.js";
 
 const log = createSubsystemLogger("embedded-agent-settings");
 
-const DEFAULT_EMBEDDED_AGENT_PROJECT_SETTINGS_POLICY = "sanitize";
 const SANITIZED_PROJECT_AGENT_KEYS = ["shellPath", "shellCommandPrefix"] as const;
 
 type EmbeddedAgentProjectSettingsPolicy = "trusted" | "sanitize" | "ignore";
@@ -111,11 +110,7 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
 export function resolveEmbeddedAgentProjectSettingsPolicy(
   cfg?: OpenClawConfig,
 ): EmbeddedAgentProjectSettingsPolicy {
-  const raw = cfg?.agents?.defaults?.embeddedAgent?.projectSettingsPolicy;
-  if (raw === "trusted" || raw === "sanitize" || raw === "ignore") {
-    return raw;
-  }
-  return DEFAULT_EMBEDDED_AGENT_PROJECT_SETTINGS_POLICY;
+  return cfg?.agents?.defaults?.embeddedAgent?.projectSettingsPolicy ?? "sanitize";
 }
 
 /** Merges global, plugin, and project settings according to the selected trust policy. */

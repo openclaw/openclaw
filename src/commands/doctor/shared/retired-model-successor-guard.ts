@@ -9,7 +9,7 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { buildManifestBuiltInModelSuppressionResolver } from "../../../plugins/manifest-model-suppression.js";
 import type { ModelRefRepair, ModelRetirementScope } from "./retired-model-ref-repair.types.js";
 
-export type SuccessorGuardOwner = {
+type SuccessorGuardOwner = {
   suppression(
     config?: OpenClawConfig,
   ): ReturnType<typeof buildManifestBuiltInModelSuppressionResolver>;

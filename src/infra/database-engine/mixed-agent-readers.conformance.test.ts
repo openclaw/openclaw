@@ -8,10 +8,16 @@ import {
   resolveAuthProfileDatabaseOwnerId,
   inspectPersistedAuthProfileStoreRaw,
 } from "../../agents/auth-profiles/sqlite.js";
-import { updateAuthProfileStoreWithLock } from "../../agents/auth-profiles/store-runtime.js";
+import {
+  updateAuthProfileStoreWithLock,
+  withAuthProfileStoreAtEffect,
+} from "../../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.sqlite-entry.js";
+import { listSessionParticipantsReadOnly } from "../../config/sessions/session-accessor.sqlite-participant-read.js";
 import { appendTranscriptMessage } from "../../config/sessions/session-accessor.sqlite-transcript-write.js";
+import { recordSessionParticipantInWorker } from "../../config/sessions/session-sharing-store.async.js";
 import { prepareSessionTranscriptHydration } from "../../config/sessions/session-transcript-hydration.js";
 import { searchSessionTranscripts } from "../../config/sessions/session-transcript-search.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
@@ -68,6 +74,7 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
     });
 
     it("reads explicit and shared-main auth with warm readers and cold schema inspection", async () => {
+      withEngineStoreAdmission(() => openOpenClawStateDatabase());
       const store: AuthProfileStore = {
         version: 1,
         profiles: { fixture: { type: "api_key", provider: "fixture", key: "synthetic" } },
@@ -100,6 +107,14 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
             },
           });
           expect((await reader.read()).store).toEqual({ status: "readable", raw: store });
+          await withAuthProfileStoreAtEffect(
+            path.dirname(database.path),
+            { inheritedAuthDir: path.dirname(database.path), externalCli: { mode: "none" } },
+            async (effect) => {
+              expect((await effect.read()).profiles).toEqual(store.profiles);
+              effect.assertCurrent();
+            },
+          );
           expect(
             withEngineStoreAdmission(() =>
               inspectPersistedAuthProfileStoreRaw(path.dirname(database.path)),
@@ -188,6 +203,41 @@ describe.skipIf(!mixedAgentConnection).each(mixedAgentPairs)(
       expect((await searchSessionTranscripts(search)).hits).toEqual([
         expect.objectContaining({ messageId: "mixed-user", sessionId: target.sessionId }),
       ]);
+    });
+
+    it("records the first participant through the worker and retains contributions after reopen", async () => {
+      await captureRuntimeConfigAsyncReader()();
+      const scope = {
+        agentId: "participant",
+        sessionKey: "agent:participant:mixed",
+        env: process.env,
+      };
+      await upsertSessionEntryCore(scope, { sessionId: "mixed-participant", updatedAt: 1 });
+      const identity = { type: "agent", id: "teammate" } as const;
+      expect(await recordSessionParticipantInWorker(scope, { identity, promptedAt: 20 })).toBe(
+        "inserted",
+      );
+      expect(await recordSessionParticipantInWorker(scope, { identity, promptedAt: 30 })).toBe(
+        "updated",
+      );
+      const expected = [
+        { identity, contributionCount: 2, firstPromptedAt: 20, lastPromptedAt: 30 },
+      ];
+      const read = () =>
+        withEngineStoreAdmission(() => listSessionParticipantsReadOnly(scope)).get(
+          scope.sessionKey,
+        );
+      expect(read()).toEqual(expected);
+      const pathname = path.join(
+        fixture.root,
+        "agents",
+        scope.agentId,
+        "agent",
+        "openclaw-agent.sqlite",
+      );
+      withEngineStoreAdmission(() => closeOpenClawAgentDatabaseByPath(pathname));
+      await closeOpenClawAgentDatabaseByPathAsync(pathname);
+      expect(read()).toEqual(expected);
     });
   },
 );

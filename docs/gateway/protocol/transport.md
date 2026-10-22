@@ -47,14 +47,53 @@ that supervise the Gateway as a child process, see
   the gateway closes or drops the frame. These events carry `surface`, byte
   sizes, limits, and a safe reason code, never message bodies, attachment
   contents, raw frame bytes, tokens, cookies, or secrets.
-- The Gateway offers `permessage-deflate` with context takeover disabled in
-  both directions. Peers that negotiate it (browsers, `ws` clients, Foundation,
-  OkHttp) receive frames of 16 KiB and up compressed; smaller session and tool
-  updates stay raw. Browsers compress every request; the Gateway inflates and
-  compresses each message inline instead of through background zlib streams,
-  so request bursts reach handler scheduling together, as uncompressed frames
-  do. Peers that do not offer the extension are unaffected. Payload limits
-  apply to the inflated size.
+- The Gateway offers `permessage-deflate` to remote clients, with context
+  takeover disabled in both directions. Direct-local connections skip
+  compression to avoid extra RPC latency. Trusted reverse proxies and managed
+  Tailscale ingress retain compression even when their Gateway-side socket is
+  loopback. Plain TCP tunnels without proxy attribution appear direct-local
+  and also skip compression. Peers that negotiate it (browsers, `ws` clients,
+  Foundation, OkHttp) receive frames of 1 KiB and up compressed; smaller session
+  and tool updates stay raw. Browsers compress every request; the Gateway
+  inflates and deflates synchronously instead of through background zlib
+  streams, so request bursts reach handler scheduling together, as uncompressed
+  frames do. Large shared payloads are compressed once and reused across
+  recipients; worker-produced history is compressed off the Gateway thread.
+  Peers that do not offer the extension are unaffected. Payload limits apply to
+  the inflated size.
+
+### Compression threshold
+
+The 1 KiB threshold balances payload savings against synchronous deflate CPU at
+observed event rates. A synthetic corpus of 1,805 current producer frames
+(4,340,581 raw bytes), including session-row snapshots and deltas, presence resets
+and deltas, and agent, tool, observer, and chat events, produced these results
+with the shared-context level-1 codec and no context takeover:
+
+| Threshold | Wire payload bytes | Median main-thread CPU ms / 1,000 frames |
+| --------- | -----------------: | ---------------------------------------: |
+| 256 B     |          1,357,907 |                                   21.884 |
+| 512 B     |          1,402,623 |                                   18.019 |
+| **1 KiB** |      **1,464,046** |                               **16.986** |
+| 2 KiB     |          2,334,915 |                                    8.011 |
+| 4 KiB     |          3,078,930 |                                    4.002 |
+
+At 1 KiB, this mix uses 52.45% fewer payload bytes than at 4 KiB, compared with
+24.16% fewer at 2 KiB. The extra 12.984 ms of CPU per 1,000 frames costs about
+0.32 ms/s at the observed aggregate rate of 25 event frames/s (about 180,000 over
+two hours), or 1.30 ms/s at a swarm peak of 100 frames/s: roughly 0.03–0.13% of
+one core. Below 1 KiB, savings flatten: 512 B saves only another 61,423 bytes
+(4.20%) because smaller frames compress less effectively without context
+takeover. The threshold decision uses cost at these event rates rather than a
+fixed CPU budget per 1,000 frames.
+
+Measurements used an Apple M3 Ultra with Node 26.12.0, three warm-ups, and eight
+rotating measured rounds. Fresh segment identities prevented compressed-segment
+cache reuse from hiding deflate work. Corpus frequencies and text are synthetic;
+these savings are not a production egress forecast. Wire payload bytes exclude
+WebSocket, TLS, and TCP headers. See [Prometheus metrics](/gateway/prometheus) for
+per-event wire-byte counters and raw frame-size distributions that can validate
+the mix on a running Gateway.
 
 Frame shapes:
 

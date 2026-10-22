@@ -83,7 +83,7 @@ jobs:
           echo "desktop_test_bundles=${BASH_REMATCH[3]}" >> "$GITHUB_OUTPUT"
 
       - name: Prepare Git owner
-        uses: openclaw/openclaw/.github/actions/git-owner@dd4528b6393e7d00063067a080ca7241b48ce475
+        uses: openclaw/openclaw/.github/actions/git-owner@88095dc00eef288c3829909d4dc64a9e249fa7ef
 
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -110,7 +110,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Verify trusted release tooling identity
@@ -335,7 +335,7 @@ jobs:
       - name: Setup trusted Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -631,11 +631,10 @@ jobs:
     name: Build unsigned macOS test bundles
     if: ${{ needs.validate_release.outputs.desktop_test_bundles == 'true' }}
     needs: validate_release
-    # macos-15, not macos-14: tauri-plugin-notifications' Swift sources use
-    # typed throws (`throws(FFIResult)`), which needs Swift 6. The macos-14
-    # image still ships Swift 5.x, so this job could not build the plugin.
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 45
+    env:
+      MACOSX_DEPLOYMENT_TARGET: "13.0"
     permissions:
       contents: read
     outputs:
@@ -648,7 +647,7 @@ jobs:
       - name: Setup trusted Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -736,7 +735,7 @@ jobs:
       - name: Setup trusted Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24
+          node-version: 24.22.1
 
       - name: Checkout selected tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -1146,7 +1145,7 @@ jobs:
       - name: Setup supported Node runtime
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: "24.21.0"
+          node-version: "24.22.1"
           package-manager-cache: false
 
       - name: Publish immutable bundles, canonical Linux channel, and legacy mirror

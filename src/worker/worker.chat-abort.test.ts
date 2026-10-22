@@ -6,7 +6,6 @@ import {
   withinTest,
 } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { resolveActiveEmbeddedRunOwner } from "../agents/embedded-agent-runner/runs.js";
 import {
   clearRuntimeConfigSnapshot,
   getRuntimeConfigSnapshot,
@@ -19,6 +18,7 @@ import {
   invokeChatAbortHandler,
 } from "../gateway/server-methods/chat.abort.test-helpers.js";
 import { coreGatewayHandlers } from "../gateway/server-methods/core-handlers.js";
+import { claimRpcSourceForTest } from "../gateway/test-helpers.rpc-source.js";
 import { hashWorkerCredential } from "../gateway/worker-environments/credential.js";
 import { projectWorkerSessionTurnClaim } from "../gateway/worker-environments/placement-record.js";
 import { createWorkerTurnRunOwner } from "../gateway/worker-environments/worker-turn-run-owner.js";
@@ -32,6 +32,7 @@ import {
   getActiveAgentRunDelegatedAuthority,
   getAgentRunContext,
 } from "../infra/agent-run-registry.js";
+import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
 import {
   ComposedGatewayHarness,
   ENVIRONMENT_ID,
@@ -113,6 +114,7 @@ it.each([
       removeChatRun: (...args: Parameters<typeof harness.chat.state.registry.remove>) =>
         harness.chat.state.registry.remove(...args),
     });
+    let deliverCancellation: (() => void) | undefined;
     const authority = getActiveAgentRunDelegatedAuthority(
       descriptor.assignment.operationalRunInstance,
     );
@@ -120,7 +122,12 @@ it.each([
       throw new Error("managed worker turn has no admitted authority");
     }
     const registration = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
+      target: captureSessionTarget({
+        storeScope: harness.sessionTarget.storePath,
+        sessionKey: SESSION_KEY,
+        incarnation: SESSION_ID,
+        agentId: "main",
+      }),
       runId: RUN_ID,
       ...runContext,
       ownerConnId: "fault-operator",
@@ -129,8 +136,17 @@ it.each([
       timeoutMs: 60_000,
       kind: "chat-send",
     });
+    if (!registration.registered) {
+      throw new Error("Expected worker source admission");
+    }
     registration.bindAgentRunDelegatedAuthority(authority);
-    registration.markExecutionStarted();
+    registration.initializeTiming();
+    const releaseSource = await claimRpcSourceForTest(registration.entry);
+    const operation = registration.entry.input.claim?.operation;
+    if (!operation) {
+      throw new Error("Expected controller-owned worker operation");
+    }
+    expect(registration.markExecutionStarted()).toBe(true);
     const ownerInput = {
       placements,
       isReplyDelivered: () => false,
@@ -146,10 +162,10 @@ it.each([
         runId: RUN_ID,
         config: harness.cfg,
         abortSignal: registration.controller.signal,
+        replyOperation: operation,
       },
     };
     const owner = await createWorkerTurnRunOwner(ownerInput);
-    let replacement: Awaited<ReturnType<typeof createWorkerTurnRunOwner>> | undefined;
     const ackEntered = createDeferred();
     const ackRelease = createDeferred();
     const { release: providerRelease, started: providerStarted } = harness.planPending();
@@ -186,7 +202,14 @@ it.each([
     let command: Promise<void> | undefined;
     try {
       const worker = await workers.launch({ descriptor, signal });
-      cancelWorker = () => worker.cancel();
+      cancelWorker = () => {
+        if (fence === "after durable ACK") {
+          // Let the Gateway's inference cancellation arrive before local cancellation.
+          deliverCancellation = () => worker.cancel();
+        } else {
+          worker.cancel();
+        }
+      };
       owner.signal.addEventListener("abort", cancelWorker, { once: true });
       command = worker.finish().then((exit) => {
         stdout = exit.stdout;
@@ -206,7 +229,10 @@ it.each([
         previewGate?.entered.promise ?? providerStarted.promise,
         "cancellation boundary",
       );
-      expect(getAgentRunContext(RUN_ID)?.sessionId).toBe(SESSION_ID);
+      expect(getAgentRunContext(RUN_ID)).toMatchObject({
+        sessionId: SESSION_ID,
+        isControlUiVisible: true,
+      });
       const respond = await invokeChatAbortHandler({
         handler: coreGatewayHandlers["chat.abort"]!,
         context,
@@ -221,6 +247,7 @@ it.each([
       const publishedAtAbort = publishedEvents;
       previewGate?.release.resolve();
       await waitFor(finishingGate.entered.promise, "cancellation finishing");
+      deliverCancellation?.();
       const cursorAtAbort = cursor();
       if (fence === "claim") {
         await harness.settleRun(RUN_ID);
@@ -259,12 +286,13 @@ it.each([
       finishingGate.release.resolve();
       if (replaceDuringAck) {
         await waitFor(ackEntered.promise, "durable ACK boundary");
-        replacement = await createWorkerTurnRunOwner({
-          ...ownerInput,
-          turn: { ...ownerInput.turn, abortSignal: undefined },
-        });
-        // The same claim cannot lend replacement authority across the ACK await.
-        expect(resolveActiveEmbeddedRunOwner(SESSION_ID)?.abort()).toBe(true);
+        await expect(
+          createWorkerTurnRunOwner({
+            ...ownerInput,
+            turn: { ...ownerInput.turn, abortSignal: undefined },
+          }),
+        ).rejects.toThrow("Worker attempt retired");
+        owner.dispose();
         ackRelease.resolve();
       }
       const failure = await command.then(
@@ -329,8 +357,9 @@ it.each([
           owner.signal.removeEventListener("abort", cancelWorker);
         }
         owner.dispose();
-        replacement?.dispose();
         registration.cleanup();
+        releaseSource();
+        await registration.entry.input.settlement.promise;
         unsubscribe();
       }
     }

@@ -12,9 +12,9 @@ import {
 } from "../../plugins/runtime/gateway-request-scope.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
 import type { FollowupRun } from "./queue.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
 
 const state = vi.hoisted(() => ({
   account: vi.fn(),
@@ -39,8 +39,19 @@ vi.mock("./agent-runner-result-accounting.js", () => ({
   accountFollowupTurn: (...args: unknown[]) => state.account(...args),
 }));
 
-vi.mock("./followup-turn-admission.js", () => ({
-  admitFollowupTurn: (...args: unknown[]) => state.admit(...args),
+vi.mock("./reply-agent-turn-preparation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-agent-turn-preparation.js")>()),
+  prepareReplyAgentTurn: (...args: unknown[]) => state.admit(...args),
+}));
+
+// mock-isolation: Presentation tests use synthetic operations; real owner admission is
+// exercised by followup-runner.queue-custody.test.ts through the production runner.
+vi.mock("./reply-turn-admission-lifecycle.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./reply-turn-admission-lifecycle.js")>()),
+  runWithReplyOperationLifecycleAdmission: async (
+    _operation: unknown,
+    run: () => Promise<unknown>,
+  ) => await run(),
 }));
 
 vi.mock("./followup-turn-execution.js", () => ({
@@ -52,15 +63,14 @@ vi.mock("./followup-delivery.js", () => ({
   resolveFollowupDeliveryDecision: (...args: unknown[]) => state.resolveDecision(...args),
 }));
 
-vi.mock("./queue.js", () => ({
+vi.mock("./queue.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./queue.js")>()),
   completeFollowupRunLifecycle: (...args: unknown[]) => state.completeLifecycle(...args),
-  FollowupRunDeferredError: class FollowupRunDeferredError extends Error {},
 }));
 
 vi.mock("../../runtime.js", () => ({ defaultRuntime: { error: vi.fn() } }));
 
 const { createFollowupRunner } = await import("./followup-runner.js");
-const { FollowupRunDeferredError } = await import("./queue.js");
 
 function createQueuedRun(overrides: Partial<FollowupRun> = {}): FollowupRun {
   return {
@@ -151,7 +161,6 @@ function createSettledExecution(): FollowupExecutionResult {
         resolved: { provider: "anthropic", model: "claude" },
         fallback: { exhausted: false, attempts: [] },
         autoCompactionCount: 0,
-        didLogHeartbeatStrip: false,
       },
     },
   };
@@ -252,13 +261,19 @@ describe("createFollowupRunner", () => {
       turn.queued.originatingChannel = "webchat";
       turn.queued.queuedFollowupReplyDisposition = { kind: "deliver", deliver: source.deliver };
       const failure = new Error("session generation changed after compaction");
-      const notice = { text: "Context compacted", mediaUrl: "https://example.test/status.png" };
+      const notice = {
+        text: "Context compacted",
+        replyToCurrent: true,
+        isCompactionNotice: true,
+      };
       const order: string[] = [];
       state.admit.mockImplementation(
         async (
-          params: Parameters<typeof import("./followup-turn-admission.js").admitFollowupTurn>[0],
+          params: Parameters<
+            typeof import("./reply-agent-turn-preparation.js").prepareReplyAgentTurn
+          >[0],
         ) => {
-          await params.onCompactionNoticePayload?.(notice, turn);
+          await params.onCompactionNotice?.("end", notice.text, turn);
           if (!succeeds) {
             throw failure;
           }
@@ -305,9 +320,11 @@ describe("createFollowupRunner", () => {
     const order: string[] = [];
     state.admit.mockImplementation(
       async (
-        params: Parameters<typeof import("./followup-turn-admission.js").admitFollowupTurn>[0],
+        params: Parameters<
+          typeof import("./reply-agent-turn-preparation.js").prepareReplyAgentTurn
+        >[0],
       ) => {
-        await params.onCompactionNoticePayload?.({ text: "Compacting context" }, turn);
+        await params.onCompactionNotice?.("start", "Compacting context", turn);
         order.push("compaction-finished");
         return { kind: "admitted", turn };
       },
@@ -533,24 +550,25 @@ describe("createFollowupRunner", () => {
     });
   });
 
-  it("turns active-lane deferral into a restorable queue error", async () => {
+  it("settles invalidated claimed input without executing or replaying", async () => {
     const typing = createTypingController();
     const endCorrelation = vi.fn();
     const queued = createQueuedRun({ deliveryCorrelations: [{ begin: () => endCorrelation }] });
-    state.admit.mockResolvedValue({ kind: "deferred", reason: "active-run" });
+    state.admit.mockResolvedValue({ kind: "skipped", reason: "lifecycle-invalidated" });
 
-    const pending = createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(
-      queued,
-    );
-    await expect(pending).rejects.toBeInstanceOf(FollowupRunDeferredError);
-    await expect(pending).rejects.toThrow(
-      "Follow-up reply lane is still active (Follow-up reply lane is still active (active-run))",
-    );
+    await expect(
+      createFollowupRunner({ typing, typingMode: "instant", defaultModel: "claude" })(queued),
+    ).resolves.toBeUndefined();
 
-    expect(state.completeLifecycle).not.toHaveBeenCalled();
+    expect(state.completeLifecycle).toHaveBeenCalledWith(queued);
     expect(typing.markRunComplete).toHaveBeenCalledOnce();
     expect(typing.markDispatchIdle).toHaveBeenCalledOnce();
-    expect(endCorrelation).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(state.execute).not.toHaveBeenCalled();
+    expect(endCorrelation).toHaveBeenCalledExactlyOnceWith({
+      visibleReplySent: false,
+      failed: true,
+      completed: false,
+    });
   });
 
   it.each(["aborted", "lifecycle-invalidated", "goal-inactive"])(

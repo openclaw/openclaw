@@ -2,6 +2,7 @@ import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { ConfigSnapshotReadMeasure, ConfigSnapshotReadOptions } from "../config/io.js";
 import { resolveStateDir } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
+import { withEngineStoreAdmission } from "../infra/database-engine/admission-scope.js";
 import { getDatabaseEngineSelection } from "../infra/database-engine/context.js";
 import { assertDatabasePortStartupAllowed } from "../infra/database-port-recovery.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
@@ -42,7 +43,7 @@ export type StartupConfigPreflightResult = ReturnType<typeof result> & {
   pluginCache?: PluginCache;
 };
 
-/** Prepare current runtime state; legacy imports and repair receipts belong to Doctor. */
+/** Prepare runtime state, including backed-up client credential migration through Doctor custody. */
 export async function runStartupConfigPreflight(
   options: StartupConfigPreflightOptions,
 ): Promise<StartupConfigPreflightResult> {
@@ -125,6 +126,10 @@ async function prepareStartupConfig(
       readSnapshot,
       validateConfig: options.validateStartupConfig,
       beforeStatePreparation,
+      prepareClientCredentials: async (snapshot) => {
+        const { prepareStartupClientCredentials } = await import("./startup-client-credentials.js");
+        await prepareStartupClientCredentials({ env, config: snapshot.config });
+      },
     });
   let read = await readAdmitted();
   env = cloneEnvWithPlatformSemantics(process.env);
@@ -196,38 +201,58 @@ async function prepareStartupConfig(
         await import("../infra/state-migrations.daemon-runtime-pins.js");
       initializeFreshDaemonRuntimePinMigration(env);
     }
-    const { HISTORICAL_WEBHOOK_CHANNELS, recordUnwrittenWebhookCompletion } =
-      await import("./doctor/shared/legacy-webhook-pins.js");
-    const webhookCompletion = read.snapshot.sourceConfig.meta?.migrations?.webhookListeners;
-    if (
-      webhookCompletion !== true &&
-      !HISTORICAL_WEBHOOK_CHANNELS.every((id) => Object.hasOwn(webhookCompletion ?? {}, id))
-    ) {
+    const {
+      HISTORICAL_WEBHOOK_CHANNELS,
+      prepareUnwrittenWebhookCompletion,
+      readUnwrittenWebhookCompletion,
+    } = await import("./doctor/shared/legacy-webhook-pins.js");
+    const webhookCompletion =
+      read.snapshot.sourceConfig.meta?.migrations?.webhookListeners ??
+      (await readUnwrittenWebhookCompletion(env));
+    const pendingWebhookChannels =
+      webhookCompletion === true
+        ? []
+        : HISTORICAL_WEBHOOK_CHANNELS.filter((id) => !Object.hasOwn(webhookCompletion ?? {}, id));
+    if (pendingWebhookChannels.length) {
       const migration = await measureDoctorConfigPreflightStep("webhook-readiness", async () => {
         const { applyPluginDoctorCompatibilityMigrations } =
           await import("../plugins/doctor-contract-registry.js");
-        return applyPluginDoctorCompatibilityMigrations(read.snapshot.sourceConfig, {
-          config: read.snapshot.sourceConfig,
-          env,
-          manifestRegistry: read.pluginMetadataSnapshot?.manifestRegistry,
-          pluginIds: HISTORICAL_WEBHOOK_CHANNELS,
-          historicalWebhookListeners: true,
-          startup: true,
-        });
+        // Legacy compatibility inspection is synchronous boot admission, before runtime starts.
+        return withEngineStoreAdmission(() =>
+          applyPluginDoctorCompatibilityMigrations(read.snapshot.sourceConfig, {
+            config: read.snapshot.sourceConfig,
+            env,
+            manifestRegistry: read.pluginMetadataSnapshot?.manifestRegistry,
+            pluginIds: pendingWebhookChannels,
+            historicalWebhookListeners: true,
+            historicalWebhookCompletion: { marker: webhookCompletion },
+            startup: true,
+          }),
+        );
       });
       if (migration.warnings?.length) {
         throw new Error(migration.warnings.join("\n"));
       }
-      if (migration.changes.length) {
+      const completion = prepareUnwrittenWebhookCompletion(read.snapshot, migration, env);
+      if (!completion && migration.changes.length) {
+        const { StartupMaintenanceRequiredError } =
+          await import("../infra/startup-maintenance-required.js");
+        throw new StartupMaintenanceRequiredError(
+          "state-migrations",
+          `Webhook listeners require config migration. Run \`openclaw doctor --fix\`, then restart. Startup left the config unchanged.\n${migration.changes.join("\n")}`,
+        );
+      }
+      if (completion) {
         await beforeStatePreparation(read.snapshot);
         assertLeaseCurrent();
-        if (!recordUnwrittenWebhookCompletion(read.snapshot, migration, env)) {
-          const { StartupMaintenanceRequiredError } =
-            await import("../infra/startup-maintenance-required.js");
-          throw new StartupMaintenanceRequiredError(
-            "state-migrations",
-            `Webhook listeners require config migration. Run \`openclaw doctor --fix\`, then restart. Startup left the config unchanged.\n${migration.changes.join("\n")}`,
-          );
+        const { writeConfigMachineStateAsync } =
+          await import("../state/config-machine-state-async.js");
+        try {
+          await writeConfigMachineStateAsync(completion.key, completion.value, { env });
+        } catch (error) {
+          recordStartupMigrationWarnings([
+            `Could not record webhook listener completion; startup will retry on the next boot: ${String(error)}`,
+          ]);
         }
       }
     }

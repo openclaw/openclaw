@@ -197,7 +197,10 @@ OpenClaw release:
         use protected file-descriptor forwarding, including tokens saved with
         `openclaw models auth paste-token --provider anthropic`. API keys saved for
         the `anthropic` provider require an explicit account selection for CLI
-        forwarding. Existing sessions keep their account until you select another
+        forwarding. Saved subscription accounts also make configured Claude CLI
+        models available in the picker without a native `claude auth login`;
+        switching models preserves the configured Claude CLI runtime.
+        Existing sessions keep their account until you select another
         or remove its saved profile. Native-tool approvals remain under OpenClaw
         control. Schema-valid native calls pass through OpenClaw's shared
         tool policy before native approval. Isolated side-question completions
@@ -557,6 +560,13 @@ metadata appended to large transcripts is included without reading the entire
 history. Metadata outside those windows may be unavailable. Desktop rows retain
 their Desktop title and remain colorless.
 
+Routine discovery reads at most 64 MiB of transcript metadata across 10,000 files.
+If it reaches either limit, the final discovered page reports `DISCOVERY_TRUNCATED`
+instead of claiming the inventory is complete. Search by an exact session ID to
+look up matching transcripts independently of that frontier; reading, continuing,
+and opening a known session in a terminal use the same bounded lookup. Per-file
+metadata windows and normal path, sidechain, and archive checks still apply.
+
 No additional OpenClaw config is required for discovery. The Anthropic plugin
 is bundled and enabled by default; a native macOS node advertises the read-only
 Claude session commands when the local Claude projects directory exists
@@ -849,7 +859,6 @@ OpenClaw supports Anthropic's prompt caching feature for API-key auth.
       agents: {
         ownership: "explicit",
         defaults: {
-          heartbeat: { agentId: "research" },
           systemAgent: { agentId: "research" },
           authInheritance: { agentId: "research" },
           model: { primary: "anthropic/claude-opus-4-6" },

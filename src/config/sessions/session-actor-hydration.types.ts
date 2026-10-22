@@ -25,7 +25,7 @@ export type SessionActorStoredState = {
   /** Only a complete cache can prove that a durable completion is absent. */
   completionsComplete: boolean;
   transcript: {
-    /** Only a complete window can prove that an identity or history row is absent. */
+    /** Complete means every identity row for the session, not just the bounded window. */
     complete: boolean;
     coldArchive:
       | Omit<Selectable<DB["session_transcript_cold_archives"]>, "archive_blob">

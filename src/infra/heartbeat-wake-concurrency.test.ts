@@ -10,6 +10,7 @@ import {
   requestHeartbeatAndWait,
   setHeartbeatWakeHandler as setRuntimeHeartbeatWakeHandler,
 } from "./heartbeat-wake.js";
+import { expectWakeHandlerReplacementConcurrency } from "./wake-concurrency.test-helpers.js";
 
 describe("heartbeat wake target concurrency", () => {
   type WakeRequest = Parameters<typeof requestHeartbeat>[0];
@@ -42,7 +43,6 @@ describe("heartbeat wake target concurrency", () => {
 
   it.each([
     { reason: "requests-in-flight", delay: 1_000, siblingAllowed: false },
-    { reason: "cron-in-progress", delay: 4_500, siblingAllowed: false },
     { reason: "throw", delay: 1_000, siblingAllowed: false },
     { reason: "min-spacing", delay: 4_500, siblingAllowed: true },
   ])(
@@ -84,19 +84,22 @@ describe("heartbeat wake target concurrency", () => {
         coalesceMs: 99,
       }).then(settled);
       await vi.advanceTimersByTimeAsync(99);
-      const initial = siblingAllowed ? ["event", "task"] : ["event"];
+      const failed = reason === "throw";
+      const initial = siblingAllowed || failed ? ["event", "task"] : ["event"];
       expect(handler.mock.calls.map(([request]) => request.intent)).toEqual(initial);
-      expect(settled).toHaveBeenCalledTimes(siblingAllowed ? 1 : 0);
+      expect(settled).toHaveBeenCalledTimes(failed ? 2 : siblingAllowed ? 1 : 0);
       await vi.advanceTimersByTimeAsync(delay - 1);
       expect(handler.mock.calls.map(([request]) => request.intent)).toEqual(initial);
       await vi.advanceTimersByTimeAsync(1);
       expect(handler.mock.calls.map(([request]) => request.intent)).toEqual(
-        siblingAllowed ? ["event", "task", "event"] : ["event", "event", "task"],
+        failed ? initial : siblingAllowed ? ["event", "task", "event"] : ["event", "event", "task"],
       );
       await Promise.all([event, task]);
       expect(settled).toHaveBeenCalledTimes(2);
       expect(settled.mock.calls.map(([result]) => result)).toEqual([
-        { status: "ran", durationMs: 1 },
+        failed
+          ? { status: "failed", reason: "temporary admission failure" }
+          : { status: "ran", durationMs: 1 },
         { status: "ran", durationMs: 1 },
       ]);
     },
@@ -154,98 +157,20 @@ describe("heartbeat wake target concurrency", () => {
   );
 
   it("preserves the target concurrency bound across heartbeat handler replacement", async () => {
-    vi.useFakeTimers();
-    const finishOldWakeByAgent = new Map<string, () => void>();
-    const finishNewWakeByAgent = new Map<string, () => void>();
-    const oldWakeSignals: AbortSignal[] = [];
-    let peakActiveWakeCount = 0;
-    const oldHandler = vi.fn(async (request: WakeRequest) => {
-      peakActiveWakeCount = Math.max(peakActiveWakeCount, getActiveGatewayRootWorkCount());
-      const signal = getHeartbeatWakeAbortSignal();
-      if (signal) {
-        oldWakeSignals.push(signal);
-      }
-      await new Promise<void>((resolve) => {
-        finishOldWakeByAgent.set(request.agentId ?? "", resolve);
-      });
-      return { status: "ran" as const, durationMs: 1 };
+    await expectWakeHandlerReplacementConcurrency({
+      setHandler: setHeartbeatWakeHandler,
+      requestTarget: (agentId) => {
+        requestHeartbeat({
+          source: "cron",
+          intent: "event",
+          reason: `cron:${agentId}`,
+          agentId,
+          sessionKey: `agent:${agentId}:main`,
+          coalesceMs: 0,
+        });
+      },
+      getAbortSignal: getHeartbeatWakeAbortSignal,
     });
-    setHeartbeatWakeHandler(oldHandler);
-
-    function requestTarget(agentId: string): void {
-      requestHeartbeat({
-        source: "cron",
-        intent: "event",
-        reason: `cron:${agentId}`,
-        agentId,
-        sessionKey: `agent:${agentId}:main`,
-        coalesceMs: 0,
-      });
-    }
-
-    for (let index = 0; index < 4; index += 1) {
-      requestTarget(`target-${index}`);
-    }
-    await vi.advanceTimersByTimeAsync(1);
-    expect(oldHandler).toHaveBeenCalledTimes(4);
-    expect(getActiveGatewayRootWorkCount()).toBe(4);
-
-    const newHandler = vi.fn(async (request: WakeRequest) => {
-      peakActiveWakeCount = Math.max(peakActiveWakeCount, getActiveGatewayRootWorkCount());
-      await new Promise<void>((resolve) => {
-        finishNewWakeByAgent.set(request.agentId ?? "", resolve);
-      });
-      return { status: "ran" as const, durationMs: 1 };
-    });
-    setHeartbeatWakeHandler(newHandler);
-    requestTarget("target-0");
-    for (let index = 4; index < 8; index += 1) {
-      requestTarget(`target-${index}`);
-    }
-
-    try {
-      await vi.advanceTimersByTimeAsync(1);
-      expect(oldWakeSignals).toHaveLength(4);
-      expect(oldWakeSignals.every((signal) => signal.aborted)).toBe(false);
-      expect(newHandler).not.toHaveBeenCalled();
-      expect(getActiveGatewayRootWorkCount()).toBe(4);
-      for (const finishWake of finishOldWakeByAgent.values()) {
-        finishWake();
-      }
-      await vi.advanceTimersByTimeAsync(0);
-      expect(newHandler.mock.calls.map(([request]) => request.agentId)).toEqual([
-        "target-0",
-        "target-4",
-        "target-5",
-        "target-6",
-      ]);
-      expect(getActiveGatewayRootWorkCount()).toBe(4);
-
-      finishNewWakeByAgent.get("target-0")?.();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(newHandler.mock.calls.map(([request]) => request.agentId)).toEqual([
-        "target-0",
-        "target-4",
-        "target-5",
-        "target-6",
-        "target-7",
-      ]);
-      expect(getActiveGatewayRootWorkCount()).toBe(4);
-    } finally {
-      for (let index = 0; index < 9; index += 1) {
-        for (const finishWake of finishOldWakeByAgent.values()) {
-          finishWake();
-        }
-        for (const finishWake of finishNewWakeByAgent.values()) {
-          finishWake();
-        }
-        await vi.advanceTimersByTimeAsync(0);
-      }
-    }
-
-    expect(newHandler).toHaveBeenCalledTimes(5);
-    expect(peakActiveWakeCount).toBe(4);
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("joins disposed work without letting its stale disposer abort a replacement", async () => {

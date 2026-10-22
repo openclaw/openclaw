@@ -7,6 +7,7 @@ import type { AgentsFilesListResult, AgentsListResult } from "../../api/types.ts
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import { createBrowserHistory } from "../../app/browser.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { agentFileValues } from "./agent-file-state.test-helpers.ts";
 import {
@@ -52,14 +53,53 @@ describe("AgentsPage routing", () => {
         panel: "tools",
       });
 
-      expect(page.read().activePanel).toBe("tools");
+      expect(page.read().readData().agentsPanel).toBe("tools");
       expect(page.read().selectedAgentId).toBe(expectedAgentId);
+      expect(page.read().memoryTarget.read()).toBe(expectedAgentId);
       expect(selection.state.selectedId).toBe(expectedAgentId);
-      expect(agentFileValues(page.read().agentFiles, "draft")).toEqual(
+      expect(agentFileValues(page.read().readData(), "draft")).toEqual(
         selectedId === expectedAgentId ? { "AGENTS.md": "Previous agent's file" } : {},
       );
     },
   );
+
+  it("publishes admitted memory targets from the retained page owner", () => {
+    const currentGateway = gateway(snapshot(null, false));
+    const selection = settingsSelection(roster, "main");
+    const agents = agentsCapability(async () => files("main", "main"));
+    agents.state.agentsList = roster;
+    const context: ApplicationContext = {
+      ...pageContext(currentGateway, agents),
+      settingsAgentSelection: selection,
+    };
+    const page = createAgentsPage(
+      context,
+      agentsRouteData(currentGateway, roster, "main", selection),
+    );
+    const target = page.read().memoryTarget;
+    const notify = vi.fn((agentId: string | null) => agentId);
+    const stop = target.subscribe(() => notify(target.read()));
+    try {
+      expect(target.read()).toBe("main");
+      const staleRoute = agentsRouteData(currentGateway, roster, "research", selection);
+      selection.set("research");
+      expect(notify).toHaveBeenLastCalledWith("research");
+      selection.set("main");
+      expect(notify).toHaveBeenLastCalledWith("main");
+      page.setRouteData(staleRoute);
+      expect(target.read()).toBe("main");
+      expect(page.read().memoryTarget).toBe(target);
+
+      stop();
+      notify.mockClear();
+      selection.set("research");
+      expect(notify).not.toHaveBeenCalled();
+    } finally {
+      stop();
+      page.dispose();
+      selection.dispose();
+    }
+  });
 
   it("keeps Back at Settings when the roster defaults after Agents route data", async () => {
     const previousUrl = window.location.href;
@@ -221,7 +261,7 @@ describe("AgentsPage routing", () => {
       );
       try {
         await waitForFast(() =>
-          expect(page.read().agentFiles.agentFilesList?.workspace).toBe("main"),
+          expect(page.read().readData().agentFilesList?.workspace).toBe("main"),
         );
 
         agents.state.agentsList = null;
@@ -243,9 +283,9 @@ describe("AgentsPage routing", () => {
 
         const expectedAgentId = newerIntent ? "main" : "research";
         expect(selection.state.selectedId).toBe(expectedAgentId);
-        expect(page.read().activePanel).toBe("files");
+        expect(page.read().readData().agentsPanel).toBe("files");
         await waitForFast(() =>
-          expect(page.read().agentFiles.agentFilesList?.workspace).toBe(expectedAgentId),
+          expect(page.read().readData().agentFilesList?.workspace).toBe(expectedAgentId),
         );
         expect(context.navigate).not.toHaveBeenCalled();
         if (newerIntent) {
@@ -315,15 +355,13 @@ describe("AgentsPage routing", () => {
       agentsRouteData(currentGateway, roster, "main", selection),
     );
 
-    expect(page.read().agentFiles.agentFilesLoading).toBe(true);
-
     selection.set("research");
     pending.resolve(files("main", "retired-main-workspace"));
     await pending.promise;
 
     expect(page.read().selectedAgentId).toBe("research");
     await waitForFast(() =>
-      expect(page.read().agentFiles.agentFilesList?.workspace).toBe("research"),
+      expect(page.read().readData().agentFilesList?.workspace).toBe("research"),
     );
     expect(context.navigate).toHaveBeenCalledWith("agents", {
       pathname: "/settings/agents/research/files",
@@ -332,7 +370,7 @@ describe("AgentsPage routing", () => {
   });
 
   it.each(["same target", "different target", "excluded target", "profile", "source"])(
-    "retains an identity draft through discovery retirement only for its current owner (%s)",
+    "retains an identity draft for its original agent and profile through selection changes (%s)",
     (change) => {
       const listeners = new Set<() => void>();
       const client = {
@@ -367,7 +405,7 @@ describe("AgentsPage routing", () => {
         agents.state.agentsList = null;
         listeners.forEach((listener) => listener());
         expect(page.read().selectedAgentId).toBeNull();
-        expect(page.read().overview.identityDraft.name).toBeNull();
+        expect(page.read().readData().identityDraft.name).toBeNull();
         if (change === "different target") {
           selection.set("research");
           selection.set("main");
@@ -386,8 +424,8 @@ describe("AgentsPage routing", () => {
         expect(page.read().selectedAgentId).toBe(
           change === "excluded target" ? "research" : "main",
         );
-        expect(page.read().overview.identityDraft.name).toBe(
-          change === "same target" ? "Lunar museum guide" : null,
+        expect(page.read().readData().identityDraft.name).toBe(
+          change === "same target" || change === "different target" ? "Lunar museum guide" : null,
         );
       } finally {
         page.dispose();
@@ -443,28 +481,36 @@ describe("AgentsPage routing", () => {
       }
       emitGatewaySnapshot(currentGateway, snapshot(client, false));
       emitGatewaySnapshot(currentGateway, snapshot(client));
-      expect(page.read().overview.identityDraft.name).toBe("Lunar museum guide");
-      expect(page.read().overview.identitySaving).toBe(false);
+      expect(page.read().readData().identityDraft.name).toBe("Lunar museum guide");
+      expect(page.read().readData().identitySaving).toBe(false);
 
       page.read().overview.onIdentityFieldChange("name", "Lunar museum curator");
       page.read().overview.onIdentitySave();
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+      const currentOutcome = page.read().readData().identityOutcome;
       if (stage === "request") {
         oldRequest.reject(new Error("Retired identity request"));
         await mutations[0]?.catch(() => undefined);
       } else {
+        vi.mocked(context.agentIdentity.ensure).mockClear();
         oldRefresh.resolve(agentsList);
-        await waitForFast(() => expect(context.agentIdentity.ensure).toHaveBeenCalledOnce());
+        await waitForFast(() =>
+          expect(context.agentIdentity.ensure).toHaveBeenCalledWith(["main"]),
+        );
       }
       await Promise.resolve();
-      expect(page.read().overview.identitySaving).toBe(true);
-      expect(page.read().overview.identityDraft.name).toBe("Lunar museum curator");
-      expect(page.read().overview.identityError).toBeNull();
+      expect(page.read().readData().identitySaving).toBe(true);
+      expect(page.read().readData().identityDraft.name).toBe("Lunar museum curator");
+      expect(page.read().readData().identityOutcome).toBe(currentOutcome);
 
       newRequest.resolve();
-      await waitForFast(() => expect(page.read().overview.identitySaving).toBe(false));
-      expect(page.read().overview.identityDraft).toEqual({ name: null, emoji: null, avatar: null });
-      expect(page.read().overview.identityError).toBeNull();
+      await waitForFast(() => expect(page.read().readData().identitySaving).toBe(false));
+      expect(page.read().readData().identityDraft).toEqual({
+        name: null,
+        emoji: null,
+        avatar: null,
+      });
+      expect(await page.read().readData().identityOutcome).toBeNull();
     },
   );
 
@@ -496,13 +542,45 @@ describe("AgentsPage routing", () => {
     page.read().overview.onIdentityFieldChange("name", "Main draft");
 
     page.read().overview.onIdentitySave();
-    expect(runExternalMutation).toHaveBeenCalledOnce();
+    await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledOnce());
     selection.set("research");
     admission.resolve();
     await runExternalMutation.mock.results[0]?.value;
 
     expect(request).not.toHaveBeenCalled();
-    expect(page.read().overview.identityDraft).toEqual({ name: null, emoji: null, avatar: null });
+    expect(page.read().readData().identityDraft).toEqual({ name: null, emoji: null, avatar: null });
+    page.dispose();
+  });
+
+  it("does not dispatch a queued identity write after operator access is revoked", async () => {
+    const admission = deferred();
+    const request = vi.fn();
+    const client = { request } as unknown as GatewayBrowserClient;
+    const currentGateway = gateway(snapshot(client));
+    const agents = agentsCapability(async () => files("main", "main"));
+    const runExternalMutation = vi.fn<ApplicationContext["runtimeConfig"]["runExternalMutation"]>(
+      async (task, options) => {
+        await admission.promise;
+        if (!options?.canDispatch?.()) {
+          return { ok: false, reason: "rejected", error: "Access changed." };
+        }
+        return { ok: true, value: await task(client), refresh: { ok: true } };
+      },
+    );
+    const context: ApplicationContext = {
+      ...pageContext(currentGateway, agents),
+      runtimeConfig: { subscribe: () => () => undefined, runExternalMutation },
+    } as unknown as ApplicationContext;
+    const page = createAgentsPage(context);
+    page.read().overview.onIdentityFieldChange("name", "Private draft");
+    page.read().overview.onIdentitySave();
+    await waitForFast(() => expect(runExternalMutation).toHaveBeenCalledOnce());
+
+    currentGateway.snapshot.hello = gatewayHelloForMethods(["agents.update"], ["operator.read"]);
+    admission.resolve();
+    await runExternalMutation.mock.results[0]?.value;
+
+    expect(request).not.toHaveBeenCalled();
     page.dispose();
   });
 });

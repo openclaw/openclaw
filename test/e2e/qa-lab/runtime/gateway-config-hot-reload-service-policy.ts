@@ -399,7 +399,7 @@ export async function proveHotReloadServicePolicy({
         const activeObserver = observer;
         const discover = async () => {
           activeObserver.check();
-          return (await discoverGatewayBeacons({ domains: ["local."], timeoutMs: 5_000 })).filter(
+          return (await discoverGatewayBeacons({ wideAreaDomain: "", timeoutMs: 5_000 })).filter(
             (beacon) => beacon.port === port && beacon.lanHost === `${hostname}.local`,
           );
         };

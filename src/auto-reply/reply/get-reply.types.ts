@@ -16,6 +16,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { DashboardMessageReadAdmission } from "../../gateway/message-action-turn-capability.js";
 import type { ExtractedFileImage } from "../../media-understanding/extracted-file-images.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
+import type { ReplyOperation } from "../../sessions/session-controller.contracts.js";
 import type { AgentDatabaseRequestExecutionSource } from "../../state/openclaw-agent-execution-admission-contract.js";
 import type { PreparedTtsPreferences } from "../../tts/tts-preferences.js";
 import { getCommandOwnerAuthority } from "../command-owner-authority.js";
@@ -26,10 +27,12 @@ import type { VerboseLevel } from "../thinking.js";
 import type { CommandSessionMetadataChange } from "./command-session-metadata.js";
 import type { PreparedReplyConversation } from "./prompt-session-context.js";
 import type { QueuedFollowupReplyDelivery } from "./queue/types.js";
-import type { ReplyOptionsWithAdmissionTicket } from "./reply-admission-ticket.js";
 import type { ReplyOptionsWithOperationRunState } from "./reply-operation-run-state.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
-import type { SessionEventExecution } from "./session-event-contract.js";
+import type { ReplySourceBinding } from "./reply-source-binding.types.js";
+import type {
+  ScheduledSessionAutomation,
+  SessionEventExecution,
+} from "./session-event-contract.js";
 
 export type ReplySessionBinding = {
   sessionKey?: string;
@@ -49,14 +52,29 @@ export type ReplyRunVerbosity = {
 };
 
 type InternalReplySessionOptions = {
+  /** Dispatch-owned command requester binding; never part of the public plugin API. */
+  withCommandNativeSubagents?: <T>(
+    binding: { agentId: string; sessionKey: string; entry: SessionEntry },
+    run: (
+      create:
+        | import("../../plugins/runtime/native-subagent-context.js").NativeSubagentCommandFactory
+        | undefined,
+    ) => Promise<T>,
+  ) => Promise<T>;
   /** Settles attribution before tool effects; model preparation may run concurrently. */
   awaitSessionDiffBaseline?: () => Promise<void>;
+  /** One-shot model selection for host-owned turns; never persisted as a user preference. */
+  modelOverride?: string;
+  /** Host-owned scheduling authority retained through ordinary session execution. */
+  scheduledAutomation?: ScheduledSessionAutomation;
   /** Producer callbacks follow this occurrence through queueing and delivery. */
   internalEventExecution?: SessionEventExecution;
   /** Source-owned cancellation retained when dispatch borrows an active lane for queued followups. */
   queuedFollowupAbortSignal?: AbortSignal;
   /** Host-minted original operator authority; never restored from session metadata. */
   operatorAuthority?: AdmittedRunOperatorAuthority;
+  /** Live channel policy retained from ingress through awaited lifecycle mutations. */
+  assertChannelAuthority?: () => void;
   extractedFileImages?: ExtractedFileImage[];
   /** Rechecks the live Gateway caller before a chat login has a durable effect. */
   assertProviderLoginAuthority?: () => void;
@@ -115,6 +133,8 @@ type InternalReplySessionOptions = {
   queueModeOverride?: QueueMode;
   /** Dispatch-owned operation used to defer hooks until durable run admission. */
   replyOperation?: ReplyOperation;
+  /** Observe the admitted owner without transferring the runner's settlement custody. */
+  onReplyOperationAdmitted?: (operation: ReplyOperation) => void;
   /** Return true only when the caller accepts settlement custody for this exact operation. */
   onReplyOperationOwned?: (operation: ReplyOperation) => boolean | void;
   skillOverrides?: SessionToolOverrides["skills"];
@@ -125,7 +145,7 @@ export type InternalGetReplyOptions = GetReplyOptions &
   PluginCommandReplyOptions &
   InternalReplySessionOptions &
   ReplyOptionsWithOperationRunState &
-  ReplyOptionsWithAdmissionTicket;
+  ReplySourceBinding;
 
 /** Pin the host-issued source before public options cross asynchronous preparation. */
 export function prepareInternalGetReplyOptions(

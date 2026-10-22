@@ -6,11 +6,12 @@ import {
   executeSqliteQueryTakeFirstSync,
 } from "../../infra/kysely-sync.js";
 import type { EngineConnection } from "../../infra/sql-connection.js";
-import { getAdmittedSqliteSchemaFacts } from "../../infra/sqlite-schema-facts.js";
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { getAdmittedSqlSchemaFacts } from "../../infra/sqlite-schema-facts.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import type { OpenClawAgentReadOnlyDatabase } from "../../state/openclaw-agent-db-readonly.js";
 import { captureOpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution.js";
 import { SESSION_GOAL_OPERATIONS_TABLE } from "../../state/openclaw-agent-goal-operations-schema.js";
+import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import {
   assertSessionGoalOperationTime,
   createSessionGoalOperationResult,
@@ -59,12 +60,11 @@ export function readSessionGoalOperationInDatabase(
 ): SessionGoalOperationResult | undefined {
   assertSessionGoalOperationTime(options.operation, Date.now());
   const { db } = database;
-  return runSqliteDeferredTransactionSync(db, () => {
-    const schema = getAdmittedSqliteSchemaFacts(db);
-    if (!schema) {
+  return runSqliteReadSnapshotSync(db, () => {
+    if (!getAdmittedSqlSchemaFacts(db)) {
       throw new Error("Goal receipt reads require admitted schema facts");
     }
-    if (!schema.tables.has(SESSION_GOAL_OPERATIONS_TABLE)) {
+    if (!tableExists(db, SESSION_GOAL_OPERATIONS_TABLE)) {
       return undefined;
     }
     const receipt = readSessionGoalOperationReceipt(
@@ -258,11 +258,11 @@ export async function mutateSessionGoal(
   }
   const resolved = captureLifecycleDatabaseScope(resolveSqliteScope(options));
   const databaseOptions = toDatabaseOptions(resolved);
-  const input = structuredClone({
+  const input = {
     sessionKey: resolved.sessionKey,
     expectedSessionId: options.expectedSessionId,
     operation: options.operation,
-  });
+  };
   return runExclusiveSqliteSessionWrite(
     resolved,
     async () => {

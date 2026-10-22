@@ -1,5 +1,4 @@
 import { lookup } from "node:dns/promises";
-import { bufferToBlobPart } from "openclaw/plugin-sdk/blob-runtime";
 import { isPrivateIpAddress } from "openclaw/plugin-sdk/ssrf-policy";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { fetchWithTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
@@ -167,7 +166,8 @@ export async function uploadToConsentUrl(params: {
         "Content-Type": params.contentType ?? "application/octet-stream",
         "Content-Range": `bytes 0-${params.buffer.length - 1}/${params.buffer.length}`,
       },
-      body: new Blob([bufferToBlobPart(params.buffer)]),
+      // Snapshot the slice without a Blob stream, which retains async context on Node 24.16–24.19.
+      body: Uint8Array.from(params.buffer),
     },
     resolveMSTeamsSharePointUploadTimeoutMs(params.buffer.length),
   );

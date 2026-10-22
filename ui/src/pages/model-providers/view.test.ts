@@ -3,6 +3,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { choosePickerValue, openPicker, updatePickers } from "../../test-helpers/select-picker.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
+import { resolveDefaultModelPresentation } from "./data.ts";
 import { card, mount, props, text } from "./view.test-support.tsx";
 
 it("offers only decision models, even without a chat provider, and retains an unavailable selection", async () => {
@@ -141,6 +143,184 @@ function selectSegment(group: Element, value: string) {
 }
 
 describe("renderModelProviders", () => {
+  it("keeps access details in open model options and out of selected settings triggers", async () => {
+    const onPrimaryChange = vi.fn();
+    const onUtilityChange = vi.fn();
+    const onFallbackChange = vi.fn();
+    const onUtilityFallbackChange = vi.fn();
+    const model = (id: string) => ({
+      id,
+      provider: "openai",
+      name: "A deliberately long model name",
+      available: true,
+    });
+    const pinned = "openai/other@openai:team";
+    const utilityModel = { primary: "openai/primary", fallbacks: [pinned] };
+    const container = mount(
+      props({
+        configuredModels: [
+          model("primary"),
+          model("other"),
+          { ...model("other"), selectionRef: pinned },
+        ],
+        authStatus: {
+          ts: 1,
+          providers: [
+            {
+              provider: "openai",
+              displayName: "OpenAI",
+              status: "ok",
+              profiles: [{ profileId: "openai:team", type: "api_key", status: "static" }],
+              apiKey: { source: "config" },
+            },
+          ],
+        },
+        defaultModels: { primary: "openai/primary", fallbacks: [pinned], utilityModel },
+        onPrimaryChange,
+        onUtilityChange,
+        onFallbackChange,
+        onUtilityFallbackChange,
+      }),
+    );
+    await updatePickers(container);
+    for (const [label, change] of [
+      ["Model", onPrimaryChange],
+      ["Utility Model", onUtilityChange],
+      ["Utility Fallback Model", onUtilityFallbackChange],
+      ["Fallback Model", onFallbackChange],
+    ] as const) {
+      const picker = settingsRow(container, label).querySelector<HTMLElement>(
+        "openclaw-select-picker",
+      )!;
+      const trigger = picker.querySelector<HTMLButtonElement>(".picker-select__trigger")!;
+      expect(text(trigger)).toBe("A deliberately long model name");
+      expect(trigger.getAttribute("aria-label")).toBe(`${label}: A deliberately long model name`);
+      expect(trigger.querySelector(".picker-select__description")).toBeNull();
+      await openPicker(picker);
+      const option = picker.querySelector(`[role="option"][data-value="${pinned}"]`)!;
+      expect(text(option.querySelector(".picker-select__description"))).toBe("API");
+      await choosePickerValue(picker, pinned);
+      expect(change).toHaveBeenCalledExactlyOnceWith(pinned);
+      expect(text(trigger)).not.toContain("API");
+    }
+  });
+
+  it("does not offer one account's Ultrafast entitlement for another saved account pin", () => {
+    const onFastModeChange = vi.fn();
+    const configured = {
+      primary: "openai/gpt-5@openai:account-b",
+      fallbacks: [],
+      utilityModel: null,
+      thinkingLevel: "max",
+      thinkingOverridden: true,
+      fastMode: "ultrafast" as const,
+      fastModeOverridden: true,
+    };
+    const forAccount = (serviceTiers: string[]) =>
+      resolveDefaultModelPresentation(
+        {
+          hasSnapshot: true,
+          retired: false,
+          models: [
+            {
+              provider: "openai",
+              id: "gpt-5",
+              name: "GPT-5",
+              available: true,
+              supportsFastMode: true,
+              serviceTiers,
+              thinkingLevels: [{ id: "max", label: "Maximum" }],
+            },
+          ],
+        },
+        configured,
+        null,
+      );
+    const accountA = forAccount(["priority", "ultrafast"]);
+    const viewProps = props({
+      ...configured,
+      defaultModels: accountA.defaults,
+      configuredModels: accountA.configuredModels,
+      onFastModeChange,
+    });
+    const container = mount(viewProps);
+    const speed = settingsRow(container, "Fast Mode");
+    expect(selectedSegment(speed)).toBe("ultrafast");
+    expect(speed.querySelector<HTMLInputElement>('[value="ultrafast"]')?.disabled).toBe(true);
+    expect(speed.querySelector('[value="on"]')).toBeNull();
+    selectSegment(speed, "ultrafast");
+    expect(onFastModeChange).not.toHaveBeenCalled();
+    const accountB = forAccount([]);
+    mount({ ...viewProps, configuredModels: accountB.configuredModels }, container);
+    expect(selectedSegment(speed)).toBe("ultrafast");
+    expect(speed.querySelector<HTMLInputElement>('[value="ultrafast"]')?.disabled).toBe(true);
+    mount({ ...viewProps, fastMode: false }, container);
+    expect(speed.querySelector('[value="ultrafast"]')).toBeNull();
+    mount(
+      { ...viewProps, defaultModels: { ...configured, primary: "openai/gpt-5" }, fastMode: false },
+      container,
+    );
+    expect(speed.querySelector<HTMLInputElement>('[value="ultrafast"]')?.disabled).toBe(false);
+    selectSegment(speed, "ultrafast");
+    expect(onFastModeChange).toHaveBeenCalledExactlyOnceWith("ultrafast");
+  });
+
+  it("offers advertised thinking and Ultrafast without rewriting a saved preference on model changes", () => {
+    const onThinkingChange = vi.fn();
+    const onFastModeChange = vi.fn();
+    const model = {
+      id: "gpt-5",
+      provider: "openai",
+      name: "GPT-5",
+      available: true,
+      thinkingLevels: [
+        { id: "max", label: "Max" },
+        { id: "ultra", label: "Ultra" },
+        { id: "adaptive", label: "Provider effort" },
+      ],
+      supportsFastMode: true,
+      serviceTiers: ["priority", "ultrafast"],
+    };
+    const viewProps = props({
+      configuredModels: [model],
+      thinkingLevel: "max",
+      fastMode: "ultrafast",
+      onThinkingChange,
+      onFastModeChange,
+    });
+    const container = mount(viewProps);
+    const thinking = settingsRow(container, "Thinking");
+    const fast = settingsRow(container, "Fast Mode");
+    expect(selectedSegment(fast)).toBe("ultrafast");
+    expect(text(thinking)).toContain("Ultra");
+    selectSegment(thinking, "adaptive");
+    expect(onThinkingChange).toHaveBeenCalledWith("adaptive");
+    selectSegment(fast, "on");
+    expect(onFastModeChange).toHaveBeenCalledWith(true);
+    selectSegment(fast, "ultrafast");
+    // Reselecting a saved value must not rewrite it.
+    expect(onFastModeChange).toHaveBeenCalledTimes(1);
+    mount(
+      {
+        ...viewProps,
+        defaultModels: { primary: "openai/other", fallbacks: [], utilityModel: null },
+        configuredModels: [
+          model,
+          { ...model, id: "other", thinkingLevels: [], supportsFastMode: false, serviceTiers: [] },
+        ],
+      },
+      container,
+    );
+    expect(selectedSegment(thinking)).toBe("max");
+    expect(selectedSegment(fast)).toBe("ultrafast");
+    expect(thinking.querySelector<HTMLInputElement>('[value="max"]')?.disabled).toBe(true);
+    expect(fast.querySelector<HTMLInputElement>('[value="ultrafast"]')?.disabled).toBe(true);
+    expect(thinking.querySelector('[value="adaptive"]')).toBeNull();
+    expect(fast.querySelector('[value="on"]')).toBeNull();
+    expect(onThinkingChange).toHaveBeenCalledTimes(1);
+    expect(onFastModeChange).toHaveBeenCalledTimes(1);
+  });
+
   it("surfaces a provider-usage failure on the provider list", () => {
     const container = document.createElement("div");
     mount(props({ providerUsageFailed: true }), container);
@@ -154,16 +334,19 @@ describe("renderModelProviders", () => {
     await i18n.setLocale("en");
   });
 
-  it("keeps discovery failure recovery visible while another provider is pending", () => {
+  it("keeps discovery failure recovery visible while another provider is pending", async () => {
     const container = mount(
       props({ catalogDiscovering: true, catalogDiscoveryError: "A provider failed discovery." }),
     );
     expect(
       container.querySelector('.model-providers__catalog-progress[role="status"]'),
     ).not.toBeNull();
-    expect(
-      container.querySelector('.model-providers__catalog-progress[role="alert"] span')?.textContent,
-    ).toBe("A provider failed discovery.");
+    await waitForFast(() =>
+      expect(
+        container.querySelector('.model-providers__catalog-progress[role="alert"] span')
+          ?.textContent,
+      ).toBe("A provider failed discovery."),
+    );
     const retry = container.querySelector<HTMLButtonElement>(
       '.model-providers__catalog-progress[role="alert"] button',
     );

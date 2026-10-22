@@ -116,6 +116,13 @@ commentary/final channels distinguish narration from final answers. Reasoning
 visibility settings and private-tag filtering also continue to apply; preserving
 visible text does not expose hidden reasoning.
 
+Shared text filtering skips repeated reasoning/final-tag scans for marker-free
+HTML, generic types, and comparisons. Recognized or ambiguous marker heads use
+the existing tag handling, including tags split across provider chunks.
+
+Answers containing only whitespace or invisible formatting characters stay empty,
+including when a character is split across provider chunks.
+
 Provider plugins should omit `openclawDelivery.textPhaseRequiresTerminal`.
 This field, shipped in `v2026.10.1`, is now ignored. Its optional SDK type remains
 source-compatible until the next Plugin SDK major; removal also requires explicit
@@ -332,16 +339,16 @@ Slack-only:
   answer's paragraph separators and code fences in the edited message.
 - Preview streaming is skipped when Discord block streaming is explicitly
   enabled.
-- `progress` is quiet by default: headline, authored commentary and reasoning,
-  plan milestones, approval requests, and safe current-operation and delegated-task
-  status. Status does not require a utility model or a model-authored preamble.
-  Intermediate tool failures and nonzero command exits are hidden.
+- `progress` is quiet by default: a headline, enabled commentary and reasoning,
+  plan milestones, and approval requests. Without a headline, the draft falls
+  back to `Working`. Tool names, last-activity rows, delegated-task lifecycle
+  rows, intermediate tool failures, and nonzero command exits are hidden.
   `streaming.progress.toolProgress: true` adds the rolling tool log with its icons.
-  Telegram shares the safe work-status presentation; other channels retain their
-  existing progress layouts.
+  Telegram retains its current-operation and delegated-task status presentation.
 - `progress` mode deletes the status draft once the final answer is delivered,
-  so busy channels keep no orphaned tool log above the reply. Error finals keep
-  the draft as the record of the failed turn.
+  so busy channels keep no orphaned tool log above the reply. Transient deletion
+  failures are retried with backoff. Error finals keep the draft as the record
+  of the failed turn.
 - Final media, error, and explicit-reply payloads cancel pending previews
   without flushing a new draft, then use normal delivery.
 

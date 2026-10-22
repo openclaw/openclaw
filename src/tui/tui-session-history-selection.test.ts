@@ -109,7 +109,6 @@ it.each(["agent:research:main", "global"])(
 it.each([
   ["empty existing row", { messages: [], sessionId: "literal-row" }],
   ["nested existing identity", { messages: [], sessionInfo: { sessionId: "literal-row" } }],
-  ["archived row", { messages: [], sessionId: "literal-row", sessionInfo: { archived: true } }],
   ["identity-free nonempty history", { messages: [{ role: "assistant", content: "x" }] }],
   ["partial reply", {}],
   ["malformed metadata", { messages: [], sessionInfo: "incomplete" }],

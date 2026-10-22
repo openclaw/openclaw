@@ -729,7 +729,7 @@ it("bootstraps and refreshes the connected user's profile through users.self", a
   page.querySelector<HTMLButtonElement>(".profile-refresh")?.click();
   flush();
   expect(request.mock.calls.some(([method]) => method === "users.self")).toBe(false);
-  processing.resolve({ mime: "image/png", avatarBase64: "aA==", byteLength: 1 });
+  processing.resolve({ mime: "image/png", avatarBase64: "aA==" });
 });
 
 it("keeps model-account actions usable when identity refresh overlaps ChatGPT completion", async () => {
@@ -856,7 +856,7 @@ it("rechecks avatar upload policy after processing and rerenders on config updat
   );
   await config.refresh();
   await waitForFast(() => expect(page.querySelector('input[type="file"]')).toBeNull());
-  processed.resolve({ mime: "image/png", avatarBase64: "aA==", byteLength: 1 });
+  processed.resolve({ mime: "image/png", avatarBase64: "aA==" });
   await waitForFast(() =>
     expect(page.querySelector(".identity-error")?.textContent).toContain(uploadsDisabledMessage()),
   );
@@ -949,7 +949,7 @@ it("distinguishes unreported permissions from an explicit empty grant", async ()
   );
 });
 
-it("reconnects through the connection owner, retiring grants and preserving the editor", async () => {
+it("reconnects through the connection owner while retaining the last access summary and editor", async () => {
   const scope = "operator.admin";
   const harness = createConnectedContext(
     vi.fn(async () => ({})) as GatewayBrowserClient["request"],
@@ -967,9 +967,10 @@ it("reconnects through the connection owner, retiring grants and preserving the 
   reconnect?.click();
   expect(harness.context.gateway.connect).toHaveBeenCalledExactlyOnceWith();
   flush();
-  expect(page.querySelector("#settings-profile-access")).toBeNull();
-  expect(page.textContent).not.toContain("You have permission to manage this server.");
-  expect(page.querySelector('[role="status"]')?.textContent).toContain("Connecting…");
+  expect(page.querySelector("#settings-profile-access .settings-row__value")?.textContent).toBe(
+    scope,
+  );
+  expect(page.textContent).toContain("You have permission to manage this server.");
   expect(page.querySelector("openclaw-personal-instructions")).toBe(personalEditor);
 
   harness.emitHello(gatewayHelloForMethods([], ["operator.read"]));

@@ -7,6 +7,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { pathExists } from "../infra/fs-safe.js";
+import { safeStat } from "../infra/path-existence.js";
 import { resolveUserPath } from "../utils.js";
 import { detectBundleManifestFormat, loadBundleManifest } from "./bundle-manifest.js";
 import { normalizePluginsConfig, resolveEffectiveEnableState } from "./config-state.js";
@@ -413,8 +414,4 @@ function validateBundleInstallRecordPayload(params: {
       : "invalid-bundle-manifest",
     detail: `Bundle manifest validation failed: ${bundleManifest.error}`,
   };
-}
-
-async function safeStat(target: string): Promise<import("node:fs").Stats | null> {
-  return await fs.stat(target).catch(() => null);
 }

@@ -1,8 +1,10 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
+import { createIntersectionObserver } from "../lib/reactive/observers.ts";
 import { LinkReaderMarkdown, documentUrl, type LoadImage } from "./link-reader-markdown.tsx";
 import type { ReaderReadyView, ReaderSection } from "./link-reader-panel-view.ts";
 import { linkReaderAuthorHref } from "./link-reader-response.ts";
@@ -36,9 +38,14 @@ function DateLabel(props: { value: string | undefined }) {
   );
 }
 
-function Diff(props: { patch: string; filename: string }) {
+function Diff(props: {
+  patch: string;
+  filename: string;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
+}) {
   return (
     <pre
+      ref={[elementRef(props.onScrollPortRef)]}
       class="lr-diff"
       tabindex={0}
       aria-label={t("linkReader.diffLabel", { filename: props.filename })}
@@ -53,7 +60,7 @@ function Diff(props: { patch: string; filename: string }) {
                 : line.startsWith("@@")
                   ? "hunk"
                   : "context";
-            return <span class={"lr-diff-line lr-diff-line--" + kind}>{line}</span>;
+            return <span class={["lr-diff-line", `lr-diff-line--${kind}`]}>{line}</span>;
           }}
         </For>
       </code>
@@ -69,7 +76,11 @@ function TruncationNote(props: { truncated: boolean | undefined; label: string }
   );
 }
 
-function FileContent(props: { file: ControlUiLinkReaderFile; expanded: boolean }) {
+function FileContent(props: {
+  file: ControlUiLinkReaderFile;
+  expanded: boolean;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
+}) {
   // Preserve native toggles until the document changes its expansion preference.
   const expanded = createMemo(() => props.expanded);
   return (
@@ -88,7 +99,13 @@ function FileContent(props: { file: ControlUiLinkReaderFile; expanded: boolean }
         when={props.file.patch}
         fallback={<p class="lr-note">{t("linkReader.patchUnavailable")}</p>}
       >
-        {(patch) => <Diff patch={patch()} filename={props.file.path} />}
+        {(patch) => (
+          <Diff
+            patch={patch()}
+            filename={props.file.path}
+            onScrollPortRef={props.onScrollPortRef}
+          />
+        )}
       </Show>
       <TruncationNote truncated={props.file.patchTruncated} label="linkReader.patchTruncated" />
     </details>
@@ -97,6 +114,7 @@ function FileContent(props: { file: ControlUiLinkReaderFile; expanded: boolean }
 
 function CommentContent(props: {
   comment: ControlUiLinkReaderComment;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
   base: string;
   loadImage?: LoadImage;
 }) {
@@ -136,7 +154,11 @@ function CommentContent(props: {
         {(diff) => (
           <details class="lr-file lr-review-diff">
             <summary>{t("linkReader.reviewContext")}</summary>
-            <Diff patch={diff()} filename={props.comment.context?.path ?? ""} />
+            <Diff
+              patch={diff()}
+              filename={props.comment.context?.path ?? ""}
+              onScrollPortRef={props.onScrollPortRef}
+            />
             <TruncationNote
               truncated={props.comment.context?.diffTruncated}
               label="linkReader.patchTruncated"
@@ -176,12 +198,14 @@ function ChecksContent(props: {
   checks: ReaderChecks;
   base: string;
   refreshState?: "idle" | "loading" | "error";
+  sectionRef: (element: HTMLElement) => void;
 }) {
   const source = () =>
     props.checks.url ? documentUrl(props.checks.url, props.base)?.href : undefined;
   return (
     <details
-      class={"lr-checks lr-checks--" + props.checks.state}
+      ref={(element) => props.sectionRef(element)}
+      class={["lr-checks", `lr-checks--${props.checks.state}`]}
       data-reader-section="checks"
       tabindex={-1}
       open={props.checks.state === "failure"}
@@ -216,7 +240,7 @@ function ChecksContent(props: {
         >
           <span class="lr-checks-meter" aria-hidden="true">
             <For each={props.checks.items}>
-              {(item) => <span class={"lr-check-segment lr-check-segment--" + item.state} />}
+              {(item) => <span class={["lr-check-segment", `lr-check-segment--${item.state}`]} />}
             </For>
           </span>
         </Show>
@@ -226,7 +250,7 @@ function ChecksContent(props: {
           {(item) => {
             const url = () => (item.url ? documentUrl(item.url, props.base)?.href : undefined);
             return (
-              <li class={"lr-check lr-check--" + item.state}>
+              <li class={["lr-check", `lr-check--${item.state}`]}>
                 <span class="lr-check-symbol" role="img" aria-label={t(checkLabels[item.state])}>
                   <Icon name={checkIcons[item.state]} />
                 </span>
@@ -269,7 +293,7 @@ function ChecksContent(props: {
 }
 
 function SectionLink(props: {
-  section: string;
+  destination: () => HTMLElement | undefined;
   label: string;
   count?: number;
   onLoad?: () => void;
@@ -277,11 +301,9 @@ function SectionLink(props: {
   return (
     <button
       type="button"
-      onClick={(event) => {
+      onClick={() => {
         props.onLoad?.();
-        const destination = event.currentTarget
-          .closest(".lr-document")
-          ?.querySelector<HTMLElement>(`[data-reader-section="${props.section}"]`);
+        const destination = props.destination();
         if (destination instanceof HTMLDetailsElement) {
           destination.open = true;
         }
@@ -303,11 +325,15 @@ function ListSection(props: {
   total?: number;
   truncated?: boolean;
   children: JSX.Element;
+  refreshState?: "idle" | "loading" | "error";
+  onLoad: () => void;
+  sectionRef: (element: HTMLElement) => void;
 }) {
   return (
     <section
+      ref={(element) => props.sectionRef(element)}
       aria-label={t(`linkReader.${props.kind}`)}
-      class={`lr-${props.kind}`}
+      class={{ "lr-files": props.kind === "files", "lr-comments": props.kind === "comments" }}
       id={props.kind === "files" ? "files" : undefined}
       data-reader-section={props.kind}
       tabindex={-1}
@@ -319,6 +345,23 @@ function ListSection(props: {
           {props.total !== undefined && props.total !== props.count ? " / " + props.total : ""}
         </span>
       </h2>
+      <Show when={props.refreshState}>
+        <p class="lr-meta" role="status">
+          {t(
+            props.refreshState === "error"
+              ? "linkReader.sectionRefreshFailed"
+              : "linkReader.sectionRefreshing",
+            {
+              section: t(props.kind === "comments" ? "linkReader.discussion" : "linkReader.files"),
+            },
+          )}
+          {props.refreshState === "error" && (
+            <button type="button" class="lr-retry" onClick={() => props.onLoad()}>
+              {t("linkReader.retry")}
+            </button>
+          )}
+        </p>
+      </Show>
       {props.children}
       <TruncationNote truncated={props.truncated} label={`linkReader.${props.kind}Truncated`} />
       <Show when={props.count === 0 && !props.truncated}>
@@ -330,60 +373,28 @@ function ListSection(props: {
   );
 }
 
-function RetainedSectionStatus(props: {
-  section: ReaderSection;
-  state: "idle" | "loading" | "error";
-  onLoad: () => void;
-}) {
-  return (
-    <p class="lr-meta" role="status">
-      {t(
-        props.state === "error"
-          ? "linkReader.sectionRefreshFailed"
-          : "linkReader.sectionRefreshing",
-        {
-          section: t(props.section === "discussion" ? "linkReader.discussion" : "linkReader.files"),
-        },
-      )}
-      {props.state === "error" && (
-        <button type="button" class="lr-retry" onClick={() => props.onLoad()}>
-          {t("linkReader.retry")}
-        </button>
-      )}
-    </p>
-  );
-}
-
 function DeferredSection(props: {
   section: ReaderSection;
   state: "idle" | "loading" | "error";
   onLoad: () => void;
+  sectionRef: (element: HTMLElement) => void;
 }) {
   let element: HTMLElement | undefined;
-  const label = () =>
-    t(props.section === "discussion" ? "linkReader.discussion" : "linkReader." + props.section);
-  createEffect(
-    () => props.section === "files" && props.state === "idle",
-    (observe) => {
-      if (!observe || !element || typeof IntersectionObserver === "undefined") {
-        return undefined;
+  const label = () => t("linkReader." + props.section);
+  createIntersectionObserver(
+    () => (props.section === "files" && props.state === "idle" && element ? [element] : []),
+    (entries) => {
+      if (entries.some((entry) => entry.isIntersecting)) {
+        props.onLoad();
       }
-      const observer = new IntersectionObserver(
-        (entries) => {
-          if (entries.some((entry) => entry.isIntersecting)) {
-            props.onLoad();
-          }
-        },
-        { rootMargin: "120px" },
-      );
-      observer.observe(element);
-      return () => observer.disconnect();
     },
+    { rootMargin: "120px" },
   );
   return (
     <section
       ref={(node) => {
         element = node;
+        props.sectionRef(node);
       }}
       class={["lr-section-loading", { "lr-section-loading--checks": props.section === "checks" }]}
       data-reader-section={props.section === "discussion" ? "comments" : props.section}
@@ -417,7 +428,9 @@ export function LinkReaderContent(props: {
   loadImage?: LoadImage;
   sections?: ReaderReadyView["sections"];
   onLoadSection?: (section: ReaderSection) => void;
+  onScrollPortRef?: (element: HTMLElement) => void | (() => void);
 }) {
+  const elements: Partial<Record<"overview" | ReaderSection, HTMLElement>> = {};
   const authorHref = () => linkReaderAuthorHref(props.detail.authorUrl, props.detail.url);
   const coAuthorNames = () => {
     const authors = props.detail.coAuthors ?? [];
@@ -433,7 +446,9 @@ export function LinkReaderContent(props: {
         <h1>{props.detail.title}</h1>
         <div class="lr-meta lr-item-meta">
           <Show when={props.detail.badge}>
-            {(badge) => <span class={"lr-state lr-state--" + badge().tone}>{badge().label}</span>}
+            {(badge) => (
+              <span class={["lr-state", `lr-state--${badge().tone}`]}>{badge().label}</span>
+            )}
           </Show>{" "}
           <Show when={props.detail.author}>
             {(author) => (
@@ -475,10 +490,10 @@ export function LinkReaderContent(props: {
         </Show>
       </header>
       <nav class="lr-section-nav" aria-label={t("linkReader.navigation")}>
-        <SectionLink section="overview" label={t("linkReader.overview")} />
+        <SectionLink destination={() => elements.overview} label={t("linkReader.overview")} />
         <Show when={props.detail.checks || props.sections?.checks}>
           <SectionLink
-            section="checks"
+            destination={() => elements.checks}
             label={t("linkReader.checks")}
             count={props.detail.checks?.total}
             onLoad={() => props.onLoadSection?.("checks")}
@@ -486,7 +501,7 @@ export function LinkReaderContent(props: {
         </Show>
         <Show when={props.detail.files || props.sections?.files}>
           <SectionLink
-            section="files"
+            destination={() => elements.files}
             label={t("linkReader.filesShort")}
             count={props.detail.filesTotal ?? props.detail.files?.length}
             onLoad={() => props.onLoadSection?.("files")}
@@ -494,7 +509,7 @@ export function LinkReaderContent(props: {
         </Show>
         <Show when={props.detail.comments || props.sections?.discussion}>
           <SectionLink
-            section="comments"
+            destination={() => elements.discussion}
             label={t("linkReader.discussion")}
             count={props.detail.commentsTotal ?? props.detail.comments?.length}
             onLoad={() => props.onLoadSection?.("discussion")}
@@ -507,6 +522,7 @@ export function LinkReaderContent(props: {
           <Show when={props.detail.checks}>
             {(checks) => (
               <ChecksContent
+                sectionRef={(element) => (elements.checks = element)}
                 checks={checks()}
                 base={props.detail.url}
                 refreshState={props.sections?.checks}
@@ -517,6 +533,7 @@ export function LinkReaderContent(props: {
       >
         {(state) => (
           <DeferredSection
+            sectionRef={(element) => (elements.checks = element)}
             section="checks"
             state={state()}
             onLoad={() => props.onLoadSection?.("checks")}
@@ -541,6 +558,7 @@ export function LinkReaderContent(props: {
         </p>
       </Show>
       <section
+        ref={(element) => (elements.overview = element)}
         aria-label={t("linkReader.description")}
         class="lr-description"
         data-reader-section="overview"
@@ -563,6 +581,7 @@ export function LinkReaderContent(props: {
       <Show when={props.sections?.files && !props.detail.files && props.sections.files}>
         {(state) => (
           <DeferredSection
+            sectionRef={(element) => (elements.files = element)}
             section="files"
             state={state()}
             onLoad={() => props.onLoadSection?.("files")}
@@ -572,23 +591,21 @@ export function LinkReaderContent(props: {
       <Show when={props.detail.files}>
         {(files) => (
           <ListSection
+            sectionRef={(element) => (elements.files = element)}
             kind="files"
             count={files().length}
             total={props.detail.filesTotal}
             truncated={props.detail.filesTruncated}
+            refreshState={props.sections?.files}
+            onLoad={() => props.onLoadSection?.("files")}
           >
-            <Show when={props.sections?.files}>
-              {(state) => (
-                <RetainedSectionStatus
-                  section="files"
-                  state={state()}
-                  onLoad={() => props.onLoadSection?.("files")}
-                />
-              )}
-            </Show>
             <For each={files()} keyed={(file) => file.path}>
               {(file) => (
-                <FileContent file={file()} expanded={props.detail.filesExpanded === true} />
+                <FileContent
+                  file={file()}
+                  expanded={props.detail.filesExpanded === true}
+                  onScrollPortRef={props.onScrollPortRef}
+                />
               )}
             </For>
           </ListSection>
@@ -599,6 +616,7 @@ export function LinkReaderContent(props: {
       >
         {(state) => (
           <DeferredSection
+            sectionRef={(element) => (elements.discussion = element)}
             section="discussion"
             state={state()}
             onLoad={() => props.onLoadSection?.("discussion")}
@@ -608,24 +626,19 @@ export function LinkReaderContent(props: {
       <Show when={props.detail.comments}>
         {(comments) => (
           <ListSection
+            sectionRef={(element) => (elements.discussion = element)}
             kind="comments"
             count={comments().length}
             total={props.detail.commentsTotal}
             truncated={props.detail.commentsTruncated}
+            refreshState={props.sections?.discussion}
+            onLoad={() => props.onLoadSection?.("discussion")}
           >
-            <Show when={props.sections?.discussion}>
-              {(state) => (
-                <RetainedSectionStatus
-                  section="discussion"
-                  state={state()}
-                  onLoad={() => props.onLoadSection?.("discussion")}
-                />
-              )}
-            </Show>
             <For each={comments()} keyed={(comment) => comment.id}>
               {(comment) => (
                 <CommentContent
                   comment={comment()}
+                  onScrollPortRef={props.onScrollPortRef}
                   base={props.detail.url}
                   loadImage={props.loadImage}
                 />

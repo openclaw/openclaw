@@ -9,7 +9,10 @@ import { captureOpenClawAgentDatabaseExecution } from "../state/openclaw-agent-e
 import { runOpenClawAgentWorkerWrite } from "../state/openclaw-agent-write-admission.js";
 import { readSessionFallbackModel } from "../status/session-fallback-model.js";
 import type { SessionRowTranscriptReadParams } from "./session-row-transcript-backfill.types.js";
-import type { SessionRowTranscriptProjection } from "./session-row-transcript-preview.js";
+import type {
+  SessionRowAssistantMessage,
+  SessionRowTranscriptProjection,
+} from "./session-row-transcript-preview.js";
 
 type BackfillParams = SessionRowTranscriptReadParams & {
   sessionEntry: Pick<
@@ -22,8 +25,15 @@ type BackfillParams = SessionRowTranscriptReadParams & {
 /** Runtime alias and selected-model policy remain with the host, not the durable cache. */
 export function presentSessionRowTranscriptFields(
   params: BackfillParams,
-  fields: Pick<SessionRowTranscriptProjection, "lastMessagePreview" | "terminalModel">,
-): { lastMessagePreview?: string; fallbackModel?: { provider: string; model: string } } {
+  fields: Pick<
+    SessionRowTranscriptProjection,
+    "lastMessagePreview" | "lastAssistantMessage" | "terminalModel"
+  >,
+): {
+  lastMessagePreview?: string;
+  lastAssistantMessage?: SessionRowAssistantMessage;
+  fallbackModel?: { provider: string; model: string };
+} {
   const { sessionEntry, model, ...scope } = params;
   const terminal = fields.terminalModel;
   const fallback =
@@ -37,6 +47,9 @@ export function presentSessionRowTranscriptFields(
   return {
     ...(fields.lastMessagePreview !== null
       ? { lastMessagePreview: fields.lastMessagePreview }
+      : {}),
+    ...(fields.lastAssistantMessage && typeof fields.lastAssistantMessage !== "string"
+      ? { lastAssistantMessage: fields.lastAssistantMessage }
       : {}),
     ...(fallback
       ? { fallbackModel: { provider: fallback.modelProvider, model: fallback.model } }
@@ -66,7 +79,7 @@ export async function backfillSessionRowTranscriptFields(params: BackfillParams)
       undefined,
       "background",
     );
-    return fields ? presentSessionRowTranscriptFields(params, fields) : {};
+    return fields ? presentSessionRowTranscriptFields(params, fields) : undefined;
   } finally {
     await execution.release();
   }

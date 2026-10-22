@@ -57,6 +57,81 @@ function imageMessageIdentity(message: unknown, sessionKey: string | undefined) 
     : { canonicalMessageKey: JSON.stringify([sessionKey, identity.id, identity.sequence]) };
 }
 
+export type MessageMediaOptions = Pick<
+  GroupedMessageOptions,
+  | "sessionKey"
+  | "agentId"
+  | "mediaPolicyKey"
+  | "connectionEpoch"
+  | "resourceBasePath"
+  | "assistantAttachmentAuthToken"
+  | "mediaOwner"
+  | "onRequestOpenImage"
+  | "onOpenImage"
+  | "resolveArtifactDownload"
+  | "getTurnVideoMessages"
+>;
+
+/** Shared by transcript bubbles and read-only attachment catalogs. */
+export function createMessageMediaOptions(
+  message: unknown,
+  messageKey: string,
+  opts: MessageMediaOptions,
+  projection: Pick<
+    ReturnType<typeof projectMessageMedia>,
+    "images" | "orderedContent" | "supplementalAttachments"
+  >,
+) {
+  const { images, orderedContent, supplementalAttachments } = projection;
+  const messageId = readSessionMessageIdentity(message)?.id ?? undefined;
+  return {
+    galleryImages: images,
+    galleryVideos: (selected: AttachmentItem) => {
+      const local = messageVideoSlots({ orderedContent, supplementalAttachments });
+      const slot = local.indexOf(selected);
+      const turn = opts.getTurnVideoMessages?.(messageKey);
+      if (!turn || slot < 0) {
+        return {
+          index: slot,
+          items: local.map(({ type, attachment }) => ({ type, attachment, messageId })),
+        };
+      }
+      const items: (AttachmentItem & { messageId?: string })[] = [];
+      let index = -1;
+      for (const entry of turn) {
+        if (entry.key === messageKey) {
+          index = items.length + slot;
+          items.push(...local.map(({ type, attachment }) => ({ type, attachment, messageId })));
+        } else {
+          const prepared = prepareChatMessageRender(entry.message);
+          items.push(
+            ...messageVideoSlots(
+              projectMessageMedia(prepared.message, prepared.normalizedMessage.content),
+            ).map(({ type, attachment }) => ({
+              type,
+              attachment,
+              messageId: readSessionMessageIdentity(prepared.message)?.id ?? undefined,
+            })),
+          );
+        }
+      }
+      return { index, items };
+    },
+    sessionKey: opts.sessionKey,
+    messageId,
+    agentId: opts.agentId,
+    policyKey: opts.mediaPolicyKey,
+    ...(images.length ? imageMessageIdentity(message, opts.sessionKey) : {}),
+    connectionEpoch: opts.connectionEpoch,
+    resourceBasePath: opts.resourceBasePath,
+    authToken: opts.assistantAttachmentAuthToken,
+    mediaOwner: opts.mediaOwner,
+    onRequestOpenImage: opts.onRequestOpenImage,
+    onOpenImage: opts.onOpenImage,
+    resolveArtifactDownload: opts.resolveArtifactDownload,
+  };
+}
+
 export function prepareGroupedMessage(
   preparation: ChatMessageRenderPreparation,
   messageKey: string,
@@ -104,53 +179,11 @@ export function prepareGroupedMessage(
     (item) => item.type !== "attachment" || !videoPreviews.includes(item),
   );
   const hasUserFiles = normalizedRole === "user" && hasUserFileAttachments(cardAttachments);
-  const messageId = readSessionMessageIdentity(message)?.id ?? undefined;
-  const imageRenderOptions = {
-    galleryImages: images,
-    galleryVideos: (selected: AttachmentItem) => {
-      const local = messageVideoSlots({ orderedContent, supplementalAttachments });
-      const slot = local.indexOf(selected);
-      const turn = opts.getTurnVideoMessages?.(messageKey);
-      if (!turn || slot < 0) {
-        return {
-          index: slot,
-          items: local.map(({ type, attachment }) => ({ type, attachment, messageId })),
-        };
-      }
-      const items: (AttachmentItem & { messageId?: string })[] = [];
-      let index = -1;
-      for (const entry of turn) {
-        if (entry.key === messageKey) {
-          index = items.length + slot;
-          items.push(...local.map(({ type, attachment }) => ({ type, attachment, messageId })));
-        } else {
-          const prepared = prepareChatMessageRender(entry.message);
-          items.push(
-            ...messageVideoSlots(
-              projectMessageMedia(prepared.message, prepared.normalizedMessage.content),
-            ).map(({ type, attachment }) => ({
-              type,
-              attachment,
-              messageId: readSessionMessageIdentity(prepared.message)?.id ?? undefined,
-            })),
-          );
-        }
-      }
-      return { index, items };
-    },
-    sessionKey: opts.sessionKey,
-    messageId,
-    agentId: opts.agentId,
-    policyKey: opts.mediaPolicyKey,
-    ...(hasImages ? imageMessageIdentity(message, opts.sessionKey) : {}),
-    connectionEpoch: opts.connectionEpoch,
-    resourceBasePath: opts.resourceBasePath,
-    authToken: opts.assistantAttachmentAuthToken,
-    onRequestUpdate: opts.onRequestUpdate,
-    onRequestOpenImage: opts.onRequestOpenImage,
-    onOpenImage: opts.onOpenImage,
-    resolveArtifactDownload: opts.resolveArtifactDownload,
-  };
+  const imageRenderOptions = createMessageMediaOptions(message, messageKey, opts, {
+    images,
+    orderedContent,
+    supplementalAttachments,
+  });
   const actionText = opts.messageActions?.markdown ?? displayMarkdown;
   const omittedMedia = normalizedMessage.content.filter((item) => item.type === "omitted_media");
   const assistantViewBlocks = normalizedMessage.content.filter((item) => item.type === "canvas");
@@ -169,11 +202,7 @@ export function prepareGroupedMessage(
     codeBlockChrome: role === "user" ? "none" : "copy",
     codeBlockInteraction: role === "assistant" ? "interactive" : "static",
     fileLinks: true,
-    githubRepo: role === "assistant" ? (opts.githubRepo ?? null) : null,
     humanMentions: markdown === displayMarkdown ? humanMentions : undefined,
-    ...(role === "assistant" && opts.githubRepositories
-      ? { githubRepositories: opts.githubRepositories }
-      : {}),
     interactiveImages: opts.onOpenImage !== undefined,
     sessionLinks: true,
     tableInteractions: "enabled",
@@ -183,7 +212,17 @@ export function prepareGroupedMessage(
   // Classify completed bare JSON before Markdown can interpret its literal values.
   const jsonResult = markdown && !opts.isStreaming ? parseMarkdownJson(markdown) : null;
 
+  const inlineComments =
+    normalizedRole === "user" &&
+    !markdown &&
+    !normalizedMessage.replyTarget &&
+    !hasImagesOrNotices &&
+    !hasToolCards &&
+    !asyncQuestions &&
+    visibleAttachments.length > 0 &&
+    visibleAttachments.every(isSentCommentAttachment);
   const onlyPreviewChips =
+    !inlineComments &&
     normalizedRole === "user" &&
     !markdown &&
     !normalizedMessage.replyTarget &&
@@ -198,6 +237,7 @@ export function prepareGroupedMessage(
     videoPreviews.length > 0 ||
     hasUserFiles ||
     (normalizedRole === "user" &&
+      !inlineComments &&
       cardAttachments.some(
         (item) => isSentCommentAttachment(item) || isSentPastedTextAttachment(item),
       ));
@@ -266,7 +306,8 @@ export function prepareGroupedMessage(
     : toolNames.length <= 3
       ? toolNames.join(", ")
       : `${toolNames.slice(0, 2).join(", ")} +${toolNames.length - 2} more`;
-  const toolPreview = markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
+  const toolPreview =
+    isStandaloneToolMessage && markdown ? (formatCollapsedToolPreviewText(markdown) ?? "") : "";
   const toolMessageLabelRaw =
     singleToolDisplay && !markdown && !hasImages
       ? singleToolDisplay.label
@@ -313,6 +354,7 @@ export function prepareGroupedMessage(
     supplementalAttachments,
     videoPreviews,
     cardAttachments,
+    inlineComments,
     imageRenderOptions,
     actionText,
     omittedMedia,

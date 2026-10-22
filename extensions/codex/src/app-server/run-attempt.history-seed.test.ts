@@ -64,18 +64,20 @@ function selectedItems(requests: RecordedRequest[]): JsonValue[] {
     .filter((item) => isJsonObject(item) && item.role === "user");
 }
 
-function unquote(part: JsonValue): string {
-  if (!isJsonObject(part) || typeof part.text !== "string") {
-    return "";
-  }
-  return part.text.replace(fragmentPrefix, "").replace(fragmentSuffix, "");
-}
+const partText = (part: JsonValue): string =>
+  isJsonObject(part) && typeof part.text === "string" ? part.text : "";
+const unquote = (part: JsonValue) =>
+  partText(part).replace(fragmentPrefix, "").replace(fragmentSuffix, "");
+const historyText = (parts: JsonValue[]) => parts.map(unquote).join("");
+const isImage = (part: JsonValue) => isJsonObject(part) && part.type === "input_image";
 
-function selectedHarness() {
+function selectedHarness(threadId?: string) {
   let starts = 0;
   return createStartedThreadHarness(
     async (method) =>
-      method === "thread/start" ? threadStartResult(`thread-selected-${++starts}`) : undefined,
+      method === "thread/start"
+        ? threadStartResult(threadId ?? `thread-selected-${++starts}`)
+        : undefined,
     { persistedThreads: [] },
   );
 }
@@ -99,6 +101,37 @@ async function runTurn(
 }
 
 describe("Codex configured assembled-history delivery", () => {
+  it.each([false, true])("prepares only fresh native history (engine: %s)", async (engine) => {
+    const { params, assemble } = seedParams();
+    delete params.authoredContextTokenCap;
+    if (!engine) {
+      delete params.contextEngine;
+    }
+    const harness = selectedHarness();
+    const prepareBoundedSeed = vi.fn<
+      NonNullable<EmbeddedRunAttemptParams["hostCapabilities"]["prepareBoundedSeed"]>
+    >(async ({ assertCurrent, tokenBudget }) => {
+      assertCurrent();
+      expect(tokenBudget).toBeGreaterThan(0);
+      expect(tokenBudget).toBeLessThan(500_000);
+      expect(harness.requests.some(({ method }) => method === "thread/start")).toBe(true);
+      return [userMessage("BOUNDED_SELECTED_HISTORY", 1)];
+    });
+    params.hostCapabilities = { ...params.hostCapabilities, prepareBoundedSeed };
+    const first = await runTurn(params, harness, "lazy-seed");
+    expect(prepareBoundedSeed).toHaveBeenCalledOnce();
+    expect(JSON.stringify(selectedItems(first))).toContain("BOUNDED_SELECTED_HISTORY");
+    assemble.mockResolvedValue({
+      messages: [userMessage(original.repeat(1_000), 1)],
+      estimatedTokens: 20_000,
+    });
+    const next = await runTurn(params, harness, "lazy-seed-next");
+    expect(prepareBoundedSeed).toHaveBeenCalledOnce();
+    expect(selectedItems(next)).toEqual([]);
+    expect(next.some(({ method }) => method === "thread/start")).toBe(false);
+    expect(next.some(({ method }) => method === "thread/compact/start")).toBe(false);
+  });
+
   it("installs >1,048,576 characters in UTF-8-bounded quotes with ordered media before readiness", async () => {
     const { params, assemble } = seedParams();
     const history = `FULL_HISTORY_PREFIX $historical [@historical](plugin://history)\n${"h".repeat(1_060_000)}${"é漢😀".repeat(5_000)}\nFULL_HISTORY_TAIL`;
@@ -146,35 +179,24 @@ describe("Codex configured assembled-history delivery", () => {
       const content = selectedItems(harness.requests).flatMap((item) => {
         expect(item).toMatchObject({ type: "message", role: "user" });
         const parts = isJsonObject(item) && Array.isArray(item.content) ? item.content : [];
-        const text = parts
-          .flatMap((part) =>
-            isJsonObject(part) && typeof part.text === "string" ? [part.text] : [],
-          )
-          .join("");
+        const text = parts.map(partText).join("");
         expect(Buffer.byteLength(text, "utf8")).toBeLessThanOrEqual(8_192);
         expect(text.startsWith(fragmentPrefix)).toBe(true);
         expect(text.endsWith(fragmentSuffix)).toBe(true);
         return parts;
       });
-      const text = content.map(unquote).join("");
+      const text = historyText(content);
       expect(text.length).toBeGreaterThan(1_048_576);
       expect(text).toContain(
         history.replace("$historical", "＄historical").replace("[@historical]", "[＠historical]"),
       );
       expect(text).not.toContain(params.prompt);
-      const imageIndex = content.findIndex(
-        (part) => isJsonObject(part) && part.type === "input_image",
-      );
-      expect(content.filter((part) => isJsonObject(part) && part.type === "input_image")).toEqual([
+      const imageIndex = content.findIndex(isImage);
+      expect(content.filter(isImage)).toEqual([
         { type: "input_image", image_url: `data:image/png;base64,${image.data}` },
       ]);
-      expect(content.slice(0, imageIndex).map(unquote).join("")).toContain("IMAGE_CAPTION");
-      expect(
-        content
-          .slice(imageIndex + 1)
-          .map(unquote)
-          .join(""),
-      ).toContain("AFTER_IMAGE");
+      expect(historyText(content.slice(0, imageIndex))).toContain("IMAGE_CAPTION");
+      expect(historyText(content.slice(imageIndex + 1))).toContain("AFTER_IMAGE");
       expect(getRequestInputText(harness)).toContain(params.prompt);
       expect(getRequestInputText(harness)).toContain("CURRENT_INBOUND_REFERENCE");
       expect(getRequestInputText(harness)).not.toContain("FULL_HISTORY_PREFIX");
@@ -276,11 +298,7 @@ describe("Codex configured assembled-history delivery", () => {
       if (ownership === "reused") {
         expect(uncertain).not.toContain(original);
       }
-      const retry = createStartedThreadHarness(
-        async (method) =>
-          method === "thread/start" ? threadStartResult("thread-retry") : undefined,
-        { persistedThreads: [] },
-      );
+      const retry = selectedHarness("thread-retry");
       const requests = await runTurn(params, retry, "retry", "thread-retry");
       expect(requests.filter(({ method }) => method === "thread/inject_items")).toHaveLength(1);
       const restored = JSON.stringify(selectedItems(requests));

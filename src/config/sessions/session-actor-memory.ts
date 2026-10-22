@@ -86,7 +86,7 @@ export function createMemorySessionActorOwner(options: { agentId: string; path: 
     }
   };
   let queue = Promise.resolve();
-  const enqueue = <T>(run: () => T): Promise<T> => {
+  const enqueue = <T>(run: () => T | Promise<T>): Promise<T> => {
     const result = queue.then(run);
     queue = result.then(
       () => {},

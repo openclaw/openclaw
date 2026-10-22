@@ -1,5 +1,8 @@
 import { parseProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import { findNormalizedProviderKey } from "@openclaw/model-catalog-core/provider-id";
+import {
+  findNormalizedProviderKey,
+  normalizeProviderId,
+} from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { toAgentEntriesRecord } from "../agents/agent-scope-config.js";
 import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
@@ -8,6 +11,7 @@ import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { applyMergePatch } from "../config/merge-patch.js";
 import { mergeAgentModelEntryForConfig } from "../config/model-input.js";
 import { materializeModelPolicyAllowlist } from "../config/model-policy-allowlist-migration.js";
+import { resolveMergedModelProviderEntry } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseSecretRef } from "../config/types.secrets.js";
 import { materializeUtilityModelSeparation } from "../config/utility-model-separation-migration.js";
@@ -260,9 +264,9 @@ export function projectSetupInferenceConfig(params: {
     }
   }
   const provider = parseProviderModelRef(params.modelRef)?.provider ?? "";
-  const providerKey = findNormalizedProviderKey(params.prepared.models?.providers, provider);
-  const providerConfig = providerKey ? params.prepared.models?.providers?.[providerKey] : undefined;
-  if (providerKey && providerConfig) {
+  const providerEntry = resolveMergedModelProviderEntry(params.prepared, provider);
+  if (providerEntry) {
+    const { providerKey, providerConfig } = providerEntry;
     const selectedProvider = structuredClone(providerConfig);
     if (params.profileId) {
       if (params.credential?.type === "api_key" || params.credential?.type === "token") {
@@ -288,7 +292,14 @@ export function projectSetupInferenceConfig(params: {
     }
     config.models = {
       ...config.models,
-      providers: { ...config.models?.providers, [providerKey]: selectedProvider },
+      providers: {
+        ...Object.fromEntries(
+          Object.entries(config.models?.providers ?? {}).filter(
+            ([key]) => normalizeProviderId(key) !== normalizeProviderId(providerKey),
+          ),
+        ),
+        [providerKey]: selectedProvider,
+      },
     };
   }
   for (const pluginId of new Set([params.pluginId, params.agentRuntimeId])) {

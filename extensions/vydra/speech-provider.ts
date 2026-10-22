@@ -21,7 +21,7 @@ const VYDRA_SPEECH_VOICES = [
 
 function normalizeVydraSpeechConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const raw = asOptionalRecord(providers?.vydra) ?? asOptionalRecord(rawConfig.vydra);
+  const raw = asOptionalRecord(providers?.vydra);
   const apiKey = normalizeResolvedSecretInputString({
     value: raw?.apiKey,
     path: "tts.providers.vydra.apiKey",
@@ -118,7 +118,6 @@ export function buildVydraSpeechProvider(): SpeechProviderPlugin {
         url: audioUrl,
         kind: "audio",
         timeoutMs: req.timeoutMs,
-        fetchFn,
         maxBytes: resolveGeneratedMediaMaxBytes(req.cfg, "audio"),
         requestPolicy: {
           allowPrivateNetwork,

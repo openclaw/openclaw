@@ -3,10 +3,10 @@ import { createComponent } from "solid-js";
 import { vi } from "vitest";
 import type { ApplicationContext } from "../../app/context.ts";
 import { ApplicationProvider } from "../../lib/reactive/context.ts";
+import { chatPanePropertyKeys } from "./chat-pane-inputs.ts";
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
-import { ChatPaneRuntimeView } from "./chat-pane-runtime-view.tsx";
+import { createChatPaneView } from "./chat-pane-runtime-view.tsx";
 import { ChatPaneStateOwner } from "./chat-pane-state-owner.ts";
-import type { ChatPaneProps } from "./chat-pane.tsx";
 
 export type PaneRuntimeConstructor<R extends ChatPaneRuntime> = new (
   element: HTMLElement,
@@ -14,7 +14,7 @@ export type PaneRuntimeConstructor<R extends ChatPaneRuntime> = new (
 ) => R;
 
 export type PaneTestLifecycle = {
-  requestUpdate(): void;
+  awaitDomCommit(): Promise<boolean>;
   prepareRender(): void;
   commitRender(): void;
   connectedCallback(): void;
@@ -52,7 +52,7 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
               createComponent(ApplicationProvider, {
                 value: context,
                 get children() {
-                  return createComponent(ChatPaneRuntimeView, { runtime });
+                  return createChatPaneView(runtime);
                 },
               }),
             this,
@@ -73,39 +73,7 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
   const runtime = paneTestRuntimes.get(element)!;
   const bound = new WeakMap<object, unknown>();
   const lifecycle = new Set(["connectedCallback", "disconnectedCallback"]);
-  // Direct fixture assignments stand in for the bridge's explicit invalidation.
-  const inputs = new Set<string>([
-    "mcpAppLaunch",
-    "paneId",
-    "paneLabel",
-    "presentationId",
-    "chatMessagesBySession",
-    "sessionSnapshotStore",
-    "sessionKey",
-    "routeLoadingSkeleton",
-    "agentId",
-    "inputRegion",
-    "compact",
-    "onBackToSubagents",
-    "workContext",
-    "draft",
-    "focusComposer",
-    "dashboardExpanded",
-    "routeFace",
-    "onFaceChange",
-    "onFocusPane",
-    "onSessionDeleted",
-    "narrow",
-    "mergedChrome",
-    "navDrawerOpen",
-    "onboarding",
-    "onOpenSplitView",
-    "onSplitDown",
-    "onSplitRight",
-    "onClosePane",
-    "boardProvider",
-  ] satisfies (keyof ChatPaneProps)[]);
-  const runtimeKey = (key: string | symbol) => (key === "requestUpdate" ? "invalidate" : key);
+  const inputs = new Set<string>(chatPanePropertyKeys);
   const owner = (key: PropertyKey) =>
     !lifecycle.has(String(key)) && (key in runtime || !(key in element)) ? runtime : element;
   const pane = new Proxy(element, {
@@ -124,7 +92,8 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
       }
       if (key === "prepareRender") {
         return () => {
-          runtime.chatState.prepareRender();
+          runtime.chatState.publishPendingRunState();
+          runtime.chatState.captureRenderChanges();
           runtime.synchronizeInputs({});
         };
       }
@@ -134,9 +103,8 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
           runtime.chatState.commitRender();
         };
       }
-      const mappedKey = runtimeKey(key);
-      const source = owner(mappedKey);
-      const value: unknown = Reflect.get(source, mappedKey);
+      const source = owner(key);
+      const value: unknown = Reflect.get(source, key);
       if (typeof value !== "function" || vi.isMockFunction(value)) {
         return value;
       }
@@ -146,28 +114,36 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
       return bound.get(value);
     },
     set(_target, key, value) {
-      const mappedKey = runtimeKey(key);
-      const source = owner(mappedKey);
-      const previous = Reflect.get(source, mappedKey);
-      const applied = Reflect.set(source, mappedKey, value);
-      if (applied && inputs.has(String(mappedKey)) && !Object.is(previous, value)) {
-        runtime.invalidate();
+      const source = owner(key);
+      const previous = Reflect.get(source, key);
+      if (inputs.has(String(key)) && !Object.is(previous, value)) {
+        runtime.chatState.publishPendingRunState();
+      }
+      const applied = Reflect.set(source, key, value);
+      if (applied && inputs.has(String(key)) && !Object.is(previous, value)) {
+        if (runtime.isConnected) {
+          void runtime.awaitDomCommit();
+          runtime.synchronizeInputs({
+            sessionKey: key === "sessionKey",
+            inputRegion: key === "inputRegion",
+            draft: key === "draft",
+            focusComposer: key === "focusComposer",
+          });
+          runtime.refreshBoardSubscriptions();
+        }
       }
       return applied;
     },
     defineProperty(_target, key, descriptor) {
-      const mappedKey = runtimeKey(key);
-      return Reflect.defineProperty(owner(mappedKey), mappedKey, descriptor);
+      return Reflect.defineProperty(owner(key), key, descriptor);
     },
     deleteProperty(_target, key) {
-      const mappedKey = runtimeKey(key);
-      return Reflect.deleteProperty(owner(mappedKey), mappedKey);
+      return Reflect.deleteProperty(owner(key), key);
     },
     getOwnPropertyDescriptor(_target, key) {
-      const mappedKey = runtimeKey(key);
-      const source = owner(mappedKey);
+      const source = owner(key);
       for (let current: object | null = source; current; current = Object.getPrototypeOf(current)) {
-        const descriptor = Object.getOwnPropertyDescriptor(current, mappedKey);
+        const descriptor = Object.getOwnPropertyDescriptor(current, key);
         if (descriptor) {
           return { ...descriptor, configurable: true };
         }
@@ -175,11 +151,10 @@ export function createPaneTestHost<R extends ChatPaneRuntime>(
       return undefined;
     },
     has(_target, key) {
-      const mappedKey = runtimeKey(key);
-      return mappedKey in runtime || mappedKey in element;
+      return key in runtime || key in element;
     },
   });
-  // SAFETY: This test adapter forwards controller members and native DOM access to their owners.
+  // SAFETY: This test adapter forwards runtime members and native DOM access to their owners.
   return pane as R & HTMLElement & PaneTestLifecycle;
 }
 

@@ -100,10 +100,6 @@ vi.mock("../harness/selection.js", () => ({
   })),
 }));
 
-vi.mock("../openai-routing.js", () => ({
-  resolveSelectedOpenAIRuntimeProvider: ({ provider }: { provider: string }) => provider,
-}));
-
 vi.mock("../prepared-model-runtime.js", () => ({
   prepareModelRuntimeSnapshot: vi.fn(),
 }));
@@ -170,7 +166,8 @@ vi.mock("../provider-request-config.js", () => ({
   applyPreparedRuntimeAuthToModel: (model: unknown) => model,
 }));
 
-vi.mock("../sandbox.js", () => ({
+vi.mock("../sandbox/context.js", async () => ({
+  ...(await vi.importActual<typeof import("../sandbox/context.js")>("../sandbox/context.js")),
   resolveSandboxContext: vi.fn(async () => undefined),
 }));
 

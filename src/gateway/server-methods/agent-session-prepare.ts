@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { hasGeneratedMediaCompletionEvent } from "../../agents/internal-event-contract.js";
@@ -25,7 +24,6 @@ import {
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionEntryReadOnlyInWorker } from "../session-utils-store-worker.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
-import { evaluateAgentSessionReuse } from "./agent-session-patch.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 type PrepareAgentSessionParams = {
@@ -86,7 +84,7 @@ async function prepareAdmittedAgentSession(
   params: PrepareAgentSessionParams,
   selected: Pick<
     Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
-    "cfg" | "storePath" | "entry" | "canonicalKey" | "legacyKey" | "storeKeys"
+    "cfg" | "storePath" | "readSource" | "entry" | "canonicalKey" | "legacyKey" | "storeKeys"
   >,
   requestedAgentId: string,
   freshChild?: FreshChildSession,
@@ -213,32 +211,11 @@ async function prepareAdmittedAgentSession(
     effectiveBootstrapContextRunKind === "cron" || effectiveBootstrapContextRunKind === "heartbeat";
   const visibleRequest = !isSystemGatewayRun && !params.request.internalEvents?.length;
   const mainSessionKey = resolveAgentMainSessionKey({ cfg, agentId: canonicalSessionAgentId });
-  const reuse = freshChild
-    ? {
-        sessionId: freshChild.entry.sessionId,
-        isNewSession: false,
-        usableRequestedSessionId: undefined,
-        freshness: { fresh: true },
-      }
-    : await evaluateAgentSessionReuse({
-        freshEntry: entry,
-        cfg,
-        sessionAgentId: canonicalSessionAgentId,
-        canonicalSessionKey: canonicalKey,
-        storePath,
-        expectedExistingSessionId: params.expectedExistingSessionId,
-        hasRestoredCronContinuation: restoredCronContinuationIdentity !== undefined,
-        resetPolicy,
-        now,
-        requestedSessionId: params.requestedSessionId,
-        isSystemGatewayRun,
-        visibleRequest,
-      });
   params.assertCurrent?.();
-  const sessionId = reuse.sessionId ?? randomUUID();
   return {
     cfg,
     storePath,
+    physicalStorePath: selected.readSource?.path,
     entry,
     canonicalKey,
     storeKeys,
@@ -246,14 +223,9 @@ async function prepareAdmittedAgentSession(
     canonicalSessionAgentId,
     resetPolicy,
     now,
-    freshness: reuse.freshness,
     visibleRequest,
     mainSessionKey,
     isSystemGatewayRun,
-    usableRequestedSessionId: reuse.usableRequestedSessionId,
-    sessionId,
-    isNewSession: reuse.isNewSession,
-    rotatedSessionId: Boolean(entry?.sessionId && entry.sessionId !== sessionId),
     touchInteraction: visibleRequest,
     sessionPersistedBeforeGatewayAdmission: entry !== undefined,
     effectiveBootstrapContextRunKind,

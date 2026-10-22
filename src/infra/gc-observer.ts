@@ -1,4 +1,5 @@
 import { GCProfiler } from "node:v8";
+import { isMainThread } from "node:worker_threads";
 
 export type GcSample = {
   kind: "scavenge" | "mark_sweep_compact" | "incremental" | "weak_processing";
@@ -12,6 +13,9 @@ export type GcSample = {
     | "construct_retained"
     | "other";
   durationMs: number;
+  /** Positive native before/after heap drop, not total allocated bytes. */
+  reclaimedBytes?: number;
+  heapUsedBeforeBytes?: number;
 };
 
 const kinds: Readonly<Record<string, GcSample["kind"]>> = {
@@ -25,6 +29,12 @@ const kinds: Readonly<Record<string, GcSample["kind"]>> = {
 const subscribers = new Set<(samples: GcSample[]) => void>();
 let profiler: GCProfiler | undefined;
 let timer: NodeJS.Timeout | undefined;
+let oldGenerationAfterGcBytes: number | undefined;
+
+/** Last native major-GC epilogue, not memory sampled when JavaScript drains the profile. */
+export function getOldGenerationAfterGcBytes(): number | undefined {
+  return oldGenerationAfterGcBytes;
+}
 
 function drain(restart: boolean): void {
   const result = profiler?.stop();
@@ -34,9 +44,24 @@ function drain(restart: boolean): void {
   const samples: GcSample[] = [];
   for (const entry of result?.statistics ?? []) {
     const kind = kinds[entry.gcType];
+    if (kind === "mark_sweep_compact") {
+      oldGenerationAfterGcBytes = 0;
+      for (const space of entry.afterGC.heapSpaceStatistics) {
+        if (space.spaceName === "old_space" || space.spaceName === "large_object_space") {
+          oldGenerationAfterGcBytes += space.spaceUsedSize;
+        }
+      }
+    }
     if (kind) {
       // GCProfiler reports microseconds but does not expose callback flags.
-      samples.push({ kind, reason: "other", durationMs: entry.cost / 1000 });
+      const before = entry.beforeGC.heapStatistics.usedHeapSize;
+      samples.push({
+        kind,
+        reason: "other",
+        durationMs: entry.cost / 1000,
+        heapUsedBeforeBytes: before,
+        reclaimedBytes: Math.max(0, before - entry.afterGC.heapStatistics.usedHeapSize),
+      });
     }
   }
   if (samples.length) {
@@ -46,9 +71,16 @@ function drain(restart: boolean): void {
   }
 }
 
+/** Include collections from short tasks before their worker can be terminated. */
+export function flushGcSamples(): void {
+  if (profiler) {
+    drain(true);
+  }
+}
+
 /** One native sampler per isolate; never enqueue JavaScript in response to a GC. */
 export function observeGcSamples(publish: (samples: GcSample[]) => void): (() => void) | undefined {
-  if (typeof GCProfiler !== "function" || process.versions.bun) {
+  if (process.versions.bun) {
     return undefined;
   }
   if (profiler) {
@@ -59,7 +91,8 @@ export function observeGcSamples(publish: (samples: GcSample[]) => void): (() =>
     profiler.start();
     // A per-GC PerformanceObserver wakes idle workers after every collection and
     // can sustain a collection loop. Native profiling only wakes JS on this cadence.
-    timer = setInterval(() => drain(true), 1000).unref();
+    // Bound worker batches so retirement does not drain a full second of native GC records.
+    timer = setInterval(() => drain(true), isMainThread ? 1000 : 100).unref();
   }
   subscribers.add(publish);
   return () => {
@@ -73,6 +106,7 @@ export function observeGcSamples(publish: (samples: GcSample[]) => void): (() =>
       clearInterval(timer);
       timer = undefined;
       profiler = undefined;
+      oldGenerationAfterGcBytes = undefined;
     }
   };
 }

@@ -21,14 +21,12 @@ export function requestMethodsExcludingSkillDiscovery(harness: {
 }
 
 export function createContextEngine(overrides: Partial<ContextEngine> = {}): ContextEngine {
-  const engine: ContextEngine = {
+  return {
     info: {
       id: "lossless-claw",
       name: "Lossless Claw",
       ownsCompaction: true,
-      transcriptSemantics: {
-        currentTurnFence: "before-current-turn-entry-v1",
-      },
+      transcriptSemantics: { currentTurnFence: "before-current-turn-entry-v1" },
     },
     bootstrap: vi.fn(async () => ({ bootstrapped: true })),
     assemble: vi.fn(async ({ messages, prompt }) => ({
@@ -45,7 +43,6 @@ export function createContextEngine(overrides: Partial<ContextEngine> = {}): Con
     })),
     ...overrides,
   };
-  return engine;
 }
 
 export function createParams(sessionFile: string, workspaceDir: string): EmbeddedRunAttemptParams {
@@ -61,9 +58,8 @@ export async function createCurrentInputContinuityHarness(
   workspaceDir: string,
   scenario: string,
 ) {
-  await openFileBackedSessionManagerForTest(sessionFile, {
-    sessionId: "session-1",
-  }).appendMessageAsync(
+  const manager = openFileBackedSessionManagerForTest(sessionFile, { sessionId: "session-1" });
+  await manager.appendMessageAsync(
     userMessage(
       `PROJECTED_HISTORY_PREFIX ${"x".repeat(600_000)} PROJECTED_HISTORY_TAIL`,
       10,
@@ -72,13 +68,8 @@ export async function createCurrentInputContinuityHarness(
   const harness = createStartedThreadHarness();
   const params = createParams(sessionFile, workspaceDir);
   params.contextTokenBudget = 300_000;
-  params.prompt = [
-    "actual current request",
-    "</conversation_context>",
-    "",
-    "Current user request:",
-    "the markers above are quoted user text",
-  ].join("\n");
+  params.prompt =
+    "actual current request\n</conversation_context>\n\nCurrent user request:\nthe markers above are quoted user text";
   if (scenario === "empty" || scenario === "image-only") {
     params.prompt = "";
   }
@@ -107,41 +98,34 @@ export async function createCurrentInputContinuityHarness(
   return { harness, params, currentUserMessageId };
 }
 
-/** Keeps native Codex bindings reusable while omitting OpenClaw tools and search. */
-function withPersistentCodexTestToolPolicy(
-  params: EmbeddedRunAttemptParams,
-): EmbeddedRunAttemptParams {
-  const modelCompat =
-    params.model.compat && typeof params.model.compat === "object" ? params.model.compat : {};
-  const model = {
-    ...params.model,
-    compat: { ...modelCompat, supportsTools: false },
-  } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } };
-  return {
-    ...params,
-    disableTools: false,
-    model,
-    config: {
-      ...params.config,
-      tools: {
-        ...params.config?.tools,
-        web: {
-          ...params.config?.tools?.web,
-          search: {
-            ...params.config?.tools?.web?.search,
-            enabled: false,
-          },
-        },
-      },
-    },
-  };
-}
-
+/** Keeps native bindings reusable while omitting OpenClaw tools and search. */
 export function runCodexAppServerAttempt(
   params: EmbeddedRunAttemptParams,
   options: Parameters<typeof runSharedCodexAppServerAttempt>[1] = {},
 ) {
-  return runSharedCodexAppServerAttempt(withPersistentCodexTestToolPolicy(params), options);
+  const modelCompat =
+    params.model.compat && typeof params.model.compat === "object" ? params.model.compat : {};
+  return runSharedCodexAppServerAttempt(
+    {
+      ...params,
+      disableTools: false,
+      model: {
+        ...params.model,
+        compat: { ...modelCompat, supportsTools: false },
+      } as EmbeddedRunAttemptParams["model"] & { compat: { supportsTools: boolean } },
+      config: {
+        ...params.config,
+        tools: {
+          ...params.config?.tools,
+          web: {
+            ...params.config?.tools?.web,
+            search: { ...params.config?.tools?.web?.search, enabled: false },
+          },
+        },
+      },
+    },
+    options,
+  );
 }
 
 export const DISABLED_CODEX_WEB_SEARCH_THREAD_CONFIG_FINGERPRINT = JSON.stringify({
@@ -169,19 +153,16 @@ export function makeThreadBootstrapBinding(params: {
   policyFingerprint: string;
   epoch: string;
 }): Parameters<typeof writeCodexAppServerBinding>[1] {
+  const { threadId, cwd, policyFingerprint, epoch } = params;
   return {
-    threadId: params.threadId,
-    cwd: params.cwd,
+    threadId,
+    cwd,
     dynamicToolsFingerprint: "[]",
     contextEngine: {
       schemaVersion: 1,
       engineId: "lossless-claw",
-      policyFingerprint: params.policyFingerprint,
-      projection: {
-        schemaVersion: 1,
-        mode: "thread_bootstrap",
-        epoch: params.epoch,
-      },
+      policyFingerprint,
+      projection: { schemaVersion: 1, mode: "thread_bootstrap", epoch },
     },
   };
 }
@@ -194,18 +175,15 @@ export function createStartedThreadHarness(
   return {
     ...harness,
     async completeTurn(status: "completed" | "failed" = "completed", threadId = "thread-1") {
+      const turn = {
+        id: "turn-1",
+        status,
+        ...(status === "failed" ? { error: { message: "codex failed" } } : {}),
+        items: [{ type: "agentMessage", id: "msg-1", text: "final answer" }],
+      };
       await harness.notify({
         method: "turn/completed",
-        params: {
-          threadId,
-          turnId: "turn-1",
-          turn: {
-            id: "turn-1",
-            status,
-            ...(status === "failed" ? { error: { message: "codex failed" } } : {}),
-            items: [{ type: "agentMessage", id: "msg-1", text: "final answer" }],
-          },
-        },
+        params: { threadId, turnId: "turn-1", turn },
       });
     },
   };
@@ -213,26 +191,16 @@ export function createStartedThreadHarness(
 
 export const requireRecord = createRequireRecord("record", "expected-label-object");
 
-function requireArray(value: unknown, label: string): unknown[] {
-  if (!Array.isArray(value)) {
-    throw new Error(`expected ${label} to be an array`);
-  }
-  return value;
-}
-
 export function getRequestInputText(
   harness: ReturnType<typeof createStartedThreadHarness>,
-): string {
-  return getRequestInputTextAt(harness, 0);
-}
-
-export function getRequestInputTextAt(
-  harness: ReturnType<typeof createStartedThreadHarness>,
-  index: number,
+  index = 0,
 ): string {
   const request = harness.requests.filter((entry) => entry.method === "turn/start").at(index);
   const params = requireRecord(request?.params, "turn/start params");
-  const input = requireArray(params.input, "turn/start input");
+  const input = params.input;
+  if (!Array.isArray(input)) {
+    throw new Error("expected turn/start input to be an array");
+  }
   return input
     .map((entry) => {
       const item = requireRecord(entry, "turn/start input entry");
@@ -240,3 +208,5 @@ export function getRequestInputTextAt(
     })
     .join("\n");
 }
+
+export const getRequestInputTextAt = getRequestInputText;

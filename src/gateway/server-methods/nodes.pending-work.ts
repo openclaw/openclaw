@@ -19,7 +19,7 @@ import { wakeNodeForReconnect } from "./nodes.wake-reconnect.js";
 import { maybeSendNodeWakeNudge } from "./nodes.wake.js";
 import { respondUnavailableOnThrow } from "./response.js";
 import type { GatewayRequestHandlers } from "./types.js";
-import { assertValidParams } from "./validation.js";
+import { assertValidParams, defineValidatedGatewayHandler } from "./validation.js";
 
 export const nodePendingWorkHandlers: GatewayRequestHandlers = {
   "node.pending.drain": async ({ params, respond, client, context }) => {
@@ -65,122 +65,121 @@ export const nodePendingWorkHandlers: GatewayRequestHandlers = {
       respond(true, { nodeId, ...drained }, undefined);
     });
   },
-  "node.pending.enqueue": async ({ params, respond, context }) => {
-    if (
-      !assertValidParams(params, validateNodePendingEnqueueParams, "node.pending.enqueue", respond)
-    ) {
-      return;
-    }
-    const p = params as {
-      nodeId: string;
-      type: NodePendingWorkType;
-      priority?: NodePendingWorkPriority;
-      expiresInMs?: number;
-      wake?: boolean;
-    };
-    await respondUnavailableOnThrow(respond, async () => {
-      const nodeId = p.nodeId.trim();
-      const generation = await captureNodePairingGeneration(nodeId);
-      if (!generation) {
-        respondPairingChanged(respond, "pending work");
-        return;
-      }
-      const wakeLifecycle = captureNodeWakeLifecycle(nodeId, generation.key);
-      const isCurrent = () =>
-        isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle });
-      try {
-        if (!(await isCurrent())) {
+  "node.pending.enqueue": defineValidatedGatewayHandler(
+    "node.pending.enqueue",
+    validateNodePendingEnqueueParams,
+    async ({ params, respond, context }) => {
+      const p = params as {
+        nodeId: string;
+        type: NodePendingWorkType;
+        priority?: NodePendingWorkPriority;
+        expiresInMs?: number;
+        wake?: boolean;
+      };
+      await respondUnavailableOnThrow(respond, async () => {
+        const nodeId = p.nodeId.trim();
+        const generation = await captureNodePairingGeneration(nodeId);
+        if (!generation) {
           respondPairingChanged(respond, "pending work");
           return;
         }
-        const queued = enqueueNodePendingWork({
-          nodeId,
-          type: p.type,
-          priority: p.priority,
-          expiresInMs: p.expiresInMs,
-          pairingGeneration: generation.key,
-        });
-        let wakeTriggered = false;
-        if (
-          p.wake !== false &&
-          !queued.deduped &&
-          !context.nodeRegistry.getForPairingGeneration(nodeId, generation.key)
-        ) {
-          const wakeReqId = queued.item.id;
-          context.logGateway.info(
-            `node pending wake start node=${nodeId} req=${wakeReqId} type=${queued.item.type}`,
-          );
-          const cfg = context.getRuntimeConfig();
-          for (const force of [false, true]) {
-            const wake = await wakeNodeForReconnect({
-              nodeId,
-              context,
-              cfg,
-              generation,
-              lifecycle: wakeLifecycle,
-              requestId: wakeReqId,
-              source: "pending",
-              force,
-            });
-            if (force) {
-              break;
-            }
-            wakeTriggered = wake.available;
-            if (
-              !(await isCurrent()) ||
-              context.nodeRegistry.getForPairingGeneration(nodeId, generation.key) ||
-              !wake.available
-            ) {
-              break;
-            }
+        const wakeLifecycle = captureNodeWakeLifecycle(nodeId, generation.key);
+        const isCurrent = () =>
+          isNodePairingWorkCurrent({ nodeId, generation, lifecycle: wakeLifecycle });
+        try {
+          if (!(await isCurrent())) {
+            respondPairingChanged(respond, "pending work");
+            return;
           }
+          const queued = enqueueNodePendingWork({
+            nodeId,
+            type: p.type,
+            priority: p.priority,
+            expiresInMs: p.expiresInMs,
+            pairingGeneration: generation.key,
+          });
+          let wakeTriggered = false;
           if (
-            (await isCurrent()) &&
+            p.wake !== false &&
+            !queued.deduped &&
             !context.nodeRegistry.getForPairingGeneration(nodeId, generation.key)
           ) {
-            const nudge = await maybeSendNodeWakeNudge(nodeId, {
-              cfg,
-              lifecycle: wakeLifecycle,
-              generation,
-            });
+            const wakeReqId = queued.item.id;
             context.logGateway.info(
-              `node pending wake nudge node=${nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
-                `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +
-                `apnsStatus=${nudge.apnsStatus ?? -1} apnsReason=${nudge.apnsReason ?? "-"}`,
+              `node pending wake start node=${nodeId} req=${wakeReqId} type=${queued.item.type}`,
             );
-            context.logGateway.warn(
-              `node pending wake done node=${nodeId} req=${wakeReqId} connected=false reason=not_connected`,
-            );
-          } else if (await isCurrent()) {
-            context.logGateway.info(
-              `node pending wake done node=${nodeId} req=${wakeReqId} connected=true`,
-            );
+            const cfg = context.getRuntimeConfig();
+            for (const force of [false, true]) {
+              const wake = await wakeNodeForReconnect({
+                nodeId,
+                context,
+                cfg,
+                generation,
+                lifecycle: wakeLifecycle,
+                requestId: wakeReqId,
+                source: "pending",
+                force,
+              });
+              if (force) {
+                break;
+              }
+              wakeTriggered = wake.available;
+              if (
+                !(await isCurrent()) ||
+                context.nodeRegistry.getForPairingGeneration(nodeId, generation.key) ||
+                !wake.available
+              ) {
+                break;
+              }
+            }
+            if (
+              (await isCurrent()) &&
+              !context.nodeRegistry.getForPairingGeneration(nodeId, generation.key)
+            ) {
+              const nudge = await maybeSendNodeWakeNudge(nodeId, {
+                cfg,
+                lifecycle: wakeLifecycle,
+                generation,
+              });
+              context.logGateway.info(
+                `node pending wake nudge node=${nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
+                  `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +
+                  `apnsStatus=${nudge.apnsStatus ?? -1} apnsReason=${nudge.apnsReason ?? "-"}`,
+              );
+              context.logGateway.warn(
+                `node pending wake done node=${nodeId} req=${wakeReqId} connected=false reason=not_connected`,
+              );
+            } else if (await isCurrent()) {
+              context.logGateway.info(
+                `node pending wake done node=${nodeId} req=${wakeReqId} connected=true`,
+              );
+            }
           }
-        }
-        if (!(await isCurrent())) {
-          if (!queued.deduped) {
-            removeNodePendingWorkItem({
+          if (!(await isCurrent())) {
+            if (!queued.deduped) {
+              removeNodePendingWorkItem({
+                nodeId,
+                itemId: queued.item.id,
+                pairingGeneration: generation.key,
+              });
+            }
+            respondPairingChanged(respond, "pending work");
+            return;
+          }
+          respond(
+            true,
+            {
               nodeId,
-              itemId: queued.item.id,
-              pairingGeneration: generation.key,
-            });
-          }
-          respondPairingChanged(respond, "pending work");
-          return;
+              revision: queued.revision,
+              queued: queued.item,
+              wakeTriggered,
+            },
+            undefined,
+          );
+        } finally {
+          releaseNodeWakeLifecycle(nodeId, wakeLifecycle);
         }
-        respond(
-          true,
-          {
-            nodeId,
-            revision: queued.revision,
-            queued: queued.item,
-            wakeTriggered,
-          },
-          undefined,
-        );
-      } finally {
-        releaseNodeWakeLifecycle(nodeId, wakeLifecycle);
-      }
-    });
-  },
+      });
+    },
+  ),
 };

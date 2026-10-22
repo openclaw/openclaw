@@ -389,6 +389,8 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
       input: binding.input,
       output: binding.output,
       ...(isMcp ? { apiPath: binding.apiPath } : {}),
+      ...(isMcp && typeof binding.instructions === "string" ? { instructions: binding.instructions } : {}),
+      ...(isMcp && typeof binding.instructionsHint === "string" ? { instructionsHint: binding.instructionsHint } : {}),
     });
     for (const [key, value] of Object.entries(metadata)) {
       Object.defineProperty(handle, key, binding.source !== "openclaw"

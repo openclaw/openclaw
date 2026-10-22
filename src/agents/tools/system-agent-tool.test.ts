@@ -1,6 +1,8 @@
-// OpenClaw ring-zero tool tests: approval gating, action mapping, verification.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createSnapshot } from "../../config/mutate.test-support.js";
 import { hashSystemAgentOperation } from "../../system-agent/operator-approval.js";
+import { withSystemAgentOverviewSources } from "../../system-agent/overview.test-support.js";
 import {
   createSystemAgentTool,
   resolveSystemAgentDirectiveTransition,
@@ -18,6 +20,7 @@ const mocks = vi.hoisted(() => ({
     },
   ),
 }));
+const artifact = { action: "plugin_activate_artifact", path: "/tmp/authored-plugin.tgz" };
 
 vi.mock("../../system-agent/plugin-artifact.js", () => ({
   prepareSystemAgentPluginArtifact: mocks.preparePluginArtifact,
@@ -39,6 +42,27 @@ function toolText(result: unknown): string {
     .filter(Boolean)
     .join("\n");
 }
+
+function makeTool(options: Partial<SystemAgentToolOptions> = {}) {
+  return createSystemAgentTool({ surface: "gateway", ...options });
+}
+
+function gatewayFixture(options: Partial<SystemAgentToolOptions> = {}) {
+  const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+  const directiveRef: NonNullable<SystemAgentToolOptions["directiveRef"]> = {};
+  const tool = makeTool({ ...options, proposalRef, directiveRef });
+  const approved = makeTool({ ...options, proposalRef, directiveRef, approvalArmed: true });
+  const call = async (args: Record<string, unknown>, armed = false) =>
+    toolText(await (armed ? approved : tool).execute("call", args));
+  return { proposalRef, directiveRef, tool, call };
+}
+
+const directiveTransition = (
+  args: Record<string, unknown>,
+  resultText = "directive: host handoff",
+) => resolveSystemAgentDirectiveTransition({ args, resultText });
+const proposalTransition = (args: Record<string, unknown>, resultText: string) =>
+  resolveSystemAgentProposalTransition({ args, resultText });
 
 describe("openclaw tool", () => {
   it("stays directly callable instead of entering tool catalogs", () => {
@@ -64,14 +88,57 @@ describe("openclaw tool", () => {
       expect.anything(),
       expect.objectContaining({ approved: false }),
     );
+
+    // `health` is discoverable in the schema and advertised as a free read.
+    const actionEnum = (
+      tool.parameters as {
+        properties: { action: { enum: string[] } };
+      }
+    ).properties.action.enum;
+    expect(actionEnum).toContain("health");
+    expect(tool.description).toMatch(/Read now:.*health/);
+  });
+
+  it("routes action:overview through the canonical overview executor", async () => {
+    const runtimeConfig = {
+      agents: {
+        ownership: "explicit" as const,
+        defaults: { model: { primary: "openai/gpt-5.2" }, systemAgent: { agentId: "main" } },
+        entries: { main: {} },
+      },
+      gateway: { port: 19001 },
+    };
+    const snapshot = {
+      ...createSnapshot({ sourceConfig: runtimeConfig, hash: "test-hash" }),
+      raw: "{}",
+    };
+    const realExecutor = await vi.importActual<typeof import("../../system-agent/operations.js")>(
+      "../../system-agent/operations.js",
+    );
+    mocks.executeSystemAgentOperation.mockImplementationOnce(
+      realExecutor.executeSystemAgentOperation as unknown as typeof mocks.executeSystemAgentOperation,
+    );
+    const tool = createSystemAgentTool({ surface: "cli" });
+    const result = await withSystemAgentOverviewSources(snapshot, async () => {
+      const out = await tool.execute("t-overview", { action: "overview" });
+      const text = toolText(out);
+      expect(text).toContain("OpenClaw online. Little claws, typed tools.");
+      expect(text).toContain("Config: valid");
+      expect(text).toContain("Default agent: main");
+      expect(text).toContain("Default model: openai/gpt-5.2");
+      expect(text).toContain("Gateway: not reachable");
+      return out;
+    });
+    expect(toolText(result)).not.toContain("needs-approval");
   });
 
   it("preserves an allowed gateway credential reference as an exact proposal", async () => {
-    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
-    const result = await createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
-      "gateway-reference",
-      { action: "config_set_ref", path: "gateway.auth.token", envVar: "GATEWAY_TOKEN" },
-    );
+    const { proposalRef, tool } = gatewayFixture();
+    const result = await tool.execute("gateway-reference", {
+      action: "config_set_ref",
+      path: "gateway.auth.token",
+      envVar: "GATEWAY_TOKEN",
+    });
     expect(toolText(result)).toContain("needs-approval");
     expect(proposalRef.operation).toEqual({
       kind: "config-set-ref",
@@ -83,12 +150,13 @@ describe("openclaw tool", () => {
   });
 
   it("proposes storing a key the user gave in chat without repeating it", async () => {
-    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
+    const { proposalRef, tool } = gatewayFixture();
     const secret = " sk-owner-pasted-9d2e4b7c\n";
-    const result = await createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
-      "owner-key",
-      { action: "config_set_ref", path: "models.providers.openai.apiKey", secret },
-    );
+    const result = await tool.execute("owner-key", {
+      action: "config_set_ref",
+      path: "models.providers.openai.apiKey",
+      secret,
+    });
     expect(toolText(result)).toContain("needs-approval");
     expect(toolText(result)).not.toContain(secret);
     expect(proposalRef.operation).toEqual({
@@ -102,8 +170,7 @@ describe("openclaw tool", () => {
   });
 
   it("rejects mixed credential sources before staging", async () => {
-    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
-    const tool = createSystemAgentTool({ surface: "gateway", proposalRef });
+    const { proposalRef, tool } = gatewayFixture();
     await expect(
       tool.execute("mixed-source", {
         action: "config_set_ref",
@@ -118,13 +185,11 @@ describe("openclaw tool", () => {
   });
 
   it("createSystemAgentTool.execute does not stage a config proposal when cancelled", async () => {
-    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
-    const controller = new AbortController();
-    controller.abort(new Error("Setup cancelled"));
-    const pending = createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
+    const { proposalRef, tool } = gatewayFixture();
+    const pending = tool.execute(
       "cancelled-proposal",
       { action: "config_set", path: "gateway.port", value: "19001" },
-      controller.signal,
+      AbortSignal.abort(new Error("Setup cancelled")),
     );
     await expect(pending).rejects.toThrow("Setup cancelled");
     expect(proposalRef).toEqual({});
@@ -146,51 +211,35 @@ describe("openclaw tool", () => {
   });
 
   it("finishes the exact artifact review before proposing and hands approved bytes to the host", async () => {
-    const args = {
-      action: "plugin_activate_artifact",
-      path: "/tmp/authored-plugin.tgz",
-      sha256: "a".repeat(64),
-    };
+    const args = { ...artifact, sha256: "a".repeat(64) };
     const operation = {
       kind: "plugin-activate-artifact" as const,
       path: args.path,
       sha256: args.sha256,
     };
     const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
-    let finishReview!: (value: unknown) => void;
-    let beginReview!: () => void;
-    const started = new Promise<void>((resolve) => {
-      beginReview = resolve;
-    });
-    const review = new Promise<unknown>((resolve) => {
-      finishReview = resolve;
-    });
+    const started = createDeferred();
+    const review = createDeferred<unknown>();
     mocks.preparePluginArtifact.mockImplementationOnce(async () => {
-      beginReview();
-      return await review;
+      started.resolve();
+      return await review.promise;
     });
-    const pending = createSystemAgentTool({
-      surface: "gateway",
-      operatorApprovalOnly: true,
-      proposalRef,
-    }).execute("artifact", args);
-    await started;
+    const pending = makeTool({ operatorApprovalOnly: true, proposalRef }).execute("artifact", args);
+    await started.promise;
     expect(proposalRef.current).toBeUndefined();
-    finishReview({ pluginId: "authored-plugin", nativeControlUi: true, sha256: args.sha256 });
+    review.resolve({ pluginId: "authored-plugin", nativeControlUi: true, sha256: args.sha256 });
     const result = await pending;
     expect(toolText(result)).toContain("Reviewed plugin artifact");
     expect(toolText(result)).toContain("requesting session's permission policy");
-    expect(resolveSystemAgentProposalTransition({ args, resultText: toolText(result) })).toEqual({
+    expect(proposalTransition(args, toolText(result))).toEqual({
       proposal: hashSystemAgentOperation(operation),
       operation,
     });
     const directiveRef: NonNullable<SystemAgentToolOptions["directiveRef"]> = {};
-    await createSystemAgentTool({
-      surface: "gateway",
-      approvalArmed: true,
-      proposalRef,
-      directiveRef,
-    }).execute("approved-artifact", { ...args, approved: true });
+    await makeTool({ approvalArmed: true, proposalRef, directiveRef }).execute(
+      "approved-artifact",
+      { ...args, approved: true },
+    );
     expect(directiveRef.current).toEqual({ kind: "approved-operation", operation });
     expect(proposalRef.current).toBeUndefined();
     expect(mocks.preparePluginArtifact).toHaveBeenCalledOnce();
@@ -198,13 +247,8 @@ describe("openclaw tool", () => {
   });
 
   it("does not propose a failed artifact review or overwrite another proposal after review", async () => {
-    const args = {
-      action: "plugin_activate_artifact",
-      path: "/tmp/authored-plugin.tgz",
-      sha256: "b".repeat(64),
-    };
-    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
-    const tool = createSystemAgentTool({ surface: "gateway", proposalRef });
+    const args = { ...artifact, sha256: "b".repeat(64) };
+    const { proposalRef, tool } = gatewayFixture();
     mocks.preparePluginArtifact.mockRejectedValueOnce(new Error("SHA256 does not match"));
     await expect(tool.execute("invalid-artifact", args)).rejects.toThrow("SHA256 does not match");
     expect(proposalRef.current).toBeUndefined();
@@ -221,69 +265,42 @@ describe("openclaw tool", () => {
   });
 
   it("defers an approved mutation to the host after the full proposal handshake", async () => {
-    const proposalRef: { current?: string } = {};
-    // Phase 1: unarmed proposal is denied and records the exact operation.
-    const proposingTool = createSystemAgentTool({ surface: "gateway", proposalRef });
-    const denied = await proposingTool.execute("t3a", {
-      action: "set_default_model",
-      model: "openai/gpt-5.5",
-      approved: true,
-    });
-    expect(toolText(denied)).toContain("needs-approval");
+    const { proposalRef, directiveRef, call } = gatewayFixture();
+    const args = { action: "set_default_model", model: "openai/gpt-5.5", approved: true };
+    const expected: SystemAgentToolDirective = {
+      kind: "approved-operation",
+      operation: { kind: "set-default-model", model: "openai/gpt-5.5" },
+    };
+    expect(await call(args)).toContain("needs-approval");
     expect(proposalRef.current).toBeDefined();
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
 
-    // Phase 2: the user's yes arms the turn; the identical call becomes one
-    // host-owned directive so the inference binding can be checked again.
-    const directiveRef: { current?: SystemAgentToolDirective } = {};
-    const armedTool = createSystemAgentTool({
-      surface: "gateway",
-      approvalArmed: true,
-      proposalRef,
-      directiveRef,
-    });
-    const result = await armedTool.execute("t3b", {
-      action: "set_default_model",
-      model: "openai/gpt-5.5",
-      approved: true,
-    });
-    expect(toolText(result)).toContain("directive:approved-operation:");
-    expect(directiveRef.current).toEqual({
-      kind: "approved-operation",
-      operation: { kind: "set-default-model", model: "openai/gpt-5.5" },
-    });
+    expect(await call(args, true)).toContain("directive:approved-operation:");
+    expect(directiveRef.current).toEqual(expected);
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
-    await armedTool.execute("t3c", { action: "connect_channel", channel: "telegram" });
-    expect(directiveRef.current).toEqual({
-      kind: "approved-operation",
-      operation: { kind: "set-default-model", model: "openai/gpt-5.5" },
-    });
-    // One approval, one mutation.
+    await call({ action: "connect_channel", channel: "telegram" }, true);
+    expect(directiveRef.current).toEqual(expected);
     expect(proposalRef.current).toBeUndefined();
   });
 
   it("keeps the first staged config_set proposal instead of overwriting it with a second", async () => {
-    const proposalRef: NonNullable<SystemAgentToolOptions["proposalRef"]> = {};
-    const tool = createSystemAgentTool({ surface: "gateway", proposalRef });
-
-    const first = await tool.execute("multi-a", {
+    const { proposalRef, call } = gatewayFixture();
+    const first = await call({
       action: "config_set",
       path: "tts.providers.fish-audio.model",
       value: "s2.1-pro",
     });
-    expect(toolText(first)).toContain("needs-approval");
+    expect(first).toContain("needs-approval");
     const firstHash = proposalRef.current;
     expect(firstHash).toBeDefined();
 
-    const second = await tool.execute("multi-b", {
+    const second = await call({
       action: "config_set",
       path: "talk.providers.fish-audio.model",
       value: "s2.1-pro",
     });
 
-    // The second, different path must not silently replace the first staged
-    // operation: only one operation can ever be approved and applied.
-    expect(toolText(second)).toContain("proposal-conflict");
+    expect(second).toContain("proposal-conflict");
     expect(proposalRef.current).toBe(firstHash);
     expect(proposalRef.operation).toEqual({
       kind: "config-set",
@@ -294,71 +311,28 @@ describe("openclaw tool", () => {
   });
 
   it("binds setup approval to the exact verified model and workspace", async () => {
-    const proposalRef: { current?: string } = {};
-    const args = {
-      action: "setup",
-      workspace: "/tmp/work",
-      model: "openai/gpt-5.5",
-    };
-    const result = await createSystemAgentTool({ surface: "gateway", proposalRef }).execute(
-      "setup-proposal",
-      args,
-    );
-
+    const { proposalRef, tool } = gatewayFixture();
+    const args = { action: "setup", workspace: "/tmp/work", model: "openai/gpt-5.5" };
+    const operation = { kind: "setup", workspace: "/tmp/work", model: "openai/gpt-5.5" } as const;
+    const result = await tool.execute("setup-proposal", args);
     expect(toolText(result)).toContain("needs-approval");
-    expect(proposalRef.current).toBe(
-      hashSystemAgentOperation({
-        kind: "setup",
-        workspace: "/tmp/work",
-        model: "openai/gpt-5.5",
-      }),
-    );
-    expect(
-      resolveSystemAgentProposalTransition({
-        args,
-        resultText: toolText(result),
-      }),
-    ).toEqual({
+    expect(proposalRef.current).toBe(hashSystemAgentOperation(operation));
+    expect(proposalTransition(args, toolText(result))).toEqual({
       proposal: proposalRef.current,
-      operation: {
-        kind: "setup",
-        workspace: "/tmp/work",
-        model: "openai/gpt-5.5",
-      },
+      operation,
     });
   });
 
-  it.each([
-    {
-      proposed: { action: "create_agent", agentId: "qa-writer", name: "QA Writer" },
-      changed: { action: "create_agent", agentId: "qa-writer", name: "Other Writer" },
-    },
-  ])(
-    "refuses an armed call that differs from the proposed operation: $proposed",
-    async ({ proposed, changed }) => {
-      const proposalRef: { current?: string } = {};
-      const proposingTool = createSystemAgentTool({ surface: "cli", proposalRef });
-      await proposingTool.execute("t3c", {
-        ...proposed,
-        approved: true,
-      });
-      const armedTool = createSystemAgentTool({ surface: "cli", approvalArmed: true, proposalRef });
-      const result = await armedTool.execute("t3d", {
-        ...changed,
-        approved: true,
-      });
-      // A different operation than the approved one voids the approval entirely;
-      // even an identical retry in the same armed turn stays locked.
-      expect(toolText(result)).toContain("approval-mismatch");
-      expect(proposalRef.current).toBeUndefined();
-      const retry = await armedTool.execute("t3e", {
-        ...changed,
-        approved: true,
-      });
-      expect(toolText(retry)).toContain("approval-mismatch");
-      expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
-    },
-  );
+  it("voids approval when the requested operation changes, including identical retries", async () => {
+    const proposed = { action: "create_agent", agentId: "qa-writer", name: "QA Writer" };
+    const changed = { ...proposed, name: "Other Writer" };
+    const { proposalRef, call } = gatewayFixture({ surface: "cli" });
+    await call({ ...proposed, approved: true });
+    expect(await call({ ...changed, approved: true }, true)).toContain("approval-mismatch");
+    expect(proposalRef.current).toBeUndefined();
+    expect(await call({ ...changed, approved: true }, true)).toContain("approval-mismatch");
+    expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
+  });
 
   it.each([
     {
@@ -379,14 +353,8 @@ describe("openclaw tool", () => {
       proposalRef,
       directiveRef,
     });
-    await tool.execute("t6", {
-      ...args,
-      approved: true,
-    });
-    expect(directiveRef.current).toEqual({
-      kind: "approved-operation",
-      operation,
-    });
+    await tool.execute("t6", { ...args, approved: true });
+    expect(directiveRef.current).toEqual({ kind: "approved-operation", operation });
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 
@@ -401,186 +369,101 @@ describe("openclaw tool", () => {
   it("records interactive directives for the host without executing operations", async () => {
     const directiveRef: { current?: SystemAgentToolDirective } = {};
     const tool = createSystemAgentTool({ surface: "cli", directiveRef });
-
-    const connect = await tool.execute("t5", { action: "connect_channel", channel: "Telegram" });
-    expect(toolText(connect)).toContain("directive:");
-    expect(directiveRef.current).toEqual({ kind: "channel-setup", channel: "telegram" });
-
-    const skills = await tool.execute("t5-skills", { action: "configure_skills" });
-    expect(toolText(skills)).toContain("directive:");
-    expect(directiveRef.current).toEqual({ kind: "skills-setup" });
-
-    const search = await tool.execute("t5-search", { action: "configure_search" });
-    expect(toolText(search)).toContain("directive:");
-    expect(toolText(search)).toContain("never ask for or repeat a credential");
-    expect(directiveRef.current).toEqual({ kind: "search-setup" });
-
-    const gateway = await tool.execute("t5-gateway", { action: "configure_gateway" });
-    expect(toolText(gateway)).toContain("directive:");
-    expect(toolText(gateway)).toContain("local Gateway configuration");
-    expect(toolText(gateway)).toContain("never ask for or repeat a credential");
-    expect(directiveRef.current).toEqual({ kind: "gateway-config-setup" });
-
-    const memory = await tool.execute("t5-memory", { action: "import_memory" });
-    expect(toolText(memory)).toContain("directive:");
-    expect(toolText(memory)).toContain("copy-only memory import");
-    expect(directiveRef.current).toEqual({ kind: "memory-import" });
-
-    const accounts = await tool.execute("t5-accounts", { action: "manage_model_accounts" });
-    expect(toolText(accounts)).toContain("Nothing has changed yet");
-    expect(directiveRef.current).toEqual({ kind: "model-accounts" });
-    expect(
-      resolveSystemAgentDirectiveTransition({
-        args: { action: "manage_model_accounts" },
-        resultText: toolText(accounts),
-      }),
-    ).toEqual({ kind: "model-accounts" });
-
-    const configureModel = await tool.execute("t6", {
-      action: "configure_model_provider",
-      workspace: "/tmp/work",
-    });
-    expect(toolText(configureModel)).toContain("directive:");
-    expect(toolText(configureModel)).toContain("protected Models sign-in guidance");
-    expect(toolText(configureModel)).toContain("Nothing has changed");
-    expect(directiveRef.current).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
-
-    const open = await tool.execute("t7", { action: "open_agent", agentId: "work" });
-    expect(toolText(open)).toContain("directive:");
-    expect(directiveRef.current).toEqual({ kind: "open-tui", agentId: "work" });
-
-    const setup = await tool.execute("t7", {
-      action: "open_setup",
-      target: "channels",
-      channel: "Slack",
-    });
-    expect(toolText(setup)).toContain("directive:");
-    expect(directiveRef.current).toEqual({
-      kind: "open-setup",
-      target: "channels",
-      channel: "slack",
-    });
-
-    const guidedSetup = await tool.execute("t8", {
-      action: "open_setup",
-      target: "guided",
-    });
-    expect(toolText(guidedSetup)).toContain("cannot run inside OpenClaw");
-    expect(toolText(guidedSetup)).toContain("openclaw onboard");
-    expect(directiveRef.current).toEqual({ kind: "open-setup", target: "guided" });
-
-    const gatewaySetup = await tool.execute("t9", {
-      action: "open_setup",
-      target: "gateway",
-    });
-    expect(toolText(gatewaySetup)).toContain("masked terminal Gateway setup");
-    expect(directiveRef.current).toEqual({ kind: "open-setup", target: "gateway" });
-
-    // Directives are host handoffs, never operation executions.
+    const cases: Array<[Record<string, unknown>, SystemAgentToolDirective, string[]]> = [
+      [
+        { action: "connect_channel", channel: "Telegram" },
+        { kind: "channel-setup", channel: "telegram" },
+        ["directive:"],
+      ],
+      [{ action: "configure_skills" }, { kind: "skills-setup" }, ["directive:"]],
+      [
+        { action: "configure_search" },
+        { kind: "search-setup" },
+        ["directive:", "never ask for or repeat a credential"],
+      ],
+      [
+        { action: "configure_gateway" },
+        { kind: "gateway-config-setup" },
+        ["directive:", "local Gateway configuration", "never ask for or repeat a credential"],
+      ],
+      [
+        { action: "import_memory" },
+        { kind: "memory-import" },
+        ["directive:", "copy-only memory import"],
+      ],
+      [
+        { action: "manage_model_accounts" },
+        { kind: "model-accounts" },
+        ["Nothing has changed yet"],
+      ],
+      [
+        { action: "configure_model_provider", workspace: "/tmp/work" },
+        { kind: "model-setup", workspace: "/tmp/work" },
+        ["directive:", "protected Models sign-in guidance", "Nothing has changed"],
+      ],
+      [
+        { action: "open_agent", agentId: "work" },
+        { kind: "open-tui", agentId: "work" },
+        ["directive:"],
+      ],
+      [
+        { action: "open_setup", target: "channels", channel: "Slack" },
+        { kind: "open-setup", target: "channels", channel: "slack" },
+        ["directive:"],
+      ],
+      [
+        { action: "open_setup", target: "guided" },
+        { kind: "open-setup", target: "guided" },
+        ["cannot run inside OpenClaw", "openclaw onboard"],
+      ],
+      [
+        { action: "open_setup", target: "gateway" },
+        { kind: "open-setup", target: "gateway" },
+        ["masked terminal Gateway setup"],
+      ],
+    ];
+    for (const [args, expected, snippets] of cases) {
+      const resultText = toolText(await tool.execute("handoff", args));
+      for (const snippet of snippets) {
+        expect(resultText).toContain(snippet);
+      }
+      expect(directiveRef.current).toEqual(expected);
+      expect(directiveTransition(args, resultText)).toEqual(expected);
+    }
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 
   it("does not promise a delegated setup handoff", async () => {
     const args = { action: "open_setup", target: "channels" };
-    const directiveRef: { current?: SystemAgentToolDirective } = {};
-    const tool = createSystemAgentTool({
-      surface: "gateway",
-      operatorApprovalOnly: true,
-      directiveRef,
-    });
-
-    const text = toolText(await tool.execute("delegated-navigation", args));
+    const { directiveRef, call } = gatewayFixture({ operatorApprovalOnly: true });
+    const text = await call(args);
 
     expect(text).toContain("cannot run from a delegated agent request");
     expect(directiveRef.current).toBeUndefined();
-    expect(resolveSystemAgentDirectiveTransition({ args, resultText: text })).toBeNull();
+    expect(directiveTransition(args, text)).toBeNull();
     expect(mocks.executeSystemAgentOperation).not.toHaveBeenCalled();
   });
 
   it("mirrors directive transitions for out-of-process (CLI MCP) hosts", () => {
+    const check = (
+      args: Record<string, unknown>,
+      expected: SystemAgentToolDirective,
+      resultText = "directive: host handoff",
+    ) => expect(directiveTransition(args, resultText)).toEqual(expected);
+    check(
+      { action: "config_set", path: "gateway.port", value: "19001", approved: true },
+      {
+        kind: "approved-operation",
+        operation: { kind: "config-set", path: "gateway.port", value: "19001" },
+      },
+      "directive:approved-operation: the host will apply this action.",
+    );
+    check({ action: "open_agent" }, { kind: "open-tui" });
+    check({ action: "open_setup", target: "classic" }, { kind: "open-setup", target: "classic" });
+    check({ action: "open_setup", target: "search" }, { kind: "open-setup", target: "search" });
+    expect(directiveTransition({ action: "status" }, "ok")).toBeNull();
     expect(
-      resolveSystemAgentDirectiveTransition({
-        args: {
-          action: "config_set",
-          path: "gateway.port",
-          value: "19001",
-          approved: true,
-        },
-        resultText: "directive:approved-operation: the host will apply this action.",
-      }),
-    ).toEqual({
-      kind: "approved-operation",
-      operation: { kind: "config-set", path: "gateway.port", value: "19001" },
-    });
-    expect(
-      resolveSystemAgentDirectiveTransition({
-        args: { action: "connect_channel", channel: "telegram" },
-        resultText: "directive: the host chat now starts the guided telegram setup.",
-      }),
-    ).toEqual({ kind: "channel-setup", channel: "telegram" });
-    expect(
-      resolveSystemAgentDirectiveTransition({
-        args: { action: "configure_skills" },
-        resultText: "directive: the host chat starts skills setup.",
-      }),
-    ).toEqual({ kind: "skills-setup" });
-    expect(
-      resolveSystemAgentDirectiveTransition({
-        args: { action: "configure_search" },
-        resultText: "directive: the host chat starts web search setup.",
-      }),
-    ).toEqual({ kind: "search-setup" });
-    expect(
-      resolveSystemAgentDirectiveTransition({
-        args: { action: "configure_gateway" },
-        resultText: "directive: the host chat starts local Gateway setup.",
-      }),
-    ).toEqual({ kind: "gateway-config-setup" });
-    expect(
-      resolveSystemAgentDirectiveTransition({
-        args: { action: "import_memory" },
-        resultText: "directive: the host chat starts memory import.",
-      }),
-    ).toEqual({ kind: "memory-import" });
-    expect(
-      resolveSystemAgentDirectiveTransition({
-        args: { action: "open_agent" },
-        resultText: "directive: the host now hands the user over.",
-      }),
-    ).toEqual({ kind: "open-tui" });
-    expect(
-      resolveSystemAgentDirectiveTransition({
-        args: { action: "configure_model_provider", workspace: "/tmp/work" },
-        resultText: "directive: the host returns protected Models sign-in guidance next.",
-      }),
-    ).toEqual({ kind: "model-setup", workspace: "/tmp/work" });
-    expect(
-      resolveSystemAgentDirectiveTransition({
-        args: { action: "open_setup", target: "classic" },
-        resultText: "directive: classic setup cannot run inside OpenClaw; run openclaw onboard.",
-      }),
-    ).toEqual({ kind: "open-setup", target: "classic" });
-    expect(
-      resolveSystemAgentDirectiveTransition({
-        args: { action: "open_setup", target: "search" },
-        resultText: "directive: the host opens masked search setup.",
-      }),
-    ).toEqual({ kind: "open-setup", target: "search" });
-    expect(
-      resolveSystemAgentDirectiveTransition({
-        args: { action: "open_setup", target: "gateway" },
-        resultText: "directive: the host opens masked Gateway setup.",
-      }),
-    ).toEqual({ kind: "open-setup", target: "gateway" });
-    // Non-directive results and other actions never mirror.
-    expect(
-      resolveSystemAgentDirectiveTransition({ args: { action: "status" }, resultText: "ok" }),
-    ).toBeNull();
-    expect(
-      resolveSystemAgentDirectiveTransition({
-        args: { action: "connect_channel", channel: "telegram" },
-        resultText: "error: boom",
-      }),
+      directiveTransition({ action: "connect_channel", channel: "telegram" }, "error: boom"),
     ).toBeNull();
   });
 
@@ -588,53 +471,30 @@ describe("openclaw tool", () => {
     const args = { action: "set_default_model", model: "openai/gpt-5.5" };
     const hash = hashSystemAgentOperation({ kind: "set-default-model", model: "openai/gpt-5.5" });
 
-    // Denial registers the exact-operation hash on the host.
-    expect(
-      resolveSystemAgentProposalTransition({
-        args,
-        resultText: "needs-approval: this action changes state.",
-      }),
-    ).toEqual({
+    const transition = (resultText: string, input: Record<string, unknown> = args) =>
+      proposalTransition(input, resultText);
+    const proposed = {
       proposal: hash,
       operation: { kind: "set-default-model", model: "openai/gpt-5.5" },
-    });
+    };
+    expect(transition("needs-approval: this action changes state.")).toEqual(proposed);
+    expect(transition(`needs-approval:${hash}\nThis action changes state.`)).toEqual(proposed);
     expect(
-      resolveSystemAgentProposalTransition({
-        args,
-        resultText: `needs-approval:${hash}\nThis action changes state.`,
-      }),
-    ).toEqual({
-      proposal: hash,
-      operation: { kind: "set-default-model", model: "openai/gpt-5.5" },
-    });
-    // A voided approval clears it.
+      transition("approval-mismatch: this call is not the operation the user approved."),
+    ).toEqual({ proposal: undefined });
     expect(
-      resolveSystemAgentProposalTransition({
-        args,
-        resultText: "approval-mismatch: this call is not the operation the user approved.",
+      transition("directive:approved-operation: the host will apply this action.", {
+        ...args,
+        approved: true,
       }),
     ).toEqual({ proposal: undefined });
-    // Only the admitted host directive consumes it; generic failures are not admission.
     expect(
-      resolveSystemAgentProposalTransition({
-        args: { ...args, approved: true },
-        resultText: "directive:approved-operation: the host will apply this action.",
-      }),
-    ).toEqual({ proposal: undefined });
-    // A rejected second proposal must not overwrite the mirrored first
-    // operation: the host keeps proposalRef untouched on a null transition.
-    expect(
-      resolveSystemAgentProposalTransition({
-        args: { action: "config_set", path: "talk.providers.fish-audio.model", value: "s2.1-pro" },
-        resultText: `proposal-conflict:${hash}\nA different operation is already staged and awaiting the user's approval.`,
-      }),
+      transition(
+        `proposal-conflict:${hash}\nA different operation is already staged and awaiting the user's approval.`,
+        { action: "config_set", path: "talk.providers.fish-audio.model", value: "s2.1-pro" },
+      ),
     ).toBeNull();
-    // Read actions and unparsable calls never touch the proposal.
-    expect(
-      resolveSystemAgentProposalTransition({ args: { action: "status" }, resultText: "ok" }),
-    ).toBeNull();
-    expect(
-      resolveSystemAgentProposalTransition({ args: { action: "bogus" }, resultText: "ok" }),
-    ).toBeNull();
+    expect(transition("ok", { action: "status" })).toBeNull();
+    expect(transition("ok", { action: "bogus" })).toBeNull();
   });
 });

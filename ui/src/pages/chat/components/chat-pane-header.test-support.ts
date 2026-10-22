@@ -3,15 +3,10 @@ import { expect, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../../api/types.ts";
 import { EMPTY_SESSION_MENU_DATA } from "../../../components/session-menu-actions.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import {
-  ChatPaneHeader,
-  PaneHeaderView,
-  type ChatPaneHeaderPresentation,
-} from "./chat-pane-header.tsx";
-import type { ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
+import { ChatPaneHeader, PaneHeaderView } from "./chat-pane-header.tsx";
+import type { ChatPaneHeaderPresentation, ChatPaneHeaderProps } from "./chat-pane-header.types.ts";
 import "./chat-header-session-menu.ts";
-
-export type ChatPaneHeaderProps = Parameters<typeof ChatPaneHeader>[0];
+import type { ChatSessionSharingProps } from "./chat-session-sharing.solid.tsx";
 
 export function chatPaneHeaderSessionMenu(): NonNullable<ChatPaneHeaderProps["sessionMenuAction"]> {
   return {
@@ -152,6 +147,7 @@ export function mountChatPaneHeader(
     onMenuOpenChange: vi.fn(),
     onMenuAction: vi.fn(),
     onOpenParentSession: vi.fn(),
+    onOpenAgentSettings: vi.fn(),
     onBranchSelect: vi.fn(),
     ...patch,
   };

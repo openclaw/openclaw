@@ -1,4 +1,3 @@
-// Authorizes chat approval commands against channel approval policy.
 import { getChannelPlugin, resolveChannelApprovalCapability } from "../channels/plugins/index.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isImplicitSameChatApprovalAuthorization } from "../plugin-sdk/approval-auth-helpers.js";

@@ -1,3 +1,5 @@
+import { channel } from "node:diagnostics_channel";
+import fs from "node:fs/promises";
 import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -7,7 +9,11 @@ import { appendTranscriptMessage } from "../config/sessions/session-accessor.sql
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import {
   areDiagnosticsEnabledForProcess,
+  onDiagnosticEvent,
+  onInternalDiagnosticEvent,
   setDiagnosticsEnabledForProcess,
+  waitForDiagnosticEventsDrained,
+  type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import {
@@ -30,6 +36,7 @@ let state: OpenClawTestState;
 let diagnosticsEnabled: boolean;
 let clock: ReturnType<typeof createGatewaySchedulerClock>;
 let scheduler: ReturnType<typeof createTestGatewayScheduler>;
+let stopEvents: (() => void) | undefined;
 const reply = "synthetic current assistant reply";
 const privateReply = "synthetic memory-only assistant reply";
 const incognitoKey = "agent:heartbeat:dashboard:incognito-private";
@@ -72,7 +79,10 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+  stopEvents?.();
+  stopEvents = undefined;
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
   resetDiagnosticStateForTest();
   await scheduler.stop();
   vi.useRealTimers();
@@ -107,12 +117,50 @@ it("checks memory pressure every tick without recording idle samples", async () 
   }
 });
 
+it("keeps recovery and pressure checks running while a Linux footprint read is pending", async () => {
+  vi.stubGlobal("process", Object.create(process, { platform: { value: "linux" } }));
+  const footprint = createDeferred<string>();
+  const sampled = createDeferred();
+  const readFile = vi.spyOn(fs, "readFile").mockReturnValue(footprint.promise);
+  const memory = process.memoryUsage();
+  vi.spyOn(process, "memoryUsage").mockReturnValue({ ...memory, rss: Number.MAX_SAFE_INTEGER });
+  const critical = vi.fn();
+  const pressure = channel("openclaw.memory.critical");
+  pressure.subscribe(critical);
+  const stop = onDiagnosticEvent((event) => {
+    if (event.type === "diagnostic.memory.sample") {
+      sampled.resolve();
+    }
+  });
+  const recover = vi.fn();
+  startGatewayDiagnosticHeartbeat(
+    scheduler,
+    {},
+    { ...heartbeatOptions, recoverStuckSession: recover },
+  );
+  logSessionStateChange({ ...session("pending-footprint"), state: "processing" });
+  const first = tick();
+  const second = tick();
+  try {
+    expect(recover).toHaveBeenCalled();
+    expect(critical).toHaveBeenCalledTimes(2);
+    expect(readFile).toHaveBeenCalledTimes(1);
+  } finally {
+    footprint.resolve("RssAnon:\t1234 kB\nVmSwap:\t0 kB\n");
+    await Promise.all([first, second, sampled.promise]);
+    stop();
+    pressure.unsubscribe(critical);
+  }
+});
+
 it.each(["enabled", "disabled", "incognito"])(
   "keeps %s heartbeat diagnostics off the main thread and excludes reply content",
   async (label) => {
     const enabled = label !== "disabled";
     vi.mocked(diagnosticLogger.isEnabled).mockReturnValue(enabled);
     const { sessionId, sessionKey } = session(label);
+    const events: DiagnosticEventPayload[] = [];
+    stopEvents = onInternalDiagnosticEvent((event) => events.push(event));
     const logged = createDeferred();
     const warn = vi.spyOn(diagnosticLogger, "warn").mockImplementation((message) => {
       if (message.startsWith(`stuck session: sessionId=${sessionId} `)) {
@@ -131,17 +179,28 @@ it.each(["enabled", "disabled", "incognito"])(
     ];
     await tick();
     await tick();
-    expect(recover).toHaveBeenCalled();
+    await waitForDiagnosticEventsDrained();
+    expect(recover).toHaveBeenCalledWith(expect.objectContaining({ sessionId, sessionKey }));
     if (enabled) {
+      expect(events).toContainEqual(
+        expect.objectContaining({
+          type: "session.stuck",
+          sessionId,
+          sessionKey,
+          state: "processing",
+        }),
+      );
+    }
+    if (enabled && label !== "incognito") {
       await logged.promise;
       for (const identity of [`sessionId=${sessionId}`, `sessionKey=${sessionKey}`]) {
         expect(warn).toHaveBeenCalledWith(expect.stringContaining(identity));
       }
-      for (const content of [label === "incognito" ? privateReply : reply, "lastAssistant="]) {
-        expect(JSON.stringify(warn.mock.calls)).not.toContain(content);
-      }
     } else {
       expect(warn).not.toHaveBeenCalled();
+    }
+    for (const content of [label === "incognito" ? privateReply : reply, "lastAssistant="]) {
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(content);
     }
     for (const query of queries) {
       expect(query).not.toHaveBeenCalled();

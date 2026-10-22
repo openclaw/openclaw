@@ -4,7 +4,6 @@ import { requesterMcpOAuthStoreKeyPrefix } from "../agents/mcp-oauth-identity.js
 import { readMcpOAuthPendingAuthorization, readMcpOAuthStore } from "../agents/mcp-oauth-store.js";
 import { completeOAuthCallback } from "../agents/mcp-oauth.js";
 import { resolveMcpTransportConfig } from "../agents/mcp-transport-config.js";
-import { normalizeConfiguredMcpServers } from "../config/mcp-config-normalize.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { OAUTH_PAGE_CSP } from "../infra/oauth-page-csp.js";
@@ -58,9 +57,7 @@ export async function handleMcpOAuthCallback(
   if (url.pathname !== MCP_OAUTH_CALLBACK_PATH) {
     return false;
   }
-  const configuredServers = Object.entries(
-    normalizeConfiguredMcpServers(params.config.mcp?.servers),
-  )
+  const configuredServers = Object.entries(params.config.mcp?.servers ?? {})
     .toSorted(([left], [right]) => left.localeCompare(right))
     .flatMap(([serverName, rawServer]) => {
       if (!isPerRequesterServer(rawServer)) {

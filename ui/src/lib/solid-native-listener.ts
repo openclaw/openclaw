@@ -1,19 +1,16 @@
 import { onCleanup } from "solid-js";
+import { listen } from "./reactive/listener.ts";
 
 /** Preserve native event ordering when an enclosing custom element consumes events. */
-export function nativeListener<
-  EventName extends "click" | "keydown" | "keyup" | "focusout" | "pointerdown",
->(
+export function nativeListener<EventName extends keyof HTMLElementEventMap>(
   type: EventName,
   handle: (event: HTMLElementEventMap[EventName]) => void,
   options?: boolean | AddEventListenerOptions,
 ) {
-  let target: HTMLElement | undefined;
-  onCleanup(() => {
-    target?.removeEventListener(type, handle, options);
-  });
+  let stop: (() => void) | undefined;
+  onCleanup(() => stop?.());
   return (element: HTMLElement) => {
-    target = element;
-    target.addEventListener(type, handle, options);
+    stop?.();
+    stop = listen(element, type, handle, options);
   };
 }

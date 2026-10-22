@@ -88,7 +88,7 @@ describe("GatewayClient", () => {
   }
 
   function registerGatewayOnlyProxy() {
-    return registerActiveManagedProxyUrl(new URL("http://127.0.0.1:3128"), "gateway-only");
+    return registerActiveManagedProxyUrl(new URL("http://127.0.0.1:3128"));
   }
 
   test("uses the admitted pairing identity for shared-auth connect failures", async () => {
@@ -256,6 +256,43 @@ function broadcastChatClassEvents(
 }
 
 describe("gateway broadcaster", () => {
+  it("keeps diagnostic health details on demand only for negotiated summary clients", () => {
+    const sockets = Array.from({ length: 4 }, () => makeRecordingSocket());
+    const clients = new GatewayClientRegistry(
+      sockets.map((socket, index) => {
+        const client = makeOperatorWsClient(`health-${index}`, socket, ["operator.read"]);
+        client.connect.caps = index % 2 === 0 ? ["health-summary"] : [];
+        return client;
+      }),
+    );
+    const { broadcast } = createGatewayBroadcaster({ clients });
+    const summary = {
+      ok: true,
+      ts: 123,
+      channels: { telegram: { connected: false, lastError: "Synthetic disconnect" } },
+      channelLabels: { telegram: "Telegram" },
+      configReload: { hotReloadStatus: "active" },
+    };
+    const full = {
+      ...summary,
+      agents: [{ agentId: "main", heartbeat: { prompt: "Synthetic heartbeat instructions" } }],
+      sessions: { path: "", count: 5000, recent: [] },
+    };
+    broadcast("health", full, { stateVersion: { health: 7 } });
+    for (const [index, socket] of sockets.entries()) {
+      expect(socket.sent).toEqual([
+        expect.objectContaining({
+          event: "health",
+          seq: 1,
+          stateVersion: { health: 7 },
+          payload: index % 2 === 0 ? summary : full,
+        }),
+      ]);
+    }
+    expect(full.agents).toHaveLength(1);
+    expect(full.sessions.count).toBe(5000);
+  });
+
   it("exposes current buffered bytes for a targeted connection", () => {
     const socket = makeRecordingSocket();
     socket.bufferedAmount = 1234;

@@ -1,22 +1,21 @@
-import { onSettled, Show } from "solid-js";
+import { createMemo, onSettled, Show } from "solid-js";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import type { McpAppConfirm } from "./mcp-app-confirm.ts";
 import "../styles/mcp-app-confirm.css";
 
 registerMcpAppEnglish();
 
-export function McpAppConfirmation(props: { confirmation: McpAppConfirm; revision: number }) {
-  const pending = () => {
-    void props.revision;
-    return props.confirmation.current;
-  };
+export function McpAppConfirmation(props: { confirmation: McpAppConfirm }) {
+  const projected = createMemo(() => projectOwner(props.confirmation, (owner) => owner.read()));
+  const pending = () => projected().read();
   return (
     <Show when={pending()} keyed>
       {(decision) => {
         let strip: HTMLDivElement | undefined;
         onSettled(() => {
-          if (strip?.isConnected && props.confirmation.current === decision) {
+          if (strip?.isConnected && props.confirmation.read() === decision) {
             strip.focus({ preventScroll: true });
           }
         });

@@ -14,6 +14,7 @@ import {
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../infra/sqlite-number.js";
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { readSqliteNativeMutationRevision } from "../infra/sqlite-schema-facts.js";
+import { groupPluginRecords as groupRecords } from "../plugins/record-groups.js";
 import type { OpenClawAgentDatabase } from "../state/openclaw-agent-db-contract.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import type { AgentDatabaseExecutionFileIdentity } from "../state/openclaw-agent-execution-contract.js";
@@ -83,7 +84,15 @@ function readRuns(database: EngineConnection, sessionId?: string, runId?: string
     .select(["session_id as sessionId", "run_id as runId"])
     .select((eb) => [
       eb.fn.max<number>("created_at").as("newest"),
-      eb.fn.sum<number>(eb(eb.fn<number>("octet_length", ["event_json"]), "+", 1)).as("bytes"),
+      eb.fn
+        .sum<number>(
+          eb(
+            eb.fn.coalesce("event_utf8_bytes", eb.fn<number>("octet_length", ["event_json"])),
+            "+",
+            1,
+          ),
+        )
+        .as("bytes"),
       eb.fn.countAll<number>().as("events"),
       engineTextHexSql(database, eb.ref("session_id")).as("sessionOrder"),
       engineTextHexSql(database, eb.ref("run_id")).as("runOrder"),
@@ -263,12 +272,7 @@ export function selectTrajectoryRuntimeRetentionBatch(
   }
   if (input.snapshot && !sweep.plan) {
     sweep.plan = { ...input.snapshot, runs: [] };
-    const sessions = new Map<string, Run[]>();
-    for (const run of input.snapshot.runs) {
-      const rows = sessions.get(run.sessionId) ?? [];
-      rows.push(run);
-      sessions.set(run.sessionId, rows);
-    }
+    const sessions = groupRecords(input.snapshot.runs, (run) => run.sessionId);
     for (const [sessionId, rows] of sessions) {
       replaceSession(sweep, sessionId, sweep.receipts.get(sessionId) ?? rows);
     }

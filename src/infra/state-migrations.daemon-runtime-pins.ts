@@ -4,6 +4,7 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   completeUnshippedDaemonRuntimePinMigration,
   type DaemonRuntimePinDatabase,
+  readDaemonRuntimePinMigrationReceipt,
   withDaemonRuntimePinStore,
 } from "../daemon/runtime-pin-store.js";
 import { deleteConfigMachineState } from "../state/config-machine-state-write.js";
@@ -47,10 +48,8 @@ export function initializeFreshDaemonRuntimePinMigration(env: NodeJS.ProcessEnv)
   if (isStatePostgres()) {
     return;
   }
-  const hasReceipt = (db: DatabaseSync) =>
-    Boolean(db.prepare("SELECT 1 FROM daemon_runtime_pin_migration WHERE version = 1").get());
   // Copied and foreign-source receipts still require Doctor to reconcile their history.
-  if (withDaemonRuntimePinStore(env, false, hasReceipt)) {
+  if (readDaemonRuntimePinMigrationReceipt(env)) {
     return;
   }
   const legacyPin = withExistingOpenClawStateDatabaseCurrentReadOnly(
@@ -68,16 +67,17 @@ export function initializeFreshDaemonRuntimePinMigration(env: NodeJS.ProcessEnv)
           .limit(1),
       );
     },
-    { env },
+    { env, allowNativeRead: true },
   );
   if (legacyPin) {
     return;
   }
-  withDaemonRuntimePinStore(env, true, (db) => {
-    if (!hasReceipt(db)) {
-      writeDaemonRuntimePinMigrationReceipt(db, resolveOpenClawStateSqlitePath(env), "complete");
-    }
-  });
+  withDaemonRuntimePinStore(env, true, (db) =>
+    db
+      .prepare(`INSERT INTO daemon_runtime_pin_migration VALUES (1, ?, 'complete', ?)
+        ON CONFLICT(version) DO NOTHING`)
+      .run(resolveOpenClawStateSqlitePath(env), Date.now()),
+  );
 }
 
 export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<MigrationMessages> {
@@ -86,9 +86,7 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
   }
   const sourceState = resolveOpenClawStateSqlitePath(env);
   const migrationComplete = (stateEnv: NodeJS.ProcessEnv) => {
-    const previous = withDaemonRuntimePinStore(stateEnv, false, (db) =>
-      db.prepare("SELECT source_state, phase FROM daemon_runtime_pin_migration").get(),
-    );
+    const previous = readDaemonRuntimePinMigrationReceipt(stateEnv);
     return previous?.phase === "complete" && previous.source_state === sourceState;
   };
   // A completed handoff needs no offline custody, including while the Gateway runs.

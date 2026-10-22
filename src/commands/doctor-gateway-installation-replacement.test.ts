@@ -117,7 +117,11 @@ describe("Doctor installation replacement diagnostics", () => {
     "preserves lint history when the current probe is %s",
     async (probe) => {
       if (probe === "replaced") {
-        mocks.callGateway.mockResolvedValue({ installationReplacementWarning });
+        mocks.callGateway.mockResolvedValue({
+          installationReplacementWarning,
+          modelReasoningWarning:
+            "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning: true.",
+        });
       }
       if (probe === "offline") {
         mocks.callGateway.mockRejectedValue(new Error("Gateway unavailable"));
@@ -148,6 +152,13 @@ describe("Doctor installation replacement diagnostics", () => {
             checkId: "core/doctor/gateway-health",
             severity: "warning",
             message: installationReplacementWarning,
+          }),
+        );
+        expect(findings).toContainEqual(
+          expect.objectContaining({
+            severity: "warning",
+            message: "Model ollama/qwen3:4b emitted hidden reasoning; set reasoning: true.",
+            fixHint: "Set reasoning: true on the configured model, or choose a non-thinking model.",
           }),
         );
       } else {

@@ -26,7 +26,7 @@ import {
 } from "../plugins/runtime/gateway-request-scope.js";
 import {
   buildPluginRuntimeLoadOptions,
-  createPluginRuntimeLoaderLogger,
+  pluginRuntimeLoaderLogger,
   setPluginRuntimeLoadContext,
   type PluginRuntimeLoadContext,
 } from "../plugins/runtime/load-context.js";
@@ -419,7 +419,7 @@ export async function loadGatewayPlugins(params: {
     });
   const loaderMetadata = metadataSnapshot ?? params.pluginLookUpTable;
   const logger = {
-    ...createPluginRuntimeLoaderLogger(),
+    ...pluginRuntimeLoaderLogger,
     ...(params.suppressPluginInfoLogs ? { info: () => undefined } : {}),
   };
   const loadContext: PluginRuntimeLoadContext = {

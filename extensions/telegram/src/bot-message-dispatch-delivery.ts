@@ -252,6 +252,11 @@ export async function sendPayload(
       info: { kind: "final" },
       retryAmbiguousFinalText: true,
       replyToMode: effectiveReplyToMode,
+      // ReplyToId describes inbound ancestry. Reuse the preview's prepared target
+      // so an untagged final cannot inherit a topic-creation service message.
+      replyToId:
+        effectivePayload.replyToId ??
+        (turn.draftReplyToMessageId !== undefined ? String(turn.draftReplyToMessageId) : null),
       threadId: turn.context.threadSpec.id,
       formatting: {
         textLimit: turn.textLimit,

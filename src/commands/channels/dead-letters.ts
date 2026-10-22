@@ -1,10 +1,9 @@
-// Operator commands for inspecting and resubmitting failed channel ingress events.
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { createChannelIngressQueue } from "../../channels/message/ingress-queue.js";
 import { parseLogsPositiveInt } from "../../cli/logs-cli.options.js";
 import { formatDurationHuman } from "../../infra/format-time/format-duration.js";
-import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { defaultRuntime } from "../../runtime.js";
 
 type ChannelsDeadLettersOptions = {
   channel?: string;
@@ -26,10 +25,8 @@ function resolveScope(options: ChannelsDeadLettersOptions) {
   return { channelId, accountId };
 }
 
-/** List retained ingress failures for one channel account. */
 export async function channelsDeadLettersListCommand(
   options: ChannelsDeadLettersOptions,
-  runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   const { channelId, accountId } = resolveScope(options);
   const queue = createChannelIngressQueue({ channelId, accountId });
@@ -37,21 +34,21 @@ export async function channelsDeadLettersListCommand(
     throw new Error("This runtime does not support channel ingress dead-letter inspection.");
   }
   const deadLetters = await queue.listFailed({
-    limit: parseLogsPositiveInt(options.limit ?? undefined, 100, "--limit"),
+    limit: parseLogsPositiveInt(options.limit, 100, "--limit"),
   });
   if (options.json) {
-    writeRuntimeJson(runtime, { channelId, accountId, deadLetters });
+    defaultRuntime.writeJson({ channelId, accountId, deadLetters });
     return;
   }
-  runtime.log(theme.heading(`Channel ingress dead letters (${channelId}/${accountId})`));
+  defaultRuntime.log(theme.heading(`Channel ingress dead letters (${channelId}/${accountId})`));
   if (deadLetters.length === 0) {
-    runtime.log(theme.muted("No dead-lettered ingress events."));
+    defaultRuntime.log(theme.muted("No dead-lettered ingress events."));
     return;
   }
   const now = Date.now();
   for (const entry of deadLetters) {
     const age = formatDurationHuman(Math.max(0, now - entry.failedAt));
-    runtime.log(
+    defaultRuntime.log(
       `- ${sanitizeTerminalText(entry.id)}: ${sanitizeTerminalText(entry.reason)}; attempts=${entry.attempts}; failed ${age} ago`,
     );
   }
@@ -61,7 +58,6 @@ export async function channelsDeadLettersListCommand(
 export async function channelsDeadLettersResubmitCommand(
   eventId: string,
   options: ChannelsDeadLettersOptions,
-  runtime: RuntimeEnv = defaultRuntime,
 ): Promise<void> {
   const { channelId, accountId } = resolveScope(options);
   const queue = createChannelIngressQueue({ channelId, accountId });
@@ -71,9 +67,9 @@ export async function channelsDeadLettersResubmitCommand(
   const result = await queue.resubmit(eventId);
   if (result.kind === "resubmitted") {
     if (options.json) {
-      writeRuntimeJson(runtime, { channelId, accountId, eventId, result });
+      defaultRuntime.writeJson({ channelId, accountId, eventId, result });
     } else {
-      runtime.log(
+      defaultRuntime.log(
         `${theme.success("Resubmitted")} channel ingress event ${sanitizeTerminalText(eventId)} (${channelId}/${accountId}).`,
       );
     }

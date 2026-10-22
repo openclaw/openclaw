@@ -219,6 +219,7 @@ export async function handoffUpdateFromGateway(params: {
     tag: params.tag,
     devTarget: params.devTarget,
     acceptCapabilities: params.opts.acceptCapabilities,
+    fullIntegrityCheck: params.opts.fullIntegrityCheck,
     admission: params.opts.admission,
     reapplyLocalOverrides: params.opts.reapplyLocalOverrides,
     meta: { runId: params.opts.run?.runId },
@@ -283,7 +284,7 @@ export async function handoffUpdateFromGateway(params: {
     recordUpdateRunStep(
       params.opts.run.runId,
       { step: "managed-service update handoff", status: "completed", endedAtMs: Date.now() },
-      { env: params.opts.run.env },
+      params.opts.run,
     );
   }
   await printResult(result, params.opts, { nextAction: guidance });

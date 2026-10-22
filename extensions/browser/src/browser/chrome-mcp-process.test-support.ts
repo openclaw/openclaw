@@ -15,6 +15,14 @@ const fixture = vi.hoisted(() => ({
   linuxRows: new Map<number, ChromeMcpProcessSnapshot>(),
 }));
 
+async function afterCensus<T>(operation: Promise<T>, isCensus: boolean): Promise<T> {
+  const result = await operation;
+  if (isCensus) {
+    await fixture.mocks?.afterCensus?.();
+  }
+  return result;
+}
+
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
   const readdir = async (...args: Parameters<typeof actual.readdir>) => {
@@ -23,11 +31,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
       fixture.linuxRows = new Map(rows.map((row) => [row.pid, row]));
       return rows.map((row) => String(row.pid));
     }
-    const result = await actual.readdir(...args);
-    if (args[0] === "/proc") {
-      await fixture.mocks?.afterCensus?.();
-    }
-    return result;
+    return afterCensus(actual.readdir(...args), args[0] === "/proc");
   };
   const readFile = async (...args: Parameters<typeof actual.readFile>) => {
     const match = typeof args[0] === "string" ? /^\/proc\/(\d+)\/stat$/.exec(args[0]) : null;
@@ -59,30 +63,25 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   return {
     ...actual,
     runExec: async (...args: Parameters<typeof actual.runExec>) => {
+      const mocks = fixture.mocks;
       if (
         args[0] === "taskkill" &&
-        (fixture.mocks?.platform ||
-          fixture.mocks?.listProcesses ||
-          fixture.mocks?.taskkillProcessTree)
+        (mocks?.platform || mocks?.listProcesses || mocks?.taskkillProcessTree)
       ) {
-        if (!fixture.mocks.taskkillProcessTree) {
+        if (!mocks.taskkillProcessTree) {
           throw new Error("synthetic process census has no taskkill handler");
         }
-        await fixture.mocks.taskkillProcessTree(Number(args[1][1]));
+        await mocks.taskkillProcessTree(Number(args[1][1]));
         return { stdout: "", stderr: "" };
       }
-      if (args[0] === "powershell.exe" && fixture.mocks?.listProcesses) {
-        const rows = await fixture.mocks.listProcesses();
+      if (args[0] === "powershell.exe" && mocks?.listProcesses) {
+        const rows = await mocks.listProcesses();
         return {
           stdout: rows.map((row) => `${row.pid}\t${row.ppid}\t${row.identity}\tfixture`).join("\n"),
           stderr: "",
         };
       }
-      const result = await actual.runExec(...args);
-      if (args[0] === "ps" || args[0] === "powershell.exe") {
-        await fixture.mocks?.afterCensus?.();
-      }
-      return result;
+      return afterCensus(actual.runExec(...args), args[0] === "ps" || args[0] === "powershell.exe");
     },
   };
 });

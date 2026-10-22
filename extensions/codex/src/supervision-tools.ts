@@ -20,7 +20,6 @@ import type { createCodexAuthProfileSelection } from "./app-server/auth-profile-
 import type {
   CodexAppServerStartOptions,
   CodexPluginConfig,
-  CodexSupervisionEndpoint,
 } from "./app-server/config-contracts.js";
 import {
   codexAppServerStartOptionsKey,
@@ -29,11 +28,9 @@ import {
 import { readCodexPluginConfig } from "./app-server/config-parsing.js";
 import { assertCodexAppServerConnectionSecurity } from "./app-server/config-security.js";
 import { requestCodexAppServerJson } from "./app-server/request.js";
+import { normalizeEndpoints, type NormalizedSupervisionEndpoint } from "./supervision-endpoints.js";
 
 class CodexSupervisionPolicyError extends Error {}
-
-/** Legacy endpoint env retained for the shipped Supervisor tool contract. */
-const LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV = "OPENCLAW_CODEX_SUPERVISOR_ENDPOINTS";
 
 export const CODEX_SUPERVISION_COMPAT_TOOL_NAMES = [
   "codex_endpoint_probe",
@@ -100,19 +97,13 @@ const PAGE_LIMIT = 100;
 const MAX_COMPAT_PAGINATION_PAGES = 100;
 const MAX_COMPAT_CURSOR_LENGTH = 4096;
 const MAX_COMPAT_THREAD_ID_LENGTH = 4096;
-const ENDPOINT_URL_PREFIX = /^(?:wss?|unix):\/\//;
 
 type CodexSupervisorTurnMode = "auto" | "start" | "steer";
 type CodexSupervisionRequestPolicy = "enabled" | "raw-transcripts" | "write-controls";
 
-type NormalizedSupervisionEndpoint = {
-  id: string;
-  label?: string;
-  configured?: CodexSupervisionEndpoint;
-};
-
 type ResolvedSupervisionEndpoint = NormalizedSupervisionEndpoint & {
   connectionKey: string;
+  authProfileId?: string;
 };
 
 type CodexSupervisorSession = NonNullable<ReturnType<typeof toSession>>;
@@ -139,9 +130,9 @@ type CodexSupervisionToolsOptions = {
   resolveAuthProfileId: ReturnType<
     typeof createCodexAuthProfileSelection
   >["resolveCodexAppServerAuthProfileIdForAgent"];
-  resolveAuthProfileIdAtEffect: ReturnType<
+  withAuthProfileIdAtEffect: ReturnType<
     typeof createCodexAuthProfileSelection
-  >["resolveCodexAppServerAuthProfileIdAtEffect"];
+  >["withCodexAppServerAuthProfileIdAtEffect"];
   resolveRuntimeOptions: ReturnType<
     typeof createCodexAppServerConfig
   >["resolveCodexSupervisionAppServerRuntimeOptions"];
@@ -228,110 +219,6 @@ function readModeParam(params: Record<string, unknown>): CodexSupervisorTurnMode
   throw new Error("mode must be auto, start, or steer");
 }
 
-function normalizeEndpointId(value: string, index: number): string {
-  const trimmed = value.trim();
-  return trimmed ? trimmed.replace(/[^a-zA-Z0-9_.:-]/g, "-") : `endpoint-${index + 1}`;
-}
-
-function parseEndpointRecord(value: unknown): CodexSupervisionEndpoint | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const transport = typeof value.transport === "string" ? value.transport : undefined;
-  const common = {
-    ...(typeof value.id === "string" ? { id: value.id } : {}),
-    ...(typeof value.label === "string" ? { label: value.label } : {}),
-  };
-  if (transport === "websocket" && typeof value.url === "string") {
-    return {
-      ...common,
-      transport,
-      url: value.url,
-      ...(typeof value.authTokenEnv === "string" ? { authTokenEnv: value.authTokenEnv } : {}),
-    };
-  }
-  if (transport === "stdio-proxy" || transport === undefined) {
-    const args = Array.isArray(value.args)
-      ? value.args.filter((entry): entry is string => typeof entry === "string")
-      : undefined;
-    return {
-      ...common,
-      transport: "stdio-proxy",
-      ...(typeof value.command === "string" ? { command: value.command } : {}),
-      ...(args && args.length > 0 ? { args } : {}),
-      ...(typeof value.cwd === "string" ? { cwd: value.cwd } : {}),
-    };
-  }
-  return undefined;
-}
-
-function endpointFromToken(token: string, index: number): CodexSupervisionEndpoint | undefined {
-  const trimmed = token.trim();
-  if (trimmed === "local" || trimmed === "proxy" || trimmed === "stdio") {
-    return {
-      id: "local",
-      label: "local Codex app-server",
-      transport: "stdio-proxy",
-    };
-  }
-  const separatorIndex = ENDPOINT_URL_PREFIX.test(trimmed) ? -1 : trimmed.indexOf("=");
-  const id = separatorIndex >= 0 ? trimmed.slice(0, separatorIndex) : "";
-  const url = separatorIndex >= 0 ? trimmed.slice(separatorIndex + 1) : trimmed;
-  if (ENDPOINT_URL_PREFIX.test(url)) {
-    return { id: normalizeEndpointId(id, index), transport: "websocket", url };
-  }
-  return undefined;
-}
-
-function readLegacyEnvEndpoints(env: NodeJS.ProcessEnv): CodexSupervisionEndpoint[] | undefined {
-  const raw = env[LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV]?.trim();
-  if (!raw) {
-    return undefined;
-  }
-  if (raw.startsWith("[")) {
-    const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) {
-      throw new Error(`${LEGACY_CODEX_SUPERVISOR_ENDPOINTS_ENV} must be a JSON array`);
-    }
-    return parsed
-      .map((entry) => parseEndpointRecord(entry))
-      .filter((entry): entry is CodexSupervisionEndpoint => Boolean(entry));
-  }
-  return raw
-    .split(",")
-    .map(endpointFromToken)
-    .filter((entry): entry is CodexSupervisionEndpoint => Boolean(entry));
-}
-
-function normalizeEndpoints(
-  pluginConfig: CodexPluginConfig,
-  options: CodexSupervisionToolsOptions,
-): NormalizedSupervisionEndpoint[] {
-  const env = options.env ?? process.env;
-  const configured = pluginConfig.supervision?.endpoints;
-  const endpoints = configured?.length ? configured : readLegacyEnvEndpoints(env);
-  const normalized: NormalizedSupervisionEndpoint[] = endpoints
-    ? endpoints.map((endpoint, index) => {
-        const entry: NormalizedSupervisionEndpoint = {
-          id: normalizeEndpointId(endpoint.id ?? endpoint.label ?? "", index),
-        };
-        if (endpoint.label?.trim()) {
-          entry.label = endpoint.label.trim();
-        }
-        entry.configured = endpoint;
-        return entry;
-      })
-    : [{ id: "local", label: "local Codex app-server" }];
-  const seen = new Set<string>();
-  for (const endpoint of normalized) {
-    if (seen.has(endpoint.id)) {
-      throw new Error(`duplicate Codex supervisor endpoint id: ${endpoint.id}`);
-    }
-    seen.add(endpoint.id);
-  }
-  return normalized;
-}
-
 async function resolveEndpoints(
   pluginConfig: CodexPluginConfig,
   options: CodexSupervisionToolsOptions,
@@ -341,8 +228,10 @@ async function resolveEndpoints(
   const { resolveAuthProfileId, resolveRuntimeOptions } = options;
   return await Promise.all(
     normalizeEndpoints(pluginConfig, options).map(async (endpoint) =>
-      Object.assign({}, endpoint, {
-        connectionKey: await supervisionEndpointConnectionKey({
+      Object.assign(
+        {},
+        endpoint,
+        await resolveSupervisionEndpointConnection({
           endpoint,
           pluginConfig,
           env,
@@ -350,7 +239,7 @@ async function resolveEndpoints(
           resolveAuthProfileId,
           resolveRuntimeOptions,
         }),
-      }),
+      ),
     ),
   );
 }
@@ -421,12 +310,15 @@ function endpointConnectionContext(params: EndpointConnectionParams) {
   return { startOptions, usesNativeAuth, agentDir };
 }
 
-async function supervisionEndpointConnectionKey(params: EndpointConnectionParams): Promise<string> {
+async function resolveSupervisionEndpointConnection(params: EndpointConnectionParams) {
   const { startOptions, usesNativeAuth, agentDir } = endpointConnectionContext(params);
   const authProfileId = usesNativeAuth
     ? undefined
     : await params.resolveAuthProfileId({ agentDir, config: params.runtimeConfig });
-  return encodeEndpointConnectionKey(startOptions, agentDir, authProfileId);
+  return {
+    connectionKey: encodeEndpointConnectionKey(startOptions, agentDir, authProfileId),
+    authProfileId,
+  };
 }
 
 function encodeEndpointConnectionKey(
@@ -470,18 +362,20 @@ function createPolicyGuardedRequest(
       env,
       resolveRuntimeOptions: options.resolveRuntimeOptions,
     });
-    return await requestCodexAppServerJson<T>({
-      method,
-      requestParams,
-      timeoutMs: runtime.requestTimeoutMs,
-      startOptions,
-      // Client acquisition and queued writes can outlive the policy that admitted this request.
-      assertCurrent: () => {
-        assertCurrentEndpointAtEffect(options, policy, currentEndpoint);
-      },
-      ...(endpoint.configured || startOptions.homeScope === "user" ? { authProfileId: null } : {}),
-      ...(config ? { config } : {}),
-    });
+    return withCurrentEndpointAtEffect(options, policy, currentEndpoint, (guards) =>
+      requestCodexAppServerJson<T>({
+        method,
+        requestParams,
+        timeoutMs: runtime.requestTimeoutMs,
+        startOptions,
+        // Client acquisition and queued writes can outlive the policy that admitted this request.
+        ...guards,
+        ...(endpoint.configured || startOptions.homeScope === "user"
+          ? { authProfileId: null }
+          : {}),
+        ...(config ? { config } : {}),
+      }),
+    );
   };
 }
 
@@ -849,11 +743,11 @@ async function requireCurrentEndpoint(
   return currentEndpoint;
 }
 
-function assertCurrentEndpointAtEffect(
+function currentEndpointConnection(
   options: CodexSupervisionToolsOptions,
   policy: CodexSupervisionRequestPolicy,
   endpoint: ResolvedSupervisionEndpoint,
-): void {
+) {
   const pluginConfig = requireLiveToolPolicyConfig(options, policy);
   const current = normalizeEndpoints(pluginConfig, options).find(
     (candidate) => candidate.id === endpoint.id,
@@ -864,45 +758,96 @@ function assertCurrentEndpointAtEffect(
     );
   }
   const runtimeConfig = options.getRuntimeConfig?.();
-  const { startOptions, usesNativeAuth, agentDir } = endpointConnectionContext({
-    endpoint: current,
-    pluginConfig,
-    env: options.env ?? process.env,
+  return {
     runtimeConfig,
-    resolveAuthProfileId: options.resolveAuthProfileId,
-    resolveRuntimeOptions: options.resolveRuntimeOptions,
-  });
-  // A queued external request must recheck its current account synchronously at dispatch.
-  const authProfileId = usesNativeAuth
-    ? undefined
-    : options.resolveAuthProfileIdAtEffect({ agentDir, config: runtimeConfig });
-  if (
-    encodeEndpointConnectionKey(startOptions, agentDir, authProfileId) !== endpoint.connectionKey
-  ) {
-    throw new CodexSupervisionPolicyError(
-      `Codex supervision endpoint ${endpoint.id} was removed or changed during the request.`,
-    );
-  }
+    ...endpointConnectionContext({
+      endpoint: current,
+      pluginConfig,
+      env: options.env ?? process.env,
+      runtimeConfig,
+      resolveAuthProfileId: options.resolveAuthProfileId,
+      resolveRuntimeOptions: options.resolveRuntimeOptions,
+    }),
+  };
 }
 
-function requireCurrentEndpointSet(
+type EndpointEffectGuards = { assertCurrent(): void; assertDispatchCurrentAsync(): Promise<void> };
+
+async function withCurrentEndpointAtEffect<T>(
+  options: CodexSupervisionToolsOptions,
+  policy: CodexSupervisionRequestPolicy,
+  endpoint: ResolvedSupervisionEndpoint,
+  consume: (guards: EndpointEffectGuards) => Promise<T>,
+): Promise<T> {
+  const captured = currentEndpointConnection(options, policy, endpoint);
+  const run = async (reader?: { read(): Promise<string | undefined>; assertCurrent(): void }) => {
+    let authProfileId = endpoint.authProfileId;
+    const assertCurrent = () => {
+      const current = currentEndpointConnection(options, policy, endpoint);
+      reader?.assertCurrent();
+      if (
+        current.runtimeConfig !== captured.runtimeConfig ||
+        encodeEndpointConnectionKey(current.startOptions, current.agentDir, authProfileId) !==
+          endpoint.connectionKey
+      ) {
+        throw new CodexSupervisionPolicyError(
+          `Codex supervision endpoint ${endpoint.id} was removed or changed during the request.`,
+        );
+      }
+    };
+    assertCurrent();
+    return consume({
+      assertCurrent,
+      assertDispatchCurrentAsync: async () => {
+        if (reader) {
+          authProfileId = await reader.read();
+        }
+        assertCurrent();
+      },
+    });
+  };
+  return captured.usesNativeAuth
+    ? run()
+    : options.withAuthProfileIdAtEffect(
+        {
+          agentDir: captured.agentDir,
+          config: captured.runtimeConfig,
+        },
+        run,
+      );
+}
+
+function withCurrentEndpointSet<T>(
   options: CodexSupervisionToolsOptions,
   expected: ResolvedSupervisionEndpoint[],
-): { pluginConfig: CodexPluginConfig } {
-  const pluginConfig = requireLiveToolPolicyConfig(options, "enabled");
-  const current = normalizeEndpoints(pluginConfig, options);
-  const unchanged =
-    current.length === expected.length &&
-    expected.every((endpoint) => current.some((candidate) => candidate.id === endpoint.id));
-  if (!unchanged) {
-    throw new CodexSupervisionPolicyError(
-      "Codex supervision endpoint configuration changed during the request.",
-    );
-  }
-  for (const endpoint of expected) {
-    assertCurrentEndpointAtEffect(options, "enabled", endpoint);
-  }
-  return { pluginConfig };
+  consume: (pluginConfig: CodexPluginConfig) => T,
+): Promise<T> {
+  const guards: EndpointEffectGuards[] = [];
+  const visit = async (index: number): Promise<T> => {
+    const endpoint = expected[index];
+    if (endpoint) {
+      return withCurrentEndpointAtEffect(options, "enabled", endpoint, async (guard) => {
+        await guard.assertDispatchCurrentAsync();
+        guards.push(guard);
+        return visit(index + 1);
+      });
+    }
+    const pluginConfig = requireLiveToolPolicyConfig(options, "enabled");
+    const current = normalizeEndpoints(pluginConfig, options);
+    if (
+      current.length !== expected.length ||
+      expected.some((item) => !current.some((candidate) => candidate.id === item.id))
+    ) {
+      throw new CodexSupervisionPolicyError(
+        "Codex supervision endpoint configuration changed during the request.",
+      );
+    }
+    for (const guard of guards) {
+      guard.assertCurrent();
+    }
+    return consume(pluginConfig);
+  };
+  return visit(0);
 }
 
 function idleContinuationError(threadId: string): Error {
@@ -995,19 +940,20 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
             health.push({ endpointId: endpoint.id, ok: false });
           }
         }
-        const { pluginConfig } = requireCurrentEndpointSet(options, endpoints);
-        return jsonResult({
-          summary: `codex endpoints: ${health.filter((entry) => entry.ok).length}/${health.length} ok`,
-          endpoints: endpoints.map((endpoint) =>
-            endpointResult(
-              endpoint,
-              pluginConfig,
-              options.env ?? process.env,
-              options.resolveRuntimeOptions,
+        return withCurrentEndpointSet(options, endpoints, (pluginConfig) =>
+          jsonResult({
+            summary: `codex endpoints: ${health.filter((entry) => entry.ok).length}/${health.length} ok`,
+            endpoints: endpoints.map((endpoint) =>
+              endpointResult(
+                endpoint,
+                pluginConfig,
+                options.env ?? process.env,
+                options.resolveRuntimeOptions,
+              ),
             ),
-          ),
-          health,
-        });
+            health,
+          }),
+        );
       },
     },
     {
@@ -1024,14 +970,15 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
           includeStored: params.include_stored === true,
           maxStoredSessions: readIntegerParam(params, "max_stored_sessions"),
         });
-        const { pluginConfig } = requireCurrentEndpointSet(options, endpoints);
-        return jsonResult({
-          summary: `codex sessions: ${result.sessions.length}`,
-          ...projectSessionListResult(
-            result,
-            pluginConfig.supervision?.allowRawTranscripts === true,
-          ),
-        });
+        return withCurrentEndpointSet(options, endpoints, (pluginConfig) =>
+          jsonResult({
+            summary: `codex sessions: ${result.sessions.length}`,
+            ...projectSessionListResult(
+              result,
+              pluginConfig.supervision?.allowRawTranscripts === true,
+            ),
+          }),
+        );
       },
     },
     {
@@ -1055,10 +1002,13 @@ export function createCodexSupervisionTools(options: CodexSupervisionToolsOption
           threadId,
           includeTurns: params.include_turns === true,
         });
-        assertCurrentEndpointAtEffect(options, "raw-transcripts", endpoint);
-        return jsonResult({
-          summary: `codex session: ${threadId}`,
-          response: { thread },
+        return withCurrentEndpointAtEffect(options, "raw-transcripts", endpoint, async (guard) => {
+          await guard.assertDispatchCurrentAsync();
+          guard.assertCurrent();
+          return jsonResult({
+            summary: `codex session: ${threadId}`,
+            response: { thread },
+          });
         });
       },
     },

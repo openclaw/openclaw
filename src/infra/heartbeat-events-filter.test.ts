@@ -1,5 +1,4 @@
-// Covers heartbeat event prompt filtering.
-import { describe, expect, it } from "vitest";
+import { expect, it } from "vitest";
 import { appendExecTimeoutRetryGuidance } from "../agents/bash-tools.exec-output.js";
 import {
   buildCronEventPrompt,
@@ -10,218 +9,167 @@ import {
   isRelayableExecCompletionEvent,
 } from "./heartbeat-events-filter.js";
 
-describe("heartbeat event prompts", () => {
-  it.each([
-    { contextKey: "exec:command", fromConversationTurn: true, expected: true },
-    { contextKey: "notice:ordinary", fromConversationTurn: true, expected: false },
-    { contextKey: "exec:command", fromConversationTurn: false, expected: false },
-  ])(
-    "keeps conversation completion bound to its producer: $contextKey/$fromConversationTurn",
-    ({ contextKey, fromConversationTurn, expected }) => {
-      expect(
-        isConversationExecCompletion({
-          text: "Exec completed (command, code 0) :: result",
-          contextKey,
-          fromConversationTurn,
-        }),
-      ).toBe(expected);
-    },
-  );
+const silent = "reply with exactly NO_REPLY as the entire final answer";
+const continuation = "continue any outstanding authorized work";
+const recovered = "failures already recovered from";
+const missingLogs = "Do not ask the user to provide missing logs";
+const relayOutput = "Please relay the command output to the user";
+const reminder = "Cron: rotate logs";
+const relayReminder = "Please relay this reminder to the user";
+const internalReminder = "Handle this reminder internally";
+const completed = "Exec completed (job, code 0)";
+const failed = "Exec failed (job, code 1)";
+const timeoutHead = "Exec failed (job, signal SIGTERM)";
+const timeoutEvent = appendExecTimeoutRetryGuidance(timeoutHead, "overall-timeout");
+const responseTool = { useHeartbeatResponseTool: true };
+const toolFollowup = ["requested result not yet delivered", "notify=true with notificationText"];
+const toolForbidden = ["reply with exactly NO_REPLY", "Please relay the command output"];
+const completionEvent = {
+  text: "Exec completed (command, code 0) :: result",
+  contextKey: "exec:command",
+  fromConversationTurn: true,
+};
+const followup = [
+  "requested result not yet delivered",
+  continuation,
+  "routine output, duplicate or superseded results",
+  recovered,
+  silent,
+];
+function checkPrompt(prompt: string, expected: string[], unexpected: string[]) {
+  expected.forEach((part) => expect(prompt).toContain(part));
+  unexpected.forEach((part) => expect(prompt).not.toContain(part));
+}
 
-  it.each([
-    {
-      name: "builds user-relay cron prompt by default",
-      events: ["Cron: rotate logs"],
-      expected: ["Cron: rotate logs", "Please relay this reminder to the user"],
-      unexpected: ["Handle this reminder internally", "Reply with exactly NO_REPLY"],
-    },
-    {
-      name: "builds internal-only cron prompt when delivery is disabled",
-      events: ["Cron: rotate logs"],
-      opts: { deliverToUser: false },
-      expected: ["Cron: rotate logs", "Handle this reminder internally"],
-      unexpected: ["Please relay this reminder to the user"],
-    },
-    {
-      name: "falls back to bare heartbeat reply when cron content is empty",
-      events: ["", "   "],
-      expected: [
-        "Reply with exactly NO_REPLY as the entire final answer.",
-        "send confirmations before ending silently",
-      ],
-      unexpected: ["Handle this reminder internally"],
-    },
-    {
-      name: "uses internal empty-content fallback when delivery is disabled",
-      events: ["", "   "],
-      opts: { deliverToUser: false },
-      expected: [
-        "Handle this internally",
-        "If nothing needs user-facing follow-up",
-        "reply with exactly NO_REPLY as the entire final answer",
-      ],
-      unexpected: ["Please relay this reminder to the user"],
-    },
-  ])("$name", ({ events, opts, expected, unexpected }) => {
-    const prompt = buildCronEventPrompt(events, opts);
-    for (const part of expected) {
-      expect(prompt).toContain(part);
-    }
-    for (const part of unexpected) {
-      expect(prompt).not.toContain(part);
-    }
-  });
-
-  it.each([
-    {
-      name: "makes exec follow-ups conditional on new user-relevant information",
-      events: ["Exec finished (node=abc id=123, code 0)\nUploaded file"],
-      opts: undefined,
-      expected: [
-        "Exec finished",
-        "Uploaded file",
-        "requested result not yet delivered",
-        "continue any outstanding authorized work",
-        "routine output, duplicate or superseded results",
-        "failures already recovered from",
-        "reply with exactly NO_REPLY as the entire final answer",
-      ],
-      unexpected: ["system messages above", "Please relay the command output", "[truncated]"],
-    },
-    {
-      name: "builds internal-only exec prompt when delivery is disabled",
-      events: ["Exec failed (node=abc id=123, code 1)\nUpload failed"],
-      opts: { deliverToUser: false },
-      expected: [
-        "user delivery is disabled",
-        "Handle the result internally",
-        "reply with exactly NO_REPLY as the entire final answer",
-      ],
-      unexpected: [
-        "Upload failed",
-        "system messages above",
-        "Please relay the command output to the user",
-      ],
-    },
-    {
-      name: "keeps metadata-only successful exec completions as continuations",
-      events: ["Exec completed (abc12345, code 0)"],
-      opts: undefined,
-      expected: [
-        "Exec completed (abc12345, code 0) without captured stdout/stderr.",
-        "continue any outstanding authorized work",
-        "Do not ask the user to provide missing logs",
-        "reply with exactly NO_REPLY as the entire final answer",
-      ],
-      unexpected: ["Please relay the command output to the user"],
-    },
-    {
-      name: "applies relevance guidance to failures without captured logs",
-      events: ["Exec failed (abc12345, code 1)"],
-      opts: undefined,
-      expected: [
-        "without captured stdout/stderr",
-        "include the exit status or signal",
-        "Do not ask the user to provide missing logs",
-        "Notify the user only",
-        "failures already recovered from",
-        "reply with exactly NO_REPLY as the entire final answer",
-      ],
-      unexpected: ["Please relay the command output to the user"],
-    },
-    {
-      name: "keeps timeout retry guidance when the command printed nothing",
-      events: [
-        appendExecTimeoutRetryGuidance("Exec failed (abc12345, signal SIGTERM)", "overall-timeout"),
-      ],
-      opts: undefined,
-      expected: [
-        "Exec failed (abc12345, signal SIGTERM) without captured stdout/stderr.",
-        "Verify the resulting state before retrying",
-        "include the exit status or signal",
-        "requested result not yet delivered",
-        "continue any outstanding authorized work",
-        "routine output, duplicate or superseded results",
-        "failures already recovered from",
-        "reply with exactly NO_REPLY as the entire final answer",
-      ],
-      unexpected: ["no command output was found"],
-    },
-  ])("$name", ({ events, opts, expected, unexpected }) => {
-    const prompt = buildExecEventPrompt(events, opts);
-    for (const part of expected) {
-      expect(prompt).toContain(part);
-    }
-    for (const part of unexpected) {
-      expect(prompt).not.toContain(part);
-    }
-  });
-
-  it.each([
-    "Exec completed (report-job, code 0) :: Report ready",
-    "Exec failed (report-job, code 1)",
-  ])("uses the response tool for a nonempty completion: %s", (event) => {
-    const prompt = buildExecEventPrompt([event], { useHeartbeatResponseTool: true });
-
-    expect(prompt).toContain("requested result not yet delivered");
-    expect(prompt).toContain("heartbeat_respond");
-    expect(prompt).toContain("notify=false");
-    expect(prompt).toContain("notify=true with notificationText");
-    expect(prompt).not.toContain("reply with exactly NO_REPLY");
-    expect(prompt).not.toContain("Please relay the command output");
-  });
-
-  it("uses heartbeat_respond for empty cron events in response-tool mode", () => {
-    const prompt = buildCronEventPrompt([""], { useHeartbeatResponseTool: true });
-
-    expect(prompt).toContain("heartbeat_respond");
-    expect(prompt).toContain("notify=false");
-    expect(prompt).not.toContain("HEARTBEAT_OK");
-  });
+it.each([
+  [completionEvent, true],
+  [{ ...completionEvent, contextKey: "notice:ordinary" }, false],
+  [{ ...completionEvent, fromConversationTurn: false }, false],
+] as const)("keeps conversation completion bound to its producer: %j", (event, expected) => {
+  expect(isConversationExecCompletion(event)).toBe(expected);
 });
 
-describe("heartbeat event classification", () => {
-  it.each([
-    { value: "   ", expected: false },
-    { value: "NO_REPLY", expected: true },
-    { value: "no_reply: actual reminder", expected: true },
-    { value: "HEARTBEAT_OK", expected: false },
-    { value: "heartbeat_ok: already handled", expected: false },
-    { value: "Exec completed (abc12345, code 0)", expected: false },
-  ])("classifies cron system events for %j", ({ value, expected }) => {
-    expect(isCronSystemEvent({ text: value })).toBe(expected);
-  });
+it.each([
+  [
+    [reminder],
+    undefined,
+    [reminder, relayReminder],
+    [internalReminder, "Reply with exactly NO_REPLY"],
+  ],
+  [[reminder], false, [reminder, internalReminder], [relayReminder]],
+  [
+    ["", "   "],
+    undefined,
+    [
+      "Reply with exactly NO_REPLY as the entire final answer.",
+      "send confirmations before ending silently",
+    ],
+    [internalReminder],
+  ],
+  [
+    ["", "   "],
+    false,
+    ["Handle this internally", "If nothing needs user-facing follow-up", silent],
+    [relayReminder],
+  ],
+] satisfies Array<[string[], boolean | undefined, string[], string[]]>)(
+  "builds cron prompt for %j with delivery %s",
+  (events, deliverToUser, expected, unexpected) => {
+    checkPrompt(buildCronEventPrompt(events, { deliverToUser }), expected, unexpected);
+  },
+);
 
-  it.each([{ value: "exec finished: ok", expected: true }])(
-    "classifies relayable exec completion events for %j",
-    ({ value, expected }) => {
-      expect(isRelayableExecCompletionEvent(value)).toBe(expected);
-    },
-  );
+it.each([
+  [
+    "Exec finished: Uploaded file",
+    ["Exec finished", "Uploaded file", ...followup],
+    ["system messages above", "Please relay the command output", "[truncated]"],
+  ],
+  [
+    "Exec failed: Upload failed",
+    ["user delivery is disabled", "Handle the result internally", silent],
+    ["Upload failed", "system messages above", relayOutput],
+    { deliverToUser: false },
+  ],
+  [
+    completed,
+    [`${completed} without captured stdout/stderr.`, continuation, missingLogs, silent],
+    [relayOutput],
+  ],
+  [
+    failed,
+    [
+      "without captured stdout/stderr",
+      "include the exit status or signal",
+      missingLogs,
+      "Notify the user only",
+      recovered,
+      silent,
+    ],
+    [relayOutput],
+  ],
+  [
+    timeoutEvent,
+    [
+      `${timeoutHead} without captured stdout/stderr.`,
+      "Verify the resulting state before retrying",
+      "include the exit status or signal",
+      ...followup,
+    ],
+    ["no command output was found"],
+  ],
+] satisfies Array<[string, string[], string[], { deliverToUser: boolean }?]>)(
+  "builds continuation prompt for %s",
+  (event, expected, unexpected, opts?: Parameters<typeof buildExecEventPrompt>[1]) => {
+    checkPrompt(buildExecEventPrompt([event], opts), expected, unexpected);
+  },
+);
+
+it.each([
+  [`${completed} :: Report ready`, "exec", toolFollowup, toolForbidden],
+  [failed, "exec", toolFollowup, toolForbidden],
+  ["", "cron", [], ["HEARTBEAT_OK"]],
+] satisfies Array<[string, string, string[], string[]]>)(
+  "uses the response tool for %s (%s)",
+  (event, kind, expected, unexpected) => {
+    const build = kind === "exec" ? buildExecEventPrompt : buildCronEventPrompt;
+    checkPrompt(
+      build([event], responseTool),
+      ["heartbeat_respond", "notify=false", ...expected],
+      unexpected,
+    );
+  },
+);
+it.each([
+  { value: "   ", expected: false },
+  { value: "NO_REPLY", expected: true },
+  { value: "no_r", expected: true },
+  { value: "NO_R", expected: true },
+  { value: "no_reply: actual reminder", expected: true },
+  { value: "HEARTBEAT_OK", expected: false },
+  { value: "heartbeat_ok: already handled", expected: false },
+  { value: "heartbeat poll: noop", expected: false },
+  { value: "heartbeat wake: noop", expected: false },
+  { value: "Cron: investigate heartbeat wake failures", expected: true },
+  { value: "Reminder: review heartbeat poll results", expected: true },
+  { value: "Exec completed (abc12345, code 0)", expected: false },
+])("classifies cron system events for %j", ({ value, expected }) => {
+  expect(isCronSystemEvent({ text: value })).toBe(expected);
 });
 
-describe("isExecCompletionEvent", () => {
-  it.each(["overall-timeout"] as const)(
-    "matches %s completions that carry retry guidance without output",
-    (reason) => {
-      const event = appendExecTimeoutRetryGuidance(
-        "Exec failed (calm-del, signal SIGKILL)",
-        reason,
-      );
-      expect(isExecCompletionEvent(event)).toBe(true);
-      expect(isRelayableExecCompletionEvent(event)).toBe(true);
-    },
-  );
+it.each([
+  "exec finished: ok",
+  appendExecTimeoutRetryGuidance("Exec failed (calm-del, signal SIGKILL)", "overall-timeout"),
+])("classifies relayable exec completion events: %s", (event) => {
+  expect(isExecCompletionEvent(event)).toBe(true);
+  expect(isRelayableExecCompletionEvent(event)).toBe(true);
 });
+it("does not split surrogate pairs in long event text", () => {
+  const safePrefix = "x".repeat(7_999);
+  const result = buildExecEventPrompt([`${safePrefix}🚀tail`]);
 
-describe("buildExecEventPrompt truncation", () => {
-  it("does not split surrogate pairs in long event text", () => {
-    const safePrefix = "x".repeat(7_999);
-    const result = buildExecEventPrompt([`${safePrefix}🚀tail`]);
-
-    expect(result).toContain(`${safePrefix}\n\n[truncated]`);
-    expect(result).not.toContain("🚀tail");
-    const promptOverhead = buildExecEventPrompt(["x"]).length - 1;
-    expect(result.length).toBe(safePrefix.length + "\n\n[truncated]".length + promptOverhead);
-  });
+  expect(result).toContain(`${safePrefix}\n\n[truncated]`);
+  expect(result).not.toContain("🚀tail");
+  const promptOverhead = buildExecEventPrompt(["x"]).length - 1;
+  expect(result.length).toBe(safePrefix.length + "\n\n[truncated]".length + promptOverhead);
 });

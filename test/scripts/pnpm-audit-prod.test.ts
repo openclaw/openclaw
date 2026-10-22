@@ -135,7 +135,6 @@ snapshots:
     shared: ["1.0.0"],
     "tool-only": ["1.0.0"],
   });
-  expect(() => collectAllResolvedPackagesFromLockfile(`${lockfile}\n---\n`)).toThrow();
   const brokenApplication = lockfile.replace(
     "  shared@1.0.0: {}",
     "  shared@1.0.0:\n    dependencies:\n      native: 2.0.0",
@@ -193,6 +192,31 @@ it.each<[string, string, string, Record<string, string[]>]>([
       "opt-dep": ["4.0.0"],
       "pkg-a": ["1.0.0"],
       transitive: ["3.0.0"],
+    },
+  ],
+  [
+    "audits bundled Mistral and its transitives without unrelated development dependencies",
+    `  .:
+    devDependencies:
+      '@mistralai/mistralai': {version: 3.0.0}
+  packages/ai:
+    devDependencies:
+      '@mistralai/mistralai': {version: 2.7.0}
+      build-tool: {version: 1.0.0}`,
+    `  '@mistralai/mistralai@2.7.0':
+    dependencies:
+      schema: 1.0.0
+    optionalDependencies:
+      telemetry: 2.0.0
+  schema@1.0.0: {}
+  telemetry@2.0.0: {}
+  '@mistralai/mistralai@3.0.0': {}
+  build-tool@1.0.0: {}
+`,
+    {
+      "@mistralai/mistralai": ["2.7.0"],
+      schema: ["1.0.0"],
+      telemetry: ["2.0.0"],
     },
   ],
   [

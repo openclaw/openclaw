@@ -81,7 +81,7 @@ services. Leaving the policy unset keeps strict behavior.
 
 Use `--announce --channel telegram --to "-1001234567890"` for channel delivery. For Telegram forum topics, use `-1001234567890:topic:123`; OpenClaw also accepts the Telegram-owned `-1001234567890:123` shorthand. Direct RPC/config callers may pass `delivery.threadId` as a string or number. Slack/Discord/Mattermost targets use explicit prefixes (`channel:<id>`, `user:<id>`). Matrix room IDs are case-sensitive; use the exact room ID or `room:!room:server` form from Matrix.
 
-For announce delivery in the Control UI Automations editor, choose a channel and an explicit **Account ID** under **Advanced** to see configured conversation targets in the **To** field. Selecting a target preserves your chosen account and does not infer a topic. These configured suggestions apply only to the primary announce destination; failure-alert routing remains separate. You can still enter a target that is not in the suggestions.
+For announce delivery in the Control UI Automations editor, choose a channel and an explicit **Account ID** under **Advanced** to see configured conversation targets in the **To** field. Selecting a target preserves your chosen account and does not infer a topic. Changing the agent, delivery mode, channel, account, or recipient clears the previous topic when you save. These configured suggestions apply only to the primary announce destination; failure-alert routing remains separate. You can still enter a target that is not in the suggestions.
 
 On hosts with multiple configured channels, isolated announce jobs created with `automations add|create` or changed with `automations edit` must set `--channel <channel-plugin-id>` unless a provider-prefixed `--to` or a preserved session route selects the channel. Use `--best-effort-deliver` only when unresolved fallback delivery is acceptable; it does not choose a channel, and a delivery failure does not fail the job.
 
@@ -90,6 +90,8 @@ Channel announcements retry transient failures only when no payload may have rea
 When announce delivery uses `channel: "last"` or omits `channel`, a provider-prefixed target such as `telegram:123` can select the channel before the scheduler falls back to session history or a single configured channel. Only prefixes advertised by the loaded plugin are provider selectors. If `delivery.channel` is explicit, the target prefix must name the same provider; `channel: "whatsapp"` with `to: "telegram:123"` is rejected instead of letting WhatsApp interpret the Telegram ID as a phone number. Target-kind and service prefixes (`channel:<id>`, `user:<id>`, `imessage:<handle>`, `sms:<number>`) stay channel-owned target syntax, not provider selectors.
 
 For isolated jobs, chat delivery is shared: if a chat route is available, the agent can use the `message` tool even with `--no-deliver`. If the agent sends to the configured/current target, OpenClaw skips the fallback announce. Otherwise `announce`, `webhook`, and `none` only control what the runner does with the final reply after the agent turn.
+
+A send to the delivery target does not end the job's turn unless it sets `final: true`, so steps after the send, such as updating a state file, still run.
 
 Scheduled `message` actions use the Gateway that owns the live run. Keep the
 job's account, channel, target, and configured delivery route, but do not supply
@@ -107,6 +109,35 @@ including current cancellation and tool-policy withdrawal.
 When an agent creates an isolated reminder from an active chat, OpenClaw stores the preserved live delivery target for the fallback announce route. If it must recover a saved route, it reads the selected agent’s session store—even when the session key is the unqualified `global` alias. Explicit delivery targets still take precedence. Internal session keys may be lowercase; provider delivery targets are not reconstructed from those keys when current chat context is available.
 
 Implicit announce delivery uses configured channel allowlists to validate and reroute stale targets. DM pairing-store approvals are not fallback automation recipients; set `delivery.to` or configure the channel `allowFrom` entry when a scheduled job should proactively send to a DM.
+
+### Owner delivery and direct messages
+
+Set `delivery.target: "owner"` (`--delivery-target owner`) when a job should
+resolve a positively identified owner DM at delivery time. This does not follow
+the last group conversation or guess a recipient when owner identity is
+ambiguous. `delivery.directPolicy: "block"` (`--direct-policy block`) blocks
+direct/DM delivery for that job; the default is `allow`.
+
+A missing owner route does not skip execution. The job still runs, and ordinary
+delivery settlement records the unavailable destination without falling back to
+the last conversation. An explicit DM block remains intentional non-delivery.
+
+```bash
+openclaw automations edit <job-id> \
+  --announce --channel telegram --delivery-target owner
+```
+
+These policies support agent-turn jobs in any supported session, including `main`, and
+non-main command or script jobs with chat delivery. Owner targeting cannot
+be combined with `--to`, `--thread-id`, or `--webhook`. Setting it on an existing
+job clears the previous explicit recipient and thread. Selecting a new explicit
+recipient replaces owner targeting. Use `--clear-delivery-target` or
+`--clear-direct-policy` to remove the stored policy.
+
+Use `payload.includeReasoning: true` (`--include-reasoning`) on an agent-turn
+job only when reasoning returned by the agent should accompany a meaningful result.
+Reasoning alone does not create a notification; omitting this setting keeps ordinary
+final-output delivery.
 
 ### Failure notifications
 
@@ -166,7 +197,7 @@ Script setup refreshes retired tools after a plugin reload before execution begi
 
 A provider rejection of an unsupported model records `model_not_found` in the job state and run history. The failure notice points to `openclaw doctor --fix` for provider-declared retirements, or changing/removing the automation's model override. Known retired automation model routes fail before another inference request. Doctor replaces an override with the provider's declared successor when the agent's model policy allows it. Without a declared successor, it clears the override so the job inherits the agent default. If a pinned override's successor is disallowed, Doctor retains the reference and reports the required policy change. A missing account catalog entry or a discovery outage alone does not authorize a migration.
 
-The scheduler also provides a safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. On the terminal recurring failure, the richer auto-disable notification replaces the regular threshold alert. Repeated schedule-computation failures auto-disable after 3 errors. Terminal one-shot execution failures also record `state.autoDisabled`, without adding a safety notice when a repair request or failure alert owns the notification. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, which `openclaw doctor` reports. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them. Operator cancellations, restart retirements, and manual force-runs of paused `on-exit` jobs do not record an auto-disable.
+The scheduler also provides a safety backstop. A time-based recurring job is auto-disabled after 10 consecutive execution failures; a successful run resets that streak. On the terminal recurring failure, the auto-disable notice is sent directly through the job's failure route: the threshold, cooldown, and any pending repair request do not hold it back, and no repair turn or other model turn is involved, so it still arrives when the failing model provider is the cause. Only a job with no failure route hands the notice to its owning agent as a system event. Repeated schedule-computation failures auto-disable after 3 errors. Terminal one-shot execution failures also record `state.autoDisabled`, without adding a safety notice when a repair request or failure alert owns the notification. The job records `state.autoDisabled.reason` as `consecutive-failures` or `schedule-errors`, which `openclaw doctor` reports. Raw errors stay in automation history. After fixing the cause, run `openclaw automations enable <jobId>`; enabling clears the recorded reason and failure streaks. Because disabled jobs are hidden by the default list, use `openclaw automations list --all` to inspect them. Operator cancellations, restart retirements, and manual force-runs of paused `on-exit` jobs do not record an auto-disable.
 
 ### Output language
 

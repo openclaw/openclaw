@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveConfigPath } from "../../config/paths.js";
 import { withGatewayServiceUpdateAuthority } from "../../daemon/service-update-authority.js";
+import { readGatewayLockProcessNamespace } from "../../infra/gateway-lock-payload.js";
 import { acquireGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import type { GatewayOwnerSupervisor } from "../../infra/gateway-owner-lease.types.js";
 import {
@@ -73,6 +74,7 @@ function acquireServingStateOwner(env: NodeJS.ProcessEnv = process.env) {
     databasePath: resolveOpenClawStateSqlitePath(env),
     payload: {
       pid: process.pid,
+      processNamespace: readGatewayLockProcessNamespace(),
       createdAt: new Date().toISOString(),
       configPath: resolveConfigPath(env),
       role: "gateway",
@@ -203,10 +205,10 @@ it.each([
 
 it("targets the replacement at write admission despite stopped native status", async () => {
   service.readRuntime.mockResolvedValue({ status: "stopped" });
+  const coordinator = acquireServingStateOwner();
   vi.spyOn(process, "platform", "get").mockReturnValue("linux");
   // Synthetic process identities isolate the race; lease storage and intent consumption are real.
   vi.spyOn(processOwners, "readStateLeaseProcessOwnerStatus").mockReturnValue("live");
-  const coordinator = acquireServingStateOwner();
   try {
     publishServingOwner(process.pid + 2);
     let publications = 0;

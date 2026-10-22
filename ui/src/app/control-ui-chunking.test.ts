@@ -8,17 +8,28 @@ import {
 } from "../../config/control-ui-chunking.ts";
 
 describe("Control UI build chunking", () => {
-  it("keeps the optional JSON5 parser outside the eager validation graph", async () => {
+  it("keeps optional parsing and device signing outside the eager graph", async () => {
     const zod = new URL("../../node_modules/zod/index.js", import.meta.url).pathname;
     const json5 = new URL("../../node_modules/json5/dist/index.mjs", import.meta.url).pathname;
+    const gatewayMethods = new URL("../lib/gateway-methods.ts", import.meta.url).pathname;
+    const solid = new URL("../../node_modules/solid-js/dist/solid.js", import.meta.url).pathname;
+    const verdict = new URL(
+      "../../node_modules/@solidjs/signals/dist/prod/core/verdict.js",
+      import.meta.url,
+    ).pathname;
+    const signer = new URL("../../node_modules/@noble/ed25519/index.js", import.meta.url).pathname;
     const entry = "\0config-parser-fixture";
     const sources = new Map([
       [
         entry,
-        `export { validate } from ${JSON.stringify(zod)}; export const warm = () => import(${JSON.stringify(json5)});`,
+        `export { validate } from ${JSON.stringify(zod)}; export { canCall } from ${JSON.stringify(gatewayMethods)}; export { signal } from ${JSON.stringify(solid)}; export { pending } from ${JSON.stringify(verdict)}; export const warm = () => import(${JSON.stringify(json5)}); export const sign = () => import(${JSON.stringify(signer)});`,
       ],
       [zod, "export const validate = () => true;"],
       [json5, "export const parse = () => ({});"],
+      [gatewayMethods, "export const canCall = () => true;"],
+      [solid, "export const signal = () => 1;"],
+      [verdict, "export const pending = () => false;"],
+      [signer, "export const sign = () => 'signature';"],
     ]);
     const result = await build({
       configFile: false,
@@ -59,6 +70,12 @@ describe("Control UI build chunking", () => {
     visit(entryChunk.fileName);
     expect(dependencies.has(parserChunk.fileName)).toBe(false);
     expect(entryChunk.dynamicImports).toContain(parserChunk.fileName);
+    const signerChunk = chunks.find((chunk) => signer in chunk.modules)!;
+    expect(dependencies.has(signerChunk.fileName)).toBe(false);
+    expect(entryChunk.dynamicImports).toContain(signerChunk.fileName);
+    expect(chunks.find((chunk) => solid in chunk.modules)?.fileName).toBe(
+      chunks.find((chunk) => verdict in chunk.modules)?.fileName,
+    );
   });
 
   it("keeps routes and optional code lazy with one shared stylesheet", async () => {
@@ -66,20 +83,31 @@ describe("Control UI build chunking", () => {
     const chat = modulePath("../pages/chat/chat-pane.tsx");
     const newSession = modulePath("../pages/new-session/new-session-page.tsx");
     const optional = modulePath("../components/assistant-panel-content.ts");
-    const sharedStyle = modulePath("../styles/mcp-app-extensions.css");
+    const devices = modulePath("../pages/devices/devices-page.tsx");
+    const sharedUi = modulePath("../components/select-picker-view.tsx");
+    const pluginActions = modulePath("../plugins/control-ui-actions.ts");
+    const pluginLoader = modulePath("../plugins/control-ui-loader.ts");
+    const sharedStyle = modulePath("../styles/select-picker.css");
     const sidebarStyle = modulePath("../styles/sidebar-reorder.css");
     const entry = "\0cold-load-fixture";
     const sources = new Map([
       [
         entry,
-        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)});`,
+        `export const chat = () => import(${JSON.stringify(chat)}); export const newSession = () => import(${JSON.stringify(newSession)}); export const devices = () => import(${JSON.stringify(devices)}); export const plugins = () => import(${JSON.stringify(pluginLoader)});`,
       ],
       [
         chat,
-        `import ${JSON.stringify(sharedStyle)}; export class Chat {} export const openPanel = () => import(${JSON.stringify(optional)});`,
+        `import ${JSON.stringify(sharedStyle)}; import { label } from ${JSON.stringify(sharedUi)}; import { action } from ${JSON.stringify(pluginActions)}; export class Chat { label = action(label); } export const openPanel = () => import(${JSON.stringify(optional)});`,
       ],
-      [newSession, `import ${JSON.stringify(sidebarStyle)}; export class NewSession {}`],
+      [
+        newSession,
+        `import ${JSON.stringify(sidebarStyle)}; import { label } from ${JSON.stringify(sharedUi)}; export class NewSession { label = label; }`,
+      ],
       [optional, 'export const panel = "optional-panel";'],
+      [devices, 'export const page = "devices-page";'],
+      [sharedUi, 'export const label = "shared-ui";'],
+      [pluginActions, "export const action = (label) => label;"],
+      [pluginLoader, `export { action } from ${JSON.stringify(pluginActions)};`],
       [sharedStyle, ".shared-fixture { color: red; }"],
       [sidebarStyle, ".sidebar-fixture { color: blue; }"],
     ]);
@@ -101,7 +129,21 @@ describe("Control UI build chunking", () => {
         rolldownOptions: {
           input: entry,
           preserveEntrySignatures: "allow-extension",
-          output: { codeSplitting: controlUiCodeSplitting, strictExecutionOrder: true },
+          output: {
+            codeSplitting: {
+              ...controlUiCodeSplitting,
+              // A stale capture must not pull a lazy page into the shared boot chunk.
+              groups: controlUiCodeSplitting.groups.map((group) => ({
+                ...group,
+                // Exercise grouping below the production chunk-size floor.
+                minSize: 0,
+                ...(group.name === "control-ui-boot-shared"
+                  ? { test: (id: string) => id === devices || group.test(id) }
+                  : {}),
+              })),
+            },
+            strictExecutionOrder: true,
+          },
         },
       },
     });
@@ -128,6 +170,17 @@ describe("Control UI build chunking", () => {
     };
     expect(staticImports(chatChunk.fileName)).not.toContain(newSessionChunk.fileName);
     expect(staticImports(newSessionChunk.fileName)).not.toContain(chatChunk.fileName);
+    const pluginChunk = chunks.find((chunk) => pluginLoader in chunk.modules)!;
+    const actionChunk = chunks.find((chunk) => pluginActions in chunk.modules)!;
+    const sharedChunk = chunks.find((chunk) => sharedUi in chunk.modules)!;
+    expect(actionChunk.fileName).toBe(sharedChunk.fileName);
+    expect(staticImports(pluginChunk.fileName)).toContain(actionChunk.fileName);
+    expect(staticImports(pluginChunk.fileName)).not.toContain(chatChunk.fileName);
+    const entryChunk = chunks.find((chunk) => chunk.isEntry)!;
+    expect(staticImports(entryChunk.fileName)).not.toContain(actionChunk.fileName);
+    const devicesChunk = chunks.find((chunk) => devices in chunk.modules)!;
+    expect(staticImports(chatChunk.fileName)).not.toContain(devicesChunk.fileName);
+    expect(staticImports(newSessionChunk.fileName)).not.toContain(devicesChunk.fileName);
     const deferred = chunks.find((chunk) => optional in chunk.modules)!;
     expect(deferred).toBeDefined();
     expect(chunks.filter((chunk) => chunk.imports.includes(deferred.fileName))).toHaveLength(0);
@@ -140,8 +193,10 @@ describe("Control UI build chunking", () => {
       maxSize: 1024 * 1024,
     });
     for (const [id, expected] of [
-      ["/repo/ui/node_modules/highlight.js/lib/core.js", "markdown-runtime"],
-      [String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`, "markdown-runtime"],
+      ["/repo/ui/node_modules/highlight.js/lib/core.js", "markdown-highlight-runtime"],
+      ["/repo/ui/node_modules/markdown-it/dist/markdown-it.mjs", undefined],
+      ["/repo/ui/node_modules/entities/dist/esm/index.js", undefined],
+      [String.raw`C:\repo\ui\node_modules\highlight.js\lib\core.js`, "markdown-highlight-runtime"],
       ["/tmp/openclaw-pnpm-node-modules/dompurify/dist/purify.es.mjs", "markdown-runtime"],
       ["/tmp/openclaw-pnpm-node-modules/zod/v4/core/schemas.js", "config-runtime"],
       ["/tmp/openclaw-pnpm-node-modules/json5/dist/index.js", "json5-runtime"],
@@ -149,8 +204,8 @@ describe("Control UI build chunking", () => {
         "/tmp/openclaw-pnpm-node-modules/libphonenumber-js/max/exports/parsePhoneNumber.js",
         "phone-runtime",
       ],
-      ["/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js", "gateway-runtime"],
-      ["/repo/ui/src/lib/gateway-methods.ts", "gateway-runtime"],
+      ["/tmp/openclaw-pnpm-node-modules/@noble/ed25519/index.js", "device-signing-runtime"],
+      ["/repo/ui/src/lib/gateway-methods.ts", undefined],
       [
         new URL("../components/sidebar-update-card.tsx", import.meta.url).pathname,
         "sidebar-update-runtime",
@@ -159,6 +214,7 @@ describe("Control UI build chunking", () => {
         new URL("../styles/sidebar-update-card.css", import.meta.url).pathname,
         "sidebar-update-runtime",
       ],
+      [new URL("../pages/chat/route-entry.ts", import.meta.url).pathname, "chat-route-entry"],
       [new URL("../pages/cron/cron-page.tsx", import.meta.url).pathname, "cron-page"],
       [new URL("../pages/plugins/plugins-page.tsx", import.meta.url).pathname, "plugins-page"],
       [new URL("../components/markdown-parser.ts", import.meta.url).pathname, "markdown-runtime"],
@@ -210,7 +266,7 @@ describe("Control UI build chunking", () => {
     expect(bootGroup.test(`${repoRoot}/ui/src/components/app-sidebar-session-narration.ts`)).toBe(
       true,
     );
-    expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.ts`)).toBe(false);
+    expect(bootGroup.test(`${repoRoot}/ui/src/pages/chat/chat-page.tsx`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/cron/cron-page.tsx`)).toBe(false);
     expect(bootGroup.test(`${repoRoot}/ui/src/pages/plugins/plugins-page.tsx`)).toBe(false);
     // Fetched shared chunks once co-located the chat view with modules New Session needs.

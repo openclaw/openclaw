@@ -2,16 +2,17 @@ import { onCleanup } from "solid-js";
 import { comparePluginCatalogEntries } from "../../../../packages/plugin-package-contract/src/catalog-order.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { createPageRequest, type PageReadResult } from "../../lib/page-request.ts";
 import type {
   PluginDiscoveryCategory,
   PluginDiscoveryEntry,
   PluginDiscoveryResult,
 } from "../../lib/plugins/index.ts";
-import { createPluginRequest } from "./plugin-request.ts";
 
 export type PluginDiscoveryIntent = "all" | "bundled" | "trending" | "official" | "featured";
 export type PluginDiscoveryState = {
   result: PluginDiscoveryResult | null;
+  readonly hasCurrentResult: boolean;
   error: string | null;
   remoteError: string | null;
   categories: readonly PluginDiscoveryCategory[];
@@ -22,9 +23,11 @@ export type PluginDiscoveryState = {
   intent: PluginDiscoveryIntent;
   category: string | null;
   query: string;
-  readonly loading: boolean;
-  readonly categoriesLoading: boolean;
-  readonly loadingMore: boolean;
+  readonly reads: {
+    browse: Promise<PageReadResult> | null;
+    categories: Promise<PageReadResult> | null;
+    more: Promise<PageReadResult> | null;
+  };
 };
 
 const CATALOG_PAGE_SIZE = 100;
@@ -72,9 +75,20 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
   let categoriesReady = false;
   let categoriesStarted = false;
   let committedQuery = "";
-  let searchTimer: ReturnType<typeof setTimeout> | null = null;
+  let search: {
+    timer: ReturnType<typeof setTimeout>;
+    read: PromiseWithResolvers<PageReadResult>;
+  } | null = null;
   const state: PluginDiscoveryState = {
     result: null,
+    get hasCurrentResult() {
+      return (
+        state.result !== null &&
+        resultSelection?.intent === state.intent &&
+        resultSelection.category === state.category &&
+        resultSelection.query === state.query.trim()
+      );
+    },
     error: null,
     remoteError: null,
     categories: [],
@@ -85,29 +99,15 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
     intent: "all",
     category: null,
     query: "",
-    get loading(): boolean {
-      // Keep keyed cards and their open controls during a same-selection refresh.
-      // New filters must wait for their own result instead of showing the old selection.
-      return (
-        gateway.isConnected() &&
-        (state.query.trim() !== committedQuery ||
-          (browseTask.pending &&
-            (!state.result ||
-              resultSelection?.intent !== state.intent ||
-              resultSelection.category !== state.category ||
-              resultSelection.query !== committedQuery)))
-      );
-    },
-    get categoriesLoading(): boolean {
-      return (
-        gateway.isConnected() && categoriesStarted && !categoriesReady && categoriesTask.pending
-      );
-    },
-    get loadingMore(): boolean {
-      return gateway.isConnected() && loadMoreTask.pending;
+    get reads() {
+      return {
+        browse: search?.read.promise ?? browseTask.read,
+        categories: categoriesTask.read,
+        more: loadMoreTask.read,
+      };
     },
   };
-  const categoriesTask = createPluginRequest(onChange, {
+  const categoriesTask = createPageRequest(onChange, {
     task: ([client]: readonly [GatewayBrowserClient], { signal }) =>
       client.request<{ categories: PluginDiscoveryCategory[] }>(
         "plugins.catalog.categories",
@@ -123,7 +123,7 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
       state.categoriesError = formatUiError(error);
     },
   });
-  const browseTask = createPluginRequest(onChange, {
+  const browseTask = createPageRequest(onChange, {
     task: (
       [client, intent, category, query, manual]: readonly [...CatalogPageArgs, manual: boolean],
       { signal },
@@ -133,7 +133,7 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
       state.error = formatUiError(error);
     },
   });
-  const loadMoreTask = createPluginRequest(onChange, {
+  const loadMoreTask = createPageRequest(onChange, {
     task: (
       [client, intent, category, query, cursor]: readonly [...CatalogPageArgs, cursor: string],
       { signal },
@@ -275,8 +275,11 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
   }
 
   function cancelSearch() {
-    clearTimeout(searchTimer ?? undefined);
-    searchTimer = null;
+    if (search) {
+      clearTimeout(search.timer);
+      search.read.resolve(null);
+      search = null;
+    }
   }
 
   async function refresh(): Promise<void> {
@@ -335,7 +338,6 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
       state.intent = "all";
       state.category = null;
     }
-    onChange();
     cancelSearch();
     // Canceling a debounce can leave reset filters whose results still need loading.
     if (
@@ -344,23 +346,34 @@ export function createPluginDiscovery(gateway: PluginDiscoveryGateway, onChange:
       (nextQuery === previousQuery ||
         (resultSelection?.intent === state.intent && resultSelection.category === state.category))
     ) {
+      onChange();
       return;
     }
     if (!nextQuery) {
       committedQuery = "";
       void loadSelection();
+      onChange();
       return;
     }
-    searchTimer = setTimeout(() => {
-      searchTimer = null;
+    const read = Promise.withResolvers<PageReadResult>();
+    const timer = setTimeout(() => {
+      search = null;
       // Only a newly settled query records a manual search.
       const manual = nextQuery !== committedQuery && nextQuery.length >= 2;
       committedQuery = nextQuery;
       void loadSelection(manual);
+      read.resolve(browseTask.read);
     }, 250);
+    search = { timer, read };
+    onChange();
   }
 
   onCleanup(cancelSearch);
+  onCleanup(() => {
+    categoriesTask.cancel();
+    browseTask.cancel();
+    loadMoreTask.cancel();
+  });
   return {
     read: (): Readonly<typeof state> => state,
     invalidate,

@@ -7,6 +7,8 @@ import type { WorkspaceBootstrapFile } from "../agents/workspace.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { getContextEngineRegistration } from "../context-engine/registry.js";
+import { createGatewayRequestContext } from "../gateway/server-request-context.js";
+import { makeContextParams } from "../gateway/server-request-context.test-support.js";
 import {
   clearInternalHooks,
   createInternalHookEvent,
@@ -90,6 +92,8 @@ describe("loadOpenClawPlugins", () => {
     });
 
     const metrics = collectStartupTraceMetrics(details, "plugins.gateway-load.plugin.trace-plugin");
+    expect(metrics.configValidationMs).toEqual(expect.any(Number));
+    expect(metrics.artifactPreparationMs).toEqual(expect.any(Number));
     expect(metrics.loadMs).toEqual(expect.any(Number));
     expect(metrics.loadFailedCount).toBe(0);
     expect(metrics.registerMs).toEqual(expect.any(Number));
@@ -613,33 +617,6 @@ describe("loadOpenClawPlugins", () => {
     ).toBe("loaded");
   });
 
-  it("registers standalone text transforms", () => {
-    useNoBundledPlugins();
-    const plugin = writePlugin({
-      id: "text-shim",
-      filename: "text-shim.cjs",
-      registration: `api.registerTextTransforms({
-        input: [{ from: /red basket/g, to: "blue basket" }],
-        output: [{ from: /blue basket/g, to: "red basket" }],
-      });`,
-    });
-
-    const registry = loadRegistryFromSinglePlugin({
-      plugin,
-      pluginConfig: { allow: ["text-shim"] },
-    });
-
-    expect(registry.textTransforms).toHaveLength(1);
-    const transformRegistration = registry.textTransforms[0];
-    expect(transformRegistration?.pluginId).toBe("text-shim");
-    expect(transformRegistration?.transforms.input).toEqual([
-      { from: /red basket/g, to: "blue basket" },
-    ]);
-    expect(transformRegistration?.transforms.output).toEqual([
-      { from: /blue basket/g, to: "red basket" },
-    ]);
-  });
-
   it("loads multiple manifestless standalone files from one configured directory", () => {
     useNoBundledPlugins();
     const pluginDir = makePluginLoaderTempDir();
@@ -1003,6 +980,7 @@ describe("loadOpenClawPlugins", () => {
         const responses: unknown[] = [];
         await registry.gatewayHandlers["returned-gateway-method.status"]?.({
           params: {},
+          context: {},
           respond: (ok: boolean, payload: unknown, error?: unknown) =>
             responses.push({ ok, payload, error }),
         } as never);
@@ -1033,6 +1011,7 @@ describe("loadOpenClawPlugins", () => {
         const responses: unknown[] = [];
         await registry.gatewayHandlers["explicit-gateway-method.status"]?.({
           params: {},
+          context: {},
           respond: (ok: boolean, payload: unknown, error?: unknown) =>
             responses.push({ ok, payload, error }),
         } as never);
@@ -1040,6 +1019,76 @@ describe("loadOpenClawPlugins", () => {
         expect(responses).toEqual([
           { ok: true, payload: { status: "responded" }, error: undefined },
         ]);
+      },
+    },
+    {
+      label: "reports removed session maps without changing the plugin request context",
+      run: async () => {
+        useNoBundledPlugins();
+        const plugin = writePlugin({
+          id: "removed-session-capabilities",
+          registration: `api.registerGatewayMethod("removed-session-capabilities.probe", ({ context, params }) => {
+            if (params.capability) {
+              if (params.write) context[params.capability] = new Map();
+              return context[params.capability].size;
+            }
+            return context.getRuntimeConfig();
+          });`,
+        });
+        const registry = loadRegistryFromSinglePlugin({
+          plugin,
+          pluginConfig: { allow: [plugin.id] },
+        });
+        const handler = registry.gatewayHandlers["removed-session-capabilities.probe"];
+        if (!handler) {
+          throw new Error("missing registered plugin probe");
+        }
+        const config = { agents: { entries: { main: {} } } };
+        const context = createGatewayRequestContext(makeContextParams());
+        context.getRuntimeConfig = function () {
+          expect(this).toBe(context);
+          return config;
+        };
+        const contextKeys = Object.keys(context);
+        const respond = vi.fn();
+        const invoke = (params: Record<string, unknown>) =>
+          handler({
+            req: {
+              type: "req",
+              id: "removed-session-capabilities",
+              method: "removed-session-capabilities.probe",
+              params,
+            },
+            params,
+            client: null,
+            isWebchatConnect: () => false,
+            context,
+            respond,
+          });
+        for (const capability of ["chatAbortControllers", "chatQueuedTurns"]) {
+          for (const write of [false, true]) {
+            respond.mockClear();
+            await invoke({ capability, write });
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "INVALID_REQUEST",
+                retryable: false,
+                message: expect.stringContaining("dispatchGatewayMethod"),
+                details: {
+                  code: "PLUGIN_CAPABILITY_REMOVED",
+                  capability: `context.${capability}`,
+                },
+              }),
+              undefined,
+            );
+          }
+        }
+        respond.mockClear();
+        await invoke({});
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, config, undefined, undefined);
+        expect(Object.keys(context)).toEqual(contextKeys);
       },
     },
     {

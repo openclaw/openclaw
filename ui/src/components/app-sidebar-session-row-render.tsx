@@ -1,12 +1,15 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, For, Show, untrack } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { writeSessionDragData } from "../lib/sessions/drag.ts";
 import { canArchiveSessionRow, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import { renderHoverMarquee } from "../lib/solid/hover-marquee.tsx";
-import type { CatalogBackingSessionDisplay } from "./app-sidebar-session-catalogs.ts";
+import type {
+  CatalogBackingSessionDisplay,
+  CatalogRowControls,
+} from "./app-sidebar-session-catalogs.ts";
 import { renderSidebarSessionIndicators } from "./app-sidebar-session-indicators.tsx";
 import type { SessionListHost } from "./app-sidebar-session-render-types.ts";
 import { visibleSessionChildren } from "./app-sidebar-session-types.ts";
@@ -15,7 +18,6 @@ import { resolveSidebarSessionRowSubtitle } from "./session-row-subtitle.ts";
 import { Icon } from "./solid/icon.tsx";
 import { SidebarSessionSubtitle } from "./solid/session-presentation.tsx";
 import { SessionTitlePlaceholder } from "./solid/session-title-placeholder.tsx";
-import "./elapsed-time.tsx";
 import "./tooltip.ts";
 
 /** Compose independently owned session state and context indicators. */
@@ -83,28 +85,20 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   const subtitle = createMemo(() => subtitleState().subtitle),
     narration = createMemo(() => subtitleState().narration),
     toolName = createMemo(() => subtitleState().toolName);
-  const indicators = renderSidebarSessionIndicators(untrack(host), session, display, icon);
-  const running = createMemo(() => indicators.running),
-    stateId = createMemo(() => indicators.stateId),
-    metaId = createMemo(() => indicators.metaId),
-    pullRequest = createMemo(() => indicators.pullRequest),
-    persistentIndicator = createMemo(() => indicators.persistentIndicator),
-    childrenExpanded = createMemo(() => indicators.childrenExpanded);
+  const indicators = renderSidebarSessionIndicators(host, session, display, icon);
+  const { running, stateId, metaId, pullRequest, childrenExpanded } = indicators;
+  const controls: CatalogRowControls = {};
   const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (event) =>
-    handleContextMenuEvent(
-      event,
-      event.currentTarget.querySelector<HTMLElement>(".sidebar-recent-session__link"),
-      (trigger, x, y) => {
-        const catalogMenu = display()?.catalogMenu;
-        if (catalogMenu) {
-          host().sidebarMenus.catalogMenu.open(catalogMenu, x, y, trigger ?? undefined);
-          return;
-        }
-        if (!host().sidebarSnapshot) {
-          host().sidebarMenus.openSessionMenu(session(), x, y, trigger);
-        }
-      },
-    );
+    handleContextMenuEvent(event, controls.link ?? null, (trigger, x, y) => {
+      const catalogMenu = display()?.catalogMenu;
+      if (catalogMenu) {
+        host().sidebarMenus.catalogMenu.open(catalogMenu, x, y, trigger ?? undefined);
+        return;
+      }
+      if (!host().sidebarSnapshot) {
+        host().sidebarMenus.openSessionMenu(session(), x, y, trigger);
+      }
+    });
   const pinLabel = createMemo(() => {
     return t(personallyPinned() ? "sessionsView.unpinSession" : "sessionsView.pinSession");
   });
@@ -117,7 +111,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     const hostValue = host();
     const sessionValue = session();
     return displayValue?.catalogMenu
-      ? hostValue.sidebarMenus.catalogMenu.isOpenFor(displayValue.catalogMenu.key)
+      ? hostValue.sidebarMenus.catalogMenuView.isOpenFor(displayValue.catalogMenu.key)
       : hostValue.sidebarMenus.sessionMenu?.session.key === sessionValue.key;
   });
   const color = createMemo(() => normalizeSessionColorValue(session().color ?? ""));
@@ -160,15 +154,14 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     ),
   );
   // Always reserve the lead so every title shares the section-label text line.
-  let rowElement: HTMLDivElement | undefined;
-  createEffect(
-    () => display()?.rowRef,
-    (callback) => untrack(() => callback?.(rowElement)),
-  );
+  let rowElement: HTMLDivElement;
+  let previousFocus: Element | null;
+  onSettled(() => display()?.rowRef?.(rowElement, controls, previousFocus));
   const row = (
     <div
       ref={(element) => {
         rowElement = element;
+        previousFocus = document.activeElement;
       }}
       class={[
         "sidebar-recent-session session-row-host",
@@ -216,6 +209,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
       onKeyDown={openMenuFromEvent}
     >
       <a
+        ref={(element) => (controls.link = element)}
         href={host().sidebarSessionHref(session())}
         class="sidebar-recent-session__link"
         draggable="false"
@@ -223,7 +217,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
         aria-describedby={[stateId(), metaId()].filter(Boolean).join(" ") || undefined}
         onClick={(event: MouseEvent) => host().handleSessionRowClick(event, session())}
       >
-        {persistentIndicator()}
+        {indicators.persistentIndicator}
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__title-row">
             <Show when={session().titlePending} fallback={marqueeLabel()}>
@@ -265,6 +259,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
             },
           ]}
           type="button"
+          ref={(element) => (controls.children = element)}
           data-child-session-toggle={session().key}
           aria-expanded={childrenExpanded() ? "true" : "false"}
           aria-label={t(
@@ -298,6 +293,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           <Show when={pinnable()}>
             <button
               class="session-action session-action--pin"
+              ref={(element) => (controls.pin = element)}
               data-sidebar-session-pin="true"
               type="button"
               title={pinLabel()}
@@ -309,6 +305,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           </Show>
           <button
             class="session-action"
+            ref={(element) => (controls.archive = element)}
             data-sidebar-session-archive="true"
             type="button"
             title={(() => {
@@ -338,6 +335,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
           </button>
           <button
             class="session-action session-action--touch-menu"
+            ref={(element) => (controls.menu = element)}
             data-sidebar-session-menu="true"
             disabled={Boolean(host().sidebarSnapshot)}
             type="button"
@@ -358,8 +356,49 @@ function renderRecentSessionRow(params: RecentSessionParams) {
   );
   return row;
 }
-export function renderChildSessionLoadError(host: SessionListHost, parentKey: string) {
-  const error = createMemo(() => host.sessionData.childSessionErrorsByParent.get(parentKey));
+type PendingSessionCreate = NonNullable<ReturnType<SessionListHost["pendingSessionCreate"]>>;
+
+/** The unadmitted create renders in the slot its admitted row will take: selected,
+ *  actionless, and aligned with real rows. A create for a rendered custom group
+ *  leads that group's list; any other create leads the session list. Only the
+ *  native session list has that slot: the agent-only roster shows no row for a
+ *  new session, so a handoff row there would flash under the agent and vanish on
+ *  admission. */
+export function renderPendingSessionCreateRow(
+  pending: () => PendingSessionCreate | undefined,
+  listItem = false,
+) {
+  return (
+    <Show when={pending()}>
+      {(value) => {
+        const row = (
+          <div class="sidebar-recent-session session-row-host sidebar-recent-session--single-line sidebar-recent-session--active sidebar-recent-session--creating">
+            <div class="sidebar-recent-session__link" aria-current="page" aria-busy="true">
+              <span class="sidebar-session-indicator" aria-hidden="true" />
+              <span class="sidebar-recent-session__text">
+                <span class="sidebar-recent-session__title-row">
+                  <Show when={value().displayName} fallback={<SessionTitlePlaceholder />}>
+                    {(name) => <span class="sidebar-recent-session__name">{name()}</span>}
+                  </Show>
+                </span>
+              </span>
+            </div>
+          </div>
+        );
+        // Inside a section list it takes the tree wrapper its admitted row will have.
+        return listItem ? (
+          <div class="sidebar-session-tree" role="listitem">
+            {row}
+          </div>
+        ) : (
+          row
+        );
+      }}
+    </Show>
+  );
+}
+export function renderChildSessionLoadError(host: () => SessionListHost, parentKey: string) {
+  const error = createMemo(() => host().sessionData.childSessionErrorsByParent.get(parentKey));
   return (
     <Show when={error()}>
       <div
@@ -372,7 +411,7 @@ export function renderChildSessionLoadError(host: SessionListHost, parentKey: st
           class="sidebar-session-tree__show-more"
           type="button"
           data-retry-child-sessions={parentKey}
-          onClick={() => host.sessionData.retryChildSessions(parentKey)}
+          onClick={() => host().sessionData.retryChildSessions(parentKey)}
         >
           {t("common.retry")}
         </button>
@@ -436,7 +475,7 @@ export function renderSessionTree(params: {
             </button>
           ) : undefined}
           <For each={session().childLoadParentKeys ?? [session().key]}>
-            {(key) => renderChildSessionLoadError(host(), key)}
+            {(key) => renderChildSessionLoadError(host, key)}
           </For>
           {session().loadingChildren && session().children.length === 0 ? (
             <span
@@ -451,6 +490,5 @@ export function renderSessionTree(params: {
     </div>
   );
 }
-export { renderSidebarSessionIndicators };
 const RecentSession = renderRecentSession;
 const SessionTree = renderSessionTree;

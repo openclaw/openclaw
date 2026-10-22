@@ -1,3 +1,4 @@
+import type { GatewayProtocolRequestOptions } from "@openclaw/gateway-client/browser";
 import type {
   SessionsDeleteResult,
   SessionsSetInvolvementParams,
@@ -19,7 +20,7 @@ import type {
   SessionListOptions,
   SessionRequestClient,
   SessionResetOptions,
-} from "./session-capability.ts";
+} from "./session-types.ts";
 
 /** Personal list choices share one RPC contract across all session menus. */
 export async function requestSessionInvolvement(
@@ -127,7 +128,7 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
   const activeMinutes =
     options.archivedFilter === "archived" || options.archivedFilter === "all"
       ? 0
-      : typeof options.activeMinutes === "number" && options.activeMinutes > 0
+      : options.activeMinutes !== undefined && options.activeMinutes > 0
         ? Math.floor(options.activeMinutes)
         : 0;
   if (activeMinutes > 0) {
@@ -142,7 +143,7 @@ export function buildSessionListParams(options: SessionListOptions = {}): Sessio
   if (options.boardFace) {
     params.boardFace = options.boardFace;
   }
-  if (typeof options.offset === "number" && options.offset > 0) {
+  if (options.offset !== undefined && options.offset > 0) {
     params.offset = Math.floor(options.offset);
   }
   return params;
@@ -153,7 +154,7 @@ export function normalizeManagedSessionListQuery(
 ): Readonly<SessionsListParams & { limit: number; pageSize?: number }> {
   const { offset: _offset, append: _append, ...queryOptions } = options;
   const limit =
-    typeof options.limit === "number" && options.limit > 0
+    options.limit !== undefined && options.limit > 0
       ? Math.floor(options.limit)
       : DEFAULT_SESSION_LIST_QUERY.limit;
   return Object.freeze({
@@ -178,7 +179,7 @@ export async function requestSessionList(
 
 // Keep raw wire rows separate from locally reconciled/optimistic presentation.
 // Gateway publication identities retire them; eviction or a new client simply reads full rows.
-const sidebarWireRows = new WeakMap<
+const sessionWireRows = new WeakMap<
   SessionRequestClient,
   Map<string, { revision: string; sessions: SessionsListResult["sessions"] }>
 >();
@@ -187,17 +188,26 @@ export async function requestSessionListParams(
   client: SessionRequestClient,
   query: Readonly<SessionsListParams & { pageSize?: number }>,
   isCurrent: () => boolean,
+  options?: GatewayProtocolRequestOptions,
 ): Promise<SessionsListResult | null> {
   const { pageSize, ...params } = query;
   const read = async (request: SessionsListParams) => {
     const { source: _source, ...membership } = request;
     const key = JSON.stringify(membership);
-    const cache = sidebarWireRows.get(client);
-    const previous = request.rowMode === "sidebar" ? cache?.get(key) : undefined;
-    const result = await client.request<SessionsListResult | undefined>("sessions.list", {
-      ...request,
-      ...(previous ? { ifRowsRevision: `${SESSION_ROWS_DELTA_PREFIX}${previous.revision}` } : {}),
-    });
+    const cache = sessionWireRows.get(client);
+    const conditional = request.rowMode !== undefined;
+    const previous = conditional ? cache?.get(key) : undefined;
+    const result = await client.request<SessionsListResult | undefined>(
+      "sessions.list",
+      {
+        ...request,
+        ...(previous ? { ifRowsRevision: `${SESSION_ROWS_DELTA_PREFIX}${previous.revision}` } : {}),
+        ...(!previous && conditional && request.rowMode !== "sidebar"
+          ? { ifRowsRevision: "" }
+          : {}),
+      },
+      ...(options ? ([options] as const) : []),
+    );
     if (!result || !isCurrent()) {
       return null;
     }
@@ -222,14 +232,14 @@ export async function requestSessionListParams(
         return rows[index]!;
       });
     }
-    if (request.rowMode === "sidebar" && result.rowsRevision) {
+    if (conditional && result.rowsRevision) {
       const retained = cache ?? new Map();
       retained.delete(key);
       retained.set(key, { revision: result.rowsRevision, sessions });
       if (retained.size > 16) {
         retained.delete(retained.keys().next().value!);
       }
-      sidebarWireRows.set(client, retained);
+      sessionWireRows.set(client, retained);
     }
     return { ...list, sessions };
   };

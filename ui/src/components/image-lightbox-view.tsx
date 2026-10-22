@@ -1,11 +1,14 @@
 import type { JSX } from "@solidjs/web";
-import { Show, createSignal, onCleanup } from "solid-js";
+import { Errored, Loading, Show, action, createMemo, createOptimistic } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { showToast } from "../lib/toast.ts";
 import type { ImageLightboxItem } from "./image-lightbox.types.ts";
 import { Icon } from "./solid/icon.tsx";
 
+type FocusableRef = () => (element: HTMLElement) => void;
+
 export function LightboxAction(props: {
+  focusableRef: FocusableRef;
   class: string;
   label: string;
   disabled: boolean;
@@ -14,6 +17,7 @@ export function LightboxAction(props: {
 }) {
   return (
     <button
+      ref={props.focusableRef()}
       class={["action", props.class]}
       type="button"
       aria-label={t(props.label)}
@@ -26,97 +30,101 @@ export function LightboxAction(props: {
 }
 
 export function LightboxChrome(props: {
+  focusableRef: FocusableRef;
   title: string;
-  originalUrl: string;
+  originalUrl: Promise<string>;
   externalImageUrl: string;
-  resolvingOriginal: boolean;
+  hasGallery: boolean;
   isVideo: boolean;
   onDownloadImage: () => Promise<void>;
   onClose: (event?: Event) => void;
   children: JSX.Element;
 }) {
+  const originalUrl = createMemo(() => props.originalUrl);
   return (
     <section class="lightbox">
-      <LightboxHeader title={props.title} isVideo={props.isVideo} onClose={props.onClose} />
+      <header class="header">
+        <strong class="title">{props.title}</strong>
+        <div class="actions">
+          <button
+            ref={props.focusableRef()}
+            class="action close"
+            type="button"
+            autofocus
+            aria-label={
+              props.isVideo
+                ? t("chat.mediaPlayer.closeVideoPreview")
+                : t("chat.imageLightbox.close")
+            }
+            onClick={() => props.onClose()}
+          >
+            <Icon name="x" />
+          </button>
+        </div>
+      </header>
       {props.children}
-      <LightboxFooter
-        originalUrl={props.originalUrl}
-        externalImageUrl={props.externalImageUrl}
-        resolvingOriginal={props.resolvingOriginal}
-        isVideo={props.isVideo}
-        onDownloadImage={props.onDownloadImage}
-      />
+      <Show
+        when={props.isVideo}
+        fallback={
+          <openclaw-modal-actions class="lightbox-footer">
+            <LightboxImageDownload
+              focusableRef={props.focusableRef}
+              onDownload={props.onDownloadImage}
+            />
+            <Show when={props.externalImageUrl}>
+              <a
+                ref={props.focusableRef()}
+                class="action external-image"
+                href={props.externalImageUrl}
+                target="_blank"
+                rel="noreferrer"
+                aria-label={t("chat.imageLightbox.openOriginal")}
+              >
+                <Icon name="externalLink" />
+              </a>
+            </Show>
+          </openclaw-modal-actions>
+        }
+      >
+        {/* A failed original link must not hide the selected video or its controls. */}
+        <Errored fallback={null}>
+          <Loading
+            on={props.originalUrl}
+            fallback={
+              <Show when={props.hasGallery}>
+                <LightboxVideoOriginal focusableRef={props.focusableRef} url="" />
+              </Show>
+            }
+          >
+            <Show when={originalUrl()}>
+              {(url) => <LightboxVideoOriginal focusableRef={props.focusableRef} url={url()} />}
+            </Show>
+          </Loading>
+        </Errored>
+      </Show>
     </section>
   );
 }
 
-function LightboxHeader(props: {
-  title: string;
-  isVideo: boolean;
-  onClose: (event?: Event) => void;
-}) {
+function LightboxVideoOriginal(props: { focusableRef: FocusableRef; url: string }) {
   return (
-    <header class="header">
-      <strong class="title">{props.title}</strong>
-      <div class="actions">
-        <button
-          class="action close"
-          type="button"
-          autofocus
-          aria-label={
-            props.isVideo ? t("chat.mediaPlayer.closeVideoPreview") : t("chat.imageLightbox.close")
-          }
-          onClick={() => props.onClose()}
-        >
-          <Icon name="x" />
-        </button>
-      </div>
-    </header>
-  );
-}
-
-function LightboxFooter(props: {
-  originalUrl: string;
-  externalImageUrl: string;
-  resolvingOriginal: boolean;
-  isVideo: boolean;
-  onDownloadImage: () => Promise<void>;
-}) {
-  return (
-    <Show when={!props.isVideo || props.originalUrl || props.resolvingOriginal}>
-      <openclaw-modal-actions class="lightbox-footer">
-        <Show
-          when={props.isVideo}
-          fallback={<LightboxImageDownload onDownload={props.onDownloadImage} />}
-        >
-          <a
-            class="action open-original"
-            href={props.originalUrl || undefined}
-            aria-disabled={props.originalUrl ? "false" : "true"}
-            tabindex={props.originalUrl ? 0 : -1}
-            target="_blank"
-            rel="noreferrer"
-            aria-label={t("chat.imageLightbox.openOriginal")}
-          >
-            <span class="open-original-label">{t("chat.imageLightbox.openOriginal")}</span>
-            <span class="open-original-icon" aria-hidden="true">
-              <Icon name="externalLink" />
-            </span>
-          </a>
-        </Show>
-        <Show when={!props.isVideo && props.externalImageUrl}>
-          <a
-            class="action external-image"
-            href={props.externalImageUrl}
-            target="_blank"
-            rel="noreferrer"
-            aria-label={t("chat.imageLightbox.openOriginal")}
-          >
-            <Icon name="externalLink" />
-          </a>
-        </Show>
-      </openclaw-modal-actions>
-    </Show>
+    <openclaw-modal-actions class="lightbox-footer">
+      <a
+        ref={props.focusableRef()}
+        class="action open-original"
+        href={props.url || undefined}
+        aria-disabled={props.url ? "false" : "true"}
+        tabindex={props.url ? 0 : -1}
+        target="_blank"
+        rel="noreferrer"
+        aria-label={t("chat.imageLightbox.openOriginal")}
+      >
+        <span class="open-original-label">{t("chat.imageLightbox.openOriginal")}</span>
+        <span class="open-original-icon" aria-hidden="true">
+          <Icon name="externalLink" />
+        </span>
+      </a>
+    </openclaw-modal-actions>
   );
 }
 
@@ -133,61 +141,34 @@ export function lightboxImageStyle(image: ImageLightboxItem | undefined) {
     : undefined;
 }
 
-export function LightboxImageQualityStatus(props: {
-  upgrading: boolean;
-  failed: boolean;
-  onRetry: () => void;
+function LightboxImageDownload(props: {
+  focusableRef: FocusableRef;
+  onDownload: () => Promise<void>;
 }) {
-  return (
-    <Show when={props.upgrading || props.failed}>
-      <div class="image-quality-status" role="status" aria-live="polite">
-        <span>
-          {props.upgrading
-            ? t("chat.imageLightbox.loadingDetail")
-            : t("chat.imageLightbox.detailFailed")}
-        </span>
-        <Show when={props.failed}>
-          <button type="button" class="action" onClick={() => props.onRetry()}>
-            {t("common.retry")}
-          </button>
-        </Show>
-      </div>
-    </Show>
-  );
-}
-
-function LightboxImageDownload(props: { onDownload: () => Promise<void> }) {
-  const [downloading, setDownloading] = createSignal(false, { ownedWrite: true });
-  let active = true;
-  onCleanup(() => {
-    active = false;
-  });
-  const download = async () => {
-    if (downloading()) {
-      return;
-    }
+  const [downloading, setDownloading] = createOptimistic(false);
+  const download = action(function* (button: HTMLButtonElement) {
     setDownloading(true);
     try {
-      await props.onDownload();
+      yield props.onDownload();
     } catch {
-      if (active) {
+      // An action can outlive the view, including a reconnect of its host.
+      if (button.isConnected) {
         showToast({ message: t("chat.imageLightbox.downloadFailed") });
       }
-    } finally {
-      if (active) {
-        setDownloading(false);
-      }
     }
-  };
+  });
   return (
     <button
+      ref={props.focusableRef()}
       class="action download-image"
       type="button"
       disabled={downloading()}
       aria-busy={downloading() ? "true" : undefined}
       aria-label={t("chat.imageLightbox.download")}
-      onClick={() => {
-        void download();
+      onClick={(event) => {
+        if (!downloading()) {
+          void download(event.currentTarget);
+        }
       }}
     >
       <Icon name="download" />

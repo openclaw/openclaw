@@ -25,7 +25,8 @@ it("refreshes same-generation model sizes after a native rewrite and append", as
     for (let index = 0; index < 12; index++) {
       source.appendMessage(makeUserMessage(`question-${index}: ${"x".repeat(256)}`, index));
     }
-    const limits = { maxBytes: 2048, maxEvents: 20 };
+    // The size rewrite includes the discarded prefix as well as selectable rows.
+    const limits = { maxBytes: 2048, maxEvents: 4 };
     const read = () => SessionManager.openModelContextAsync(scope, { limits });
     const before = await read();
     const detached = before.buildSessionContext();

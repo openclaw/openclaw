@@ -222,6 +222,15 @@ function historyTarget() {
   };
 }
 
+function deltaRequest(
+  limits: Extract<SessionHistoryWorkerRequest, { kind: "delta" }>["params"]["limits"] = {},
+): Extract<SessionHistoryWorkerRequest, { kind: "delta" }> {
+  return {
+    kind: "delta",
+    params: { target: { ...historyTarget(), sessionEntry: request().params.entry }, limits },
+  };
+}
+
 function page(text: string): Extract<SessionHistoryWorkerResult, { kind: "rpc" }> {
   return {
     kind: "rpc",
@@ -288,16 +297,10 @@ it.each(["rpc", "http", "delta", "inline-visibility"] as const)(
   async (kind) => {
     const failure = new Error("Auxiliary registry changed during discovery");
     vi.spyOn(storeSources, "prepareGatewaySessionStoreReadSourcesAsync").mockRejectedValue(failure);
-    const rpc = request();
-    const target = {
-      agentId: rpc.params.sessionAgentId,
-      sessionId: rpc.params.sessionId,
-      sessionKey: rpc.params.canonicalKey,
-      storePath: rpc.params.storePath,
-    };
+    const target = historyTarget();
     const pending =
       kind === "rpc"
-        ? readSessionHistoryPageInWorker(rpc)
+        ? readSessionHistoryPageInWorker(request())
         : kind === "http"
           ? readSessionHistoryPageInWorker({ kind, params: { target, maxChars: 8000, limit: 10 } })
           : kind === "inline-visibility"
@@ -329,10 +332,7 @@ it.each(["rpc", "http"] as const)(
             kind: "http",
             params: {
               target: {
-                agentId: rpc.params.sessionAgentId,
-                sessionId: rpc.params.sessionId,
-                sessionKey: rpc.params.canonicalKey,
-                storePath: rpc.params.storePath,
+                ...historyTarget(),
                 sessionEntry: rpc.params.entry,
                 env: {
                   OPENCLAW_STATE_DIR: "/tmp/http-history-captured-state",
@@ -548,22 +548,9 @@ it.each([false, true])(
         return { ...bound, admission: { ...bound.admission, assertCurrent } };
       });
     try {
-      const rpc = request().params;
-      const deltaRequest: Extract<SessionHistoryWorkerRequest, { kind: "delta" }> = {
-        kind: "delta",
-        params: {
-          target: {
-            agentId: rpc.sessionAgentId,
-            sessionId: rpc.sessionId,
-            sessionKey: rpc.canonicalKey,
-            sessionEntry: rpc.entry,
-            storePath: rpc.storePath,
-          },
-          limits: { maxEvents: 200, maxBytes: 1_000_000 },
-        },
-      };
-      const first = readSessionHistoryPageInWorker(deltaRequest);
-      const second = readSessionHistoryPageInWorker(deltaRequest);
+      const input = deltaRequest({ maxEvents: 200, maxBytes: 1_000_000 });
+      const first = readSessionHistoryPageInWorker(input);
+      const second = readSessionHistoryPageInWorker(input);
       await waitForReaderAdmission(2);
       expect(queued).toHaveLength(1);
       const partial: SessionHistoryDelta = {
@@ -591,17 +578,7 @@ it.each([false, true])(
 );
 
 it("does not recover partial delta facts when worker retirement fails", async () => {
-  const rpc = request().params;
-  const pending = readSessionHistoryPageInWorker({
-    kind: "delta",
-    params: {
-      target: {
-        ...historyTarget(),
-        sessionEntry: rpc.entry,
-      },
-      limits: {},
-    },
-  });
+  const pending = readSessionHistoryPageInWorker(deltaRequest());
   const failure = sessionHistoryCleanupError(
     new SessionHistoryDeltaPreparationError({
       delta: { kind: "missing" },
@@ -654,7 +631,7 @@ it("shares queued equivalent pages but starts a fresh read after dispatch", asyn
   ]);
 });
 
-it.each(["rpc limit", "rpc store", "http cursor"] as const)(
+it.each(["rpc limit", "rpc store", "rpc deflate", "http cursor"] as const)(
   "keeps distinct %s selectors separate in coalescing and byte admission",
   async (selector) => {
     const makeRequest = (different: boolean): SessionHistoryWorkerRequest =>
@@ -672,7 +649,9 @@ it.each(["rpc limit", "rpc store", "http cursor"] as const)(
             different
               ? selector === "rpc limit"
                 ? { max: 2 }
-                : { storePath: "/tmp/another-history-worker-fixture/sessions.json" }
+                : selector === "rpc deflate"
+                  ? { deflateResponse: true }
+                  : { storePath: "/tmp/another-history-worker-fixture/sessions.json" }
               : {},
           );
     const first = readSessionHistoryPageInWorker(makeRequest(false));
@@ -740,6 +719,7 @@ it.each([
     try {
       const reply = page("shared result");
       const bytes = new TextEncoder().encode(JSON.stringify(reply.page.messages));
+      const deflated = new Uint8Array([0, 0, 255, 255]);
       if (encoded) {
         reply.page.messages = [];
         reply.page.encodedResponse = {
@@ -748,6 +728,7 @@ it.each([
           responseHistoryBytes: 1024,
           omission: { omittedCount: 1, normalizedBytes: 2048 },
         };
+        reply.page.encodedMessagesDeflate = deflated;
       }
       queued[0]!.result.resolve(reply);
       const results = await settled;
@@ -764,6 +745,7 @@ it.each([
         for (const result of pages) {
           // A coalesced page transfers its immutable wire buffer only once.
           expect(result.encodedResponse?.messages).toBe(bytes);
+          expect(result.encodedMessagesDeflate).toBe(deflated);
         }
         pages[0]!.encodedResponse!.omission!.omittedCount = 9;
         expect(pages[1]!.encodedResponse!.omission!.omittedCount).toBe(1);

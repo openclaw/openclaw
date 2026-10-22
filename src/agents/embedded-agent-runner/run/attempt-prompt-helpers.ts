@@ -1,3 +1,4 @@
+import { floorPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type {
   ContextEnginePromptCacheInfo,
@@ -26,7 +27,6 @@ import { deriveContextPromptTokens, type NormalizedUsage } from "../../usage.js"
 import { buildEmbeddedCompactionRuntimeContext } from "../compaction-runtime-context.js";
 import { resolveContextEngineCapabilities } from "../context-engine-capabilities.js";
 import { log } from "../logger.js";
-import { normalizeContextTokenBudget } from "../utils.js";
 import type { DecisionPromptBuildFields } from "./attempt-decision-prefilter.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
@@ -416,8 +416,8 @@ export function buildAfterTurnRuntimeContext(params: {
           ...(target?.threadId !== undefined ? { threadId: target.threadId } : {}),
         }
       : undefined;
-  const tokenBudget = normalizeContextTokenBudget(params.tokenBudget);
-  const currentTokenCount = normalizeContextTokenBudget(params.currentTokenCount);
+  const tokenBudget = floorPositiveFiniteNumber(params.tokenBudget);
+  const currentTokenCount = floorPositiveFiniteNumber(params.currentTokenCount);
   return {
     ...buildEmbeddedCompactionRuntimeContext(
       {

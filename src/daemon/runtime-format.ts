@@ -1,4 +1,3 @@
-/** Formats daemon runtime state into compact status lines for CLI output. */
 import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import { getSystemdCgroupHygieneSummary, type GatewayServiceRuntime } from "./service-runtime.js";
 

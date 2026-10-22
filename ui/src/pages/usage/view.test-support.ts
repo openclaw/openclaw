@@ -1,10 +1,26 @@
 import { vi } from "vitest";
+import { createEmptyCostUsageTotals } from "../../../../src/infra/session-cost-usage-totals.js";
 import { createUsageAggregateAccumulator } from "../../../../src/shared/usage-aggregates.js";
 import { buildUsageOverview } from "../../../../src/shared/usage-overview.js";
-import type { UsageFilterOptions } from "./query.ts";
+import type { SessionsUsageOverview } from "../../../../src/shared/usage-types.js";
 import type { UsageProps, UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts";
 
 const noop = vi.fn();
+
+export function usageTotals(
+  input: number,
+  cost: number,
+  overrides: Partial<UsageTotals> = {},
+): UsageTotals {
+  return {
+    ...createEmptyCostUsageTotals(),
+    input,
+    totalTokens: input,
+    totalCost: cost,
+    inputCost: cost,
+    ...overrides,
+  };
+}
 
 export function usageSession(
   key: string,
@@ -13,17 +29,13 @@ export function usageSession(
   totalsOverrides: Partial<UsageTotals> = {},
 ): UsageSessionEntry {
   const totals: UsageTotals = {
+    ...createEmptyCostUsageTotals(),
     input: 100,
     output: 20,
-    cacheRead: 0,
-    cacheWrite: 0,
     totalTokens: 120,
     totalCost: 1,
     inputCost: 0.8,
     outputCost: 0.2,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
     ...totalsOverrides,
   };
   return {
@@ -35,14 +47,7 @@ export function usageSession(
     updatedAt: Date.now(),
     usage: {
       ...totals,
-      messageCounts: {
-        total: 2,
-        user: 1,
-        assistant: 1,
-        toolCalls: 0,
-        toolResults: 0,
-        errors: 0,
-      },
+      messageCounts: { total: 2, user: 1, assistant: 1, toolCalls: 0, toolResults: 0, errors: 0 },
       modelUsage: [{ provider, model: `${provider}-model`, count: 1, totals }],
     },
   };
@@ -52,6 +57,7 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
   const props: UsageProps = {
     data: {
       loading: false,
+      read: null,
       exporting: false,
       error: null,
       sessions: [],
@@ -90,25 +96,23 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
       context: {
         weight: undefined,
         loading: false,
+        read: null,
         status: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       },
       timeSeriesMode: "cumulative",
       timeSeriesBreakdownMode: "total",
       timeSeries: null,
       timeSeriesLoading: false,
+      timeSeriesRead: null,
       timeSeriesStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
       sessionLogs: null,
       sessionLogsLoading: false,
+      sessionLogsRead: null,
       sessionLogsStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
       sessionLogsExpanded: false,
-      logFilters: {
-        roles: [],
-        tools: [],
-        hasTools: false,
-        query: "",
-      },
+      logFilters: { roles: [], tools: [], hasTools: false, query: "" },
     },
     callbacks: {
       filters: {
@@ -126,12 +130,7 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
         onApplyQuery: noop,
         onClearQuery: noop,
       },
-      display: {
-        onExportJson: noop,
-        onExportCsv: noop,
-        onPageChange: noop,
-        onChange: noop,
-      },
+      display: { onExportJson: noop, onExportCsv: noop, onPageChange: noop, onChange: noop },
       details: {
         onToggleContextExpanded: noop,
         onToggleSessionLogsExpanded: noop,
@@ -150,30 +149,26 @@ export function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProp
   return props;
 }
 
+export function usageFixture(
+  data: Partial<UsageProps["data"]> = {},
+  filters: Partial<UsageProps["filters"]> = {},
+  display: Partial<UsageProps["display"]> = {},
+): UsageProps {
+  const base = createUsageProps();
+  return createUsageProps({
+    data: { ...base.data, ...data },
+    filters: { ...base.filters, ...filters },
+    display: { ...base.display, ...display },
+  });
+}
+
 export function createUsageOverview(
   overrides: Partial<NonNullable<UsageProps["data"]["overview"]>> = {},
 ): NonNullable<UsageProps["data"]["overview"]> {
-  return {
-    total: 0,
-    unfilteredSessionCount: 0,
-    selectedSessionCount: 0,
-    selectedRowCount: 0,
-    selectedRows: [],
-    tableSessionCount: 0,
-    tableTotals: { tokens: 0, cost: 0, errors: 0 },
-    offset: 0,
-    limit: 50,
-    queryWarnings: [],
-    hourTokens: Array(24).fill(0),
-    weekdayTokens: Array(7).fill(0),
-    hasTimelineData: false,
-    durationMs: 0,
-    durationCount: 0,
-    hourlyMessages: Array(24).fill(0),
-    hourlyErrors: Array(24).fill(0),
-    filterOptions: { agent: [], channel: [], provider: [], model: [], tool: [] },
-    ...overrides,
-  };
+  const overview = projectUsageData([]).overview!;
+  delete overview.selectedUsageComplete;
+  delete overview.usageReport;
+  return Object.assign(overview, overrides);
 }
 
 export function projectUsageData(
@@ -182,12 +177,7 @@ export function projectUsageData(
 ): Pick<UsageProps["data"], "sessions" | "totals" | "aggregates" | "overview" | "costDaily"> {
   const result = buildUsageOverview({
     rows: sessions,
-    options: {
-      query: filters.query,
-      selectedDays: filters.selectedDays,
-      selectedHours: filters.selectedHours,
-      selectedSessions: filters.selectedSessions,
-    },
+    options: filters,
     dayBucket: { mode: "utc-offset", utcOffsetMinutes: 0 },
   });
   return { ...result, costDaily: result.aggregates.costDaily ?? [] };
@@ -197,57 +187,44 @@ export const buildAggregatesFromSessions = (
   sessions: UsageSessionEntry[],
   fallback?: UsageAggregates | null,
 ): UsageAggregates => {
-  if (sessions.length === 0) {
-    return (
-      fallback ?? {
-        messages: { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 },
-        tools: { totalCalls: 0, uniqueTools: 0, tools: [] },
-        byModel: [],
-        byProvider: [],
-        byAgent: [],
-        byChannel: [],
-        daily: [],
-      }
-    );
+  if (!sessions.length && fallback) {
+    return fallback;
   }
-
   const accumulator = createUsageAggregateAccumulator();
   for (const session of sessions) {
     accumulator.add(session);
   }
-  return accumulator.finish();
+  const result = accumulator.finish();
+  if (sessions.length) {
+    return result;
+  }
+  const { messages, tools, byModel, byProvider, byAgent, byChannel, daily } = result;
+  return { messages, tools, byModel, byProvider, byAgent, byChannel, daily };
 };
 
-function appendFilterValues<T>(
-  values: string[],
-  entries: readonly T[],
-  read: (entry: T) => string | undefined,
-  limit = 12,
-): void {
-  for (const entry of entries) {
-    if (values.length >= limit) {
-      break;
-    }
-    const value = read(entry);
-    if (value && !values.includes(value)) {
-      values.push(value);
-    }
-  }
+function filterValues(values: (string | undefined)[], limit = 12): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value)))].slice(0, limit);
 }
 
 export function buildUsageFilterOptions(
   sessions: readonly UsageSessionEntry[],
   aggregates?: UsageAggregates | null,
-): UsageFilterOptions {
-  const options: UsageFilterOptions = { agent: [], channel: [], provider: [], model: [], tool: [] };
-  appendFilterValues(options.agent, sessions, (session) => session.agentId, 6);
-  appendFilterValues(options.channel, sessions, (session) => session.channel);
-  appendFilterValues(options.provider, sessions, (session) => session.modelProvider);
-  // Overrides follow every observed provider, preserving the menu's first-seen order.
-  appendFilterValues(options.provider, sessions, (session) => session.providerOverride);
-  appendFilterValues(options.provider, aggregates?.byProvider ?? [], (entry) => entry.provider);
-  appendFilterValues(options.model, sessions, (session) => session.model);
-  appendFilterValues(options.model, aggregates?.byModel ?? [], (entry) => entry.model);
-  appendFilterValues(options.tool, aggregates?.tools.tools ?? [], (entry) => entry.name);
-  return options;
+): SessionsUsageOverview["filterOptions"] {
+  return {
+    agent: filterValues(
+      sessions.map((session) => session.agentId),
+      6,
+    ),
+    channel: filterValues(sessions.map((session) => session.channel)),
+    provider: filterValues([
+      ...sessions.map((session) => session.modelProvider),
+      ...sessions.map((session) => session.providerOverride),
+      ...(aggregates?.byProvider ?? []).map((entry) => entry.provider),
+    ]),
+    model: filterValues([
+      ...sessions.map((session) => session.model),
+      ...(aggregates?.byModel ?? []).map((entry) => entry.model),
+    ]),
+    tool: filterValues((aggregates?.tools.tools ?? []).map((entry) => entry.name)),
+  };
 }

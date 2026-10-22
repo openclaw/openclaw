@@ -1,59 +1,44 @@
-import { createHash } from "node:crypto";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core";
+import { sha256Hex } from "@openclaw/normalization-core/node-crypto";
 import type {
   ClawActionEffect,
   ClawConfiguredAccess,
   ClawLifecyclePlanResult,
   ClawPluginReview,
-  ClawSkillReview,
   ClawScheduledJobs,
 } from "../../packages/gateway-protocol/src/schema/claws.js";
 import type { AgentConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { mapNestedStrings } from "../shared/map-nested-strings.js";
 import { digestClawValue } from "./digest.js";
 import { clawActionNeedsEffect, projectClawAddActionEffect } from "./gateway-action-effects.js";
 import { projectClawAddScheduledJobs, projectClawConfiguredAccess } from "./gateway-disclosure.js";
 import { projectClawManifestDisclosure } from "./gateway-manifest-disclosure.js";
-import type {
-  ClawAddPlan,
-  ClawDiagnostic,
-  ClawLocalPrerequisite,
-  ClawReadResult,
-} from "./types.js";
-
-function safeBlocker(diagnostic: Pick<ClawDiagnostic, "code" | "path">) {
-  return {
-    code: diagnostic.code,
-    path: diagnostic.path,
-    message:
-      diagnostic.code === "plugin_disabled"
-        ? "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed."
-        : "Resolve this OpenClaw state conflict before continuing.",
-  };
-}
-
-function safeAction(action: { kind: string; id: string; action: string; blocked: boolean }) {
-  return {
-    kind: action.kind,
-    id: action.id,
-    action: action.action,
-    blocked: action.blocked,
-    ...(action.blocked ? { reason: "Current OpenClaw state blocks this action." } : {}),
-  };
-}
+import { collectClawSkillWarningReviews } from "./skill-warning-review.js";
+import type { ClawAddPlan, ClawReadResult } from "./types.js";
 
 function projectActionsWithEffects<
-  T extends { kind: string; id: string; action: string; blocked: boolean },
->(
-  operation: "add" | "update" | "remove",
-  actions: readonly T[],
-  projectEffect: (action: T) => ClawActionEffect | undefined,
-) {
+  T extends { kind: string; id: string; action: string; blocked: boolean; reason?: string },
+>(actions: readonly T[], projectEffect: (action: T) => ClawActionEffect | undefined) {
   const blockers: Array<{ code: string; path: string; message: string }> = [];
   const projected = actions.map((action) => {
-    const safe = safeAction(action);
-    if (!clawActionNeedsEffect(operation, action)) {
+    const safe = Object.assign(
+      {
+        kind: action.kind,
+        id: action.id,
+        action: action.action,
+        blocked: action.blocked,
+      },
+      action.blocked ? { reason: "Current OpenClaw state blocks this action." } : {},
+      !action.blocked &&
+        action.kind === "cronJob" &&
+        action.id.startsWith("$portable-heartbeat") &&
+        action.reason
+        ? { reason: action.reason }
+        : {},
+    );
+    if (!clawActionNeedsEffect(action)) {
       return safe;
     }
     try {
@@ -76,10 +61,6 @@ function projectActionsWithEffects<
   return { actions: projected, blockers };
 }
 
-function safeCapability(change: { kind: string; id: string; action: string; reason: string }) {
-  return { kind: change.kind, id: change.id, action: change.action, reason: change.reason };
-}
-
 function requestedPolicyBlockers(
   desiredAgent: AgentConfig,
   configuredAccess: ClawConfiguredAccess | undefined,
@@ -100,57 +81,18 @@ function requestedPolicyBlockers(
   return blockers;
 }
 
-function projectClawSkillWarningReviews(plan: ClawAddPlan): ClawSkillReview[] {
-  return plan.actions.flatMap((action) => {
-    const details = action.details;
-    if (
-      action.kind !== "package" ||
-      action.blocked ||
-      details?.kind !== "skill" ||
-      details.ownerAction !== "install" ||
-      typeof details.riskWarning !== "string" ||
-      !details.riskWarning
-    ) {
-      return [];
-    }
-    if (
-      typeof details.ref !== "string" ||
-      typeof details.version !== "string" ||
-      typeof details.integrity !== "string"
-    ) {
-      throw new Error("The Claw skill trust review is incomplete.");
-    }
-    const review = {
-      actionId: action.id,
-      ref: details.ref,
-      version: details.version,
-      integrity: details.integrity,
-      riskWarning: details.riskWarning,
-    };
-    return [{ ...review, reviewToken: digestClawValue(review) }];
-  });
-}
-
-function projectReadinessRequirement(requirement: ClawLocalPrerequisite) {
-  return requirement.kind === "plugin-setup"
-    ? { kind: requirement.kind, owner: `${requirement.plugin}/${requirement.provider}` }
-    : { kind: requirement.kind, owner: requirement.mcpServer };
-}
-
 function sealClawLifecyclePlan(
   plan: Omit<ClawLifecyclePlanResult, "schemaVersion" | "planIntegrity">,
   canonicalPlanIntegrity: string,
 ): ClawLifecyclePlanResult {
-  const planIntegrity = `sha256:${createHash("sha256")
-    .update(stableStringify({ canonicalPlanIntegrity, plan }))
-    .digest("hex")}`;
+  const planIntegrity = `sha256:${sha256Hex(stableStringify({ canonicalPlanIntegrity, plan }))}`;
   return { schemaVersion: "openclaw.clawsGatewayPlan.v1", planIntegrity, ...plan };
 }
 
 function canonicalizeClawSourcePlan(value: unknown, sourceRoot: string): unknown {
   const root = path.resolve(sourceRoot);
-  const visit = (current: unknown): unknown => {
-    if (typeof current === "string" && path.isAbsolute(current)) {
+  return mapNestedStrings(value, (current) => {
+    if (path.isAbsolute(current)) {
       const relative = path.relative(root, path.resolve(current));
       if (relative === "") {
         return "$CLAW_SOURCE";
@@ -164,22 +106,13 @@ function canonicalizeClawSourcePlan(value: unknown, sourceRoot: string): unknown
       }
       return current;
     }
-    if (Array.isArray(current)) {
-      return current.map(visit);
-    }
-    if (current && typeof current === "object") {
-      return Object.fromEntries(Object.entries(current).map(([key, entry]) => [key, visit(entry)]));
-    }
     return current;
-  };
-  return visit(value);
+  });
 }
 
 function sourceStablePlanIntegrity(plan: { planIntegrity: string }, sourceRoot: string): string {
   const { planIntegrity: _planIntegrity, ...content } = plan;
-  return `sha256:${createHash("sha256")
-    .update(stableStringify(canonicalizeClawSourcePlan(content, sourceRoot)))
-    .digest("hex")}`;
+  return `sha256:${sha256Hex(stableStringify(canonicalizeClawSourcePlan(content, sourceRoot)))}`;
 }
 
 export function plansMatchAcrossSourceRoots(params: {
@@ -203,7 +136,7 @@ export function projectClawAddPlan(
   config: OpenClawConfig,
   source?: Extract<ClawReadResult, { ok: true }>,
 ): ClawLifecyclePlanResult {
-  const effects = projectActionsWithEffects("add", plan.actions, (action) =>
+  const effects = projectActionsWithEffects(plan.actions, (action) =>
     projectClawAddActionEffect(action, sourceRoot),
   );
   let scheduledJobs: ClawScheduledJobs | undefined;
@@ -241,11 +174,25 @@ export function projectClawAddPlan(
         targetVersion: plan.claw.version,
       },
       actions: effects.actions,
-      capabilities: plan.capabilityChanges.map(safeCapability),
+      capabilities: plan.capabilityChanges.map((change) => ({
+        kind: change.kind,
+        id: change.id,
+        action: change.action,
+        reason: change.reason,
+      })),
       pluginReviews,
-      skillReviews: projectClawSkillWarningReviews(plan),
+      skillReviews: collectClawSkillWarningReviews(plan).map((review) =>
+        Object.assign(review, { reviewToken: digestClawValue(review) }),
+      ),
       blockers: [
-        ...plan.blockers.map(safeBlocker),
+        ...plan.blockers.map((diagnostic) => ({
+          code: diagnostic.code,
+          path: diagnostic.path,
+          message:
+            diagnostic.code === "plugin_disabled"
+              ? "This plugin is disabled. Enable it in Plugins; reinstall it there first if needed."
+              : "Resolve this OpenClaw state conflict before continuing.",
+        })),
         ...effects.blockers,
         ...requestedPolicyBlockers(plan.agent.config, configuredAccess),
         ...(agentIdCollision
@@ -273,7 +220,11 @@ export function projectClawAddPlan(
       ...(scheduledJobs ? { scheduledJobs } : {}),
       readiness: {
         ready: plan.readiness.ready,
-        requirements: plan.readiness.requirements.map(projectReadinessRequirement),
+        requirements: plan.readiness.requirements.map((requirement) =>
+          requirement.kind === "plugin-setup"
+            ? { kind: requirement.kind, owner: `${requirement.plugin}/${requirement.provider}` }
+            : { kind: requirement.kind, owner: requirement.mcpServer },
+        ),
       },
     },
     sourceStablePlanIntegrity(plan, sourceRoot),

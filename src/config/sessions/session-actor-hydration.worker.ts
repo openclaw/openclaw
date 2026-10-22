@@ -37,7 +37,7 @@ import { projectTranscriptNavigationSql } from "./session-model-context-projecti
 import { projectSessionTranscriptFacts } from "./session-transcript-projection-facts.js";
 import { transcriptEventReadBytesSql } from "./session-transcript-read-bytes.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
-import { transcriptEventNavigationSql } from "./transcript-payload.js";
+import { transcriptEventNavigationSql, transcriptPredicateSql } from "./transcript-payload.js";
 
 // SQL JSON projections retain their declared shape but cross the driver as TEXT.
 function decodeJsonProjection<T>(value: T | string): T {
@@ -291,8 +291,8 @@ export function hydrateSessionActorState(
             .selectFrom("transcript_events")
             .select([
               "seq",
-              "navigation_type",
-              "navigation_valid",
+              transcriptPredicateSql(database.db, "navigation_type").as("navigation_type"),
+              transcriptPredicateSql(database.db, "navigation_valid").as("navigation_valid"),
               projectTranscriptNavigationSql(
                 database.db,
                 transcriptEventNavigationSql(database.db),
@@ -315,25 +315,28 @@ export function hydrateSessionActorState(
   for (const row of rows) {
     const entry = parseReadableSessionEntryData(database, row, "full");
     const participants = decodeJsonProjection(row.actor_participants).map(readParticipantRecord);
+    // Keep exact persisted columns for no-op comparisons, without retaining aggregate payloads.
+    const {
+      actor_has_board: _hasBoard,
+      actor_participants: _participants,
+      actor_members: _members,
+      actor_pending: _pending,
+      actor_completions: _completions,
+      actor_window: _window,
+      actor_rewrite: _rewrite,
+      actor_cold: _cold,
+      actor_projection: _projection,
+      actor_has_unclassified: _hasUnclassified,
+      actor_identities: _identities,
+      actor_active: _active,
+      actor_navigation: _navigation,
+      ...entryRow
+    } = row;
     entryRows.set(
       row.session_key,
       entry
         ? {
-            row: {
-              current_session_id: row.current_session_id,
-              entry_json: row.entry_json,
-              session_key: row.session_key,
-              updated_at: row.updated_at,
-              owner_actor_type: row.owner_actor_type,
-              owner_actor_id: row.owner_actor_id,
-              owner_assigned_by_type: row.owner_assigned_by_type,
-              owner_assigned_by_id: row.owner_assigned_by_id,
-              owner_assigned_at: row.owner_assigned_at,
-              legacy_acp_migration_json: row.legacy_acp_migration_json,
-              session_diff_baseline_json: row.session_diff_baseline_json,
-              skills_snapshot_json: row.skills_snapshot_json,
-              system_prompt_report_json: row.system_prompt_report_json,
-            },
+            row: entryRow,
             entry: withProjectedParticipants(entry, participants),
           }
         : undefined,

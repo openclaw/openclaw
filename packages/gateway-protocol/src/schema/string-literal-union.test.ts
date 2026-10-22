@@ -3,11 +3,8 @@ import { describe, expect, expectTypeOf, it } from "vitest";
 import { stringLiteralUnion } from "./string-literal-union.js";
 
 describe("string literal protocol unions", () => {
-  it("preserves ordered anyOf branches and optional schema metadata", () => {
-    const schema = stringLiteralUnion(["streaming", "completed", "error"], {
-      description: "Run status",
-      deprecated: true,
-    });
+  it("preserves ordered anyOf branches", () => {
+    const schema = stringLiteralUnion(["streaming", "completed", "error"]);
     expect(JSON.stringify(schema)).toBe(
       JSON.stringify({
         anyOf: [
@@ -15,8 +12,6 @@ describe("string literal protocol unions", () => {
           { type: "string", const: "completed" },
           { type: "string", const: "error" },
         ],
-        description: "Run status",
-        deprecated: true,
       }),
     );
     expectTypeOf(schema).toEqualTypeOf<

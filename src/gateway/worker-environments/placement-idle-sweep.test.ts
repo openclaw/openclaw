@@ -122,7 +122,6 @@ describe("worker placement idle suspension", () => {
       placements,
       getSessionChangeContext: () => ({
         broadcastToConnIds: vi.fn(),
-        chatAbortControllers: new Map(),
         getRuntimeConfig: () => ({}),
         getSessionEventSubscriberConnIds: () => new Set(),
       }),

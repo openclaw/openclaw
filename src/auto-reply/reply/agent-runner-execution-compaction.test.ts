@@ -59,6 +59,20 @@ function expectNotices(reply: ReturnType<typeof vi.fn>, texts: string[], address
 }
 
 describe("executeAgentTurn: compaction events", () => {
+  it("warns about omitted seed history without claiming a compaction", async () => {
+    const onCompactionNoticePayload = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "context_bounded" } });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+    const result = await executeTestTurn(undefined, { onCompactionNoticePayload });
+    expect(result.kind).toBe("success");
+    expect(onCompactionNoticePayload).toHaveBeenCalledOnce();
+    expectBlockReplyCall(onCompactionNoticePayload, 0, {
+      text: expect.stringContaining("Full history remains saved"),
+      isCompactionNotice: true,
+    });
+  });
   it("warns about degraded compaction even when ordinary notices are disabled", async () => {
     const onCompactionNoticePayload = vi.fn();
     mockCompaction({}, { qualityDegraded: true });
@@ -214,6 +228,44 @@ describe("executeAgentTurn: compaction events", () => {
       ["Hook before", "🧹 Compacting context...", "Hook after", "🧹 Compaction complete"],
       true,
     );
+  });
+
+  it("delivers recovery hook notices without repeating lifecycle or accounting", async () => {
+    const onBlockReply = vi.fn();
+    const onCompactionStart = vi.fn();
+    const onCompactionEnd = vi.fn();
+    state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
+      await params.onAgentEvent?.({ stream: "compaction", data: { phase: "start" } });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "notice", messages: ["Recovery hook before"] },
+      });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "notice", messages: ["Recovery hook after"] },
+      });
+      await params.onAgentEvent?.({
+        stream: "compaction",
+        data: { phase: "end", completed: true },
+      });
+      return { payloads: [{ text: "final" }], meta: {} };
+    });
+
+    const result = await executeTestTurn({
+      followupRun: createNotifyUserRun(),
+      opts: { onBlockReply, onCompactionStart, onCompactionEnd },
+    });
+
+    expect(result).toMatchObject({ kind: "success", autoCompactionCount: 1 });
+    expect(onCompactionStart).toHaveBeenCalledOnce();
+    expect(onCompactionEnd).toHaveBeenCalledExactlyOnceWith({ completed: true });
+    expect(onBlockReply).toHaveBeenCalledTimes(4);
+    expectNotices(onBlockReply, [
+      "🧹 Compacting context...",
+      "Recovery hook before",
+      "Recovery hook after",
+      "🧹 Compaction complete",
+    ]);
   });
 
   it("fires both notifyUser notices alongside onCompactionStart / onCompactionEnd callbacks (#87107)", async () => {

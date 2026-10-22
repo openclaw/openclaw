@@ -114,6 +114,7 @@ shell-completion metadata.
 - Local `model run` is a lean one-shot provider completion: it resolves the configured agent model and auth but does not start a chat-agent turn, load tools, or open bundled MCP servers.
 - Model runs load the catalog for case correction only when an explicit model override contains uppercase characters. Runs using the configured default or a lowercase model ref skip that catalog lookup.
 - `model run --file` attaches image files (auto-detected MIME type) to the prompt; repeat `--file` for multiple images. Non-image files are rejected — use `infer audio transcribe` or `infer video describe` instead.
+- Local `model run --file` requires an image-capable model and fails before the provider call when the model's catalog input is text-only. `model run --gateway --file` instead offloads images for text-only models and describes them through the Gateway's media understanding.
 - `model run --gateway` exercises Gateway routing, saved auth, provider selection, and the embedded runtime, but stays a raw model check: no prior session transcript, bootstrap/AGENTS context, tools, or bundled MCP servers.
 - `model run --gateway --model <provider/model>` requires a trusted-operator gateway credential, because it asks the Gateway to run a one-off provider/model override.
 
@@ -289,6 +290,10 @@ openclaw infer embedding create --text "friendly lobster" --json
 openclaw infer embedding create --text "customer support ticket: delayed shipment" --model openai/text-embedding-3-large --json
 openclaw infer embedding providers --agent <id> --json
 ```
+
+`--model` takes `<provider/model>`. When you also pass `--provider`, it must match
+that prefix; model ids that contain a slash keep the provider prefix, for example
+`--model deepinfra/Qwen/Qwen3-Embedding-8B`.
 
 Without `--json`, `embedding create` shows the provider and model, followed by
 each input, its dimension count, and a preview of the first eight vector values.

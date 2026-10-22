@@ -1,6 +1,5 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
-import type { ConfigSnapshotPreparation } from "../config/io.snapshot-preparation.types.js";
 import type { GatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import type { GatewaySuspendHandoffOwner } from "../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
@@ -65,8 +64,6 @@ export type GatewayServerOptions = {
     import("../infra/gateway-lock.js").GatewayLockHandle,
     "assertDatabaseAccess" | "markListening"
   >;
-  /** Internal native-host operation; direct readers retain their own execution owner. */
-  prepareConfigSnapshot?: ConfigSnapshotPreparation;
   /** Internal, closure-bound host authority. Direct servers have no native lifecycle owner. */
   hostLifecycle?: GatewayHostLifecycle;
   /** Internal startup ownership; direct callers own their awaited startup work. */

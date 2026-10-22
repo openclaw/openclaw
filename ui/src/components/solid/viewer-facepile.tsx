@@ -1,4 +1,4 @@
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, onSettled, Show } from "solid-js";
 import type {
   SessionParticipant,
   SessionParticipantIdentity,
@@ -18,7 +18,7 @@ import { projectAgentIdentity, projectAgents } from "../../lib/reactive/domain-c
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { personActivityLink, type PersonActivityRouting } from "../person-activity-link.ts";
-import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
+import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
 import "../tooltip.ts";
@@ -47,11 +47,18 @@ export function ViewerAvatarContent(props: ViewerAvatarProps) {
     username: props.user?.email,
     profileAvatarUrl: props.user?.avatarUrl,
   }));
+  const presentation = createIdentityAvatarPresentation(view);
+  const fallbackColor = () => `hsl(${view().fallback.colorSeed % 360} 48% 42%)`;
   return (
     <Show when={props.user}>
       <span
-        ref={identityAvatarState(view)}
-        class={["viewer-avatar", `viewer-avatar--${props.variant ?? "session"}`]}
+        data-avatar-state={presentation.state()}
+        style={{ "--viewer-avatar-color": fallbackColor() }}
+        class={[
+          "viewer-avatar",
+          `viewer-avatar--${props.variant ?? "session"}`,
+          presentation.classes(),
+        ]}
         data-viewer-id={props.markAsViewer !== false ? props.user?.id : undefined}
         aria-label={
           props.variant === "profile"
@@ -60,11 +67,11 @@ export function ViewerAvatarContent(props: ViewerAvatarProps) {
         }
       >
         <Show when={Boolean(view().imageUrl)}>
-          <IdentityAvatarImage view={view()} fallbackSelector=".viewer-avatar" />
+          <IdentityAvatarImage view={view()} onStateChange={presentation.onStateChange} />
         </Show>
         <span
           class={view().imageUrl ? "viewer-avatar__fallback" : undefined}
-          style={{ background: `hsl(${view().fallback.colorSeed % 360} 48% 42%)` }}
+          style={{ background: fallbackColor() }}
         >
           <span class="viewer-avatar__initials">{view().fallback.initials}</span>
         </span>
@@ -84,6 +91,7 @@ export type ViewerFacepileProps = {
   maxVisible?: number;
   totalCount?: number;
   personActivity?: PersonActivityRouting;
+  registerLink?: (element: HTMLAnchorElement) => (() => void) | undefined;
 };
 
 export function ViewerFacepileContent(props: ViewerFacepileProps) {
@@ -127,15 +135,12 @@ export function ViewerFacepileContent(props: ViewerFacepileProps) {
           }
         >
           {(user) => (
-            <openclaw-tooltip prop:content={presenceViewerLabel(user())}>
-              <span class="viewer-facepile__tooltip-anchor">
-                <FacepilePerson
-                  user={user()}
-                  markAsViewer={!props.staticParticipants}
-                  routing={props.personActivity}
-                />
-              </span>
-            </openclaw-tooltip>
+            <FacepilePerson
+              user={user()}
+              markAsViewer={!props.staticParticipants}
+              routing={props.personActivity}
+              registerLink={props.registerLink}
+            />
           )}
         </For>
         <Show when={overflowCount() > 0}>
@@ -154,6 +159,7 @@ function FacepilePerson(props: {
   user: FacepileUser;
   markAsViewer: boolean;
   routing?: PersonActivityRouting;
+  registerLink?: ViewerFacepileProps["registerLink"];
 }) {
   const link = createMemo(() =>
     props.user.identity?.type === "profile"
@@ -161,18 +167,34 @@ function FacepilePerson(props: {
       : null,
   );
   const avatar = <ParticipantAvatar user={props.user} markAsViewer={props.markAsViewer} />;
+  let profileLink: HTMLAnchorElement | undefined;
   return (
-    <Show when={link()} fallback={avatar}>
-      {(target) => (
-        <a
-          class="person-activity-avatar-link"
-          href={target().href}
-          onClick={(event) => target().open(event)}
-        >
-          {avatar}
-        </a>
-      )}
-    </Show>
+    <openclaw-tooltip
+      prop:content={presenceViewerLabel(props.user)}
+      prop:descriptionTarget={link() ? () => profileLink ?? null : undefined}
+    >
+      <span class="viewer-facepile__tooltip-anchor">
+        <Show when={link()} fallback={avatar}>
+          {(target) => {
+            let anchor!: HTMLAnchorElement;
+            onSettled(() => props.registerLink?.(anchor));
+            return (
+              <a
+                ref={(element) => {
+                  anchor = element;
+                  profileLink = element;
+                }}
+                class="person-activity-avatar-link"
+                href={target().href}
+                onClick={(event) => target().open(event)}
+              >
+                {avatar}
+              </a>
+            );
+          }}
+        </Show>
+      </span>
+    </openclaw-tooltip>
   );
 }
 
@@ -246,6 +268,16 @@ export function ParticipantAvatar(props: {
 type ViewerAvatarElement = SolidBridgeElement<ViewerAvatarProps>;
 type ViewerFacepileElement = SolidBridgeElement<ViewerFacepileProps>;
 
+const mountedFacepiles = new Map<HTMLElement, ViewerFacepileProps>();
+
+export function mountedViewerSessionKeys(root: HTMLElement): ReadonlySet<string> {
+  return new Set(
+    [...mountedFacepiles].flatMap(([element, props]) =>
+      root.contains(element) ? [props.sessionKey ?? ""] : [],
+    ),
+  );
+}
+
 export const ViewerAvatar = defineSolidBridge<ViewerAvatarProps>(
   "openclaw-viewer-avatar",
   (props, host) => {
@@ -262,10 +294,14 @@ export const ViewerAvatar = defineSolidBridge<ViewerAvatarProps>(
   },
 );
 
-defineSolidBridge<ViewerFacepileProps>(
+export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
   "openclaw-viewer-facepile",
   (props, host) => {
     host.style.display = "contents";
+    onSettled(() => {
+      mountedFacepiles.set(host, host);
+      return () => mountedFacepiles.delete(host);
+    });
     return <ViewerFacepileContent {...props} />;
   },
   {
@@ -280,6 +316,7 @@ defineSolidBridge<ViewerFacepileProps>(
       maxVisible: { default: 3, attribute: "max-visible", type: Number },
       totalCount: { default: undefined, attribute: false },
       personActivity: { default: undefined, attribute: false },
+      registerLink: { default: undefined, attribute: false },
     },
   },
 );

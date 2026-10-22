@@ -520,8 +520,3 @@ export async function maybeResolveSignalApprovalReaction(params: {
   });
   return true;
 }
-
-export function clearSignalApprovalReactionTargetsForTest(): void {
-  signalApprovalReactionTargets.clearForTest();
-  loadResolveApprovalOverGateway.clear();
-}

@@ -3,15 +3,15 @@ import { For } from "solid-js";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { formatMs } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { parseToolSummary } from "./helpers.ts";
+import type { ParsedSessionLog } from "./helpers.ts";
 import { formatUsageCost, formatUsageTokens } from "./metrics.ts";
-import type { SessionLogEntry, UsageSessionEntry } from "./types.ts";
+import type { UsageSessionEntry } from "./types.ts";
 import { renderInsightList } from "./view-overview.tsx";
 
 export function renderSessionSummary(
   session: UsageSessionEntry,
   filteredUsage?: UsageSessionEntry["usage"],
-  filteredLogs?: SessionLogEntry[] | null,
+  filteredLogs?: ParsedSessionLog[] | null,
 ) {
   const usage = filteredUsage || session.usage;
   if (!usage) {
@@ -20,12 +20,12 @@ export function renderSessionSummary(
 
   const formatTs = (ts?: number): string => (ts ? formatMs(ts) : t("usage.common.emptyValue"));
   const hasInterval = filteredLogs !== undefined;
-  const datedLogs = filteredLogs?.filter((log) => log.timestamp > 0);
+  const datedLogs = filteredLogs?.filter(({ log }) => log.timestamp > 0);
   const messageCounts = !hasInterval
     ? usage.messageCounts
     : datedLogs?.length
       ? datedLogs.reduce(
-          (counts, { role }) => {
+          (counts, { log: { role } }) => {
             if (role === "user" || role === "assistant") {
               counts[role] += 1;
               counts.total += 1;
@@ -50,8 +50,8 @@ export function renderSessionSummary(
   if (datedLogs?.length) {
     toolCounts = new Map();
     // Result rows carry tool names for filtering, but only assistant rows record calls.
-    for (const log of datedLogs.filter(({ role }) => role === "assistant")) {
-      for (const [name, count] of parseToolSummary(log.content).tools) {
+    for (const { toolInfo } of datedLogs.filter(({ log }) => log.role === "assistant")) {
+      for (const [name, count] of toolInfo.tools) {
         toolCounts.set(name, (toolCounts.get(name) ?? 0) + count);
       }
     }

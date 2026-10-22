@@ -1,6 +1,7 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core";
 import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
+import { filterStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   listMessageReceiptSourceTargets,
   resolveMessageReceiptPrimaryId,
@@ -10,6 +11,7 @@ import type { MessageActionResult } from "../infra/outbound/message-action-contr
 import type { MessagePollResult, MessageSendResult } from "../infra/outbound/message.js";
 import { normalizeMessageDeliveryStatus } from "./embedded-agent-messaging-status.js";
 import type { AgentToolResult } from "./runtime/index.js";
+import { markFinalSourceReplyResult } from "./tool-source-reply-completion.js";
 
 type EmbeddedMessageDeliveryFact = {
   status: "settled" | "suppressed" | "dryRun" | "failed";
@@ -366,7 +368,10 @@ export function attachEmbeddedMessageDeliveryFact(
     const { messageDelivery: _reserved, ...rest } = details;
     return { ...result, details: rest };
   }
-  return { ...result, details: { ...details, messageDelivery: fact } };
+  const delivered = { ...result, details: { ...details, messageDelivery: fact } };
+  return fact.sourceReplyDelivered === true && fact.status === "settled" && !fact.partialDelivery
+    ? markFinalSourceReplyResult(delivered)
+    : delivered;
 }
 
 export function isDeliveredCoreCurrentChannelWidgetResult(params: {
@@ -404,9 +409,7 @@ export function readEmbeddedMessageDeliveryFact(
   value: unknown,
 ): EmbeddedMessageDeliveryFact | undefined {
   const fact = asOptionalRecord(value);
-  const createdThreadIds = Array.isArray(fact?.createdThreadIds)
-    ? fact.createdThreadIds.filter((id): id is string => typeof id === "string")
-    : [];
+  const createdThreadIds = filterStringEntries(fact?.createdThreadIds);
   if (
     !fact ||
     !isDeliveryStatus(fact.status) ||

@@ -1,13 +1,11 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
-import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   createClawHubError,
   readClawHubBytes,
   withClawHubResponse,
   resolveClawHubBaseUrl,
-  type ClawHubFetch,
   type ClawHubFetchOptions,
   type ClawHubRequestParams,
 } from "./clawhub-client.js";
@@ -23,7 +21,6 @@ export type ClawHubDownloadResult = {
   sha256Hex: string;
   artifact: "archive" | "clawpack";
   clawpackHeaderSha256?: string;
-  clawpackHeaderSpecVersion?: number;
   npmIntegrity?: string;
   npmShasum?: string;
   npmTarballName?: string;
@@ -130,8 +127,6 @@ export async function downloadClawHubPackageArchive(
     const npmTarballName =
       normalizeOptionalString(headers.get("X-ClawHub-Npm-Tarball-Name")) ??
       safePackageTarballName(params.name, params.version);
-    const rawSpecVersion = headers.get("X-ClawHub-ClawPack-Spec-Version");
-    const specVersion = parseStrictPositiveInteger(rawSpecVersion);
     return stageClawHubArchive({
       prefix: "openclaw-clawhub-clawpack",
       fileName: npmTarballName,
@@ -140,7 +135,6 @@ export async function downloadClawHubPackageArchive(
       result: {
         artifact: "clawpack",
         clawpackHeaderSha256: headerSha256,
-        ...(specVersion !== undefined ? { clawpackHeaderSpecVersion: specVersion } : {}),
         npmIntegrity,
         npmShasum,
         npmTarballName,
@@ -222,8 +216,6 @@ export async function downloadClawHubSkillArchiveUrl(
 export async function downloadClawHubGitHubSkillArchive(params: {
   repo: string;
   commit: string;
-  timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
 }): Promise<ClawHubDownloadResult> {
   const configuredBaseUrl =
     normalizeOptionalString(process.env.CLAWHUB_GITHUB_CODELOAD_BASE_URL) ||
@@ -238,7 +230,6 @@ export async function downloadClawHubGitHubSkillArchive(params: {
   downloadUrl.pathname = `${basePath}/${repoPath}/zip/${encodeURIComponent(params.commit)}`;
   const { bytes } = await fetchClawHubArchive(
     {
-      ...params,
       url: downloadUrl.toString(),
       skipAuth: true,
     },

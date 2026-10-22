@@ -23,6 +23,7 @@ import { SLACK_EDIT_TEXT_MAX_BYTES } from "../../limits.js";
 import { emitSlackMessageSentHooks } from "../../message-sent-hook.js";
 import { resolveSlackReplyRenderPlan } from "../../reply-blocks.js";
 import { recordSlackThreadParticipation } from "../../sent-thread-cache.js";
+import { resolveSlackReplyThreadTs } from "../../thread-ts.js";
 import { countSlackTextUtf8Bytes } from "../../truncate.js";
 import { registerSlackSessionRun } from "../session-run-targets.js";
 import { resolveSlackBotLoopProtection } from "./dispatch-helpers.js";
@@ -70,7 +71,7 @@ export async function dispatchPreparedSlackMessage(prepared: PreparedSlackMessag
     },
     onSettled: () => {
       releaseDeferred?.();
-      upstreamLifecycle.onSettled?.();
+      return upstreamLifecycle.onSettled?.();
     },
   };
   const release = beginSessionRun();
@@ -144,7 +145,7 @@ async function dispatchSlackMessageWithSetup(
         text: formatSlackGroupThreadReply(payload.text ?? "", info.participant),
       };
     }
-    if (info.kind === "final" && slackStreaming.mode === "progress" && progress.isProgressMode) {
+    if (info.kind === "final" && slackStreaming.mode === "progress") {
       const supplement = getReplyPayloadTtsSupplement(payload);
       const finalPayload =
         !progress.useDraftProgressCard &&
@@ -246,8 +247,16 @@ async function dispatchSlackMessageWithSetup(
       isError: payload.isError === true,
       adapter: {
         buildFinalEdit: () => {
+          const threadTs = delivery.usedReplyThreadTs ?? statusThreadTs;
+          const finalThreadTs = resolveSlackReplyThreadTs({
+            replyToMode: setup.replyDeliveryMode,
+            replyToId: payload.replyToId,
+            threadId: threadTs,
+            replyToCurrent: payload.replyToCurrent,
+          });
           if (
             hasSlackCustomIdentity ||
+            finalThreadTs !== threadTs ||
             !previewStreamingEnabled ||
             (reply.hasMedia && !ttsSupplement) ||
             payload.isError ||
@@ -260,7 +269,7 @@ async function dispatchSlackMessageWithSetup(
           return {
             text: previewFinalText,
             blocks: slackBlocks,
-            threadTs: delivery.usedReplyThreadTs ?? statusThreadTs,
+            threadTs,
           };
         },
         editFinal: async (preview, edit) => {

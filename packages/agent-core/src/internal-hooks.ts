@@ -30,6 +30,26 @@ const beforeToolBatchByAgent = new WeakMap<object, InternalBeforeToolBatchHook>(
 export type InternalToolTurnCompletionHook = NonNullable<AgentLoopConfig["completesToolTurn"]>;
 
 const toolTurnCompletionByAgent = new WeakMap<object, InternalToolTurnCompletionHook>();
+const toolTurnInputScopeByHook = new WeakMap<InternalToolTurnCompletionHook, object>();
+
+/** Keep the accepted input identity across same-input Agent.continue() calls. */
+export function getInternalToolTurnInputScope(hook: InternalToolTurnCompletionHook): object {
+  let scope = toolTurnInputScopeByHook.get(hook);
+  if (!scope) {
+    scope = {};
+    toolTurnInputScopeByHook.set(hook, scope);
+  }
+  return scope;
+}
+
+/** Queueing, cancellation and context-only updates do not commit a new input. */
+export function commitInternalToolTurnInput(
+  hook: InternalToolTurnCompletionHook | undefined,
+): void {
+  if (hook) {
+    toolTurnInputScopeByHook.set(hook, {});
+  }
+}
 
 type InternalReadyToolCall = { toolCallId: string; args: unknown };
 
@@ -65,7 +85,8 @@ export type InternalSteeringQueueObserver = {
   peek: () => readonly AgentMessage[];
   drainContext?: () => AgentMessage[];
   reserve: (messages: readonly AgentMessage[]) => () => void;
-  subscribe: (listener: () => void) => () => void;
+  onChange?: () => void;
+  subscribe?: (listener: () => void) => () => void;
 };
 const steeringQueueObserverByCallback = new WeakMap<
   InternalSteeringGetter,
@@ -101,6 +122,14 @@ type InternalToolResultAcknowledgement = () => void;
 const toolResultAcknowledgementByValue = new WeakMap<object, InternalToolResultAcknowledgement>();
 const toolResultProvenanceByValue = new WeakMap<object, object>();
 const toolResultContentSourceByValue = new WeakMap<object, ToolResultContentSource>();
+
+/** Copy present private state without clearing a target's existing slot. */
+function copyInternalSlot<T>(slots: WeakMap<object, T>, source: object, target: object): void {
+  const value = slots.get(source);
+  if (value) {
+    slots.set(target, value);
+  }
+}
 
 /** Install OpenClaw-owned loop control without adding a plugin-facing Agent option. */
 export function setInternalBeforeToolBatch(
@@ -159,10 +188,18 @@ export function attachInternalSyncSteeringGetter(
   observer?: InternalSteeringQueueObserver,
 ): InternalSteeringGetter {
   syncSteeringGetterByCallback.set(callback, syncGetter);
+  attachInternalSteeringQueueObserver(callback, observer);
+  return callback;
+}
+
+/** Wrapping a getter must retain observation of its exact underlying queue. */
+export function attachInternalSteeringQueueObserver(
+  callback: InternalSteeringGetter,
+  observer: InternalSteeringQueueObserver | undefined,
+): void {
   if (observer) {
     steeringQueueObserverByCallback.set(callback, observer);
   }
-  return callback;
 }
 
 export function getInternalSteeringQueueObserver(
@@ -194,10 +231,7 @@ export function getInternalToolExecutionPreparer(
 
 /** Preserve private execution ownership when an adapter replaces a tool object. */
 export function copyInternalToolExecutionPreparer<T extends object>(source: object, target: T): T {
-  const preparer = toolExecutionPreparerByTool.get(source);
-  if (preparer) {
-    toolExecutionPreparerByTool.set(target, preparer);
-  }
+  copyInternalSlot(toolExecutionPreparerByTool, source, target);
   return target;
 }
 
@@ -248,18 +282,9 @@ export function getInternalToolResultContentSource(
 
 /** Carry private commit ownership through result transforms and message construction. */
 export function copyInternalToolResultState<T extends object>(source: object, target: T): T {
-  const acknowledge = toolResultAcknowledgementByValue.get(source);
-  if (acknowledge) {
-    toolResultAcknowledgementByValue.set(target, acknowledge);
-  }
-  const provenance = toolResultProvenanceByValue.get(source);
-  if (provenance) {
-    toolResultProvenanceByValue.set(target, provenance);
-  }
-  const contentSource = toolResultContentSourceByValue.get(source);
-  if (contentSource) {
-    toolResultContentSourceByValue.set(target, contentSource);
-  }
+  copyInternalSlot(toolResultAcknowledgementByValue, source, target);
+  copyInternalSlot(toolResultProvenanceByValue, source, target);
+  copyInternalSlot(toolResultContentSourceByValue, source, target);
   return target;
 }
 

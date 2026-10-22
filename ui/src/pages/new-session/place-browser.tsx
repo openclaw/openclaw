@@ -1,9 +1,33 @@
-import { createMemo, For } from "solid-js";
+import { createMemo, Errored, For, isPending, Loading, onSettled } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
+import { formatUiError } from "../../lib/format-error.ts";
+import { isComposingKeyboardEvent, recordCompositionEnd } from "../../lib/ime.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import type { PlaceBrowserOptions } from "./place-browser.ts";
-export function PlaceBrowser(props: { params: PlaceBrowserOptions }) {
+export function PlaceBrowser(props: {
+  params: PlaceBrowserOptions;
+  registeringProject: boolean;
+  pathRef?: (node: HTMLInputElement) => void;
+}) {
+  const options = new Map<string, HTMLButtonElement>();
+  // Keep receipt identity without asking this memo to consume its promise.
+  const readCompletion = createMemo(() => ({ promise: props.params.browser.readCompletion }), {
+    equals: (previous, next) => previous.promise === next.promise,
+  });
+  const listingRead = createMemo(() => {
+    const completion = readCompletion().promise;
+    return completion?.then((error) => {
+      if (error) {
+        throw new Error(error);
+      }
+    });
+  });
+  const loadingStatus = () => (
+    <span class="new-session-page__browser-loading" role="status">
+      {t("common.loading")}
+    </span>
+  );
   const view = createMemo(() => ({
     ...props.params.browser.view(),
     highlighted: props.params.browser.highlightedEntry(),
@@ -53,17 +77,23 @@ export function PlaceBrowser(props: { params: PlaceBrowserOptions }) {
           placeholder={props.params.label}
           value={props.params.browser.draft}
           onInput={(event) => props.params.browser.setDraft(event.currentTarget.value)}
-          ref={nativeListener("keydown", (event: KeyboardEvent) => {
+          ref={(node) => props.pathRef?.(node)}
+          onCompositionEnd={recordCompositionEnd}
+          onKeyDown={(event) => {
+            if (isComposingKeyboardEvent(event)) {
+              return;
+            }
             switch (event.key) {
               case "ArrowDown":
               case "ArrowUp":
                 event.preventDefault();
                 props.params.browser.moveHighlight(event.key === "ArrowDown" ? 1 : -1);
-                requestAnimationFrame(() =>
-                  document
-                    .getElementById(`${props.params.id}-option-${props.params.browser.activeIndex}`)
-                    ?.scrollIntoView({ block: "nearest" }),
-                );
+                onSettled(() => {
+                  const path = props.params.browser.highlightedEntry()?.path;
+                  if (path) {
+                    options.get(path)?.scrollIntoView({ block: "nearest" });
+                  }
+                });
                 break;
               case "Enter":
                 event.preventDefault();
@@ -75,13 +105,11 @@ export function PlaceBrowser(props: { params: PlaceBrowserOptions }) {
                 }
                 break;
             }
-          })}
+          }}
         />
-        {props.params.browser.loading ? (
-          <span class="new-session-page__browser-loading" role="status">
-            {t("common.loading")}
-          </span>
-        ) : undefined}
+        <Loading fallback={loadingStatus()}>
+          {isPending(listingRead) ? loadingStatus() : undefined}
+        </Loading>
         <button
           type="button"
           class="new-session-page__browser-nav"
@@ -92,11 +120,22 @@ export function PlaceBrowser(props: { params: PlaceBrowserOptions }) {
           <Icon name="x" />
         </button>
       </div>
-      {props.params.browser.error ? (
-        <div class="new-session-page__error" role="alert">
-          {props.params.browser.error}
-        </div>
-      ) : undefined}
+      <Errored
+        fallback={(error) => (
+          <div class="new-session-page__error" role="alert">
+            {props.params.browser.error ?? formatUiError(error())}
+          </div>
+        )}
+      >
+        <Loading on={readCompletion()}>
+          {listingRead()}
+          {props.params.browser.error ? (
+            <div class="new-session-page__error" role="alert">
+              {props.params.browser.error}
+            </div>
+          ) : undefined}
+        </Loading>
+      </Errored>
       <div
         class="new-session-page__browser-list"
         role="listbox"
@@ -113,29 +152,40 @@ export function PlaceBrowser(props: { params: PlaceBrowserOptions }) {
           </div>
         ) : undefined}
         <For each={view().entries} keyed={(entry) => entry.path}>
-          {(entry, index) => (
-            <button
-              type="button"
-              role="option"
-              id={`${props.params.id}-option-${index()}`}
-              aria-selected={index() === props.params.browser.activeIndex ? "true" : "false"}
-              class={[
-                "new-session-page__browser-entry",
-                {
-                  "new-session-page__browser-entry--active":
-                    index() === props.params.browser.activeIndex,
-                  "new-session-page__browser-entry--hidden": entry().hidden,
-                },
-              ]}
-              title={entry().hidden ? t("newSession.hiddenFolder") : undefined}
-              ref={nativeListener("click", () => void props.params.browser.navigate(entry().path))}
-            >
-              <span class="new-session-page__target-icon" aria-hidden="true">
-                <Icon name="folder" />
-              </span>
-              <span>{entry().name}</span>
-            </button>
-          )}
+          {(entry, index) => {
+            let option!: HTMLButtonElement;
+            onSettled(() => {
+              const staticPath = entry().path;
+              options.set(staticPath, option);
+              return () => options.delete(staticPath);
+            });
+            return (
+              <button
+                ref={(node) => {
+                  option = node;
+                }}
+                type="button"
+                role="option"
+                id={`${props.params.id}-option-${index()}`}
+                aria-selected={index() === props.params.browser.activeIndex ? "true" : "false"}
+                class={[
+                  "new-session-page__browser-entry",
+                  {
+                    "new-session-page__browser-entry--active":
+                      index() === props.params.browser.activeIndex,
+                    "new-session-page__browser-entry--hidden": entry().hidden,
+                  },
+                ]}
+                title={entry().hidden ? t("newSession.hiddenFolder") : undefined}
+                onClick={() => void props.params.browser.navigate(entry().path)}
+              >
+                <span class="new-session-page__target-icon" aria-hidden="true">
+                  <Icon name="folder" />
+                </span>
+                <span>{entry().name}</span>
+              </button>
+            );
+          }}
         </For>
       </div>
       <div class="new-session-page__browser-actions">
@@ -143,7 +193,7 @@ export function PlaceBrowser(props: { params: PlaceBrowserOptions }) {
           <button
             type="button"
             class="new-session-page__browser-register"
-            disabled={props.params.registeringProject}
+            disabled={props.registeringProject}
             ref={nativeListener("click", () => {
               const path = props.params.registerProjectPath;
               if (path) {
@@ -157,7 +207,7 @@ export function PlaceBrowser(props: { params: PlaceBrowserOptions }) {
         <button
           type="button"
           class="new-session-page__browser-use"
-          disabled={view().usablePath === null || props.params.registeringProject}
+          disabled={props.registeringProject || view().usablePath === null}
           ref={nativeListener("click", () => {
             const path = props.params.browser.usablePath();
             if (path !== null) {

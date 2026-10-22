@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { persistPendingFinalDeliveryMarker } from "../../agents/pending-final-delivery-marker.js";
 import { clearPendingFinalDeliveryAfterSuccess } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
@@ -44,60 +45,64 @@ vi.mock("../../utils/sleep.js", async (importOriginal) => ({
 }));
 
 const cfg: OpenClawConfig = { channels: { telegram: { enabled: true } } };
+const connectionReset = () => Object.assign(new Error("socket reset"), { code: "ECONNRESET" });
 
-async function replacementFixture(options?: { newChannel?: boolean; sameGeneration?: boolean }) {
+function setConfig(
+  registry: Parameters<typeof setPluginRuntimeLoadContext>[0],
+  config: OpenClawConfig,
+) {
+  setPluginRuntimeLoadContext(registry, {
+    rawConfig: config,
+    config,
+    activationSourceConfig: config,
+    autoEnabledReasons: {},
+    workspaceDir: undefined,
+    env: {},
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+  });
+}
+
+async function replacementFixture(options?: {
+  newChannel?: boolean;
+  sameGeneration?: boolean;
+  missingAdmissionConfig?: boolean;
+}) {
   const retired = new PluginInstance("discord");
-  const old = createTestRegistry([
-    {
-      pluginId: "discord",
-      source: "test",
-      plugin: retired.wrap({
-        ...createChannelTestPluginBase({ id: "discord" }),
-        get id() {
-          return "discord";
-        },
-      }),
-    },
-  ]);
+  const registryFor = (pluginId: string, plugin: unknown, config?: OpenClawConfig) =>
+    createTestRegistry([{ pluginId, source: "test", plugin }], config ? { config } : undefined);
+  const old = registryFor(
+    "discord",
+    retired.wrap({
+      ...createChannelTestPluginBase({ id: "discord" }),
+      get id() {
+        return "discord";
+      },
+    }),
+    options?.missingAdmissionConfig ? undefined : cfg,
+  );
   const sendText = vi.fn(async (_ctx: ChannelMessageSendTextContext) => ({
     messageId: "accepted-final",
   }));
   const beforeSendAttempt = vi.fn(async () => {});
-  const current = createTestRegistry([
-    {
-      pluginId: "telegram",
-      source: "test",
-      plugin: {
-        ...createChannelTestPluginBase({ id: "telegram" }),
-        message: {
-          id: "telegram",
-          durableFinal: {
-            capabilities: { text: true, media: true, payload: true, messageSendingHooks: true },
-          },
-          send: {
-            text: sendText,
-            media: sendText,
-            payload: sendText,
-            lifecycle: { beforeSendAttempt },
-          },
-        },
+  const current = registryFor("telegram", {
+    ...createChannelTestPluginBase({ id: "telegram" }),
+    message: {
+      id: "telegram",
+      durableFinal: {
+        capabilities: { text: true, media: true, payload: true, messageSendingHooks: true },
+      },
+      send: {
+        text: sendText,
+        media: sendText,
+        payload: sendText,
+        lifecycle: { beforeSendAttempt },
       },
     },
-  ]);
+  });
   if (!options?.newChannel) {
     old.channels.push(...current.channels);
   }
-  const setConfig = (config: OpenClawConfig) =>
-    setPluginRuntimeLoadContext(current, {
-      rawConfig: config,
-      config,
-      activationSourceConfig: config,
-      autoEnabledReasons: {},
-      workspaceDir: undefined,
-      env: {},
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-    });
-  setConfig(cfg);
+  setConfig(current, cfg);
   const publication: { current: typeof current | undefined } = { current };
   const owner = { current: () => publication.current };
   bindPluginRegistryGatewayOwner(old, owner);
@@ -127,18 +132,17 @@ async function replacementFixture(options?: { newChannel?: boolean; sameGenerati
       if (!structured) {
         return deliverInboundReplyWithMessageSendContextCore(request);
       }
-      const [plan] = createStructuredOutboundPayloadPlan([request.payload]);
-      if (!plan) {
-        throw new Error("Expected a sendable final reply");
-      }
+      const plan = expectDefined(
+        createStructuredOutboundPayloadPlan([request.payload])[0],
+        "final plan",
+      );
       return deliverStructuredInboundReplyWithMessageSendContextCore({ ...request, plan });
     });
   return {
-    old,
     turn,
     current,
     publication,
-    setConfig,
+    setConfig: (config: OpenClawConfig) => setConfig(current, config),
     sendText,
     beforeSendAttempt,
     deliver,
@@ -148,29 +152,25 @@ async function replacementFixture(options?: { newChannel?: boolean; sameGenerati
 
 describe("final delivery after plugin replacement", () => {
   const state = installDeliveryQueueTmpDirHooks();
+  beforeEach(() => vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir()));
   afterEach(() => {
     resetPluginRuntimeStateForTest();
     vi.unstubAllEnvs();
   });
 
   it("keeps the final caller pending until saved rich text is recovered", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
-    const fixture = await replacementFixture({ sameGeneration: true });
-    fixture.request.payload = { text: "**Saved final** with [a link](https://example.com)" };
+    const { request, sendText, deliver } = await replacementFixture({ sameGeneration: true });
+    request.payload = { text: "**Saved final** with [a link](https://example.com)" };
     const retryStarted = createDeferred();
     const retryResult = createDeferred<{ messageId: string }>();
-    fixture.sendText
-      .mockRejectedValueOnce(
-        new Error("network request failed", {
-          cause: Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
-        }),
-      )
+    sendText
+      .mockRejectedValueOnce(new Error("network request failed", { cause: connectionReset() }))
       .mockImplementationOnce(async () => {
         retryStarted.resolve();
         return await retryResult.promise;
       });
     let settled = false;
-    const delivery = fixture.deliver(true).then((result) => {
+    const delivery = deliver(true).then((result) => {
       settled = true;
       return result;
     });
@@ -184,10 +184,9 @@ describe("final delivery after plugin replacement", () => {
         { maxRetries: 2, attemptCount: 2 },
       ]);
       expect(settled).toBe(false);
-      expect(fixture.sendText).toHaveBeenCalledTimes(2);
-      expect(fixture.sendText.mock.calls.map(([ctx]) => ctx.text)).toEqual([
-        fixture.request.payload.text,
-        fixture.request.payload.text,
+      expect(sendText.mock.calls.map(([ctx]) => ctx.text)).toEqual([
+        request.payload.text,
+        request.payload.text,
       ]);
     } finally {
       retryResult.resolve({ messageId: "recovered-final" });
@@ -200,46 +199,41 @@ describe("final delivery after plugin replacement", () => {
   });
 
   it("retains the accepted chunk when the final retry fails without replaying it", async () => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
-    const fixture = await replacementFixture({ sameGeneration: true });
-    fixture.sendText
-      .mockRejectedValueOnce(Object.assign(new Error("socket reset"), { code: "ECONNRESET" }))
-      .mockImplementationOnce(async (ctx) => {
-        await ctx.onDeliveryResult?.({
-          messageId: "accepted-retry-chunk",
-          receipt: {
-            primaryPlatformMessageId: "accepted-retry-chunk",
-            platformMessageIds: ["accepted-retry-chunk"],
-            parts: [{ platformMessageId: "accepted-retry-chunk", kind: "text", index: 0 }],
-            sentAt: 1,
-          },
-        });
-        throw new Error("second retry chunk rejected");
+    const { sendText, deliver } = await replacementFixture({ sameGeneration: true });
+    const accepted = "accepted-retry-chunk";
+    sendText.mockRejectedValueOnce(connectionReset()).mockImplementationOnce(async (ctx) => {
+      await ctx.onDeliveryResult?.({
+        messageId: accepted,
+        receipt: {
+          primaryPlatformMessageId: accepted,
+          platformMessageIds: [accepted],
+          parts: [{ platformMessageId: accepted, kind: "text", index: 0 }],
+          sentAt: 1,
+        },
       });
-    await expect(fixture.deliver()).resolves.toMatchObject({
+      throw new Error("second retry chunk rejected");
+    });
+    await expect(deliver()).resolves.toMatchObject({
       status: "failed",
       sentBeforeError: true,
       error: {
         message: "second retry chunk rejected",
-        deliveryResult: { visibleReplySent: true, messageIds: ["accepted-retry-chunk"] },
+        deliveryResult: { visibleReplySent: true, messageIds: [accepted] },
         cause: {
-          results: [expect.objectContaining({ messageId: "accepted-retry-chunk" })],
+          results: [expect.objectContaining({ messageId: accepted })],
           payloadOutcomes: [expect.objectContaining({ status: "failed", sentBeforeError: true })],
         },
       },
     });
-    expect(fixture.sendText).toHaveBeenCalledTimes(2);
+    expect(sendText).toHaveBeenCalledTimes(2);
     expect(await loadPendingDeliveries(state.tmpDir())).toEqual([]);
   });
 
   it.each(["backoff", "preparation"] as const)(
     "blocks the retry when its runtime is superseded during %s",
     async (phase) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
       const fixture = await replacementFixture({ sameGeneration: true });
-      fixture.sendText.mockRejectedValueOnce(
-        Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
-      );
+      fixture.sendText.mockRejectedValueOnce(connectionReset());
       const supersede = async () => {
         fixture.publication.current = undefined;
       };
@@ -263,24 +257,18 @@ describe("final delivery after plugin replacement", () => {
     { text: "A photo", mediaUrl: "https://example.com/photo.png" },
     { text: "Choose", channelData: { buttons: [["yes"]] } },
   ])("does not replay side-effect or media finals: $text", async (payload) => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
     const fixture = await replacementFixture({ sameGeneration: true });
     fixture.request.payload = payload;
-    fixture.sendText.mockRejectedValue(
-      Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
-    );
+    fixture.sendText.mockRejectedValue(connectionReset());
     await expect(fixture.deliver()).resolves.toMatchObject({ status: "failed" });
     expect(fixture.sendText).toHaveBeenCalledTimes(1);
   });
 
-  it.each([
-    { sameGeneration: false, structured: true, retry: false, tool: false },
-    { sameGeneration: true, structured: false, retry: true, tool: true },
-  ])(
-    "preserves final custody (sameGeneration=$sameGeneration, structured=$structured, retry=$retry, tool=$tool)",
-    async ({ sameGeneration, structured, retry, tool }) => {
-      vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
-      const fixture = await replacementFixture({ sameGeneration });
+  it.each(["structured final", "message tool"])(
+    "preserves final custody for %s",
+    async (source) => {
+      const tool = source === "message tool";
+      const fixture = await replacementFixture({ sameGeneration: tool });
       const successorConfig: OpenClawConfig = { ...cfg, logging: { level: "debug" } };
       fixture.setConfig(successorConfig);
       const locator = {
@@ -301,19 +289,17 @@ describe("final delivery after plugin replacement", () => {
         deliveryContext: { channel: "telegram", to: "12345" },
         runOwnedSessionId: entry.sessionId,
       });
-      const completion = resolvePendingFinalDeliveryCompletion([fixture.request.payload]);
-      if (!completion) {
-        throw new Error("Expected production-owned pending-final custody");
-      }
-      expect(loadSessionEntry(locator)?.pendingFinalDelivery?.deliveries).toEqual([
-        { id: completion.deliveryId, state: "prepared" },
-      ]);
-      if (retry) {
-        fixture.sendText.mockRejectedValueOnce(
-          Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
-        );
-      }
+      const completion = expectDefined(
+        resolvePendingFinalDeliveryCompletion([fixture.request.payload]),
+        "pending-final custody",
+      );
+      const expectCustody = (deliveryState: "prepared" | "delivered") =>
+        expect(loadSessionEntry(locator)?.pendingFinalDelivery?.deliveries).toEqual([
+          { id: completion.deliveryId, state: deliveryState },
+        ]);
+      expectCustody("prepared");
       if (tool) {
+        fixture.sendText.mockRejectedValueOnce(connectionReset());
         const result = await withPluginRuntimeRegistryScope(fixture.current, () =>
           sendDurableMessageBatchCore({
             cfg,
@@ -330,10 +316,7 @@ describe("final delivery after plugin replacement", () => {
         ).toBeUndefined();
         return;
       }
-      const result = await fixture.deliver(structured);
-      if (result.status === "failed") {
-        throw result.error;
-      }
+      const result = await fixture.deliver(true);
       expect(result).toMatchObject({
         status: "handled_visible",
         delivery: {
@@ -342,92 +325,109 @@ describe("final delivery after plugin replacement", () => {
           receipt: { platformMessageIds: ["accepted-final"] },
         },
       });
-      expect(fixture.sendText).toHaveBeenCalledTimes(retry ? 2 : 1);
-      expect(fixture.sendText).toHaveBeenLastCalledWith(
+      expect(fixture.sendText).toHaveBeenCalledExactlyOnceWith(
         expect.objectContaining({
-          cfg: sameGeneration ? cfg : successorConfig,
+          cfg: successorConfig,
           to: "12345",
           text: "Saved final answer",
           accountId: "default",
         }),
       );
-      expect(loadSessionEntry(locator)?.pendingFinalDelivery?.deliveries).toEqual([
-        { id: completion.deliveryId, state: "delivered" },
-      ]);
+      expectCustody("delivered");
       expect(await loadPendingDeliveries(state.tmpDir())).toEqual([]);
       await clearPendingFinalDeliveryAfterSuccess(completion);
       expect(loadSessionEntry(locator)?.pendingFinalDelivery).toBeUndefined();
     },
   );
 
-  it.each([
-    "closed",
-    "removed",
-    "account-changed",
-    "defaults-changed",
-    "plugin-changed",
-    "plugin-id-changed",
-    "new-channel",
-    "replaced-channel",
-    "superseded-before-send",
-    "superseded-live-send",
-    "superseded-prepared-send",
-  ] as const)("does not send or borrow the process root when %s", async (stateChange) => {
-    vi.stubEnv("OPENCLAW_STATE_DIR", state.tmpDir());
-    const fixture = await replacementFixture({
-      newChannel: stateChange === "new-channel",
-      sameGeneration: stateChange === "superseded-prepared-send",
+  type Fixture = Awaited<ReturnType<typeof replacementFixture>>;
+  const supersedeBeforeSend = (fixture: Fixture) =>
+    fixture.beforeSendAttempt.mockImplementation(async () => {
+      fixture.publication.current = undefined;
     });
-    setActivePluginRegistry(createTestRegistry([...fixture.current.channels]));
-    if (stateChange === "replaced-channel") {
-      fixture.current.channels = fixture.current.channels.map((entry) => ({
+  const runtimeChanges: Record<string, (fixture: Fixture) => unknown> = {
+    "replaced-channel": ({ current }) =>
+      (current.channels = current.channels.map((entry) => ({
         ...entry,
         plugin: { ...entry.plugin },
-      }));
-    }
-    if (stateChange === "plugin-id-changed") {
-      fixture.current.channels = fixture.current.channels.map((entry) => ({
+      }))),
+    "plugin-id-changed": ({ current }) =>
+      (current.channels = current.channels.map((entry) => ({
         ...entry,
         pluginId: "another-owner",
-      }));
-    }
-    if (stateChange === "closed") {
-      fixture.publication.current = undefined;
-    }
-    if (stateChange === "removed") {
-      fixture.current.channels = [];
-    }
-    if (stateChange === "account-changed") {
-      fixture.setConfig({ channels: { telegram: { enabled: false } } });
-    }
-    if (stateChange === "defaults-changed") {
-      fixture.setConfig({ channels: { ...cfg.channels, defaults: { groupPolicy: "disabled" } } });
-    }
-    if (stateChange === "plugin-changed") {
-      fixture.setConfig({ ...cfg, plugins: { entries: { telegram: { enabled: false } } } });
-    }
-    if (stateChange.startsWith("superseded")) {
-      fixture.beforeSendAttempt.mockImplementation(async () => {
-        fixture.publication.current = undefined;
+      }))),
+    closed: ({ publication }) => (publication.current = undefined),
+    removed: ({ current }) => (current.channels = []),
+    "account-changed": ({ setConfig: configure }) =>
+      configure({ channels: { telegram: { enabled: false } } }),
+    "defaults-changed": ({ setConfig: configure }) =>
+      configure({
+        channels: { ...cfg.channels, defaults: { groupPolicy: "disabled" } },
+      }),
+    "plugin-changed": ({ setConfig: configure }) =>
+      configure({
+        ...cfg,
+        plugins: { entries: { telegram: { enabled: false } } },
+      }),
+    "new-channel": () => {},
+    "missing-admission-config": () => {},
+    "superseded-before-send": supersedeBeforeSend,
+    "superseded-live-send": supersedeBeforeSend,
+    "superseded-prepared-send": supersedeBeforeSend,
+  };
+  it.each(Object.keys(runtimeChanges))(
+    "does not send or borrow the process root when %s",
+    async (stateChange) => {
+      const fixture = await replacementFixture({
+        newChannel: stateChange === "new-channel",
+        sameGeneration: stateChange === "superseded-prepared-send",
+        missingAdmissionConfig: stateChange === "missing-admission-config",
       });
-    }
-    const result = await fixture.deliver(
-      false,
-      stateChange === "superseded-live-send" ? fixture.current : fixture.turn,
-    );
-    expect(result).toMatchObject({
-      status: "failed",
-      error: {
-        message: expect.stringContaining(
-          stateChange === "closed"
-            ? "closing"
-            : stateChange.startsWith("superseded")
-              ? "runtime changed"
-              : "channel changed",
-        ),
-      },
+      setActivePluginRegistry(createTestRegistry([...fixture.current.channels]));
+      runtimeChanges[stateChange]?.(fixture);
+      const result = await fixture.deliver(
+        false,
+        stateChange === "superseded-live-send" ? fixture.current : fixture.turn,
+      );
+      expect(result).toMatchObject({
+        status: "failed",
+        error: {
+          message: expect.stringContaining(
+            stateChange === "closed"
+              ? "closing"
+              : stateChange.startsWith("superseded")
+                ? "runtime changed"
+                : "channel changed",
+          ),
+        },
+      });
+      expect(fixture.sendText).not.toHaveBeenCalled();
+    },
+  );
+
+  it("uses publication settings through prepared views and current policy for delivery", async () => {
+    const { request, turn, setConfig: configure, deliver, sendText } = await replacementFixture();
+    const withPrefix = (config: OpenClawConfig) => ({
+      ...config,
+      channels: { telegram: { ...config.channels?.telegram, responsePrefix: "[ACCOUNT]" } },
     });
-    expect(fixture.sendText).not.toHaveBeenCalled();
+    request.cfg = withPrefix(cfg);
+    const currentConfig: OpenClawConfig = {
+      ...cfg,
+      tools: { fs: { workspaceOnly: true } },
+    };
+    configure(currentConfig);
+    setConfig(turn, request.cfg);
+    request.prepareRuntimeHandoff = withPrefix;
+    await expect(deliver()).resolves.toMatchObject({ status: "handled_visible" });
+    expect(sendText).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        cfg: {
+          channels: { telegram: { enabled: true, responsePrefix: "[ACCOUNT]" } },
+          tools: { fs: { workspaceOnly: true } },
+        },
+      }),
+    );
   });
 });
 
@@ -457,6 +457,7 @@ const { createTelegramDispatchHttpFixture } = await loadBundledPluginFacade<{
 
 const finalText = "Saved final answer after an unrelated reload.";
 const replacementToken = "654321:reload-test-replacement";
+const secretEnv = "TELEGRAM_TEST_RELOAD_TOKEN";
 
 describe("Telegram final sender after registry replacement", () => {
   const http = createTelegramDispatchHttpFixture();
@@ -465,31 +466,36 @@ describe("Telegram final sender after registry replacement", () => {
   it.each(["unchanged", "environment", "token-file", "secret-ref"] as const)(
     "keeps the admitted bot when credentials are %s",
     async (source) => {
-      const old = getActivePluginRegistry();
-      if (!old) {
-        throw new Error("Expected the fixture's Telegram registry");
-      }
-      const owner = createPluginRegistryOwner(old);
+      const old = expectDefined(getActivePluginRegistry(), "Telegram registry");
+      let owner: ReturnType<typeof createPluginRegistryOwner> | undefined;
       const next = createTestRegistry([...old.channels]);
       const tokenFile = http.state.path("telegram-token");
+      const credentials: Record<typeof source, TelegramAccountConfig> = {
+        unchanged: {},
+        environment: { botToken: undefined },
+        "token-file": { botToken: undefined, tokenFile },
+        "secret-ref": { botToken: { source: "env", provider: "reload", id: secretEnv } },
+      };
+      const writeToken = (token: string) => fs.writeFile(tokenFile, token, { mode: 0o600 });
       if (source === "token-file") {
-        await fs.writeFile(tokenFile, http.token, { mode: 0o600 });
+        await writeToken(http.token);
       }
       vi.stubEnv("TELEGRAM_BOT_TOKEN", http.token);
-      vi.stubEnv("TELEGRAM_TEST_RELOAD_TOKEN", http.token);
+      vi.stubEnv(secretEnv, http.token);
       try {
         await withPluginRuntimeRegistryScope(old, () =>
           http.dispatchProgressTurn(
             async () => {
-              if (source === "environment") {
-                vi.stubEnv("TELEGRAM_BOT_TOKEN", replacementToken);
-              } else if (source === "token-file") {
-                await fs.writeFile(tokenFile, replacementToken, { mode: 0o600 });
-              } else if (source === "secret-ref") {
-                vi.stubEnv("TELEGRAM_TEST_RELOAD_TOKEN", replacementToken);
+              if (source === "token-file") {
+                await writeToken(replacementToken);
+              } else if (source !== "unchanged") {
+                vi.stubEnv(
+                  source === "secret-ref" ? secretEnv : "TELEGRAM_BOT_TOKEN",
+                  replacementToken,
+                );
               }
               setActivePluginRegistry(next);
-              owner.publish(next);
+              expectDefined(owner, "publication owner").publish(next);
               // Another Gateway's process projection is never our delivery owner.
               setActivePluginRegistry(createTestRegistry([]));
             },
@@ -498,39 +504,19 @@ describe("Telegram final sender after registry replacement", () => {
               toolProgress: false,
               finalReply: { text: finalText },
               allowErrors: source !== "unchanged",
-              telegramCfg:
-                source === "token-file"
-                  ? { botToken: undefined, tokenFile }
-                  : source === "environment"
-                    ? { botToken: undefined }
-                    : source === "secret-ref"
-                      ? {
-                          botToken: {
-                            source: "env",
-                            provider: "reload",
-                            id: "TELEGRAM_TEST_RELOAD_TOKEN",
-                          },
-                        }
-                      : {},
+              telegramCfg: credentials[source],
               cfg: {
                 secrets: {
                   providers: {
-                    reload: { source: "env", allowlist: ["TELEGRAM_TEST_RELOAD_TOKEN"] },
+                    reload: { source: "env", allowlist: [secretEnv] },
                   },
                 },
               },
               onDispatch(dispatchConfig) {
                 for (const registry of [old, next]) {
-                  setPluginRuntimeLoadContext(registry, {
-                    rawConfig: dispatchConfig,
-                    config: dispatchConfig,
-                    activationSourceConfig: dispatchConfig,
-                    autoEnabledReasons: {},
-                    workspaceDir: undefined,
-                    env: {},
-                    logger: { info() {}, warn() {}, error() {}, debug() {} },
-                  });
+                  setConfig(registry, dispatchConfig);
                 }
+                owner = createPluginRegistryOwner(old);
               },
             },
           ),
@@ -538,19 +524,19 @@ describe("Telegram final sender after registry replacement", () => {
         const finals = http.calls.filter(
           (call) => call.method === "sendMessage" && call.fields.text === finalText,
         );
-        if (source === "unchanged") {
-          expect(finals).toHaveLength(1);
+        const admitted = source === "unchanged";
+        expect({
+          finals: finals.length,
+          visible: [...http.visibleMessages.values()].includes(finalText),
+        }).toEqual({ finals: admitted ? 1 : 0, visible: admitted });
+        if (admitted) {
           expect(http.endpoints[http.calls.findIndex((call) => call === finals[0])]).toBe(
             "/bot" + http.token + "/sendMessage",
           );
-          expect([...http.visibleMessages.values()]).toContain(finalText);
-        } else {
-          expect(finals).toEqual([]);
-          expect([...http.visibleMessages.values()]).not.toContain(finalText);
         }
         expect(http.endpoints.some((endpoint) => endpoint.includes(replacementToken))).toBe(false);
       } finally {
-        await owner.close();
+        await owner?.close();
       }
     },
   );

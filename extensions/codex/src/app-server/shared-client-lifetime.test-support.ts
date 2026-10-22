@@ -177,10 +177,7 @@ export function registerSharedClientLifetimeTests(
     "preserves binding cleanup ownership (caller retains client: %s)",
     async (callerRetains) => {
       const harness = createClientHarness();
-      vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-      const acquiring = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
-      await sendInitializeResult(harness, "openclaw/0.151.0 (Linux; test)");
-      const client = await acquiring;
+      const client = await acquireInitializedClient(harness, "openclaw/0.151.0 (Linux; test)");
       const unsubscribe = createDeferred<void>();
       const entered = createDeferred<void>();
       await retainCodexAppServerBindingSubscription(client, "previous-thread", {
@@ -221,10 +218,9 @@ export function registerSharedClientLifetimeTests(
   it("keeps a retired one-shot client alive until native subagent completion", async () => {
     const harness = createClientHarness();
     vi.spyOn(CodexAppServerClient, "start").mockResolvedValueOnce(harness.client);
-
-    const clientPromise = getLeasedSharedCodexAppServerClient({ timeoutMs: 1000 });
+    const acquiring = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
     await sendInitializeResult(harness, "openclaw/0.149.0 (Linux; test)");
-    const client = await clientPromise;
+    const client = await acquiring;
     const deliverCompletion = vi.fn(async () => ({ delivered: true, path: "direct" as const }));
     const retainClient = vi.fn(() => retainSharedCodexAppServerClientIfCurrent(client));
     const monitor = new codexNativeSubagentMonitorRuntime.Monitor(
@@ -311,10 +307,7 @@ export function registerSharedClientLifetimeTests(
     "acquires the recorded %s owner through physical lifetime",
     async (state) => {
       const harness = createClientHarness({ autoEmitExit: false });
-      vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-      const acquire = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
-      await sendInitializeResult(harness, "openclaw/0.151.0 (Linux; test)");
-      const client = await acquire;
+      const client = await acquireInitializedClient(harness, "openclaw/0.151.0 (Linux; test)");
       if (state !== "current") {
         expect(retireSharedCodexAppServerClientIfCurrent(client)).toEqual({
           activeLeases: 1,
@@ -357,10 +350,7 @@ export function registerSharedClientLifetimeTests(
     const harness = createClientHarness({ autoEmitExit: false });
     signal.addEventListener("abort", harness.emitExit, { once: true });
     try {
-      vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-      const acquire = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
-      await sendInitializeResult(harness, "openclaw/0.151.0 (Linux; test)");
-      const client = await acquire;
+      const client = await acquireInitializedClient(harness, "openclaw/0.151.0 (Linux; test)");
       const session = {
         kind: "session" as const,
         agentId: "main",
@@ -405,10 +395,7 @@ export function registerSharedClientLifetimeTests(
 
   it("settles session cancellation when its native owner closes during the callback without exiting", async () => {
     const harness = createClientHarness({ autoEmitExit: false });
-    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-    const acquire = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
-    await sendInitializeResult(harness, `codex-cli/${CODEX_APP_SERVER_VERSION}`);
-    const client = await acquire;
+    const client = await acquireInitializedClient(harness, `codex-cli/${CODEX_APP_SERVER_VERSION}`);
     const bindingStore = createCodexTestBindingStore();
     const session = {
       kind: "session" as const,
@@ -449,10 +436,7 @@ export function registerSharedClientLifetimeTests(
   it("lets cancellation end a writer handoff to a retired owner that other leases keep alive", async () => {
     const harness = createClientHarness({ autoEmitExit: false });
     const successor = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-    const acquire = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
-    await sendInitializeResult(harness, "openclaw/0.151.0 (Linux; test)");
-    const retired = await acquire;
+    const retired = await acquireInitializedClient(harness, "openclaw/0.151.0 (Linux; test)");
     retireSharedCodexAppServerClientIfCurrent(retired);
     const abort = new AbortController();
     let outcome: unknown = "pending";
@@ -460,7 +444,7 @@ export function registerSharedClientLifetimeTests(
       client: successor.client,
       clientId: successor.client.getInstanceId(),
       ownerClientId: retired.getInstanceId(),
-      lifecycleTiming: createCodexThreadLifecycleTimingTracker(),
+      lifecycleTiming: createCodexThreadLifecycleTimingTracker(false),
       threadId: "thread",
       signal: abort.signal,
     }).then(
@@ -676,10 +660,7 @@ export function registerSharedClientLifetimeTests(
 
   it("preserves client lifetime while an unleased acquire is pending", async () => {
     const harness = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-    const acquire = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
-    await sendInitializeResult(harness, "openclaw/0.149.0 (Linux; test)");
-    const client = await acquire;
+    const client = await acquireInitializedClient(harness, "openclaw/0.149.0 (Linux; test)");
     const assertCurrent = captureCodexAppServerClientLifetime(client, "native-process");
     let observedPendingAcquire = false;
     await getSharedCodexAppServerClient({
@@ -701,10 +682,7 @@ export function registerSharedClientLifetimeTests(
     "revokes %s ownership when its physical client is retired",
     async (requiredOwnership) => {
       const harness = createClientHarness();
-      vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
-      const acquire = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
-      await sendInitializeResult(harness, "openclaw/0.149.0 (Linux; test)");
-      const client = await acquire;
+      const client = await acquireInitializedClient(harness, "openclaw/0.149.0 (Linux; test)");
       const assertExclusive = captureCodexAppServerClientLifetime(client, requiredOwnership);
       retireSharedCodexAppServerClientIfCurrent(client);
 
@@ -726,4 +704,14 @@ async function sendInitializeResult(
   const initialize = JSON.parse(await harness.waitForWrite(0)) as { id: number; method: string };
   expect(initialize.method).toBe("initialize");
   harness.send({ id: initialize.id, result: { userAgent } });
+}
+
+async function acquireInitializedClient(
+  harness: ReturnType<typeof createClientHarness>,
+  userAgent: string,
+) {
+  vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+  const acquire = getLeasedSharedCodexAppServerClient({ timeoutMs: 1_000 });
+  await sendInitializeResult(harness, userAgent);
+  return acquire;
 }

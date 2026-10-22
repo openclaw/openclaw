@@ -12,7 +12,6 @@ import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
 export const DIAGNOSTIC_PROFILE_MAX_BYTES = 1024 * 1024;
 const ENGINE_NAMES = new Set(["(root)", "(program)", "(idle)", "(garbage collector)"]);
 let capturing = false;
-let cleanupUncertain = false;
 
 type FailureReason =
   | "cooldown"
@@ -103,12 +102,7 @@ export function createInspectorProfileCapture<Profile>(
       } catch {
         // Disconnect must still release the inspector after a failed disable.
       }
-      try {
-        session.disconnect();
-      } catch (error) {
-        cleanupUncertain = true;
-        throw error;
-      }
+      session.disconnect();
       if (!disabled) {
         throw new ProfileFailure("cleanup-failed");
       }
@@ -124,14 +118,7 @@ export function createNativeCpuProfileCapture(
     // Node shares its native profiler with the stall recorder's overlapping windows.
     start: () => (handle = v8.startCpuProfile({ sampleInterval: intervalMicros / 1_000 })),
     stop: () => handle && { profile: parseNativeCpuProfile(handle.stop()) },
-    close: () => {
-      try {
-        handle?.[Symbol.dispose]();
-      } catch (error) {
-        cleanupUncertain = true;
-        throw error;
-      }
-    },
+    close: () => handle?.[Symbol.dispose](),
   };
 }
 
@@ -230,7 +217,7 @@ export function sanitizeDiagnosticProfileFrame(
 
 /** Owns one ephemeral isolate-local capture; it never opens an inspector listener. */
 export async function captureDiagnosticProfile<Profile, Result>(options: {
-  signal: AbortSignal;
+  signal?: AbortSignal;
   hasAuthority: () => boolean;
   durationMs: number;
   /** Worker captures require tracing admission from the Gateway; trace_events is main-only. */
@@ -240,7 +227,7 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     profile: Profile,
     packageRoot: string | null,
     measurement: ProfileMeasurement,
-  ) => Result;
+  ) => Result | Promise<Result>;
 }): Promise<DiagnosticProfileOutcome<Result>> {
   const unavailable = (
     reason: FailureReason,
@@ -250,9 +237,6 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     reason,
     cleanupFailed,
   });
-  if (cleanupUncertain) {
-    return unavailable("cleanup-failed", true);
-  }
   if (capturing) {
     return unavailable("busy");
   }
@@ -269,7 +253,7 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
   let startBlockedMs = 0;
   let packageRoot: string | null = null;
   const assertActive = () => {
-    if (options.signal.aborted || !options.hasAuthority()) {
+    if (options.signal?.aborted || !options.hasAuthority()) {
       throw new ProfileFailure("cancelled");
     }
   };
@@ -330,7 +314,7 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
     failure =
       error instanceof ProfileFailure
         ? error.reason
-        : options.signal.aborted
+        : options.signal?.aborted
           ? "cancelled"
           : "capture-failed";
   } finally {
@@ -348,23 +332,24 @@ export async function captureDiagnosticProfile<Profile, Result>(options: {
         cleanupFailed = true;
       }
     }
-    capturing = false;
   }
   if (failure || cleanupFailed) {
+    capturing = false;
     return unavailable(failure ?? "cleanup-failed", cleanupFailed);
   }
   try {
     assertActive();
-    return {
-      status: "complete",
-      result: options.sanitize(profile!, packageRoot, {
-        durationMs,
-        startBlockedMs,
-        before: before!,
-        after: after!,
-      }),
-    };
+    const result = await options.sanitize(profile!, packageRoot, {
+      durationMs,
+      startBlockedMs,
+      before: before!,
+      after: after!,
+    });
+    assertActive();
+    return { status: "complete", result };
   } catch (error) {
     return unavailable(error instanceof ProfileFailure ? error.reason : "invalid-profile");
+  } finally {
+    capturing = false;
   }
 }

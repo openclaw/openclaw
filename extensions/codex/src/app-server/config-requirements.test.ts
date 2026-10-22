@@ -16,112 +16,59 @@ const unrestricted = {
   approvalsReviewer: "user",
 };
 const restrictedSandbox = 'allowed_sandbox_modes = ["read-only", "workspace-write"]\n';
+type RuntimeParams = Parameters<typeof resolveRuntimeForTest>[0];
+const openai = { modelProvider: "openai" };
+const userGuardian = { ...guardian, approvalsReviewer: "user" };
+const remoteBuild = `[[remote_sandbox_config]]
+hostname_patterns = ["build-*.example.com"]
+allowed_sandbox_modes = ["read-only", "workspace-write"]`;
 
 describe("Codex app-server requirements", () => {
-  it.each<
-    [string, Parameters<typeof resolveRuntimeForTest>[0], Parameters<typeof expectRuntimePolicy>[1]]
-  >([
+  it.each<[string, Parameters<typeof expectRuntimePolicy>[1], RuntimeParams?]>([
+    [restrictedSandbox, userGuardian],
     [
-      "uses user approvals when the model provider is unknown",
-      { requirementsToml: restrictedSandbox },
-      { ...guardian, approvalsReviewer: "user" },
-    ],
-    [
-      "reads quoted keys and escaped read-only sandbox values",
-      {
-        modelProvider: "openai",
-        requirementsToml: String.raw`'allowed_sandbox_modes' = ["read\u002donly"]`,
-      },
+      String.raw`'allowed_sandbox_modes' = ["read\u002donly"]`,
       { ...guardian, sandbox: "read-only" },
+      openai,
     ],
+    ['allowed_approval_policies = ["on-request"]', guardian, openai],
+    ['allowed_approval_policies = ["on-failure"]', guardian, openai],
+    ['allowed_approvals_reviewers = ["auto_review"]', guardian, openai],
+    [`${restrictedSandbox}allowed_approvals_reviewers = ["user"]`, userGuardian],
     [
-      "uses guardian when never approval is disallowed",
-      { modelProvider: "openai", requirementsToml: 'allowed_approval_policies = ["on-request"]' },
-      guardian,
-    ],
-    [
-      "normalizes the deprecated on-failure alias",
-      { modelProvider: "openai", requirementsToml: 'allowed_approval_policies = ["on-failure"]' },
-      guardian,
-    ],
-    [
-      "uses guardian when the user reviewer is disallowed",
-      {
-        modelProvider: "openai",
-        requirementsToml: 'allowed_approvals_reviewers = ["auto_review"]',
-      },
-      guardian,
-    ],
-    [
-      "selects the allowed user reviewer under sandbox restrictions",
-      { requirementsToml: `${restrictedSandbox}allowed_approvals_reviewers = ["user"]` },
-      { ...guardian, approvalsReviewer: "user" },
-    ],
-    [
-      "ignores quoted sandbox modes inside comments",
-      {
-        modelProvider: "openai",
-        requirementsToml: `allowed_sandbox_modes = [
+      `allowed_sandbox_modes = [
   "read-only",
   # "danger-full-access",
   "workspace-write",
 ]`,
-      },
       guardian,
+      openai,
     ],
     [
-      "applies the first matching remote sandbox requirements",
-      {
-        modelProvider: "openai",
-        hostName: "BUILD-01.EXAMPLE.COM.",
-        requirementsToml: `[[remote_sandbox_config]]
-hostname_patterns = ["build-*.example.com"]
-allowed_sandbox_modes = ["read-only", "workspace-write"]
-
+      `${remoteBuild}
 [[remote_sandbox_config]]
 hostname_patterns = ["build-01.example.com"]
 allowed_sandbox_modes = ["read-only", "danger-full-access"]`,
-      },
       guardian,
+      { ...openai, hostName: "BUILD-01.EXAMPLE.COM." },
     ],
     [
-      "ignores non-matching remote-only requirements after comments",
-      {
-        hostName: "laptop.example.com",
-        requirementsToml: `${"# Remote build hosts have separate sandbox requirements.\n".repeat(4)}[[remote_sandbox_config]]
-hostname_patterns = ["build-*.example.com"]
-allowed_sandbox_modes = ["read-only", "workspace-write"]`,
-      },
+      `${"# Remote build hosts have separate sandbox requirements.\n".repeat(4)}${remoteBuild}`,
       unrestricted,
+      { hostName: "laptop.example.com" },
     ],
+    ['allowed_approval_policies = ["never"]', unrestricted],
+    ['allowed_sandbox_modes = ["ReadOnly", "WorkspaceWrite", "DangerFullAccess"]', unrestricted],
+    ["allowed_sandbox_modes = [read-only]", unrestricted],
     [
-      "stays unchained when never approval is allowed",
-      { requirementsToml: 'allowed_approval_policies = ["never"]' },
+      restrictedSandbox,
       unrestricted,
-    ],
-    [
-      "stays unchained when full access is allowed",
-      {
-        requirementsToml:
-          'allowed_sandbox_modes = ["ReadOnly", "WorkspaceWrite", "DangerFullAccess"]',
-      },
-      unrestricted,
-    ],
-    [
-      "stays unchained when requirements are malformed",
-      { requirementsToml: "allowed_sandbox_modes = [read-only]" },
-      unrestricted,
-    ],
-    [
-      "does not apply local requirements to websocket transports",
       {
         pluginConfig: { appServer: { transport: "websocket", url: "ws://127.0.0.1:39175" } },
-        requirementsToml: restrictedSandbox,
       },
-      unrestricted,
     ],
-  ])("%s", (_name, params, policy) => {
-    expectRuntimePolicy(resolveRuntimeForTest({ pluginConfig: {}, ...params }), policy);
+  ])("applies requirements %s as %j with %j", (requirementsToml, policy, options) => {
+    expectRuntimePolicy(resolveRuntimeForTest({ requirementsToml, ...options }), policy);
   });
 
   it("preserves managed approval over an allowed unrestricted policy", () => {
@@ -134,18 +81,13 @@ allowed_sandbox_modes = ["read-only", "workspace-write"]`,
     expect(withMcpElicitationsApprovalPolicy(runtime.approvalPolicy)).toBe("untrusted");
   });
 
-  it.each([
-    {
-      name: "configured path",
-      options: { requirementsPath: "/custom/codex/requirements.toml" },
-      expected: "/custom/codex/requirements.toml",
-    },
-    {
-      name: "Windows ProgramData path",
-      options: { platform: "win32" as const, env: { ProgramData: "D:\\ManagedData" } },
-      expected: "D:\\ManagedData\\OpenAI\\Codex\\requirements.toml",
-    },
-  ])("reads local requirements from the $name", ({ options, expected }) => {
+  it.each<[Omit<NonNullable<RuntimeParams>, "pluginConfig">, string]>([
+    [{ requirementsPath: "/custom/codex/requirements.toml" }, "/custom/codex/requirements.toml"],
+    [
+      { platform: "win32", env: { ProgramData: "D:\\ManagedData" } },
+      "D:\\ManagedData\\OpenAI\\Codex\\requirements.toml",
+    ],
+  ])("reads local requirements with %j", (options, expected) => {
     const readPaths: string[] = [];
     const runtime = resolveCodexAppServerRuntimeOptions({
       pluginConfig: {},

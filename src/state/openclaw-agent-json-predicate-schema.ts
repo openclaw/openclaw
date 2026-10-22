@@ -36,34 +36,6 @@ export function migrateAgentJsonPredicatesInTransaction(database: DatabaseSync):
   for (const column of AGENT_JSON_PREDICATE_COLUMNS.transcript_events) {
     ensureColumn(database, "transcript_events", `${column} ${COLUMN_DECLARATIONS[column]}`);
   }
-  // sqlite-allow-raw: classify canonical navigation in place during the versioned schema migration.
-  database.exec(`
-    WITH source AS (
-      SELECT session_id, seq, CASE WHEN event_json IS NOT NULL THEN event_json
-        ELSE json_extract(navigation_json, '$.navigation') END AS event
-      FROM transcript_events
-    ), navigation AS (
-      SELECT session_id, seq, coalesce(json_valid(event), 0) AS valid,
-        CASE WHEN json_valid(event) THEN event ELSE '{}' END AS event
-      FROM source
-    ), fields AS (
-      SELECT session_id, seq, valid,
-        json_extract(event, '$.type') AS first_type,
-        json_extract(event, '$.customType') AS first_custom_type,
-        CASE WHEN json_type(event, '$.display') = 'true' THEN 1 ELSE 0 END AS display,
-        json_extract(event, '$.message.role') AS role,
-        (SELECT value FROM json_each(event) WHERE key = 'type' ORDER BY id DESC LIMIT 1) AS last_type,
-        (SELECT value FROM json_each(event) WHERE key = 'customType' ORDER BY id DESC LIMIT 1) AS last_custom_type
-      FROM navigation
-    )
-    UPDATE transcript_events SET
-      navigation_type = CASE WHEN fields.first_type IN ('session', 'message', 'reset', 'compaction', 'custom_message', 'custom') THEN fields.first_type END,
-      navigation_custom_type = CASE WHEN fields.first_custom_type IN ('openclaw.runtime-context', 'openclaw.cache-ttl') THEN fields.first_custom_type END,
-      navigation_display = fields.display,
-      message_role = CASE WHEN fields.role IN ('user', 'assistant', 'toolResult', 'system') THEN fields.role END,
-      navigation_last_type = CASE WHEN fields.last_type IN ('session', 'message', 'reset', 'compaction', 'custom_message', 'custom') THEN fields.last_type END,
-      navigation_last_custom_type = CASE WHEN fields.last_custom_type IN ('openclaw.runtime-context', 'openclaw.cache-ttl') THEN fields.last_custom_type END,
-      navigation_valid = fields.valid
-    FROM fields WHERE transcript_events.session_id = fields.session_id AND transcript_events.seq = fields.seq;
-  `);
+  // Old transcript rows stay byte-for-byte intact. Reads derive missing predicates
+  // within their existing windows; ordinary payload writes publish all fields.
 }

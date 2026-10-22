@@ -3185,18 +3185,11 @@ workboard-inline-text {
   min-width: 0;
 }
 
-.workboard-detail__section h3,
-.workboard-detail__section h4 {
+.workboard-detail__section h3 {
   margin: 0;
   font-size: 0.84rem;
   font-weight: 600;
   color: var(--text);
-}
-
-.workboard-detail__section h4 {
-  margin-top: 4px;
-  color: var(--muted);
-  font-size: 0.78rem;
 }
 
 .workboard-detail__section p {
@@ -3277,11 +3270,6 @@ workboard-inline-text {
   font-size: 0.76rem;
   line-height: 1.5;
   overflow-wrap: anywhere;
-}
-
-.workboard-detail__session-state {
-  color: var(--muted);
-  font-size: 0.72rem;
 }
 
 .workboard-detail .workboard-detail__session-link {
@@ -4660,4 +4648,13 @@ workboard-inline-text {
     width: 44px;
     height: 44px;
   }
+}
+
+.workboard-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  color: var(--muted);
 }

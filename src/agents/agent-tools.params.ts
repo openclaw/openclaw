@@ -160,7 +160,7 @@ export async function normalizeFileToolPathParamsFromKeys<T extends Record<strin
   return normalized ?? record;
 }
 
-export function missingRequiredParamLabels(
+function missingRequiredParamLabels(
   record: Record<string, unknown> | undefined,
   groups: readonly RequiredParamGroup[],
 ): string[] {
@@ -203,24 +203,17 @@ export function assertRequiredParams(
 
 export function wrapToolParamValidation(
   tool: AnyAgentTool,
-  requiredParamGroups?: readonly RequiredParamGroup[],
+  requiredParamGroups: readonly RequiredParamGroup[],
   cwd?: string,
-  bridge?: SandboxFsBridge,
 ): AnyAgentTool {
   return {
     ...tool,
     execute: async (toolCallId, params, signal, onUpdate) => {
       const record = getToolParamsRecord(params);
-      const pathKeys = requiredParamGroups?.some((group) => group.keys.includes("path"))
-        ? ["path"]
-        : [];
-      const normalizedRecord =
-        record && pathKeys.length > 0
-          ? await normalizeFileToolPathParamsFromKeys(record, pathKeys, cwd, bridge)
-          : record;
-      if (requiredParamGroups?.length) {
-        assertRequiredParams(normalizedRecord, requiredParamGroups, tool.name);
-      }
+      const normalizedRecord = record
+        ? await normalizeFileToolPathParamsFromKeys(record, ["path"], cwd)
+        : record;
+      assertRequiredParams(normalizedRecord, requiredParamGroups, tool.name);
       return tool.execute(toolCallId, normalizedRecord ?? params, signal, onUpdate);
     },
   };

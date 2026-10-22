@@ -6,7 +6,7 @@ import {
   observeParentSqlite,
 } from "../../../test/helpers/sqlite-parent-observer.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import {
@@ -83,12 +83,16 @@ function expectHistoryUnchanged() {
   expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
 }
 
+function maintain(config = maintenanceConfig(fixture.scope.storePath), assertCurrent?: () => void) {
+  return runSessionColdStorageMaintenance({ config, assertCurrent });
+}
+
 it.each([
-  { name: "a newly admitted normalized logical key", change: "protected" },
-  { name: "a newly registered live run", change: "registry" },
-  { name: "an unrelated newly admitted key", change: "unrelated" },
-  { name: "revoked configuration", change: "configuration" },
-])("rechecks $name after worker selection without parent SQLite", async ({ change }) => {
+  ["a newly admitted normalized logical key", "protected"],
+  ["a newly registered live run", "registry"],
+  ["an unrelated newly admitted key", "unrelated"],
+  ["revoked configuration", "configuration"],
+])("rechecks %s after worker selection without parent SQLite", async (_name, change) => {
   const protectsHistory = change !== "unrelated";
   const ownerStorePath =
     change === "configuration"
@@ -99,19 +103,18 @@ it.each([
   const delayed = delayPreparation();
   const observer = observeParentSqlite();
   const config = maintenanceConfig(ownerStorePath);
-  const pending = runSessionColdStorageMaintenance({
+  const pending = maintain(
     config,
-    assertCurrent:
-      change === "configuration"
-        ? () => {
-            if (!config.session.maintenance.coldStorage.enabled) {
-              throw new Error("Cold maintenance configuration was revoked");
-            }
+    change === "configuration"
+      ? () => {
+          if (!config.session.maintenance.coldStorage.enabled) {
+            throw new Error("Cold maintenance configuration was revoked");
           }
-        : undefined,
-  });
+        }
+      : undefined,
+  );
   const outcome = pending.catch((error: unknown) => error);
-  let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   try {
     await awaitGateBeforeSettlement(
       delayed.entered.promise,
@@ -127,7 +130,7 @@ it.each([
         projectSessionActive: true,
       });
     } else {
-      admission = await beginSessionWorkAdmission({
+      admission = await beginSessionEffect({
         scope: ownerStorePath,
         identities: [
           protectsHistory ? fixture.scope.sessionKey.toUpperCase() : "agent:main:unrelated-work",
@@ -211,9 +214,7 @@ it.each([
     }
     const before = fixture.snapshot();
     try {
-      await expect(
-        runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.scope.storePath) }),
-      ).resolves.toEqual({
+      await expect(maintain()).resolves.toEqual({
         archivedTranscripts: protectedHistory ? 0 : 1,
         externalizedTranscripts: 0,
       });
@@ -234,9 +235,7 @@ it("propagates selection failure without a mutation or synchronous fallback", as
     .mockRejectedValueOnce(failure);
   const observer = observeParentSqlite();
   try {
-    await expect(
-      runSessionColdStorageMaintenance({ config: maintenanceConfig(fixture.scope.storePath) }),
-    ).rejects.toBe(failure);
+    await expect(maintain()).rejects.toBe(failure);
     expect(observer.counts).toEqual(emptySqliteCounts());
     expect(worker).toHaveBeenCalledOnce();
   } finally {
@@ -247,7 +246,7 @@ it("propagates selection failure without a mutation or synchronous fallback", as
 
 it("retains an embedded archive when its window gains an admitted owner after preparation", async () => {
   const config = maintenanceConfig(fixture.scope.storePath);
-  await expect(runSessionColdStorageMaintenance({ config })).resolves.toEqual({
+  await expect(maintain(config)).resolves.toEqual({
     archivedTranscripts: 1,
     externalizedTranscripts: 0,
   });
@@ -271,9 +270,9 @@ it("retains an embedded archive when its window gains an admitted owner after pr
   await closeOpenClawAgentDatabasesAsync();
 
   const delayed = delayPreparation();
-  const pending = runSessionColdStorageMaintenance({ config });
+  const pending = maintain(config);
   const outcome = pending.catch((error: unknown) => error);
-  let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   try {
     await awaitGateBeforeSettlement(
       delayed.entered.promise,
@@ -285,7 +284,7 @@ it("retains an embedded archive when its window gains an admitted owner after pr
       .prepare("UPDATE session_windows SET session_key = ? WHERE session_id = ?")
       .run(reboundKey, historicalId);
     const before = fixture.snapshot();
-    admission = await beginSessionWorkAdmission({
+    admission = await beginSessionEffect({
       scope: fixture.scope.storePath,
       identities: [reboundKey],
       assertAllowed: () => {},

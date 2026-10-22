@@ -50,7 +50,6 @@ describe("reply dedupe uses the plugin's delivery destination", () => {
         config: {},
         payloads,
         isHeartbeat: false,
-        didLogHeartbeatStrip: false,
         blockStreamingEnabled: false,
         blockReplyPipeline: null,
         replyToMode: mode,

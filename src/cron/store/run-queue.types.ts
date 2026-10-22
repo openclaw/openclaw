@@ -9,7 +9,11 @@ export type CronRunRequestContext = {
   event?: CronEventAdmission;
 };
 
-export type CronQueuedRun = { job: CronJob; runReceipt: CronRunReceiptHandle };
+export type CronQueuedRun = {
+  job: CronJob;
+  runReceipt: CronRunReceiptHandle;
+  migrationPending?: boolean;
+};
 export type CronSkippedRequest = {
   job?: CronJob;
   runReceipt: CronRunReceiptHandle;
@@ -47,8 +51,18 @@ export type CronRunQueueOperations = {
       maxConcurrentRuns: number;
       requests: CronRunRequestContext[];
       schedulingPaused?: boolean;
+      preparingAgentIds?: string[];
+      /**
+       * The draining Gateway process. Private command schedules from another process, or a
+       * drain without this identity, retire before spending an attempt.
+       */
+      hostProcessId?: string;
     };
-    output: { launches: CronQueuedRun[]; skipped: CronSkippedRequest[] };
+    output: {
+      launches: CronQueuedRun[];
+      preparing: CronQueuedRun[];
+      skipped: CronSkippedRequest[];
+    };
   };
   "cron.cancelRequests": {
     input: {

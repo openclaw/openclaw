@@ -17,7 +17,6 @@ const warnHookFailure = (hook: string) => (error: unknown) => {
   return undefined;
 };
 
-/** Prompt/developer-instruction pair after harness prompt-build hooks run. */
 type AgentHarnessPromptBuildResult = {
   prompt: string;
   developerInstructions: string;
@@ -34,7 +33,6 @@ type AgentHarnessDeveloperInstructionBuilder = {
   build: (params: { toolsAllow?: string[]; hasToolRestrictions: boolean }) => string | undefined;
 };
 
-/** Runs before-prompt hooks and returns the adjusted prompt fields. */
 export async function resolveAgentHarnessBeforePromptBuildResult(params: {
   prompt: string;
   currentInboundContext?: CurrentInboundPromptContext;

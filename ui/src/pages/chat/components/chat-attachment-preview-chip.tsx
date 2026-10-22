@@ -17,15 +17,17 @@ export function AttachmentPreviewChip(props: {
   onReveal?: () => void;
   removal?: AttachmentChipRemoval;
   elementRef?: (element: Element | undefined) => void;
+  triggerRef?: JSX.Ref<HTMLButtonElement>;
 }) {
   const ref = attachmentAdmissionRef(() => props.elementRef);
   const label = () => (
     <>
       <span aria-hidden="true">{props.icon}</span>
       <span
-        class={
-          props.removal ? "chat-selection-annotations__label" : "chat-attachment-preview-label"
-        }
+        class={{
+          "chat-selection-annotations__label": Boolean(props.removal),
+          "chat-attachment-preview-label": !props.removal,
+        }}
         dir="auto"
       >
         {props.label}
@@ -49,7 +51,11 @@ export function AttachmentPreviewChip(props: {
       }}
     >
       <Show when={props.removal} fallback={<span class="chat-attachment-file">{label()}</span>}>
-        <button type="button" class="chat-attachment-file chat-selection-annotations__trigger">
+        <button
+          ref={props.triggerRef}
+          type="button"
+          class="chat-attachment-file chat-selection-annotations__trigger"
+        >
           {label()}
         </button>
       </Show>

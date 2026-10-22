@@ -1,4 +1,5 @@
 import type {
+  APIChannel,
   APIGuildMember,
   APIGuildScheduledEvent,
   APIRole,
@@ -10,15 +11,10 @@ import {
   resolveExpiresAtMsFromDurationMs,
   timestampMsToIsoString,
 } from "openclaw/plugin-sdk/number-runtime";
-import {
-  getChannel,
-  getGuild,
-  getGuildMember,
-  getGuildVoiceState,
-  isUnknownDiscordVoiceStateError,
-  type APIChannel,
-  type RequestClient,
-} from "./internal/discord.js";
+import { getGuild, getGuildMember, getGuildVoiceState } from "./internal/api.guild.js";
+import { getChannel } from "./internal/api.messages.js";
+import { isUnknownDiscordVoiceStateError } from "./internal/rest-errors.js";
+import type { RequestClient } from "./internal/rest.js";
 import { DISCORD_IMAGE_UPLOAD_TYPES, loadDiscordMediaForUpload } from "./send.emojis-stickers.js";
 import { resolveDiscordRest } from "./send.shared.js";
 import type {

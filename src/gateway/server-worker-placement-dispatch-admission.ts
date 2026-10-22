@@ -22,7 +22,7 @@ import { captureSessionTranscriptTargetBinding } from "../config/sessions/transc
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../sessions/session-controller.lifecycle.js";
 import { sessionChanges, type SessionRowFacts } from "../sessions/session-row-changes.js";
 import {
   prepareSessionRowPublicationScope,
@@ -125,9 +125,10 @@ export async function withGatewayWorkerSessionAdmission<T>(
         }
         return current;
       };
-      let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+      let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
       try {
-        admission = await beginSessionWorkAdmission({
+        admission = await beginSessionEffect({
+          agentId: scope.agentId,
           scope: memory.path,
           identities: [scope.sessionKey, scope.sessionId, ...(params.target?.storeKeys ?? [])],
           onInterrupt: (reason) => controller.abort(reason),
@@ -226,13 +227,13 @@ export async function withGatewayWorkerSessionAdmission<T>(
     params.authorize?.();
     assertRouteCurrent();
   };
-  let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+  let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
   const acquiring = new AbortController();
   const abortAcquisition = () => acquiring.abort(signal.reason);
   signal.addEventListener("abort", abortAcquisition, { once: true });
   try {
     // Reserve before asynchronous source acquisition so Stop can retire queued ingress.
-    admission = await beginSessionWorkAdmission({
+    admission = await beginSessionEffect({
       agentId: scope.agentId,
       scope: configuredPath,
       identities: [scope.sessionKey, scope.sessionId, ...(params.target?.storeKeys ?? [])],

@@ -1,3 +1,4 @@
+import "./discussions/session-authority.test-support.js";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -357,7 +358,6 @@ describe("handleClickClackInbound", () => {
       accountId: "default",
       credentialFingerprint: "test-fingerprint",
       destinationIdentity: "http://127.0.0.1:8080\0wsp_1",
-      createGeneration: () => "pending-generation",
     });
     await recordPendingDiscussionOpen({
       runtime,

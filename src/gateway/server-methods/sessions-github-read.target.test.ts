@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -9,14 +10,26 @@ import { managedWorktrees } from "../../agents/worktrees/service.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { setCanonicalUserProfileRole } from "../../state/user-profile-writes.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import * as availability from "../github-publication-availability.js";
 import { prepareGitHubPublicationTarget } from "../github-publication-target.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import * as sessionStoreWorker from "../session-utils-store-worker.js";
 import {
+  expectFailure,
+  expectNoCalls,
+  expectNoPersonalReads,
+  expectReply,
+  mockPublicationIdentity,
+  optionsResult,
   publisher,
+  publisherIdentity,
   receipt,
   sessionKey,
+  withHeldReceipt,
   withReadFixture,
+  type ReadFixture,
 } from "./sessions-github-read.test-support.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -24,51 +37,46 @@ const guest = { personal: true, scopes: ["operator.sessions.write"] };
 const sharedOptions = expect.objectContaining({ shared: publisher });
 const githubOrigin = "https://github.com/example/project.git";
 const repositoryChanged = "GitHub publication workspace repository changed.";
-const publisherIdentity = {
-  source: publisher.source,
-  account: { accountId: publisher.accountId, login: publisher.login, avatarUrl: null },
-};
-type ReadFixture = Parameters<Parameters<typeof withReadFixture>[0]>[0];
 type Worktree = Awaited<ReturnType<typeof registerWorktree>>;
 const options = (fixture: ReadFixture) => fixture.invoke("sessions.github.options", { sessionKey });
-const expectedOptions = (supported: boolean) => ({
-  personal: null,
-  shared: supported ? publisher : null,
-  ...(!supported ? { sharedUnavailableReason: "unsupported_workspace" } : {}),
-  pendingPersonal: null,
-  latestShared: receipt,
-});
-function expectFailure(
-  response: ReturnType<typeof vi.fn>,
-  detail: { code?: string; message?: string },
-) {
-  expect(response).toHaveBeenCalledWith(false, undefined, expect.objectContaining(detail));
-}
+const expectedOptions = (supported: boolean) =>
+  optionsResult({
+    shared: supported ? publisher : null,
+    ...(!supported ? { sharedUnavailableReason: "unsupported_workspace" } : {}),
+  });
 async function withWorktree(
   run: (fixture: ReadFixture, worktree: Worktree) => Promise<void>,
   origin: string | undefined = githubOrigin,
+  bare = false,
 ) {
-  await withReadFixture(async (fixture) => run(fixture, await registerWorktree(origin)), guest);
+  await withReadFixture(
+    async (fixture) => run(fixture, await registerWorktree(origin, bare)),
+    guest,
+  );
 }
 
 async function git(root: string, ...args: string[]) {
   expect((await runGit(root, args)).code).toBe(0);
 }
 
-beforeEach(() => {
-  vi.spyOn(availability, "prepareCurrentGitHubPublicationOptionsIdentity").mockResolvedValue(
-    publisherIdentity,
-  );
-});
+beforeEach(mockPublicationIdentity);
 afterEach(() => vi.restoreAllMocks());
 
-async function registerWorktree(origin?: string) {
-  const root = await fs.realpath(temporary.make("publication-read-target-"));
+async function registerWorktree(origin?: string, bare = false) {
+  let root = await fs.realpath(temporary.make("publication-read-target-"));
   await git(root, "init", "--initial-branch=feature");
   await git(root, "config", "user.name", "Publication Fixture");
   await git(root, "config", "user.email", "publication@example.invalid");
   await git(root, "config", "commit.gpgsign", "false");
   await git(root, "commit", "--allow-empty", "-m", "fixture");
+  if (bare) {
+    const repository = `${root}/bare.git`;
+    const checkout = `${root}/checkout`;
+    await git(root, "clone", "--bare", root, repository);
+    await git(repository, "remote", "remove", "origin");
+    await git(repository, "worktree", "add", checkout, "feature");
+    root = checkout;
+  }
   if (origin) {
     await git(root, "remote", "add", "origin", origin);
   }
@@ -95,6 +103,71 @@ async function registerWorktree(origin?: string) {
 }
 
 describe("registered guest publication target discovery", () => {
+  it.each([false, true])(
+    "shares repository discovery across linked sessions (bare root: %s)",
+    async (bare) => {
+      await withWorktree(
+        async (fixture, worktree) => {
+          const keys = [sessionKey];
+          for (let index = 1; index <= 2; index++) {
+            const key = `${sessionKey}-${index}`;
+            const linked = {
+              ...worktree,
+              id: `${worktree.id}-${index}`,
+              path: `${worktree.path}/linked-${index}`,
+              branch: `feature-${index}`,
+              ownerId: key,
+            };
+            await git(worktree.path, "worktree", "add", "-b", linked.branch, linked.path);
+            await insertRegistryWorktree(process.env, linked);
+            await upsertSessionEntryCore(
+              { agentId: "main", sessionKey: key },
+              {
+                sessionId: `linked-session-${index}`,
+                updatedAt: 1,
+                worktree: { id: linked.id, branch: linked.branch, repoRoot: linked.repoRoot },
+              },
+            );
+            keys.push(key);
+          }
+          try {
+            const lookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
+            const sessionReads = vi.spyOn(
+              sessionStoreWorker,
+              "loadGatewaySessionEntryReadOnlyInWorker",
+            );
+            const responses = await Promise.all(
+              keys.map((key) => fixture.invoke("sessions.github.options", { sessionKey: key })),
+            );
+            for (const response of responses) {
+              expectReply(response, sharedOptions);
+            }
+            expect(lookup).toHaveBeenCalledOnce();
+            expect(sessionReads).toHaveBeenCalledTimes(keys.length);
+
+            // A revised registry identity cannot borrow the previous repository's positive facts.
+            await updateRegistryWorktree(process.env, `${worktree.id}-1`, {
+              repositoryIdentity: { repoRoot: worktree.repoRoot, repoFingerprint: "changed" },
+            });
+            expectFailure(
+              await fixture.invoke("sessions.github.options", { sessionKey: keys[1] }),
+              {
+                message: repositoryChanged,
+              },
+            );
+            expectReply(await options(fixture), sharedOptions);
+          } finally {
+            for (let index = 1; index <= 2; index++) {
+              await git(worktree.path, "worktree", "remove", `${worktree.path}/linked-${index}`);
+            }
+          }
+        },
+        githubOrigin,
+        bare,
+      );
+    },
+  );
+
   it("shares Git discovery across concurrent options readers", async () => {
     await withWorktree(async (fixture) => {
       const readers = 8;
@@ -114,7 +187,7 @@ describe("registered guest publication target discovery", () => {
       const lookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
       const responses = await Promise.all(Array.from({ length: readers }, () => options(fixture)));
       for (const response of responses) {
-        expect(response).toHaveBeenCalledWith(true, sharedOptions);
+        expectReply(response, sharedOptions);
       }
       expect(lookup).toHaveBeenCalledOnce();
     });
@@ -126,17 +199,17 @@ describe("registered guest publication target discovery", () => {
       let now = Date.now();
       vi.spyOn(Date, "now").mockImplementation(() => now);
       for (let index = 0; index < 2; index++) {
-        expect(await options(fixture)).toHaveBeenCalledWith(true, sharedOptions);
+        expectReply(await options(fixture), sharedOptions);
       }
       expect(lookup).toHaveBeenCalledOnce();
       await git(worktree.path, "remote", "set-url", "origin", "https://example.test/repo.git");
       now += 14_999;
-      expect(await options(fixture)).toHaveBeenCalledWith(true, sharedOptions);
+      expectReply(await options(fixture), sharedOptions);
       expect(lookup).toHaveBeenCalledOnce();
       await expect(
         prepareGitHubPublicationTarget({
           worktree,
-          identity: { ...publisherIdentity, env: {} },
+          identity: { ...publisherIdentity(), env: {} },
           assertCurrent: () => {},
         }),
       ).rejects.toThrow(repositoryChanged);
@@ -147,9 +220,9 @@ describe("registered guest publication target discovery", () => {
 
   it("checks the current connection on cached discovery hits", async () => {
     await withWorktree(async (fixture) => {
-      expect(await options(fixture)).toHaveBeenCalledWith(true, sharedOptions);
+      expectReply(await options(fixture), sharedOptions);
       const lookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
-      expect(await options(fixture)).toHaveBeenCalledWith(true, sharedOptions);
+      expectReply(await options(fixture), sharedOptions);
       expect(lookup).not.toHaveBeenCalled();
       fixture.disconnect();
       expectFailure(await options(fixture), { code: "FORBIDDEN" });
@@ -161,7 +234,7 @@ describe("registered guest publication target discovery", () => {
     "keeps receipts for unsupported origin %s and rejects stale or failed repository reads",
     async (origin) => {
       await withWorktree(async (fixture, worktree) => {
-        expect(await options(fixture)).toHaveBeenCalledWith(true, expectedOptions(false));
+        expectReply(await options(fixture), expectedOptions(false));
         if (origin) {
           vi.spyOn(managedWorktrees, "resolveRepositoryIdentity").mockRejectedValueOnce(
             new Error("Repository read unavailable"),
@@ -173,12 +246,13 @@ describe("registered guest publication target discovery", () => {
           message: origin ? "Repository read unavailable" : repositoryChanged,
         });
         if (origin) {
-          expect(
+          expectReply(
             await fixture.invoke("sessions.github.status", {
               sessionKey,
               requestId: receipt.result.requestId,
             }),
-          ).toHaveBeenCalledWith(true, receipt);
+            receipt,
+          );
         } else {
           const identity = await managedWorktrees.resolveRepositoryIdentity(worktree.path);
           await updateRegistryWorktree(process.env, worktree.id, {
@@ -187,15 +261,14 @@ describe("registered guest publication target discovery", () => {
               repoFingerprint: identity.fingerprint,
             },
           });
-          expect(await options(fixture)).toHaveBeenCalledWith(true, expectedOptions(true));
-          expect(fixture.personalConnectionStatus).not.toHaveBeenCalled();
-          expect(fixture.requestForSession).not.toHaveBeenCalled();
+          expectReply(await options(fixture), expectedOptions(true));
+          expectNoCalls(fixture.personalConnectionStatus, fixture.requestForSession);
         }
       }, origin ?? "");
     },
   );
 
-  it.each(["connection", "worktree"] as const)(
+  it.each(["connection", "worktree", "session worktree"] as const)(
     "rejects a changed %s during repository discovery",
     async (change) => {
       await withWorktree(async (fixture, worktree) => {
@@ -216,6 +289,8 @@ describe("registered guest publication target discovery", () => {
           );
           if (change === "connection") {
             fixture.disconnect();
+          } else if (change === "session worktree") {
+            await upsertSessionEntryCore({ agentId: "main", sessionKey }, { worktree: undefined });
           } else {
             await updateRegistryWorktree(process.env, worktree.id, { removedAt: 2 });
           }
@@ -247,12 +322,8 @@ describe("registered guest publication target discovery", () => {
           { repositoryWorkspaceId: workspace.workspaceId },
         );
         const localLookup = vi.spyOn(managedWorktrees, "resolveRepositoryIdentity");
-        expect(await options(fixture)).toHaveBeenCalledWith(
-          true,
-          expectedOptions(url.includes("github.com")),
-        );
-        expect(localLookup).not.toHaveBeenCalled();
-        expect(fixture.requestForSession).not.toHaveBeenCalled();
+        expectReply(await options(fixture), expectedOptions(url.includes("github.com")));
+        expectNoCalls(localLookup, fixture.requestForSession);
       }, guest);
     },
   );
@@ -277,9 +348,102 @@ describe("registered guest publication target discovery", () => {
             respond,
           });
         }
-        expect(respond).toHaveBeenCalledWith(true, sharedOptions);
+        expectReply(respond, sharedOptions);
         expect(target).not.toHaveBeenCalled();
       });
+    },
+  );
+});
+
+describe.each(["options", "status"] as const)("registered guest sessions.github.%s", (method) => {
+  it.each([
+    ["read", false, "view", false],
+    ["write", false, "view", false],
+    ["write", true, "view", false],
+    ["write", true, "none", false],
+    ...(method === "status" ? [["write", false, "view", true] as const] : []),
+  ] as const)(
+    "keeps %s foreign=%s others=%s missing=%s visibility and personal boundaries",
+    async (scope, foreign, others, missing) => {
+      await withReadFixture(
+        async (fixture) => {
+          if (missing) {
+            fixture.sharedStatus.mockResolvedValue(undefined);
+          }
+          const respond = await fixture[method]();
+          if (foreign && others === "none") {
+            expect(respond).toHaveBeenCalledWith(false, undefined, expect.any(Object));
+            expect(fixture.latestShared).not.toHaveBeenCalled();
+            expect(fixture.sharedStatus).not.toHaveBeenCalled();
+          } else if (missing) {
+            expectFailure(respond);
+            expect(fixture.sharedStatus).toHaveBeenCalledOnce();
+          } else {
+            expectReply(
+              respond,
+              method === "options"
+                ? optionsResult({ shared: null, sharedUnavailableReason: "unsupported_workspace" })
+                : receipt,
+            );
+          }
+          expectNoPersonalReads(fixture);
+        },
+        { personal: true, scopes: [`operator.sessions.${scope}`], others, foreign },
+      );
+    },
+  );
+
+  it.each(["scope", "role", "profile", "grant", "connection", "visibility", "lifecycle"] as const)(
+    "rejects %s loss during an awaited receipt read",
+    async (change) => {
+      await withReadFixture(
+        async (fixture) => {
+          const granted = new AbortController();
+          fixture.client.internal = {
+            operatorAccessAuthority: {
+              signal: granted.signal,
+              assertCurrent: () => granted.signal.throwIfAborted(),
+            },
+          };
+          await withHeldReceipt(
+            fixture,
+            method === "options" ? "shared" : "status",
+            async (respond, release) => {
+              const profile = expectDefined(
+                fixture.client.authenticatedUserProfile,
+                "guest profile",
+              );
+              const updateSession = (patch: Parameters<typeof upsertSessionEntryCore>[1]) =>
+                upsertSessionEntryCore({ agentId: "main", sessionKey }, patch);
+              await {
+                scope: () => {
+                  fixture.client.connect.scopes = [];
+                },
+                role: () => setCanonicalUserProfileRole(profile.profileId, "blocked"),
+                profile: () => {
+                  profile.profileId = ensureProfileForEmail(
+                    "replacement-publication-reader@example.test",
+                  ).id;
+                },
+                grant: () => granted.abort(),
+                connection: fixture.disconnect,
+                visibility: () => updateSession({ visibility: "draft" }),
+                lifecycle: () => updateSession({ lifecycleRevision: "replaced-publication" }),
+              }[change]();
+              await release(receipt);
+              expectFailure(respond);
+              expect(respond).toHaveBeenCalledOnce();
+              expectNoPersonalReads(fixture);
+            },
+          );
+        },
+        {
+          personal: true,
+          scopes: ["operator.sessions.write"],
+          others: change === "visibility" ? "view" : "none",
+          foreign: change === "visibility",
+        },
+      );
     },
   );
 });

@@ -5,6 +5,55 @@ import { cloneEnvWithPlatformSemantics } from "../config-env-vars.js";
 import { createSessionHistoryWorkerReaders } from "./session-transcript-worker-readers.js";
 import { createSessionHistoryWorkerRequestStub } from "./session-transcript-worker-readers.test-support.js";
 
+const storageStateDir = path.resolve("synthetic-worker-state");
+const storagePath = path.join(storageStateDir, "agents", "main", "agent.sqlite");
+const storageEnv = new Proxy(
+  { OPENCLAW_STATE_DIR: storageStateDir, SYNTHETIC_VALUE: "worker-env-sentinel" },
+  {},
+);
+type Readers = ReturnType<typeof createSessionHistoryWorkerReaders>;
+const storageInput = { env: storageEnv };
+const session = { ...storageInput, sessionId: "one" };
+// One direct reader covers the shared factory; keep both custom eviction preparers.
+const storageRequests: Array<[string, (readers: Readers) => Promise<unknown>]> = [
+  ["cold metadata", (readers) => readers.readColdMetadata(session)],
+  [
+    "historical eviction",
+    (readers) =>
+      readers.readHistoricalEvictionCandidates({ ...storageInput, admissionIdentities: [] }),
+  ],
+  [
+    "archived eviction",
+    (readers) =>
+      readers.readArchivedEvictionCandidates({
+        ...storageInput,
+        archived: { liveSessionKeys: [] },
+      }),
+  ],
+];
+
+it.each(storageRequests)("serializes Proxy environments for %s requests", async (_name, read) => {
+  const serialized = new Error("Stopped after serializing the worker request");
+  const readers = createSessionHistoryWorkerReaders(async (prepare) => {
+    // Exercise the actual producer without starting a Worker or opening a database.
+    const request = structuredClone(prepare());
+    expect(request).toMatchObject({ env: { ...storageEnv } });
+    throw serialized;
+  });
+  await expect(read(readers)).rejects.toBe(serialized);
+});
+
+it("serializes the nested Proxy environment for activity summary reads", async () => {
+  const serialized = new Error("Stopped after serializing the worker request");
+  const readers = createSessionHistoryWorkerReaders(async (prepare) => {
+    const request = structuredClone(prepare());
+    expect(request).toMatchObject({ scope: { env: { ...storageEnv } } });
+    throw serialized;
+  });
+  const scope = { agentId: "main", sessionId: "one", storePath: storagePath, env: storageEnv };
+  await expect(readers.readActivitySummarySource({ scope })).rejects.toBe(serialized);
+});
+
 const transcriptInput = {
   target: { sessionId: "synthetic-session" },
   resolvedScope: { agentId: "main", sessionId: "synthetic-session" },
@@ -46,7 +95,7 @@ it("preserves the direct read request, signal, and projected result", async () =
   await expect(readers.readMessagePresence(input, signal)).resolves.toBe(true);
 });
 
-it.each(["archives", "corpus", "targets", "exact entries"] as const)(
+it.each(["archives", "corpus", "targets", "exact entries", "row facts"] as const)(
   "serializes Windows storage environments for %s requests",
   async (inventory) => {
     const stateDir = path.resolve("synthetic-state");
@@ -69,6 +118,9 @@ it.each(["archives", "corpus", "targets", "exact entries"] as const)(
             OPENCLAW_SUPERVISOR_MODE: "external",
           };
           switch (request.kind) {
+            case "session-row-facts":
+              expect(request.env).toEqual(expectedEnv);
+              return { kind: request.kind, rows: [] };
             case "session-exact-entries":
               expect(request.env).toEqual(expectedEnv);
               return { kind: request.kind, entries: [], lifecycleTimestamps: {} };
@@ -86,31 +138,33 @@ it.each(["archives", "corpus", "targets", "exact entries"] as const)(
           }
         }),
       );
-      const result =
-        inventory === "exact entries"
-          ? readers.readExactEntries({ env, sessionKeys: ["agent:main:main"] })
-          : inventory === "archives"
-            ? readers.readArchiveInventory({ agentId: "main", storePath, env, sessionIds: ["one"] })
-            : inventory === "targets"
-              ? readers.readMemorySessionTargets({
-                  params: { agentId: "main", storePath, env, sessionIds: ["one"] },
-                })
-              : readers.readCorpusInventory({
-                  scope: {
-                    cfg: {},
-                    normalizedAgentId: "main",
-                    storePath,
-                    env,
-                    artifactDirs: [],
-                    isSharedFixedStore: false,
-                  },
-                  options: {},
-                  artifacts: [],
-                });
-      await expect(result).resolves.toEqual(
-        inventory === "exact entries"
-          ? { kind: "session-exact-entries", entries: [], lifecycleTimestamps: {} }
-          : [],
+      const archive = { agentId: "main", storePath, env, sessionIds: ["one"] };
+      const entries = { env, sessionKeys: ["agent:main:main"] };
+      const reads = {
+        "row facts": () => readers.readRowFacts(entries),
+        "exact entries": () => readers.readExactEntries(entries),
+        archives: () => readers.readArchiveInventory(archive),
+        targets: () => readers.readMemorySessionTargets({ params: archive }),
+        corpus: () =>
+          readers.readCorpusInventory({
+            scope: {
+              cfg: {},
+              normalizedAgentId: "main",
+              storePath,
+              env,
+              artifactDirs: [],
+              isSharedFixedStore: false,
+            },
+            options: {},
+            artifacts: [],
+          }),
+      };
+      await expect(reads[inventory]()).resolves.toEqual(
+        inventory === "row facts"
+          ? { kind: "session-row-facts", rows: [] }
+          : inventory === "exact entries"
+            ? { kind: "session-exact-entries", entries: [], lifecycleTimestamps: {} }
+            : [],
       );
     } finally {
       Object.defineProperty(process, "platform", { value: platform });

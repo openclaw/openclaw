@@ -208,8 +208,10 @@ caches, or relax resource caps to manufacture a favorable comparison. The recipe
 creates only a new benchmark directory and leaves normal caches untouched.
 
 For CPU/heap investigation, reuse `OPENCLAW_TSGO_PPROF_DIR` with a distinct directory
-per measured invocation, or use `tsgo:profile --deep`. Profiling changes measurement
-overhead: enable it for both comparison sides or keep it outside timing pairs.
+per measured invocation, or use `tsgo:profile --deep`. Go profiling requests select
+tsgo even when tsrs is the default checker. An explicit `OPENCLAW_TYPECHECKER=tsrs`
+combined with `--pprofDir` fails rather than silently omitting profiles. Keep Go-only
+profiling outside tsrs-versus-tsgo timing pairs.
 The evidence records the effective `--pprofDir`; it does not manage or delete those
 profiles. These measurements are developer evidence, not a CI pass/fail threshold.
 
@@ -294,6 +296,16 @@ needed only for files that still exceed their cap, avoiding unused blob download
 in partial clones.
 Main-push CI does not run the PR growth comparison; ordinary lint still reports
 all unsuppressed over-cap files.
+
+`pnpm check:baseline-ratchets --base <commit> --no-merge-base` runs the CI
+ratchets in two managed child slots, retaining all results after ordinary
+failures. `RATCHET_PR_HEAD_SHA` adds the existing PR-only line-cap comparison.
+The database-worker inventory starts first and shares the runner with at most
+one smaller check; it never runs two semantic inventories concurrently. When
+the complete current and historical source snapshots have identical paths and
+contents, its fresh current analysis also supplies the comparison counts.
+Changed snapshots retain both full analyses and historical-cache validation.
+Frozen targets without the aggregate command retain their original commands.
 
 The max-lines suppression inventory and environment-variable count budget use
 the same severity policy. After removing a suppression, remove its stale entry

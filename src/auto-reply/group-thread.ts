@@ -202,7 +202,7 @@ export async function runGroupThread<T>(params: {
     return { results, turnsStarted, failedTurns };
   } finally {
     try {
-      lifecycle?.onSettled?.();
+      await lifecycle?.onSettled?.();
     } finally {
       activeThreads.delete(key);
     }

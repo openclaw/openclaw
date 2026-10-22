@@ -488,11 +488,18 @@ describe("ManagedWorktreeService branch discovery", () => {
   });
 
   it("warns when the fetched default commit is more than seven days old", async () => {
-    const timestamp = Number(await git(repo, "show", "-s", "--format=%ct", "HEAD"));
+    const timestamp = Math.floor(Date.now() / 1000) - 8 * 86_400;
+    const date = new Date(timestamp * 1000).toISOString();
+    await execFileAsync(
+      "git",
+      ["-C", repo, "commit", "--allow-empty", "-m", "old default fixture"],
+      {
+        env: { ...process.env, GIT_AUTHOR_DATE: date, GIT_COMMITTER_DATE: date },
+      },
+    );
     await createRemote();
     service = new ManagedWorktreeService({
       env: { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "state") },
-      now: () => (timestamp + 8 * 86_400) * 1000,
     });
     const logs = createWarnLogCapture("worktree-base-age");
     try {

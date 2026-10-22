@@ -10,6 +10,7 @@ import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { AgentsListResult, GatewaySessionRow, SessionsListResult } from "../api/types.ts";
 import type { RouteId } from "../app-route-paths.ts";
 import { createApplicationNavigationPreferences } from "../app/bootstrap-navigation-preferences.ts";
+import { createChatSubmissions } from "../app/chat-submissions.ts";
 import { createApplicationConfigCapability } from "../app/config.ts";
 import type {
   ApplicationContext,
@@ -21,7 +22,7 @@ import type { ApplicationOverlays } from "../app/overlays-types.ts";
 import type { AppSidebarElement, AppSidebarOwner } from "../components/app-sidebar.tsx";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
 import { createInitialConfigState } from "../lib/config/config-state-model.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import {
   createSessionCapability,
   type SessionCapability,
@@ -37,7 +38,7 @@ import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
 } from "./application-context.ts";
-import { gatewayHelloForMethods, SESSION_MUTATION_TEST_METHODS } from "./gateway-methods.ts";
+import { sidebarGatewayHello } from "./gateway-methods.ts";
 import { waitForSolid } from "./solid-settle.ts";
 
 // mock-isolation: Keep attention health RPCs out of sidebar call-order assertions; sidebar-attention.test.ts owns its rendering.
@@ -88,7 +89,7 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: gatewayHelloForMethods([...SESSION_MUTATION_TEST_METHODS, "openclaw.chat"]),
+    hello: sidebarGatewayHello(),
     assistantAgentId: "main",
     sessionKey: "agent:main:main",
     lastError: null,
@@ -313,7 +314,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     subscribeCreated: () => () => undefined,
     isPreparedWorkSession: () => false,
     isRunVisuallyActive: (row: GatewaySessionRow) =>
-      scopedSessions?.isRunVisuallyActive(row) ?? isSessionRunActive(row),
+      scopedSessions?.isRunVisuallyActive(row) ?? isSessionRunStateActive(row),
     pullRequestSummary: (key: string) => pullRequestSummaries.get(key),
     setPullRequestSummary(key: string, summary: SessionCatalogPullRequestSummary | undefined) {
       if (summary) {
@@ -518,7 +519,9 @@ export function createContext(
     config: createApplicationConfigCapability({ resourceBasePath: "" }),
     gateway,
     ...lifecycle,
+    chatSubmissions: createChatSubmissions(),
     navigation: createApplicationNavigationPreferences(lifecycle.theme),
+    navigate: vi.fn(),
     sessions,
     plugins: {
       registrations: () => [],
@@ -584,7 +587,7 @@ export async function createSidebarElement(): Promise<SidebarLifecycleState> {
         return false;
       }
       const written = Reflect.set(owner, key, value);
-      owner.requestUpdate();
+      owner.invalidate();
       return written;
     },
   }) as SidebarLifecycleState;
@@ -625,7 +628,7 @@ export async function mountSidebarContext(
   const owner = getAppSidebarOwner(element)!;
   await Promise.all([
     import("../components/app-sidebar-session-narration.ts"),
-    owner.preloadCatalogRenderer(),
+    owner.catalogRendererImport.load(),
     owner.sidebarMenus.preloadMenuRenderer(),
   ]);
   await sidebar.updateComplete;
@@ -667,55 +670,44 @@ export const TWO_AGENTS = {
 
 export { manyAgents } from "./app-sidebar-setup.ts";
 
-export const catalogPage = (
-  sessions: Array<{ threadId: string; name: string; sessionKey?: string; color?: string }>,
-  nextCursor?: string,
-  catalogId = "codex",
-): SessionsCatalogListResult => ({
+type CatalogHost = SessionsCatalogListResult["catalogs"][number]["hosts"][number];
+const catalogWithHost = (catalogId: string, host: CatalogHost): SessionsCatalogListResult => ({
   catalogs: [
     {
       id: catalogId,
       label: catalogId === "codex" ? "Codex" : "Claude",
       capabilities: { continueSession: true, archive: true },
-      hosts: [
-        {
-          hostId: "gateway:local",
-          label: "Local Codex",
-          kind: "gateway" as const,
-          connected: true,
-          sessions: sessions.map((session) => ({
-            ...session,
-            status: "idle",
-            archived: false,
-            canContinue: true,
-            canArchive: true,
-          })),
-          ...(nextCursor ? { nextCursor } : {}),
-        },
-      ],
+      hosts: [host],
     },
   ],
 });
 
-export const catalogErrorPage = (
-  message: string,
+export const catalogPage = (
+  sessions: Array<{ threadId: string; name: string; sessionKey?: string; color?: string }>,
+  nextCursor?: string,
   catalogId = "codex",
-): SessionsCatalogListResult => ({
-  catalogs: [
-    {
-      id: catalogId,
-      label: catalogId === "codex" ? "Codex" : "Claude",
-      capabilities: { continueSession: true, archive: true },
-      hosts: [
-        {
-          hostId: "gateway:local",
-          label: "Unavailable host",
-          kind: "gateway",
-          connected: false,
-          sessions: [],
-          error: { code: "unavailable", message },
-        },
-      ],
-    },
-  ],
-});
+): SessionsCatalogListResult =>
+  catalogWithHost(catalogId, {
+    hostId: "gateway:local",
+    label: "Local Codex",
+    kind: "gateway",
+    connected: true,
+    sessions: sessions.map((session) => ({
+      ...session,
+      status: "idle",
+      archived: false,
+      canContinue: true,
+      canArchive: true,
+    })),
+    ...(nextCursor ? { nextCursor } : {}),
+  });
+
+export const catalogErrorPage = (message: string, catalogId = "codex"): SessionsCatalogListResult =>
+  catalogWithHost(catalogId, {
+    hostId: "gateway:local",
+    label: "Unavailable host",
+    kind: "gateway",
+    connected: false,
+    sessions: [],
+    error: { code: "unavailable", message },
+  });

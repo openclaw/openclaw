@@ -8,7 +8,8 @@ import "../../../styles/chat/composer.css";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import "./chat-comment-pins.tsx";
 import { CommentPreviewChip, CommentPreviewRow } from "./chat-comment-preview.tsx";
-import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.ts";
+import { removeChatSelectionPopup, showChatAnnotationEditor } from "./chat-selection-popup.tsx";
+import { createTranscriptMessageElements } from "./chat-transcript-message-elements.ts";
 
 const longSelection = "Selected passage with enough words to exceed a compact preview. ".repeat(8);
 const longComment =
@@ -423,10 +424,21 @@ describe("comment pins", () => {
     const before = bubble("before");
     const source = bubble("source");
     const after = bubble("after");
+    const messageElements = createTranscriptMessageElements(() => undefined);
+    messageElements.forKey("source")(source);
+    onTestFinished(() => messageElements.dispose());
     const pins = document.createElement("openclaw-chat-comment-pins") as HTMLElement & {
       attachments: ChatAttachment[];
       sessionKey: string;
+      transcript: {
+        messageElements: typeof messageElements;
+        contentElement: HTMLDivElement;
+      };
       updateComplete: Promise<unknown>;
+    };
+    pins.transcript = {
+      messageElements,
+      contentElement: thread.querySelector<HTMLDivElement>(".chat-thread-inner")!,
     };
     pins.attachments = [
       {

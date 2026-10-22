@@ -121,7 +121,7 @@ describe("effort bar colour and flow", () => {
     onTestFinished(installChatComposerPickerDismissal(document));
     onTestFinished(installTitleTooltips(document));
     const focusComposer = (event: MouseEvent | PointerEvent) =>
-      focusComposerFromChrome(event, true);
+      focusComposerFromChrome(event, true, textarea);
     composer.addEventListener("pointerdown", focusComposer);
     composer.addEventListener("click", focusComposer);
     onTestFinished(() => {

@@ -1,4 +1,3 @@
-/** Computer Use readiness probes and their native subscription lifecycle. */
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import {
   CodexAppServerUnsafeSubscriptionError,
@@ -74,7 +73,6 @@ export type CodexComputerUseLiveTestStatus = {
   repaired: boolean;
   message: string;
   error?: string;
-  durationMs?: number;
 };
 
 const COMPUTER_USE_LIVE_TEST_RETRY_COUNT = 1;
@@ -90,7 +88,6 @@ export async function runCodexComputerUseLiveTest(params: {
   config: ResolvedCodexComputerUseConfig;
   tools?: readonly string[];
 }): Promise<{ liveTest: CodexComputerUseLiveTestStatus; repair?: CodexComputerUseRepairStatus }> {
-  const startedAt = Date.now();
   let lastError: unknown;
   let repair: CodexComputerUseRepairStatus | undefined;
   const probe =
@@ -106,7 +103,6 @@ export async function runCodexComputerUseLiveTest(params: {
     timeoutMs: params.config.liveTestTimeoutMs,
     retried: attempts > 1,
     repaired: Boolean(repair?.attempted && repair.warnings.length === 0),
-    durationMs: Math.max(0, Date.now() - startedAt),
     message:
       error === undefined
         ? "Computer Use live test passed."

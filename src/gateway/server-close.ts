@@ -3,6 +3,7 @@ import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import type { WebSocketServer } from "ws";
 import { disposeAcpSessionManager } from "../acp/control-plane/manager.js";
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
+import { disposeAllCliLiveSessions } from "../agents/cli-runner/cli-live-session-registry.js";
 import { disposeRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-runtime.lifecycle.js";
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
@@ -12,7 +13,7 @@ import { memorySessionActorOwners } from "../config/sessions/session-actor-memor
 import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/session-transcript-reconcile-pool.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage, hasErrnoCode } from "../infra/errors.js";
-import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
+import { heartbeatNotifications } from "../infra/heartbeat-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { GatewayPluginMetadataOwner } from "../plugins/plugin-metadata-lifecycle.js";
 import { hasRetainedPluginRuntimeCloseError } from "../plugins/runtime-close-error.js";
@@ -172,11 +173,10 @@ export type GatewayCloseParams = {
   closeProviderTransportDispatcherPool: () => Promise<void>;
   cron: { stop: () => void; stopAndDrain?: () => Promise<void> };
   stopCronMaintenance?: () => Promise<void>;
-  heartbeatRunner: HeartbeatRunner;
+  stopScheduledServices: () => Promise<void>;
   maintenance: GatewayMaintenanceHandles | null;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   agentUnsub: (() => Promise<void> | void) | null;
-  heartbeatUnsub: (() => void) | null;
   transcriptUnsub: (() => void) | null;
   lifecycleUnsub: (() => void) | null;
   clients: Set<{
@@ -227,9 +227,6 @@ export async function prepareGatewayClose(
   const { measureCloseStep, shutdownStep } = createCloseSteps(reason, warnings);
   // Fence async session-state writes before the first awaited shutdown step.
   fenceSessionSuspensionWritesForGatewayShutdown();
-  // Debug-level: the signal handler already announced the stop/restart at
-  // info, and the completion line below reports duration and outcome.
-  shutdownLog.debug(`shutdown started: ${reason}`);
 
   const triggerLifecycleHook = (action: "shutdown" | "pre-restart", timeoutMs: number) => {
     const hookName = `gateway:${action}` as const;
@@ -348,6 +345,7 @@ async function closeGatewayResources(
   const disposeRuntime = async (
     label:
       | "plugin-services"
+      | "cli-live-sessions"
       | "agent-harnesses"
       | "bundle-mcp"
       | "bundle-lsp"
@@ -405,6 +403,7 @@ async function closeGatewayResources(
         await shutdownStep(`channel/${channelId}`, () => params.stopChannel(channelId));
       }
     });
+    await disposeRuntime("cli-live-sessions", disposeAllCliLiveSessions);
     await disposeRuntime("agent-harnesses", disposeRegisteredAgentHarnesses);
     await shutdownStep("ai-session-resources", () => cleanupSessionResources());
     await shutdownStep("provider-transport-dispatchers", () =>
@@ -433,9 +432,7 @@ async function closeGatewayResources(
       recordShutdownWarning(warnings, "media-cleanup");
     }
     await shutdownStep("gmail-watcher", () => params.stopGmailWatcher());
-    // Cron heartbeat runs await this owner's queued wakes after handing off cancellation.
-    // Settle those waiters before joining cron so shutdown cannot wait on its own next step.
-    await shutdownStep("heartbeat-runner", () => params.heartbeatRunner.stop());
+    await shutdownStep("scheduled-services", params.stopScheduledServices);
     await shutdownStep("cron", () =>
       params.cron.stopAndDrain ? params.cron.stopAndDrain() : params.cron.stop(),
     );
@@ -443,9 +440,7 @@ async function closeGatewayResources(
     if (params.agentUnsub) {
       await shutdownStep("agent-unsub", () => params.agentUnsub!());
     }
-    if (params.heartbeatUnsub) {
-      await shutdownStep("heartbeat-unsub", () => params.heartbeatUnsub!());
-    }
+    heartbeatNotifications.onEvent = () => {};
     if (params.transcriptUnsub) {
       await shutdownStep("transcript-unsub", () => params.transcriptUnsub!());
     }

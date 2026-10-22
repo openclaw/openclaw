@@ -26,17 +26,9 @@ import type {
   TranscriptReadWindowOptions,
 } from "../../sessions/transcript-read-window.js";
 import { isVisibleTranscriptRecord } from "../../sessions/transcript-visible-record.js";
-import {
-  createVisibleMessageCursor,
-  encodeVisibleMessageCursor,
-  normalizeVisibleDeltaLimits,
-  parseVisibleMessageCursor,
-} from "./session-accessor.sqlite-visible-cursor.js";
 import type {
   SessionTranscriptRawDeltaLimits,
   SessionTranscriptRawDeltaResult,
-  SessionTranscriptVisibleMessageDeltaLimits,
-  SessionTranscriptVisibleMessageDeltaResult,
 } from "./session-accessor.types.js";
 import { readSessionActorMemoryBoundedTail } from "./session-actor-memory-history-facts.js";
 import {
@@ -123,92 +115,6 @@ export function readSessionActorMemoryRawDelta(
   return {
     kind: "page",
     cursor: encodeRawTranscriptCursor({ ...cursor, lastSeq }),
-    events,
-    hasMore,
-    serializedBytes,
-    ...(requiredBytes === undefined ? {} : { requiredBytes }),
-  };
-}
-
-export function readSessionActorMemoryVisibleDelta(
-  window: SessionActorMemoryWindow,
-  scope: SessionActorMemoryHistoryScope,
-  limits: SessionTranscriptVisibleMessageDeltaLimits,
-): SessionTranscriptVisibleMessageDeltaResult {
-  const { maxBytes, maxMessages } = normalizeVisibleDeltaLimits(limits);
-  const generation = window.hot.transcript.version.generation;
-  const sessionId = window.hot.entry?.sessionId;
-  if (!generation || !sessionId) {
-    return { kind: "missing" };
-  }
-  const initial = createVisibleMessageCursor({ agentId: scope.agentId, sessionId, generation });
-  const reset = (
-    reason: Extract<SessionTranscriptVisibleMessageDeltaResult, { kind: "reset" }>["reason"],
-  ): SessionTranscriptVisibleMessageDeltaResult => ({
-    kind: "reset",
-    cursor: encodeVisibleMessageCursor(initial),
-    reason,
-  });
-  const cursor = limits.cursor === undefined ? initial : parseVisibleMessageCursor(limits.cursor);
-  if (!cursor) {
-    return reset("invalid_cursor");
-  }
-  if (cursor.agentId !== scope.agentId || cursor.sessionId !== sessionId) {
-    return reset("scope_mismatch");
-  }
-  if (cursor.generation !== generation) {
-    return reset("generation_mismatch");
-  }
-  if (
-    scope.readFence &&
-    cursor.lastMessagePosition >= scope.readFence.beforeActiveMessagePosition
-  ) {
-    throw new SessionTranscriptReadFenceError(
-      "Transcript read cursor has crossed the current-turn admission fence",
-    );
-  }
-  const navigation = createSessionActorMemoryHistoryNavigation(window);
-  const messages = navigation.active.filter((row) => row.messagePosition !== null);
-  if (cursor.lastEventSeq >= 0) {
-    const anchor = messages.find((row) => row.rawSeq === cursor.lastEventSeq);
-    if (!anchor) {
-      return reset("anchor_missing");
-    }
-    if (anchor.messagePosition !== cursor.lastMessagePosition) {
-      return reset("anchor_moved");
-    }
-  }
-  let serializedBytes = 0;
-  let hasMore = false;
-  let requiredBytes: number | undefined;
-  let lastEventSeq = cursor.lastEventSeq;
-  let lastMessagePosition = cursor.lastMessagePosition;
-  const events: Extract<SessionTranscriptVisibleMessageDeltaResult, { kind: "page" }>["events"] =
-    [];
-  for (const row of messages) {
-    if (row.messagePosition! <= cursor.lastMessagePosition) {
-      continue;
-    }
-    if (events.length >= maxMessages || serializedBytes + row.serializedBytes > maxBytes) {
-      hasMore = true;
-      if (!events.length) {
-        requiredBytes = row.serializedBytes;
-      }
-      break;
-    }
-    serializedBytes += row.serializedBytes;
-    lastEventSeq = row.rawSeq;
-    lastMessagePosition = row.messagePosition!;
-    events.push({
-      event: row.event,
-      eventSeq: row.rawSeq,
-      seq: row.messagePosition! + 1,
-      parentId: navigation.active[row.activePosition - 1]?.node?.id ?? null,
-    });
-  }
-  return {
-    kind: "page",
-    cursor: encodeVisibleMessageCursor({ ...cursor, lastEventSeq, lastMessagePosition }),
     events,
     hasMore,
     serializedBytes,

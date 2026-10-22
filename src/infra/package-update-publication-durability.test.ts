@@ -1,9 +1,8 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { withUpdateCommandExecutor } from "../cli/update-cli/update-command-executor.js";
+import { expect, it, vi } from "vitest";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import * as durability from "./directory-durability.js";
 import {
   encodePackageActivationLauncher,
@@ -11,7 +10,6 @@ import {
   resolvePackageActivationAnchor,
   resolvePackageActivationControl,
 } from "./package-update-activation-journal.js";
-import { createPackageActivationLifetimeFixture } from "./package-update-activation-lifetime.test-support.js";
 import { packageActivationRuntimeForTest } from "./package-update-activation-runtime.test-support.js";
 import {
   preparePackageActivation,
@@ -19,18 +17,25 @@ import {
 } from "./package-update-activation.js";
 import { interceptPackageFileHashes } from "./package-update-integrity-hasher.test-support.js";
 import * as integrity from "./package-update-integrity.js";
-import type { PackageUpdateTransaction } from "./package-update-swap-contract.js";
-import { swapStagedPackageInstall } from "./package-update-swap.js";
+import {
+  createPublicationTestFixture,
+  withPublicationFence,
+  runPublicationSwap,
+  readPublicationText as read,
+  readPublicationManifest as manifest,
+} from "./package-update-publication.test-support.js";
 import { createPackageSwapFixture } from "./package-update-swap.test-support.js";
+import { interceptStagedFileSync } from "./package-update-sync.test-support.js";
 import * as capability from "./update-post-core-capability.js";
 
-async function prepareFixtureActivation(
+async function activationParams(
   f: Awaited<ReturnType<typeof createPackageSwapFixture>>,
   fence: Parameters<typeof preparePackageActivation>[0]["options"]["fence"],
+  onPrepared = () => {},
 ) {
   const reader = integrity.createPackageIntegrityReader();
-  return preparePackageActivation({
-    options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
+  return {
+    options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared },
     installTarget: f.params.installTarget,
     liveRoot: f.packageRoot,
     stageRoot: f.params.stage.packageRoot,
@@ -43,26 +48,15 @@ async function prepareFixtureActivation(
         previous: encodePackageActivationLauncher(await reader.launcher(f.launcher)),
       },
     ],
-  });
+  };
 }
 
-const fixture = createPackageActivationLifetimeFixture();
-let root: string;
-beforeEach(() => {
-  ({ root } = fixture.setup());
-  const state = path.join(root, "state");
-  fs.mkdirSync(state, { mode: 0o700 });
-  vi.stubEnv("OPENCLAW_STATE_DIR", state);
-  vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(state, "openclaw.json"));
-});
-afterEach(async () => {
-  try {
-    await fixture.lifetime.cleanup();
-  } finally {
-    vi.restoreAllMocks();
-    vi.unstubAllEnvs();
-  }
-});
+const prepareFixtureActivation = async (...args: Parameters<typeof activationParams>) =>
+  preparePackageActivation(await activationParams(...args));
+
+const fixture = createPublicationTestFixture();
+
+const withFixture = fixture.withFixture;
 
 it
   .skipIf(process.platform === "win32")
@@ -76,103 +70,99 @@ it
     "interrupted",
   ] as const)(
   "reuses the previous digest and trusts freshly prepared candidate contents (%s)",
-  (changed) =>
-    fixture.lifetime.run(async () => {
-      const f = await createPackageSwapFixture(root);
-      await fixture.writePostCoreCapability(f.params.stage.packageRoot);
-      const anchor = resolvePackageActivationAnchor(f.packageRoot);
-      const previousRoot = path.join(anchor, "previous");
-      const candidateRoot = path.join(anchor, "candidate");
-      let now = Date.now() + (changed === "initially-fresh" ? 0 : 6_000);
-      vi.spyOn(Date, "now").mockImplementation(() => now);
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
-        const prepared = await prepareFixtureActivation(f, fence);
-        expect(prepared).toBeDefined();
-        if (changed === "interrupted") {
-          const failure = new Error("package helper read interrupted");
-          const read = vi.spyOn(fsp, "readFile").mockRejectedValueOnce(failure);
-          await expect(prepared!.publish(false)).rejects.toBe(failure);
-          read.mockRestore();
-        }
-        const tampered = path.join(
-          changed === "previous" ? f.packageRoot : candidateRoot,
-          "dist/index.js",
+  withFixture(async (f, changed: string) => {
+    const anchor = resolvePackageActivationAnchor(f.packageRoot);
+    const previousRoot = path.join(anchor, "previous");
+    const candidateRoot = path.join(anchor, "candidate");
+    let now = Date.now() + (changed === "initially-fresh" ? 0 : 6_000);
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    await withPublicationFence(f.packageRoot, async (fence) => {
+      const prepared = await prepareFixtureActivation(f, fence);
+      expect(prepared).toBeDefined();
+      if (changed === "interrupted") {
+        const failure = new Error("package helper read interrupted");
+        const interruptedRead = vi.spyOn(fsp, "readFile").mockRejectedValueOnce(failure);
+        await expect(prepared!.publish(false)).rejects.toBe(failure);
+        interruptedRead.mockRestore();
+      }
+      const tampered = path.join(
+        changed === "previous" ? f.packageRoot : candidateRoot,
+        "dist/index.js",
+      );
+      if (changed === "candidate-version") {
+        await fsp.writeFile(
+          path.join(candidateRoot, "package.json"),
+          '{"name":"openclaw","version":"3.0.0"}',
         );
-        if (changed === "candidate-version") {
-          await fsp.writeFile(
-            path.join(candidateRoot, "package.json"),
-            '{"name":"openclaw","version":"3.0.0"}',
-          );
-        } else if (changed === "candidate-directory") {
-          await fsp.rename(candidateRoot, path.join(root, "displaced-candidate"));
-          await fsp.mkdir(candidateRoot);
-          await fsp.writeFile(
-            path.join(candidateRoot, "package.json"),
-            '{"name":"openclaw","version":"2.0.0"}',
-          );
-        } else if (changed === "previous" || changed === "candidate" || changed === "interrupted") {
-          await fsp.writeFile(tampered, `changed ${changed} package content\n`);
+      } else if (changed === "candidate-directory") {
+        await fsp.rename(candidateRoot, path.join(fixture.root, "displaced-candidate"));
+        await fsp.mkdir(candidateRoot);
+        await fsp.writeFile(
+          path.join(candidateRoot, "package.json"),
+          '{"name":"openclaw","version":"2.0.0"}',
+        );
+      } else if (changed === "previous" || changed === "candidate" || changed === "interrupted") {
+        await fsp.writeFile(tampered, `changed ${changed} package content\n`);
+      }
+      now += 6_000;
+      const hash = interceptPackageFileHashes();
+      const packageOpens: string[] = [];
+      const open = fsp.open.bind(fsp);
+      vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
+        const file = String(args[0]);
+        if (
+          [f.packageRoot, previousRoot, candidateRoot].some((directory) =>
+            file.startsWith(`${directory}${path.sep}`),
+          ) &&
+          fs.lstatSync(file, { throwIfNoEntry: false })?.isFile()
+        ) {
+          packageOpens.push(file);
         }
-        now += 6_000;
-        const hash = interceptPackageFileHashes();
-        const packageOpens: string[] = [];
-        const open = fsp.open.bind(fsp);
-        vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
-          const file = String(args[0]);
-          if (
-            [f.packageRoot, previousRoot, candidateRoot].some((directory) =>
-              file.startsWith(`${directory}${path.sep}`),
-            ) &&
-            fs.lstatSync(file, { throwIfNoEntry: false })?.isFile()
-          ) {
-            packageOpens.push(file);
-          }
-          return open(...args);
-        });
-        const publishing = prepared!.publish(false);
-        if (changed === "candidate-version" || changed === "candidate-directory") {
-          await expect(publishing).rejects.toThrow("Package publication object changed");
-          expect(hash).not.toHaveBeenCalled();
-          expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
-          return;
-        }
-        if (changed === "previous" || changed === "interrupted") {
-          await expect(publishing).rejects.toBeInstanceOf(integrity.PackageIntegrityMismatchError);
-          expect(hash.mock.calls.map(([file]) => file)).toEqual([tampered]);
-          expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
-          return;
-        }
-        await expect(publishing).resolves.toMatchObject({ phase: "publication-complete" });
-        expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
-        if (changed === "initially-fresh") {
-          // Re-read recent previous-package bytes once after they settle;
-          // the private candidate does not enter the content verifier.
-          expect(hash.mock.calls.length).toBeGreaterThan(0);
-          expect(
-            hash.mock.calls.every(([file]) => file.startsWith(`${f.packageRoot}${path.sep}`)),
-          ).toBe(true);
-          expect(new Set(hash.mock.calls.map(([, stat]) => `${stat.dev}:${stat.ino}`)).size).toBe(
-            hash.mock.calls.length,
-          );
-          hash.mockClear();
-        } else {
-          expect(hash).not.toHaveBeenCalled();
-        }
-        // Version checks still read manifests without rescanning candidate payloads.
-        if (changed !== "initially-fresh") {
-          expect(packageOpens).toHaveLength(4);
-          expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
-        }
-        await expect(prepared!.retire()).resolves.toMatchObject({ phase: "complete" });
-        expect(hash).not.toHaveBeenCalled();
-        if (changed !== "initially-fresh") {
-          expect(packageOpens).toHaveLength(5);
-          expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
-        }
-        expect(fs.existsSync(anchor)).toBe(false);
+        return open(...args);
       });
-    }),
+      const publishing = prepared!.publish(false);
+      if (changed === "candidate-version" || changed === "candidate-directory") {
+        await expect(publishing).rejects.toThrow("Package publication object changed");
+        expect(hash).not.toHaveBeenCalled();
+        expect(read(f.launcher)).toBe("old launcher\n");
+        return;
+      }
+      if (changed === "previous" || changed === "interrupted") {
+        await expect(publishing).rejects.toBeInstanceOf(integrity.PackageIntegrityMismatchError);
+        expect(hash.mock.calls.map(([file]) => file)).toEqual([tampered]);
+        expect(read(f.launcher)).toBe("old launcher\n");
+        return;
+      }
+      await expect(publishing).resolves.toMatchObject({ phase: "publication-complete" });
+      expect(read(f.launcher)).toBe("candidate launcher\n");
+      if (changed === "initially-fresh") {
+        // Re-read recent previous-package bytes once after they settle;
+        // the private candidate does not enter the content verifier.
+        expect(hash.mock.calls.length).toBeGreaterThan(0);
+        expect(
+          hash.mock.calls.every(([file]) => file.startsWith(`${f.packageRoot}${path.sep}`)),
+        ).toBe(true);
+        expect(new Set(hash.mock.calls.map(([, stat]) => `${stat.dev}:${stat.ino}`)).size).toBe(
+          hash.mock.calls.length,
+        );
+        hash.mockClear();
+      } else {
+        expect(hash).not.toHaveBeenCalled();
+      }
+      // Version checks still read manifests without rescanning candidate payloads.
+      if (changed !== "initially-fresh") {
+        expect(packageOpens).toHaveLength(4);
+        expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
+      }
+      await expect(prepared!.retire()).resolves.toMatchObject({ phase: "complete" });
+      expect(hash).not.toHaveBeenCalled();
+      if (changed !== "initially-fresh") {
+        expect(packageOpens).toHaveLength(5);
+        expect(packageOpens.every((file) => path.basename(file) === "package.json")).toBe(true);
+      }
+      expect(fs.existsSync(anchor)).toBe(false);
+    });
+  }),
 );
 
 it.skipIf(process.platform === "win32").each([
@@ -182,148 +172,118 @@ it.skipIf(process.platform === "win32").each([
   ["publish", "installation"],
 ] as const)(
   "persists both package rename parents before advancing %s (%s failure)",
-  (cut, parent) =>
-    fixture.lifetime.run(async () => {
-      const f = await createPackageSwapFixture(root);
-      await fixture.writePostCoreCapability(f.params.stage.packageRoot);
-      const anchor = resolvePackageActivationAnchor(f.packageRoot);
-      const previousRoot = path.join(anchor, "previous");
-      const candidateRoot = path.join(anchor, "candidate");
-      const parents = [anchor, path.dirname(f.packageRoot)];
-      const failedParent = parent === "anchor" ? anchor : path.dirname(f.packageRoot);
-      const failure = Object.assign(new Error(`${cut} directory sync interrupted`), {
-        code: "EIO",
-      });
-      const synced = { displace: new Set<string>(), publish: new Set<string>() };
-      let faultEnabled = true;
-      let refused = 0;
-      let callbackDurable: boolean | undefined;
-      const sync = durability.syncDirectory;
-      vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
-        const directoryPath = typeof directory === "string" ? directory : directory.path;
-        const phase = !fs.existsSync(previousRoot)
-          ? undefined
-          : fs.existsSync(f.packageRoot)
-            ? "publish"
-            : "displace";
-        if (faultEnabled && phase === cut && directoryPath === failedParent) {
-          refused++;
-          throw failure;
-        }
-        const result = await sync(directory);
-        if (phase) {
-          synced[phase].add(directoryPath);
-        }
-        return result;
-      });
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
-        const prepared = await prepareFixtureActivation(f, fence);
-        expect(prepared).toBeDefined();
-        await expect(
-          prepared!.publish(false, () => {
-            callbackDurable = parents.every((directory) => synced.displace.has(directory));
-          }),
-        ).rejects.toBe(failure);
-      });
-      expect(refused).toBe(1);
-      expect(callbackDurable).toBe(cut === "displace" ? undefined : true);
-      const version = (directory: string) =>
-        JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8")).version;
-      expect(version(previousRoot)).toBe("1.0.0");
-      expect(version(cut === "displace" ? candidateRoot : f.packageRoot)).toBe("2.0.0");
-      expect(fs.existsSync(cut === "displace" ? f.packageRoot : candidateRoot)).toBe(false);
-      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
-      const journal = openPackageActivationJournal(anchor);
-      const pending = journal.read();
-      expect(pending).toMatchObject({
-        phase: "publishing",
-        intent: { kind: cut },
-        publications: [],
-      });
-      // Reopening observes the completed rename, but its missing durability
-      // acknowledgement must still prevent every subsequent effect.
+  withFixture(async (f, cut: "displace" | "publish", parent: string) => {
+    const anchor = resolvePackageActivationAnchor(f.packageRoot);
+    const previousRoot = path.join(anchor, "previous");
+    const candidateRoot = path.join(anchor, "candidate");
+    const parents = [anchor, path.dirname(f.packageRoot)];
+    const failedParent = parent === "anchor" ? anchor : path.dirname(f.packageRoot);
+    const failure = Object.assign(new Error(`${cut} directory sync interrupted`), { code: "EIO" });
+    const synced = { displace: new Set<string>(), publish: new Set<string>() };
+    let faultEnabled = true;
+    let refused = 0;
+    let callbackDurable: boolean | undefined;
+    const sync = durability.syncDirectory;
+    vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
+      const directoryPath = typeof directory === "string" ? directory : directory.path;
+      const phase = !fs.existsSync(previousRoot)
+        ? undefined
+        : fs.existsSync(f.packageRoot)
+          ? "publish"
+          : "displace";
+      if (faultEnabled && phase === cut && directoryPath === failedParent) {
+        refused++;
+        throw failure;
+      }
+      const result = await sync(directory);
+      if (phase) {
+        synced[phase].add(directoryPath);
+      }
+      return result;
+    });
+    await withPublicationFence(f.packageRoot, async (fence) => {
+      const prepared = await prepareFixtureActivation(f, fence);
+      expect(prepared).toBeDefined();
       await expect(
-        runPackageActivationRecovery(anchor, "repair", pending.descriptor.operationId),
+        prepared!.publish(false, () => {
+          callbackDurable = parents.every((directory) => synced.displace.has(directory));
+        }),
       ).rejects.toBe(failure);
-      expect(refused).toBe(2);
-      expect(journal.read()).toEqual(pending);
-      expect(version(previousRoot)).toBe("1.0.0");
-      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
-      faultEnabled = false;
-      await expect(
-        runPackageActivationRecovery(anchor, "repair", pending.descriptor.operationId),
-      ).resolves.toMatchObject({ phase: "publication-complete" });
-      expect(parents.every((directory) => synced[cut].has(directory))).toBe(true);
-      expect(version(f.packageRoot)).toBe("2.0.0");
-      expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
-      await expect(
-        runPackageActivationRecovery(anchor, "retire", pending.descriptor.operationId),
-      ).resolves.toMatchObject({ phase: "complete" });
-    }),
+    });
+    expect(refused).toBe(1);
+    expect(callbackDurable).toBe(cut === "displace" ? undefined : true);
+    const version = (directory: string) => manifest(directory).version;
+    expect(version(previousRoot)).toBe("1.0.0");
+    expect(version(cut === "displace" ? candidateRoot : f.packageRoot)).toBe("2.0.0");
+    expect(fs.existsSync(cut === "displace" ? f.packageRoot : candidateRoot)).toBe(false);
+    expect(read(f.launcher)).toBe("old launcher\n");
+    const journal = openPackageActivationJournal(anchor);
+    const pending = journal.read();
+    const recover = (action: "repair" | "retire") =>
+      runPackageActivationRecovery(anchor, action, pending.descriptor.operationId);
+    expect(pending).toMatchObject({
+      phase: "publishing",
+      intent: { kind: cut },
+      publications: [],
+    });
+    // Reopening observes the completed rename, but its missing durability
+    // acknowledgement must still prevent every subsequent effect.
+    await expect(recover("repair")).rejects.toBe(failure);
+    expect(refused).toBe(2);
+    expect(journal.read()).toEqual(pending);
+    expect(version(previousRoot)).toBe("1.0.0");
+    expect(read(f.launcher)).toBe("old launcher\n");
+    faultEnabled = false;
+    await expect(recover("repair")).resolves.toMatchObject({ phase: "publication-complete" });
+    expect(parents.every((directory) => synced[cut].has(directory))).toBe(true);
+    expect(version(f.packageRoot)).toBe("2.0.0");
+    expect(read(f.launcher)).toBe("candidate launcher\n");
+    await expect(recover("retire")).resolves.toMatchObject({ phase: "complete" });
+  }),
 );
 
 it.skipIf(process.platform === "win32").each(["anchor", "installation", "launchers"] as const)(
   "retains recovery copies when restored package %s persistence fails",
-  (parent) =>
-    fixture.lifetime.run(async () => {
-      const f = await createPackageSwapFixture(root);
-      await fixture.writePostCoreCapability(f.params.stage.packageRoot);
-      const anchor = resolvePackageActivationAnchor(f.packageRoot);
-      const failedParent =
-        parent === "anchor"
-          ? anchor
-          : path.dirname(parent === "launchers" ? f.launcher : f.packageRoot);
-      if (parent === "launchers") {
-        fs.unlinkSync(f.launcher);
-      }
-      const failure = Object.assign(new Error("restored directory sync interrupted"), {
-        code: "EIO",
-      });
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
-        let transaction: PackageUpdateTransaction | undefined;
-        const result = await swapStagedPackageInstall({
-          ...f.params,
-          activation: { fence, runtime: packageActivationRuntimeForTest(), onPrepared: () => {} },
-          onTransaction: (issued) => {
-            transaction = issued;
-          },
-        });
-        expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
-        const sync = durability.syncDirectory;
-        let refused = 0;
-        vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
-          if (
-            directory === failedParent &&
-            fs.existsSync(path.join(anchor, "previous.candidate"))
-          ) {
-            refused++;
-            throw failure;
-          }
-          return sync(directory);
-        });
-        await expect(transaction!.rollback(fence.assertCurrent)).rejects.toBe(failure);
-        expect(refused).toBe(1);
-        expect(openPackageActivationJournal(anchor).read().phase).toBe("rollback-in-progress");
-        expect(
-          JSON.parse(fs.readFileSync(path.join(f.packageRoot, "package.json"), "utf8")).version,
-        ).toBe("1.0.0");
-        expect(
-          JSON.parse(fs.readFileSync(path.join(anchor, "previous.candidate/package.json"), "utf8"))
-            .version,
-        ).toBe("2.0.0");
-        if (parent === "launchers") {
-          expect(fs.existsSync(f.launcher)).toBe(false);
-        } else {
-          expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+  withFixture(async (f, parent: string) => {
+    const anchor = resolvePackageActivationAnchor(f.packageRoot);
+    const failedParent =
+      parent === "anchor"
+        ? anchor
+        : path.dirname(parent === "launchers" ? f.launcher : f.packageRoot);
+    if (parent === "launchers") {
+      fs.unlinkSync(f.launcher);
+    }
+    const failure = Object.assign(new Error("restored directory sync interrupted"), {
+      code: "EIO",
+    });
+    await withPublicationFence(f.packageRoot, async (fence) => {
+      const { result, transaction } = await runPublicationSwap(f, fence);
+      expect(result.status, result.step.stderrTail ?? undefined).toBe("committed");
+      const sync = durability.syncDirectory;
+      let refused = 0;
+      vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
+        if (directory === failedParent && fs.existsSync(path.join(anchor, "previous.candidate"))) {
+          refused++;
+          throw failure;
         }
-        await expect(
-          transaction!.complete({ activationVerified: true }, fence.assertCurrent),
-        ).rejects.toBe(failure);
-        expect(fs.existsSync(path.join(anchor, "previous.candidate"))).toBe(true);
+        return sync(directory);
       });
-    }),
+      await expect(transaction!.rollback(fence.assertCurrent)).rejects.toBe(failure);
+      expect(refused).toBe(1);
+      expect(openPackageActivationJournal(anchor).read().phase).toBe("rollback-in-progress");
+      expect(manifest(f.packageRoot).version).toBe("1.0.0");
+      expect(JSON.parse(read(anchor, "previous.candidate/package.json")).version).toBe("2.0.0");
+      if (parent === "launchers") {
+        expect(fs.existsSync(f.launcher)).toBe(false);
+      } else {
+        expect(read(f.launcher)).toBe("old launcher\n");
+      }
+      await expect(
+        transaction!.complete({ activationVerified: true }, fence.assertCurrent),
+      ).rejects.toBe(failure);
+      expect(fs.existsSync(path.join(anchor, "previous.candidate"))).toBe(true);
+    });
+  }),
 );
 
 it.skipIf(process.platform === "win32").each([
@@ -332,143 +292,81 @@ it.skipIf(process.platform === "win32").each([
   ["directory", "EIO"],
 ] as const)(
   "does not acknowledge an unpersisted launcher %s %s and requires durability on recovery",
-  (cut, code) =>
-    fixture.lifetime.run(async () => {
-      const f = await createPackageSwapFixture(root);
-      await fixture.writePostCoreCapability(f.params.stage.packageRoot);
-      const anchor = resolvePackageActivationAnchor(f.packageRoot);
-      const failure = Object.assign(new Error("launcher durability interrupted"), { code });
-      const handles: Array<{ fd: number; dev: bigint; ino: bigint }> = [];
-      let refused = 0;
-      const open = fsp.open;
-      const openSpy = vi.spyOn(fsp, "open").mockImplementation(async (...args) => {
-        const handle = await open(...args);
-        if (cut === "file" && String(args[0]).includes(".openclaw-shim-stage-")) {
-          const identity = await handle.stat({ bigint: true });
-          if (identity.isFile()) {
-            vi.spyOn(handle, "sync").mockImplementation(async () => {
-              handles.push({ fd: handle.fd, dev: identity.dev, ino: identity.ino });
-              refused++;
-              throw failure;
-            });
-          }
-        }
-        return handle;
-      });
-      const fsync = fs.fsyncSync;
-      const fsyncSpy = vi.spyOn(fs, "fsyncSync").mockImplementation((fd) => {
-        const identity = fs.fstatSync(fd, { bigint: true });
-        // Native fs-safe staging uses raw descriptors, not fs.promises.open.
-        // Bind the fault to an actual file inode in this fixture's private staging.
-        const staged =
-          cut === "file" &&
-          identity.isFile() &&
-          fs
-            .readdirSync(path.dirname(f.launcher))
-            .filter((name) => name.startsWith(".openclaw-shim-stage-"))
-            .some((name) => {
-              const directory = path.join(path.dirname(f.launcher), name);
-              return fs.readdirSync(directory).some((entry) => {
-                const current = fs.lstatSync(path.join(directory, entry), { bigint: true });
-                return (
-                  current.isFile() && current.dev === identity.dev && current.ino === identity.ino
-                );
-              });
-            });
-        if (staged) {
-          handles.push({ fd, dev: identity.dev, ino: identity.ino });
-          refused++;
-          throw failure;
-        }
-        fsync(fd);
-      });
-      const sync = durability.syncDirectory;
-      const syncSpy = vi
-        .spyOn(durability, "syncDirectory")
-        .mockImplementation(async (directory) => {
-          if (
-            cut === "directory" &&
-            directory === path.dirname(f.launcher) &&
-            fs.readFileSync(f.launcher, "utf8") === "candidate launcher\n"
-          ) {
-            refused++;
-            throw failure;
-          }
-          return sync(directory);
-        });
-      await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-        const fence = await executor.enter(f.packageRoot);
-        const prepared = await prepareFixtureActivation(f, fence);
-        expect(prepared).toBeDefined();
-        // Exercise the actual publication owner without the outer swap's automatic
-        // compensation, leaving the interrupted operation available for recovery.
-        await expect(prepared!.publish(false)).rejects.toThrow("launcher durability interrupted");
-      });
-      expect(refused).toBeGreaterThan(0);
-      for (const handle of handles) {
-        let current: fs.BigIntStats | undefined;
-        try {
-          current = fs.fstatSync(handle.fd, { bigint: true });
-        } catch {
-          /* Closed. */
-        }
-        expect(current?.dev === handle.dev && current?.ino === handle.ino).toBe(false);
+  withFixture(async (f, cut: string, code: string) => {
+    const anchor = resolvePackageActivationAnchor(f.packageRoot);
+    const failure = Object.assign(new Error("launcher durability interrupted"), { code });
+    const probe = interceptStagedFileSync(path.dirname(f.launcher), failure, cut === "file");
+    let refused = 0;
+    const sync = durability.syncDirectory;
+    const syncSpy = vi.spyOn(durability, "syncDirectory").mockImplementation(async (directory) => {
+      if (
+        cut === "directory" &&
+        directory === path.dirname(f.launcher) &&
+        read(f.launcher) === "candidate launcher\n"
+      ) {
+        refused++;
+        throw failure;
       }
-      const journal = openPackageActivationJournal(anchor);
-      const pending = journal.read();
-      expect(pending.phase).toBe("publishing");
-      expect(pending.publications).toEqual([]);
-      expect(fs.existsSync(path.join(anchor, "previous"))).toBe(true);
-      if (cut === "directory") {
-        expect(pending.intent).toMatchObject({ kind: "launcher", name: "openclaw" });
-        expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
-        const before = refused;
-        await expect(
-          runPackageActivationRecovery(anchor, "repair", pending.descriptor.operationId),
-        ).rejects.toBe(failure);
-        expect(refused).toBeGreaterThan(before);
-        expect(journal.read()).toEqual(pending);
-      } else {
-        expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
-        expect(handles.length).toBeGreaterThan(0);
+      return sync(directory);
+    });
+    await withPublicationFence(f.packageRoot, async (fence) => {
+      const prepared = await prepareFixtureActivation(f, fence);
+      expect(prepared).toBeDefined();
+      // Exercise the actual publication owner without the outer swap's automatic
+      // compensation, leaving the interrupted operation available for recovery.
+      await expect(prepared!.publish(false)).rejects.toThrow("launcher durability interrupted");
+    });
+    expect(refused + probe.refused).toBeGreaterThan(0);
+    for (const handle of probe.handles) {
+      let current: fs.BigIntStats | undefined;
+      try {
+        current = fs.fstatSync(handle.fd, { bigint: true });
+      } catch {
+        /* Closed. */
       }
-      // The same recorded operation can finish only once the persistence boundary works.
-      fsyncSpy.mockRestore();
-      openSpy.mockRestore();
-      syncSpy.mockRestore();
-      await expect(
-        runPackageActivationRecovery(anchor, "repair", pending.descriptor.operationId),
-      ).resolves.toMatchObject({ phase: "publication-complete" });
-      await expect(
-        runPackageActivationRecovery(anchor, "retire", pending.descriptor.operationId),
-      ).resolves.toMatchObject({ phase: "complete" });
-      expect(fs.readFileSync(f.launcher, "utf8")).toBe("candidate launcher\n");
-      expect(fs.existsSync(anchor)).toBe(false);
-    }),
+      expect(current?.dev === handle.dev && current?.ino === handle.ino).toBe(false);
+    }
+    const journal = openPackageActivationJournal(anchor);
+    const pending = journal.read();
+    const recover = (action: "repair" | "retire") =>
+      runPackageActivationRecovery(anchor, action, pending.descriptor.operationId);
+    expect(pending).toMatchObject({ phase: "publishing", publications: [] });
+    expect(fs.existsSync(path.join(anchor, "previous"))).toBe(true);
+    if (cut === "directory") {
+      expect(pending.intent).toMatchObject({ kind: "launcher", name: "openclaw" });
+      expect(read(f.launcher)).toBe("candidate launcher\n");
+      const before = refused;
+      await expect(recover("repair")).rejects.toBe(failure);
+      expect(refused).toBeGreaterThan(before);
+      expect(journal.read()).toEqual(pending);
+    } else {
+      expect(read(f.launcher)).toBe("old launcher\n");
+      expect(probe.handles.length).toBeGreaterThan(0);
+    }
+    // The same recorded operation can finish only once the persistence boundary works.
+    probe.restore();
+    syncSpy.mockRestore();
+    await expect(recover("repair")).resolves.toMatchObject({ phase: "publication-complete" });
+    await expect(recover("retire")).resolves.toMatchObject({ phase: "complete" });
+    expect(read(f.launcher)).toBe("candidate launcher\n");
+    expect(fs.existsSync(anchor)).toBe(false);
+  }),
 );
 
 it.skipIf(process.platform === "win32")(
   "keeps the original preparation assertion after capability and integrity awaits",
   () =>
     fixture.lifetime.run(async () => {
-      const f = await createPackageSwapFixture(root);
-      const previous = await integrity.createPackageIntegrityReader().tree(f.packageRoot);
-      const previousLauncher = await integrity.createPackageIntegrityReader().launcher(f.launcher);
-      let release!: () => void;
-      let reached!: () => void;
-      const paused = new Promise<void>((resolve) => {
-        release = resolve;
-      });
-      const inspecting = new Promise<void>((resolve) => {
-        reached = resolve;
-      });
+      const f = await createPackageSwapFixture(fixture.root);
+      const { promise: paused, resolve: release } = createDeferred();
+      const { promise: inspecting, resolve: reached } = createDeferred();
       let preparing: ReturnType<typeof preparePackageActivation> | undefined;
       let original: (() => void) | undefined;
       const onPrepared = vi.fn();
-      let outcome: { value: unknown } | { error: unknown } | undefined;
+      let outcome: PromiseSettledResult<unknown> | undefined;
       try {
-        await withUpdateCommandExecutor(randomUUID(), async (executor) => {
-          const fence = await executor.enter(f.packageRoot);
+        await withPublicationFence(f.packageRoot, async (fence) => {
+          const params = await activationParams(f, fence, onPrepared);
           original = fence.assertCurrent.bind(fence);
           vi.spyOn(capability, "supportsPostCoreExecutor").mockImplementation(async () => {
             await Promise.resolve();
@@ -490,35 +388,13 @@ it.skipIf(process.platform === "win32")(
               },
             };
           });
-          preparing = preparePackageActivation({
-            options: { fence, runtime: packageActivationRuntimeForTest(), onPrepared },
-            installTarget: f.params.installTarget,
-            liveRoot: f.packageRoot,
-            stageRoot: f.params.stage.packageRoot,
-            launcherRoot: f.params.stage.layout.binDir,
-            binDir: path.dirname(f.launcher),
-            previous,
-            launchers: [
-              { name: "openclaw", previous: encodePackageActivationLauncher(previousLauncher) },
-            ],
-          });
-          void preparing.then(
-            (value) => {
-              outcome = { value };
-            },
-            (error: unknown) => {
-              outcome = { error };
-            },
+          preparing = preparePackageActivation(params);
+          void preparing.catch(() => {});
+          await awaitGateBeforeSettlement(
+            inspecting,
+            preparing,
+            "Preparation settled before the integrity pause.",
           );
-          const preparationSettled = preparing.then(
-            () => {
-              throw new Error("Preparation completed before the integrity pause.");
-            },
-            (error: unknown) => {
-              throw new Error("Preparation failed before the integrity pause.", { cause: error });
-            },
-          );
-          await Promise.race([inspecting, preparationSettled]);
           // Deliberately end the genuine executor scope while the admitted preparation
           // is paused. The test still owns and joins that escaped operation below.
         });
@@ -527,15 +403,15 @@ it.skipIf(process.platform === "win32")(
       } finally {
         release();
         if (preparing) {
-          await Promise.allSettled([preparing]);
+          [outcome] = await Promise.allSettled([preparing]);
         }
       }
-      expect(outcome).toMatchObject({ error: expect.any(Error) });
+      expect(outcome).toMatchObject({ status: "rejected", reason: expect.any(Error) });
       expect(onPrepared).not.toHaveBeenCalled();
       const anchor = resolvePackageActivationAnchor(f.packageRoot);
       expect(fs.existsSync(anchor)).toBe(false);
       expect(fs.existsSync(resolvePackageActivationControl(anchor))).toBe(false);
       expect(fs.existsSync(f.params.stage.packageRoot)).toBe(true);
-      expect(fs.readFileSync(f.launcher, "utf8")).toBe("old launcher\n");
+      expect(read(f.launcher)).toBe("old launcher\n");
     }),
 );
