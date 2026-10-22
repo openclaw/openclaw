@@ -132,6 +132,112 @@ a tool-result echo. `observed` is absent without independent host execution
 evidence. Unknown facts remain absent; these receipts do not prove that a
 provider honored a control.
 
+## Requester-admitted scheduled commands
+
+An eligible external command can request bounded, unattended command turns using
+optional `ctx.runtimeContext?.scheduledTurns`. This is not a timer or a general
+Gateway capability: registration, services, and retained invocation references
+cannot create these schedules.
+
+Declare both manifest contracts:
+
+```json
+{
+  "contracts": {
+    "commandRuntimeCapabilities": ["subagents", "scheduledTurns"],
+    "sessionScheduledTurns": ["requester-command"]
+  }
+}
+```
+
+The scheduling command must set `requireAuth: true` and
+`runtimeCapabilities: ["subagents", "scheduledTurns"]`. The target command must
+belong to the same plugin, require authentication, support the current channel,
+and declare `subagents`.
+
+Feature-detect twice. Before registering the command, check that
+`api.runtime.capabilities` includes `command-scheduled-turns-v1`; hosts without
+it reject a command that requests `scheduledTurns`, so register a variant
+without it instead. At invocation time, probe `ctx.runtimeContext?.scheduledTurns`.
+An absent capability must not fall back to a system or administrator schedule.
+
+```typescript
+const schedules = ctx.runtimeContext?.scheduledTurns;
+if (!schedules) return { text: "Scheduled continuation is unavailable." };
+const accepted = await schedules.schedule({
+  requestId: "review-resume",
+  command: "review-pr", // registered command name, without a slash
+  args: "resume",
+  schedule: { kind: "every", everyMs: 60_000 },
+  deadlineAtMs: Date.now() + 30 * 60_000,
+  maxRuns: 10,
+});
+return { text: "Continuation scheduled: " + accepted.jobId };
+```
+
+Use an `at` schedule with an ISO `at` value for a single occurrence, or
+`every` with `everyMs >= 1000`. Every occurrence must precede the deadline,
+which can be at most seven days from invocation preparation. `maxRuns` is an
+integer from 1 to 100. An activated native launch spends an attempt even if
+subsequent authorization fails or execution is interrupted; queued preparation
+and capacity deferral do not. Restart recovery never refunds attempts.
+
+The schedule is retired (disabled, with no next run) in the same scheduler
+transaction that launches its final allowed attempt, or that finds its deadline
+passed, its attempts exhausted, or its Gateway process gone. A retired schedule
+never wakes again and stays visible for inspection. One invocation can create
+at most 4 schedules, and each loaded plugin instance can keep at most 8 active
+schedules per parent session. Only enabled schedules created by the same
+plugin instance in the current Gateway process count toward that cap.
+Schedules left by an earlier Gateway process or a replaced plugin instance can
+never run plugin code again, so they do not block re-enrollment; each one
+retires at its next occurrence.
+
+The stored ceiling is the requester's whole native tool surface, at most 256
+plain tool names. A larger surface refuses scheduling with an explicit error.
+
+Identical calls with one `requestId` within the invocation join the same native
+job. Changed input refuses rather than replacing or rearming it. A refused call
+can be retried with the same `requestId`; if an earlier attempt was committed,
+the retry returns that job rather than creating another. The native cron store
+owns persistence, receipts, and recovery. Normal authorized cron management can
+disable or remove a schedule; editing or rearming it is not supported. Disabling
+also refuses manual force runs, so a disabled schedule cannot spend attempts.
+
+Each run restores the original requester and revalidates current operator,
+provider-account, session, plugin, and native tool authority. It reuses the
+command-scoped native-child eligibility producer. Reset, deletion, revocation,
+expired budgets, and unloaded plugins fail closed. Stored source facts are not
+execution authority. No caller can choose a different parent or delivery route.
+
+Schedules bind the exact managed plugin instance, not just its ID, version, or
+source path. Registry adoption of that same instance preserves the binding.
+Plugin replacement/reload or a Gateway process restart cannot inherit old
+schedules; a fresh eligible requester command must enroll a new schedule.
+Persisted jobs do not establish instance continuity or restore execution authority.
+
+Schedules are therefore restart-scoped. After a Gateway restart or update, each
+old schedule is retired at its next occurrence without spending an attempt. A
+plugin that needs to continue across restarts must re-enroll from a later
+eligible requester command, such as an explicit resume command. After an
+in-process plugin reload, the first occurrence that finds another live instance
+of the plugin is refused without running plugin code and retires the schedule;
+it does not wait for generic repeated-failure auto-disable. That refusal spends
+one attempt. A transient gap, such as a registry swap that keeps the same
+instance or a plugin that is still unloading, is an ordinary refusal that
+retries at the next occurrence.
+
+Schedules are stored under a dedicated `pluginCommand` payload kind. An older
+Gateway that does not support scheduled command turns treats that row as an
+invalid job and never runs it as an ordinary model prompt.
+
+Scheduled invocations expose native spawn/collect, not another scheduling
+capability. Direct command `llm.complete` and `continueAgent` are refused:
+model work must use admitted native children. Text/media output is recorded only
+in the exact original parent transcript, without channel announcement. Retained
+runtime callbacks and late results cannot create effects after their invocation
+closes. This does not sandbox trusted in-process plugin code.
+
 ## Background work namespaces
 
 <AccordionGroup>
