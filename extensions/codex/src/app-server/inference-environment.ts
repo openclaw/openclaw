@@ -42,7 +42,17 @@ export function supportsInferenceEnvironment(native: NodeJS.ProcessEnv): boolean
     .split(",")
     .map((entry) => entry.trim())
     .filter(Boolean);
-  if (bypasses.some((entry) => !["127.0.0.1", "localhost", "::1", "[::1]"].includes(entry))) {
+  // Reqwest supports CIDR entries and exact trailing-dot hostnames. Keep the
+  // native child's bypass surface limited to the managed proxy's loopback list.
+  const loopbackBypasses = new Set([
+    "127.0.0.1",
+    "localhost",
+    "localhost.",
+    "::1",
+    "[::1]",
+    "127.0.0.0/8",
+  ]);
+  if (bypasses.some((entry) => !loopbackBypasses.has(entry))) {
     return false;
   }
   if ((http || all) && !bypasses.includes("127.0.0.1")) {

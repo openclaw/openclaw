@@ -1,5 +1,6 @@
 import { createNativeSessionBindingScope } from "openclaw/plugin-sdk/agent-harness-session-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { LOOPBACK_NO_PROXY } from "../../../../src/infra/net/proxy/proxy-lifecycle.js";
 import {
   CodexInferenceAuthorizationError,
   createCodexInferenceModelBinding,
@@ -598,6 +599,10 @@ it.each([
   { env: bothProxies, supported: false },
   {
     env: { ...bothProxies, NO_PROXY: "127.0.0.1,localhost" },
+    supported: true,
+  },
+  {
+    env: { ...bothProxies, NO_PROXY: LOOPBACK_NO_PROXY, no_proxy: LOOPBACK_NO_PROXY },
     supported: true,
   },
   { env: { HTTPS_PROXY: proxyUrl }, supported: true },
