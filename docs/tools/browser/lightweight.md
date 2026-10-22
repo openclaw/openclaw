@@ -248,6 +248,42 @@ The engine and its session model are documented in the
 See [browser profiles](/tools/browser/profiles) and
 [remote browsers](/tools/browser/remote) for the shared profile and routing rules.
 
+## Page classification and judge
+
+You can triage page blockers with OpenClaw's existing
+[Decision model](/concepts/decision-models), without returning the whole page to
+the primary model: in Code Mode, pass a bounded `browser` `text` observation
+directly to `decision_evaluate` and return only its answers. The bundled
+`browser-automation` skill includes a page-triage recipe with separate loading,
+empty-results, login, consent, bot-challenge, paywall, error, and unsupported-browser
+questions. It is explicit, advisory work, not automatic navigation policy.
+
+Use the selected provider only when page data is authorized for that destination.
+Hosted Decision providers can charge; a local browser does not imply local
+inference. Missing tools or unavailable inference leave ordinary browser
+inspection available, not an automatic model/engine fallback. Missing, uncertain,
+or all-low blocker scores do not prove usable content, especially on blank or
+truncated pages. Consent, login, CAPTCHA, and payment actions still need their
+normal authorization.
+
+This is **not native Lightpanda `judge()` support**. As inspected on October 21,
+2026, upstream
+[`page.judge()`](https://github.com/lightpanda-io/lightpanda-python/blob/758da0d95b159097b833f289e565a84471d166b9/lightpanda/browser.py#L295-L318)
+on the experimental `page-classify` branch calls the MCP `classify` tool. The
+branch's [CDP LP dispatcher](https://github.com/lightpanda-io/browser/blob/f29c03e09012918aa107684f05f78fb44cc30798/src/server/cdp/domains/lp.zig#L35-L78)
+does not expose classification. OpenClaw's adapter uses CDP, so neither an engine
+version nor a successful connection establishes this capability. Opening a
+separate MCP session would not classify the existing CDP page and its login state.
+
+The upstream [classification implementation](https://github.com/lightpanda-io/browser/blob/f29c03e09012918aa107684f05f78fb44cc30798/src/browser/classify.zig#L233-L255)
+builds URL/title/status plus at most 8,192 bytes of semantic-tree content, then
+[calls TypeSafe](https://github.com/lightpanda-io/browser/blob/f29c03e09012918aa107684f05f78fb44cc30798/src/browser/tools.zig#L1924-L1962).
+It is not evidence of embedded model weights or offline inference. Native
+integration needs an upstream classification operation that targets the existing
+CDP session, with explicit capability discovery and inference configuration.
+Until then, do not guess `LP.classify`/`LP.judge` methods or forward OpenClaw
+credentials into an external browser process.
+
 ## Verification and benchmarks
 
 Engine startup, CDP connectivity, task completion, and full OpenClaw integration
