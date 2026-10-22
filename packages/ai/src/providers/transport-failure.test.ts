@@ -10,9 +10,7 @@ import { makeProviderModel } from "./provider-model.test-support.js";
 const initialHost = getAiTransportHost();
 afterEach(() => configureAiTransportHost(initialHost));
 
-const context: Context = {
-  messages: [{ role: "user", content: "Hello", timestamp: 1 }],
-};
+const context: Context = { messages: [{ role: "user", content: "Hello", timestamp: 1 }] };
 const model = makeProviderModel("openai-completions", "openai", "gpt-5.6-luna", {
   baseUrl: "https://provider.test/v1",
 });

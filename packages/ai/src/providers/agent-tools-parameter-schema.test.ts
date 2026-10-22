@@ -83,9 +83,7 @@ it.each(["root id", "nested defs"])("coerces through %s fallback", (shape) => {
     ...defined("settings", { settings }),
     ...(shape === "root id" ? { $id: "https://example.invalid/tool" } : {}),
   });
-  expect(validate(parameters, { settings: '{"count":"2"}' })).toEqual({
-    settings: { count: 2 },
-  });
+  expect(validate(parameters, { settings: '{"count":"2"}' })).toEqual({ settings: { count: 2 } });
 });
 
 it("inlines malformed and encoded references and removes unused definitions", () => {

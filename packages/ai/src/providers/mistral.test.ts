@@ -7,6 +7,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { configureAiTransportHost } from "../host.js";
+import { createAssistantOutput } from "../transports/assistant-output.js";
 import { withProviderAcceptanceObserver } from "../transports/transport-stream-shared.js";
 import type { Context } from "../types.js";
 import { onLlmRequestActivity } from "../utils/llm-request-activity.js";
@@ -68,9 +69,7 @@ const makeMistralModel = () =>
     reasoning: false,
   });
 
-const context = {
-  messages: [{ role: "user", content: "hello", timestamp: 0 }],
-} satisfies Context;
+const context = { messages: [{ role: "user", content: "hello", timestamp: 0 }] } satisfies Context;
 
 function makeUnreadableParameterTool() {
   const tool = { ...makeHealthyTool(), name: "broken_tool" };
@@ -200,10 +199,7 @@ function makeMistralToolResultContext(
     messages: [
       ...(options.includeUser === false ? [] : [{ role: "user", content: "hello", timestamp: 1 }]),
       {
-        role: "assistant",
-        provider: "mistral",
-        api: "mistral-conversations",
-        model: "mistral-large-latest",
+        ...createAssistantOutput(makeMistralModel()),
         stopReason: "toolUse",
         timestamp: 0,
         content: [{ type: "toolCall", id: toolCallId, name: toolName, arguments: {} }],
@@ -333,19 +329,14 @@ describe("Mistral provider", () => {
     expect(result.stopReason).toBe("error");
     expect(acceptanceObserver).not.toHaveBeenCalled();
     expect(onResponse).toHaveBeenCalledWith(
-      {
-        status: 429,
-        headers: expect.objectContaining({ "x-mistral-request-id": "req-rejected" }),
-      },
+      { status: 429, headers: expect.objectContaining({ "x-mistral-request-id": "req-rejected" }) },
       expect.objectContaining({ provider: "mistral" }),
     );
     expect(hostFetch).toHaveBeenCalledOnce();
   });
 
   it("forwards simple stop sequences to Mistral stop", async () => {
-    const result = await runSimpleMistralFixture(context, {
-      stop: ["STOP"],
-    });
+    const result = await runSimpleMistralFixture(context, { stop: ["STOP"] });
 
     expect(result.stopReason).toBe("error");
     expect(mistralMockState.payloads[0]).toHaveProperty("stop", ["STOP"]);
@@ -354,23 +345,12 @@ describe("Mistral provider", () => {
   it("preserves requested maxTokens when the model output limit is unknown", async () => {
     const model = makeMistralModel();
     Reflect.deleteProperty(model, "maxTokens");
-    let sentMaxTokens: unknown;
-    let payloadCaptured = false;
-    await runSimpleMistralFixture(
-      context,
-      {
-        maxTokens: 360,
-        onPayload: (requestPayload) => {
-          payloadCaptured = true;
-          sentMaxTokens = (requestPayload as { maxTokens?: number }).maxTokens;
-          throw new Error("stop before network");
-        },
-      },
-      model,
-    );
-
-    expect(payloadCaptured).toBe(true);
-    expect(sentMaxTokens).toBe(360);
+    const onPayload = vi.fn(() => {
+      throw new Error("stop before network");
+    });
+    await runSimpleMistralFixture(context, { maxTokens: 360, onPayload }, model);
+    expect(onPayload).toHaveBeenCalledOnce();
+    expect(onPayload).toHaveBeenCalledWith(expect.objectContaining({ maxTokens: 360 }), model);
   });
 
   it("preserves Mistral HTTP status and message while keeping error bodies UTF-16 safe and bounded", async () => {
@@ -481,8 +461,7 @@ describe("Mistral provider", () => {
       ],
       [wireTool("first_tool", ":1}"), wireTool("second_tool", ":2}")],
     ]);
-    // The SDK defaults an omitted wire index to zero. Explicit provider ids
-    // must still win over that ambiguous compatibility default.
+    // Explicit IDs must win over the SDK's default index zero.
     expect(parsedChunks[0]).toMatchObject([{ index: 0 }, { index: 0 }]);
 
     expect(toolCalls).toMatchObject([
@@ -500,8 +479,7 @@ describe("Mistral provider", () => {
       ],
       "00000000-0000-4000-8000-000000429247",
     );
-    // The SDK defaults the omitted continuation index to zero; the persistent
-    // function name must still bind it back to the index-1 call.
+    // The persistent name must win over the SDK's default continuation index zero.
     expect(parsedChunks).toMatchObject([
       [
         { id: "null", index: 0 },
@@ -566,10 +544,10 @@ describe("Mistral provider", () => {
       [wireTool("second_tool", ":1}", { id: "explicitA" })],
     ]);
 
-    expect(result.stopReason).toBe("error");
-    expect(result.errorMessage).toBe(
-      "Mistral streamed tool-call identities conflict; refusing to merge arguments",
-    );
+    expect(result).toMatchObject({
+      stopReason: "error",
+      errorMessage: "Mistral streamed tool-call identities conflict; refusing to merge arguments",
+    });
     expect(toolCalls).toEqual([]);
   });
 
@@ -630,10 +608,7 @@ describe("Mistral provider", () => {
   it("validates and emits one snapshot of a pinned Mistral tool name", async () => {
     let nameReads = 0;
     const result = await runMistralFixture(
-      {
-        ...context,
-        tools: [makeHealthyTool()] as never,
-      },
+      { ...context, tools: [makeHealthyTool()] as never },
       {
         toolChoice: {
           type: "function",
@@ -707,16 +682,10 @@ describe("Mistral provider", () => {
   });
 
   it("preserves tool-result boundary whitespace in the request payload", async () => {
-    const testContext = makeMistralToolResultContext("read_file", [
-      { type: "text", text: "  indented\n" },
-    ]);
-
-    await runMistralFixture(testContext);
-
-    const content = toolMessage()?.content;
-    const toolContent = Array.isArray(content) ? content : [];
-    const textBlock = toolContent.find((block) => block.type === "text");
-    expect(textBlock?.text).toBe("  indented\n");
+    await runMistralFixture(
+      makeMistralToolResultContext("read_file", [{ type: "text", text: "  indented\n" }]),
+    );
+    expect(toolMessage()?.content).toContainEqual({ type: "text", text: "  indented\n" });
   });
 
   it("does not emit image chunks or placeholders for payload-less tool media", async () => {

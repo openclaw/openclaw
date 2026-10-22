@@ -17,9 +17,7 @@ const model = makeProviderModel("azure-openai-responses", "azure", "gpt-5.5", {
   contextWindow: 200000,
 });
 
-const context = {
-  messages: [{ role: "user", content: "hello", timestamp: 1 }],
-} satisfies Context;
+const context = { messages: [{ role: "user", content: "hello", timestamp: 1 }] } satisfies Context;
 
 const directModel = { ...model, provider: "azure-openai-responses" };
 
@@ -96,10 +94,7 @@ describe("azure-openai-responses", () => {
     await stream(
       directModel,
       { ...context, tools },
-      {
-        apiKey: "synthetic-azure-key",
-        openclawCodeModeToolSurface: true,
-      },
+      { apiKey: "synthetic-azure-key", openclawCodeModeToolSurface: true },
     ).result();
     expect(requests).toHaveLength(1);
     expect(requests[0]?.body).toMatchObject({
@@ -112,10 +107,7 @@ describe("azure-openai-responses", () => {
   });
 
   it("disables response storage and clamps small output limits", async () => {
-    await streamSimple(model, context, {
-      apiKey: "test-api-key",
-      maxTokens: 1,
-    }).result();
+    await streamSimple(model, context, { apiKey: "test-api-key", maxTokens: 1 }).result();
     expect(requests[0]?.body).toMatchObject({ max_output_tokens: 16, store: false });
   });
 
