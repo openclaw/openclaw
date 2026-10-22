@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { formatSignalMediaText } from "../media-text.js";
+import type { SignalDataMessage } from "./event-handler.types.js";
 
 const internalHookMocks = vi.hoisted(() => ({
   createInternalHookEvent: vi.fn(
@@ -27,33 +28,21 @@ vi.mock("openclaw/plugin-sdk/hook-runtime", async (importOriginal) => {
   };
 });
 
-type SignalMsgContext = Pick<MsgContext, "Body" | "WasMentioned">;
-
-let capturedCtx: SignalMsgContext | undefined;
-
+let capturedCtx: MsgContext | undefined;
 const getCapturedCtx = () => expectDefined(capturedCtx, "Signal MsgContext");
 
-function getGroupHistoryEntries(
-  groupHistories: ReturnType<typeof createBaseSignalEventHandlerDeps>["groupHistories"],
-  groupId = "g1",
-) {
-  return expectDefined(groupHistories.get(groupId), `pending history for ${groupId}`);
-}
-
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>();
-  const { createSignalPreparedDispatchRunner } = await import("./event-handler.test-harness.js");
-  return {
-    ...actual,
-    runChannelInboundEvent: createSignalPreparedDispatchRunner(
-      actual.runChannelInboundEvent,
-      async () => {},
-      async (resolved) => {
-        capturedCtx = resolved.ctxPayload as SignalMsgContext;
-        return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-      },
-    ),
-  };
+  const { signalInboundTestModule } =
+    await import("./event-handler.inbound-context.test-support.js");
+  return signalInboundTestModule(
+    await importOriginal<typeof import("openclaw/plugin-sdk/channel-inbound")>(),
+    async () => {},
+    async (resolved) => {
+      capturedCtx = resolved.ctxPayload;
+      return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+    },
+    false,
+  );
 });
 
 const [
@@ -68,17 +57,9 @@ const [
   import("../reply-authors.js"),
 ]);
 
-type GroupEventOpts = {
-  message?: string;
-  attachments?: unknown[];
+type GroupEventOpts = Pick<SignalDataMessage, "message" | "attachments" | "mentions"> & {
   quoteText?: string;
   timestamp?: number;
-  mentions?: Array<{
-    uuid?: string;
-    number?: string;
-    start?: number;
-    length?: number;
-  }> | null;
 };
 
 function makeGroupEvent(opts: GroupEventOpts) {
@@ -143,7 +124,7 @@ async function expectSkippedGroupHistory(
   });
   await handler(makeGroupEvent(opts));
   expect(capturedCtx).toBeUndefined();
-  const entries = getGroupHistoryEntries(groupHistories);
+  const entries = expectDefined(groupHistories.get("g1"), "pending group history");
   expect(entries).toHaveLength(1);
   const entry = expectDefined(entries[0], "Signal group history entry");
   expect(entry.body).toBe(expectedBody);
@@ -287,30 +268,18 @@ describe("signal mention gating", () => {
     });
   });
 
-  it("does not let an authorized command bypass a native mention of another participant", async () => {
-    const placeholder = "\uFFFC";
-    await expectSkippedGroupHistory(
-      {
-        message: `/help ${placeholder}`,
-        mentions: [{ uuid: "other-user", start: 6, length: placeholder.length }],
-      },
-      "/help @other-user",
-      "",
-      { mentionPattern: null, accountUuid: "bot-uuid" },
-    );
-  });
-
-  it("does not accept malformed matching native mention metadata as a bot mention", async () => {
-    await expectSkippedGroupHistory(
-      {
-        message: "plain ping",
-        mentions: [{ uuid: "bot-uuid", start: 99, length: 1 }],
-      },
-      "plain ping",
-      "",
-      { mentionPattern: null, accountUuid: "bot-uuid" },
-    );
-  });
+  it.each([
+    ["/help \uFFFC", { uuid: "other-user", start: 6, length: 1 }, "/help @other-user"],
+    ["plain ping", { uuid: "bot-uuid", start: 99, length: 1 }, "plain ping"],
+  ] as const)(
+    "rejects a non-bot or malformed native mention: %s",
+    async (message, mention, expected) => {
+      await expectSkippedGroupHistory({ message, mentions: [mention] }, expected, "", {
+        mentionPattern: null,
+        accountUuid: "bot-uuid",
+      });
+    },
+  );
 });
 
 it("renderSignalMentions skips missing identifiers and out-of-bounds spans", () => {
