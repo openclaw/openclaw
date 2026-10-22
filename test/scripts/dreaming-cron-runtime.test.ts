@@ -92,27 +92,21 @@ describe("dreaming runtime persistence assertion", () => {
     expect(() => assertRuntimePersistence(runtime, rows)).not.toThrow();
   });
 
-  it.each<[string, (rows: ReturnType<typeof fixture>["rows"]) => unknown]>([
-    ["migrated automation rewritten by startup", (rows) => Object.assign(rows[0], { enabled: 1 })],
-    ["whole-store ordinal compaction", (rows) => Object.assign(rows[2], { sort_order: 2 })],
-    ["authored timestamp projection", (rows) => Object.assign(rows[2], { updated_at: 1010 })],
-    [
-      "authored JSON reserialization",
-      (rows) => Object.assign(rows[2], { job_json: rows[2].job_json + " " }),
-    ],
-    [
-      "inactive partition rewrite",
-      (rows) => Object.assign(rows[3], { updated_at: rows[3].updated_at + 1 }),
-    ],
-    ["changed row ordinal rewrite", (rows) => Object.assign(rows[1], { sort_order: 1 })],
-    ["regressed future timestamp", (rows) => Object.assign(rows[1], { updated_at: 2000 })],
-    [
-      "stale changed definition grant",
-      (rows) => Object.assign(rows[1], { grant_definition_generation: 3 }),
-    ],
+  type Rows = ReturnType<typeof fixture>["rows"];
+  const change = (index: 0 | 1 | 2 | 3, patch: Partial<Rows[number]>) => (rows: Rows) =>
+    Object.assign(rows[index], patch);
+  it.each([
+    ["migrated automation rewritten by startup", change(0, { enabled: 1 })],
+    ["whole-store ordinal compaction", change(2, { sort_order: 2 })],
+    ["authored timestamp projection", change(2, { updated_at: 1010 })],
+    ["authored JSON reserialization", (rows: Rows) => (rows[2].job_json += " ")],
+    ["inactive partition rewrite", change(3, { updated_at: 1001 })],
+    ["changed row ordinal rewrite", change(1, { sort_order: 1 })],
+    ["regressed future timestamp", change(1, { updated_at: 2000 })],
+    ["stale changed definition grant", change(1, { grant_definition_generation: 3 })],
     ["missing row", (rows) => rows.pop()],
     ["duplicate row", (rows) => rows.push(rows[2])],
-  ])("rejects %s", (_name, corrupt) => {
+  ] satisfies [string, (rows: Rows) => unknown][])("rejects %s", (_name, corrupt) => {
     const { runtime, rows } = fixture();
     corrupt(rows);
     expect(() => assertRuntimePersistence(runtime, rows)).toThrow();
