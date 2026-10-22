@@ -10,15 +10,12 @@ import { OLLAMA_DEFAULT_BASE_URL } from "./src/defaults.js";
 
 describe("ollama provider policy public artifact", () => {
   it.each([
-    {
-      provider: "ollama",
-      modelId: "qwen3.5:9b",
-      baseUrl: "http://model-host.internal:11434",
-      expected: "tools",
-    },
-    { provider: "ollama", modelId: "kimi-k2.5", baseUrl: "https://ollama.com/v1", expected: false },
-  ])("selects Tool Search for $provider/$modelId at $baseUrl", ({ expected, ...context }) => {
-    expect(resolveToolSearchMode({ ...context, api: "ollama" })).toBe(expected);
+    ["qwen3.5:9b", "http://model-host.internal:11434", "tools"],
+    ["kimi-k2.5", "https://ollama.com/v1", false],
+  ] as const)("selects Tool Search for %s at %s", (modelId, baseUrl, expected) => {
+    expect(resolveToolSearchMode({ provider: "ollama", modelId, baseUrl, api: "ollama" })).toBe(
+      expected,
+    );
   });
   it("injects defaults so implicit discovery can run before validation", () => {
     expect(normalizeConfig({ provider: "ollama", providerConfig: {} })).toStrictEqual({
@@ -65,22 +62,15 @@ describe("ollama provider policy public artifact", () => {
   });
 
   it("uses the implicit native API for discovered tiers", () => {
-    const profile = resolveThinkingProfile({
-      provider: "ollama",
-      modelId: "custom-thinking-model",
-      api: undefined,
-      reasoning: true,
-      thinkingLevelMap: { minimal: "minimal", xhigh: "xhigh" },
-    });
-    expect(profile.levels.map(({ id }) => id)).toEqual([
-      "off",
-      "minimal",
-      "low",
-      "medium",
-      "high",
-      "xhigh",
-      "max",
-    ]);
+    expect(
+      resolveThinkingProfile({
+        provider: "ollama",
+        modelId: "custom-thinking-model",
+        api: undefined,
+        reasoning: true,
+        thinkingLevelMap: { minimal: "minimal", xhigh: "xhigh" },
+      }).levels.map(({ id }) => id),
+    ).toEqual(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
   });
 
   it("does not invent effort levels for catalog-light cloud models", () => {

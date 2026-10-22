@@ -13,7 +13,7 @@ const configuredModel = {
   compat: { supportsTools: true },
 };
 const showInfo = {
-  model_info: { "model.context_length": 32_768 },
+  model_info: { "model.context_length": 32_768, "general.parameter_count": 4_000_000_000 },
   capabilities: ["completion", "tools"],
 };
 
@@ -35,6 +35,7 @@ async function withOllamaServer(
   run: (baseUrl: string, inspected: string[]) => Promise<void>,
 ) {
   const inspected: string[] = [];
+  const unexpected: string[] = [];
   await withServer(
     (request, response) => {
       let body = "";
@@ -58,12 +59,14 @@ async function withOllamaServer(
           options.onShow?.();
           send(options.show ?? showInfo, options.showStatus ?? 200);
         } else {
+          unexpected.push(request.url ?? "");
           response.writeHead(404).end();
         }
       });
     },
     (baseUrl) => run(baseUrl, inspected),
   );
+  expect(unexpected).toEqual([]);
 }
 
 function guidedSetup() {
@@ -101,7 +104,16 @@ describe("Ollama app-guided setup HTTP discovery", () => {
       },
       async (baseUrl) => {
         const prepared = await prepare(baseUrl, name);
-        expect(prepared?.configPatch?.models?.providers?.ollama?.models?.[0]).toMatchObject({
+        const provider = prepared?.configPatch?.models?.providers?.ollama;
+        expect(prepared).toMatchObject({ profiles: [], defaultModel: `ollama/${name}` });
+        expect(prepared?.configPatch?.models?.mode).toBe("merge");
+        expect(provider).toMatchObject({
+          baseUrl,
+          api: "ollama",
+          apiKey: "ollama-local",
+        });
+        expect(provider?.models?.[0]).not.toHaveProperty("parameterCount");
+        expect(provider?.models?.[0]).toMatchObject({
           id: name,
           maxTokens: expected,
         });
@@ -115,6 +127,7 @@ describe("Ollama app-guided setup HTTP discovery", () => {
       const result = await runSetup(operation, baseUrl);
       expect(result).toMatchObject({
         [operation === "detect" ? "modelRef" : "defaultModel"]: `ollama/${selected}`,
+        ...(operation === "detect" ? { detail: `${selected} at ${baseUrl}` } : {}),
       });
       expect(inspected).toEqual([selected]);
     });
@@ -128,6 +141,7 @@ describe("Ollama app-guided setup HTTP discovery", () => {
   ])("rejects a loaded model with $name", async (options) => {
     await withOllamaServer(options, async (baseUrl) => {
       await expect(guidedSetup().detect(setupContext(baseUrl))).resolves.toBeNull();
+      await expect(prepare(baseUrl)).resolves.toBeNull();
     });
   });
 

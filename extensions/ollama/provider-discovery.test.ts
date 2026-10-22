@@ -2,7 +2,7 @@ import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
-import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
+import { jsonResponse, withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 import { createModel } from "./model.test-support.js";
 import { ollamaProviderDiscovery } from "./provider-discovery.js";
@@ -27,16 +27,6 @@ describe("Ollama provider", () => {
 
   const stubOllamaFetch = (fetchMock: ReturnType<typeof vi.fn>) =>
     vi.stubGlobal("fetch", withFetchPreconnect(fetchMock));
-
-  const expectDiscoveryCallCounts = (
-    fetchMock: ReturnType<typeof vi.fn>,
-    params: { tags: number; show: number },
-  ) => {
-    expect({
-      tags: countFetchCallUrls(fetchMock, "/api/tags"),
-      show: countFetchCallUrls(fetchMock, "/api/show"),
-    }).toEqual(params);
-  };
 
   const tagsAuthorization = (
     fetchMock: Mock<(input: unknown, init?: RequestInit) => Promise<Response>>,
@@ -83,12 +73,6 @@ describe("Ollama provider", () => {
     ).resolves.toBeUndefined();
     expect(resolveProviderApiKey).not.toHaveBeenCalled();
   });
-
-  const jsonResponse = (body: unknown, status = 200) =>
-    new Response(JSON.stringify(body), {
-      status,
-      headers: { "content-type": "application/json" },
-    });
 
   const stubTagsFetch = (names: string[] = [], show?: object) => {
     const fetchMock = vi.fn(async (input: unknown, _init?: RequestInit) => {
@@ -140,7 +124,8 @@ describe("Ollama provider", () => {
       models: [{ id: "deepseek-r1:latest", reasoning: true }, { reasoning: false }],
     });
     expect(provider?.models).toHaveLength(2);
-    expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 2 });
+    expect(countFetchCallUrls(fetchMock, "/api/tags")).toBe(1);
+    expect(countFetchCallUrls(fetchMock, "/api/show")).toBe(2);
   });
 
   it("caps /api/show requests when /api/tags returns a very large model list", async () => {
@@ -151,7 +136,8 @@ describe("Ollama provider", () => {
     const provider = await runOllamaCatalog({
       env: { ...liveEnv, OLLAMA_API_KEY: "test-key" },
     });
-    expectDiscoveryCallCounts(fetchMock, { tags: 1, show: 200 });
+    expect(countFetchCallUrls(fetchMock, "/api/tags")).toBe(1);
+    expect(countFetchCallUrls(fetchMock, "/api/show")).toBe(200);
     expect(provider?.models).toHaveLength(200);
   });
 
