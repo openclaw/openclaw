@@ -164,6 +164,9 @@ all four slots:
   other backslash escapes are rejected. The file slot is
   also quote-aware: `oc://"skills/email-drafter"/Tools/$last` treats
   `skills/email-drafter` as a single file path.
+  Use `""` for an empty-string object key in JSONC, JSONL, or YAML, for example
+  `oc://sample.jsonc/""/value`. It is distinct from a missing segment and is not
+  an array index.
 - **Predicates** — `[k=v]`, `[k!=v]`, `[k<v]`, `[k<=v]`, `[k>v]`, `[k>=v]`.
   Numeric operators require both sides to coerce to finite numbers.
 - **Unions** — `{a,b,c}` matches any of the alternatives.
