@@ -216,10 +216,10 @@ export function SidebarAgentRoster(props: RosterProps) {
     }
   };
   const [contextMenu, setContextMenu] = createSignal<AgentContextMenu | null>(null);
-  const openContextMenu = (card: () => AgentMenuCard) => (event: MouseEvent | KeyboardEvent) =>
-    handleContextMenuEvent(event, agentLinks.get(card().id) ?? null, (anchor, x, y) => {
+  const openContextMenu = (id: string, event: MouseEvent | KeyboardEvent) =>
+    handleContextMenuEvent(event, agentLinks.get(id) ?? null, (anchor, x, y) => {
       host().dismissTransientMenus();
-      setContextMenu({ id: card().id, x, y, anchor });
+      setContextMenu({ id, x, y, anchor });
     });
   const agentMenu = (card: () => AgentMenuCard, point?: AgentContextMenu) => {
     const items = createMemo(() => agentMenuItems(card()));
@@ -289,8 +289,8 @@ export function SidebarAgentRoster(props: RosterProps) {
                     <div
                       class="sidebar-pinned-agent session-row-host"
                       data-pinned-agent={card().id}
-                      onContextMenu={openContextMenu(card)}
-                      onKeyDown={openContextMenu(card)}
+                      onContextMenu={(event) => openContextMenu(card().id, event)}
+                      onKeyDown={(event) => openContextMenu(card().id, event)}
                     >
                       <openclaw-tooltip
                         class="sidebar-pinned-agent__tooltip"
@@ -381,8 +381,8 @@ export function SidebarAgentRoster(props: RosterProps) {
                       "sidebar-agent-roster__header session-row-host",
                       { "sidebar-agent-roster__header--current": active() },
                     ]}
-                    onContextMenu={openContextMenu(card)}
-                    onKeyDown={openContextMenu(card)}
+                    onContextMenu={(event) => openContextMenu(card().id, event)}
+                    onKeyDown={(event) => openContextMenu(card().id, event)}
                   >
                     <a
                       ref={linkRef}
