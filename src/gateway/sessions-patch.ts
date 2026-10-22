@@ -58,6 +58,7 @@ import { normalizeSessionToolOverrides } from "../config/sessions/session-tool-o
 import { projectCanonicalSessionEntryShape } from "../config/sessions/store-entry-shape.js";
 import type { SessionAcpMeta } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { normalizeExecTarget } from "../infra/exec-approvals.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import {
   isSubagentSessionKey,
@@ -478,6 +479,11 @@ function* projectSessionPatchSteps(
       "elevatedLevel",
       normalizeElevatedLevel,
       'invalid elevatedLevel (use "on"|"off"|"ask"|"full")',
+    ) ??
+    applyNormalizedPreference(
+      "execHost",
+      (raw) => normalizeExecTarget(raw) ?? undefined,
+      'invalid execHost (use "auto"|"sandbox"|"gateway"|"node")',
     );
   if (preferenceError) {
     return invalid(preferenceError);
