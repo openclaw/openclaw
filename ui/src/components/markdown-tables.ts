@@ -5,6 +5,8 @@ import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { copyMarkdownText } from "./markdown-copy.ts";
 import { createIconElement } from "./markdown-icon.ts";
+import { SESSION_TITLE_TARGET_SELECTOR } from "./session-progress-hovercard-target.ts";
+import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 const tableShellSelector = ".chat-text .markdown-table[data-table-interactions]";
 const tableViewportSelector = ".markdown-table__viewport";
@@ -66,10 +68,9 @@ function enhanceTableShell(shell: HTMLElement): void {
   if (enhancedTableShells.has(shell)) {
     return;
   }
-  const viewport = shell.querySelector<HTMLElement>(tableViewportSelector);
   const expand = shell.querySelector<HTMLElement>(".markdown-table__expand");
   const copy = shell.querySelector<HTMLElement>(".markdown-table__copy");
-  if (!viewport || !expand || !copy) {
+  if (!expand || !copy) {
     return;
   }
   enhancedTableShells.add(shell);
@@ -260,6 +261,10 @@ async function showTableDialog(
     dialog.append(content);
     // Keep delegated file/session actions and modal teardown with their transcript.
     owner.append(dialog);
+    // Cloned anchors need their own href lifetime before the source is decorated.
+    for (const target of content.querySelectorAll<HTMLElement>(SESSION_TITLE_TARGET_SELECTOR)) {
+      stopListeners.push(registerSessionTitleTarget(target, document.createElement("span")));
+    }
   } finally {
     if (!dialog) {
       close();

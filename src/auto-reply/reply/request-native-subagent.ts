@@ -16,9 +16,10 @@ import type {
   NativeSubagentCommandFactory,
   NativeSubagentRuntimeGuard,
 } from "../../plugins/runtime/native-subagent-context.js";
-import type { NativeSubagentRuntime } from "../../plugins/runtime/types-native-subagent.js";
 import type { ReplyToolAuthorityOverlay } from "../../sessions/session-controller.contracts.js";
 import { prepareChannelRunAdmission } from "./channel-run-admission.js";
+
+type CommandNativeRuntime = NonNullable<Awaited<ReturnType<NativeSubagentCommandFactory>>>;
 
 type RequesterAuthorization = {
   isAuthorizedSender: boolean;
@@ -41,7 +42,18 @@ export type NativeSubagentRequesterState = {
   assertCurrent: () => void;
   /** Ingress owns turn adoption, recorder commitment and exact receipt validation. */
   commitTurn: (assertCurrent: () => void) => Promise<boolean>;
-  ingress: Pick<
+  /** Cron supplies genuine schedule admission; live ingress retains its existing channel producer. */
+  prepareAdmission?: (params: {
+    cfg: OpenClawConfig;
+    runId: string;
+    agentId: string;
+    operatorAuthority: AdmittedRunOperatorAuthority;
+    assertSourceCurrent: () => void;
+    onAdmitted: NonNullable<Parameters<typeof prepareChannelRunAdmission>[0]["onAdmitted"]>;
+  }) => PreparedAgentRunAdmission;
+  /** Only the live external-command owner sets this; scheduled runs cannot recursively schedule. */
+  enableScheduledTurns?: boolean;
+  ingress?: Pick<
     Parameters<typeof prepareChannelRunAdmission>[0],
     "ingressKind" | "boundary" | "evidence" | "gatewayLocalUserIngress"
   >;
@@ -58,8 +70,8 @@ export async function resolveCommandNativeSubagentEligibility(params: {
   ingressEligible: boolean;
   assertCurrent: () => void;
   authorizeRequester: () => Promise<RequesterAuthorization>;
-  prepare: (owner: RequesterAuthorization) => Promise<NativeSubagentRuntime | undefined>;
-}): Promise<NativeSubagentRuntime | undefined> {
+  prepare: (owner: RequesterAuthorization) => Promise<CommandNativeRuntime | undefined>;
+}): Promise<CommandNativeRuntime | undefined> {
   if (
     !params.ingressEligible ||
     params.command?.requireAuth !== true ||
@@ -119,7 +131,7 @@ export async function withRequesterNativeSubagents<T>(
       };
       const prepare = async (
         owner: RequesterAuthorization,
-      ): Promise<NativeSubagentRuntime | undefined> => {
+      ): Promise<CommandNativeRuntime | undefined> => {
         assertCurrent();
         const workspaceDir =
           entry.spawnedWorkspaceDir ?? resolveAgentWorkspaceDir(cfg, sessionAgentId);
@@ -194,11 +206,16 @@ export async function withRequesterNativeSubagents<T>(
                 if (!resolveGatewayContext) {
                   throw new Error("Native subagent controller requires its Gateway binding.");
                 }
-                admission = prepareChannelRunAdmission({
+                if (!state.prepareAdmission && !state.ingress) {
+                  throw new Error("Native command requires its ingress admission producer.");
+                }
+                admission = (
+                  state.prepareAdmission ??
+                  ((input) => prepareChannelRunAdmission({ ...input, ...state.ingress! }))
+                )({
                   cfg,
                   runId,
                   agentId: sessionAgentId,
-                  ...state.ingress,
                   operatorAuthority,
                   // Accepted children retain the operator source, not this invocation.
                   assertSourceCurrent: () => {
@@ -217,8 +234,14 @@ export async function withRequesterNativeSubagents<T>(
         if (state.commandIngressEligible !== undefined && !(await runtime.prepareCommand())) {
           return undefined;
         }
+        const scheduledTurns =
+          state.enableScheduledTurns &&
+          guard.command?.runtimeCapabilities?.includes("scheduledTurns")
+            ? await runtime.prepareScheduledTurns(state.messageChannel ?? "")
+            : undefined;
         assertCurrent();
         return {
+          ...(scheduledTurns ? { scheduledTurns } : {}),
           spawn: (params) => runtime.spawn(params),
           collect: (params) => runtime.collect(params),
           ...(runtime.list ? { list: runtime.list } : {}),

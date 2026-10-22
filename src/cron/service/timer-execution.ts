@@ -35,6 +35,7 @@ import {
   type ExecuteJobCoreOptions,
   resolveMainSessionCronDeliveryContext,
 } from "./timer-execution-timeout.js";
+import { preparesCronSessionEvents, runsCronMainSessionRoute } from "./timer-session-route.js";
 import { wake } from "./wake.js";
 
 /** Executes a cron job without mutating persisted job state. */
@@ -170,10 +171,7 @@ export async function executeJobCore(
   }
   let sessionPreparation: CronSessionRunPreparation | undefined;
   try {
-    if (
-      (job.payload.kind === "agentTurn" || job.payload.kind === "systemEvent") &&
-      (job.sessionTarget === "main" || job.sessionTarget.startsWith("session:"))
-    ) {
+    if (preparesCronSessionEvents(job)) {
       const target = state.deps.resolveSessionEventTarget?.({
         agentId: job.agentId,
         sessionKey: resolveCronSessionTargetSessionKey(job.sessionTarget),
@@ -328,11 +326,7 @@ export async function executeJobCore(
         payload: appendCronPayloadText(effectiveJob.payload, options.streamBatch),
       };
     }
-    if (
-      effectiveJob.sessionTarget === "main" ||
-      (effectiveJob.sessionTarget.startsWith("session:") &&
-        effectiveJob.payload.kind === "agentTurn")
-    ) {
+    if (runsCronMainSessionRoute(effectiveJob, job)) {
       const result = await executeMainSessionCronJob(
         state,
         effectiveJob,

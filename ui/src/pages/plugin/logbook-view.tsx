@@ -1,5 +1,15 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, For, onSettled, Show } from "solid-js";
+import {
+  createMemo,
+  createSignal,
+  Errored,
+  For,
+  isPending,
+  latest,
+  Loading,
+  onSettled,
+  Show,
+} from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -7,7 +17,7 @@ import { SanitizedHtml } from "../../components/solid/sanitized-html.tsx";
 import { i18n } from "../../i18n/index.ts";
 import { registerLogbookEnglish } from "../../i18n/locales/en-logbook.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
-import { formatUiExternalText } from "../../lib/format-error.ts";
+import { formatUiError, formatUiExternalText } from "../../lib/format-error.ts";
 import { formatTimeMs } from "../../lib/format.ts";
 import { projectI18n, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import "../../styles/logbook.css";
@@ -330,29 +340,41 @@ export function Logbook(props: LogbookProps) {
   const model = createLogbook(initialClient);
   const actions = createLogbookActions(model, () => props.getRetired());
   const state = () => model.state;
+  const day = createMemo(() => state().day);
+  const [completion, setCompletion] = createSignal<Promise<void>>();
+  const timelineRead = createMemo(() => completion());
+  const load = (options?: Parameters<LogbookModel["load"]>[0]) => {
+    const admitted = model.load(options);
+    void setCompletion(admitted);
+    return admitted;
+  };
+  const readTimeline = () => {
+    latest(timelineRead);
+    return null;
+  };
   // PluginPageOwner remounts this view when the connection changes.
-  onSettled(() => void model.load());
+  onSettled(() => void load());
   const isToday = () => state().day === (state().status?.today ?? localDayKey());
   return (
     <section class="logbook">
       <header class="logbook__header">
         <div class="logbook__daynav">
           <ActionButton
-            onClick={() => void model.load({ day: shiftDay(state().day, -1) })}
+            onClick={() => void load({ day: shiftDay(state().day, -1) })}
             aria-label={t("logbook.nav.previousDay")}
           >
             ‹
           </ActionButton>
           <span class="logbook__day">{state().day}</span>
           <ActionButton
-            onClick={() => void model.load({ day: shiftDay(state().day, 1) })}
+            onClick={() => void load({ day: shiftDay(state().day, 1) })}
             disabled={isToday()}
             aria-label={t("logbook.nav.nextDay")}
           >
             ›
           </ActionButton>
           <Show when={!isToday()}>
-            <ActionButton onClick={() => void model.load({ today: true })}>
+            <ActionButton onClick={() => void load({ today: true })}>
               {t("logbook.nav.today")}
             </ActionButton>
           </Show>
@@ -377,7 +399,7 @@ export function Logbook(props: LogbookProps) {
           >
             {t("logbook.actions.analyzeNow")}
           </ActionButton>
-          <ActionButton onClick={() => void model.load()} disabled={state().loading}>
+          <ActionButton onClick={() => void load()} disabled={state().loading}>
             <Icon name="refresh" />
           </ActionButton>
         </div>
@@ -389,29 +411,52 @@ export function Logbook(props: LogbookProps) {
       </Show>
       <div class="logbook__layout">
         <div class="logbook__timeline">
-          <Show when={state().loading && (state().timeline?.cards.length ?? 0) === 0}>
-            <div class="card-sub">{t("common.loading")}</div>
-          </Show>
-          <Show
-            when={!state().loading && (state().timeline?.cards.length ?? 0) === 0 && !state().error}
+          <Errored
+            fallback={(error, reset) => (
+              <div class="callout danger" role="alert">
+                {formatUiError(error())}
+                <ActionButton
+                  onClick={() => {
+                    void load();
+                    reset();
+                  }}
+                >
+                  {t("common.retry")}
+                </ActionButton>
+              </div>
+            )}
           >
-            <div class="logbook__empty">
-              <div class="logbook__empty-title">{t("logbook.empty.title")}</div>
-              <div class="logbook__empty-sub">{t("logbook.empty.subtitle")}</div>
-            </div>
-          </Show>
-          <Show when={state().status}>
-            <For each={state().timeline?.cards ?? []} keyed={(card) => card.id}>
-              {(card) => (
-                <LogbookCard
-                  model={model}
-                  card={card()}
-                  timeZone={state().status!.timeZone}
-                  formatClock={formatClock}
-                />
-              )}
-            </For>
-          </Show>
+            <Loading on={day()} fallback={<div class="card-sub">{t("common.loading")}</div>}>
+              {readTimeline()}
+              <Show when={isPending(timelineRead) && (state().timeline?.cards.length ?? 0) === 0}>
+                <div class="card-sub">{t("common.loading")}</div>
+              </Show>
+              <Show
+                when={
+                  !isPending(timelineRead) &&
+                  (state().timeline?.cards.length ?? 0) === 0 &&
+                  !state().error
+                }
+              >
+                <div class="logbook__empty">
+                  <div class="logbook__empty-title">{t("logbook.empty.title")}</div>
+                  <div class="logbook__empty-sub">{t("logbook.empty.subtitle")}</div>
+                </div>
+              </Show>
+              <Show when={state().status}>
+                <For each={state().timeline?.cards ?? []} keyed={(card) => card.id}>
+                  {(card) => (
+                    <LogbookCard
+                      model={model}
+                      card={card()}
+                      timeZone={state().status!.timeZone}
+                      formatClock={formatClock}
+                    />
+                  )}
+                </For>
+              </Show>
+            </Loading>
+          </Errored>
         </div>
         <aside class="logbook__side">
           <Stats state={state} />

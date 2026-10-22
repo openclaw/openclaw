@@ -156,6 +156,7 @@ export const runWithCommandNativeSubagents = async <T>(
       },
       ingress: { ...requester.ingress, boundary: "auto-reply.plugin-command" },
       commandIngressEligible: true,
+      enableScheduledTurns: true,
     },
     run,
   );

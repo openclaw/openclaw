@@ -3,6 +3,7 @@ import type { CronActiveJobMarker } from "../active-jobs.js";
 import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
 import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import { resolvePacedNextRunAtMs } from "../pacing.js";
+import { isPluginCommandCronJob } from "../plugin-command-schedule.js";
 import { normalizeCronRunDiagnostics, summarizeCronRunDiagnostics } from "../run-diagnostics.js";
 import { resolveCronRunErrorReason } from "../run-error-reason.js";
 import { cronSchedulingInputsEqual } from "../schedule-identity.js";
@@ -297,7 +298,17 @@ export function applyJobResult(
     job.state.pacedNextRunAtMs = previousScheduleState.pacedNextRunAtMs;
     job.state.forcePreservedNextRunAtMs = previousScheduleState.forcePreservedNextRunAtMs;
   } else if (!shouldDelete) {
-    if (job.schedule.kind === "event") {
+    if (
+      result.status === "error" &&
+      result.errorClassification?.kind === "permanent" &&
+      isPluginCommandCronJob(job)
+    ) {
+      // The bound plugin instance is gone for good: retire on this first refusal instead of
+      // erroring until generic auto-disable, whose re-enable advice could never help.
+      job.enabled = false;
+      job.state.nextRunAtMs = undefined;
+      job.state.startupCatchupAtMs = undefined;
+    } else if (job.schedule.kind === "event") {
       // The transferred ingress receipt owns this occurrence. A timer retry
       // would lose its immutable event and could repeat an external side effect.
       job.state.nextRunAtMs = undefined;
