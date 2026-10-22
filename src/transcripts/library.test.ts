@@ -558,3 +558,64 @@ describe("transcript library asynchronous reads", () => {
     },
   );
 });
+
+const emptySummary = (target: ReturnType<typeof session>) =>
+  summarizeTranscripts({ session: target, utterances: [] });
+const searchPage = (result: Awaited<ReturnType<typeof listTranscriptLibrary>>) => ({
+  ids: result.sessions.map((entry) => entry.selector),
+  cursor: result.nextCursor,
+});
+
+it("searches stored notes and speech once per capture with stable filtered pagination", async () => {
+  const { store, list } = fixture();
+  const phrase = '100% launch_ "review"';
+  const source = { providerId: "manual-transcript", accountId: "work" };
+  const common = { source, metadata: { agentId: "ops" } };
+  const speech = session("recurring", { ...common, startedAt: "2026-08-21T10:00:00Z" });
+  const notes = session("notes", common);
+  const otherOwner = session("other-owner", { ...common, metadata: { agentId: "main" } });
+  for (const target of [speech, notes, session("recurring", common), otherOwner]) {
+    await store.writeSession(target);
+  }
+  for (const target of [speech, otherOwner]) {
+    await store.appendUtteranceForSession(target, { text: phrase });
+    await store.appendUtteranceForSession(target, { text: phrase });
+  }
+  await store.writeSummary({ ...emptySummary(notes), decisions: [phrase] }, notes);
+  const filters = {
+    query: phrase.toUpperCase(),
+    ...source,
+    agentId: "ops",
+    startedAfter: "2026-08-20T00:00:00Z",
+    startedBefore: "2026-08-22T00:00:00Z",
+    limit: 1,
+  };
+  const first = await list(filters);
+  expect(searchPage(first)).toEqual({
+    ids: [transcriptSessionSelector(speech)],
+    cursor: expect.any(String),
+  });
+  const second = await list({ ...filters, cursor: first.nextCursor! });
+  expect(searchPage(second)).toEqual({ ids: [transcriptSessionSelector(notes)], cursor: null });
+  expect((await list({ ...filters, accountId: "personal" })).sessions).toEqual([]);
+});
+
+it("finds historical structured overviews and canonical Markdown notes", async () => {
+  const { store, database, list } = fixture();
+  const target = session("historical-notes");
+  await store.writeSession(target);
+  await store.writeSummary({ ...emptySummary(target), overview: "Overview" }, target);
+  const db = database();
+  const summary = meetingTranscriptDb(db)
+    .updateTable("meeting_transcript_summaries")
+    .where("session_id", "=", target.sessionId)
+    .where("session_started_at", "=", target.startedAt);
+  const expected = [transcriptSessionSelector(target)];
+  for (const [query, fields] of [
+    ["OVERVIEW", { markdown: null }],
+    ["MARKDOWN", { markdown: "Markdown", summary_json: null, overview: null }],
+  ] as const) {
+    executeSqliteQuerySync(db, summary.set(fields));
+    expect(searchPage(await list({ query })).ids).toEqual(expected);
+  }
+});

@@ -110,6 +110,10 @@ function writeNotes(target: TranscriptSessionDescriptor, text: string) {
   );
 }
 
+function caseDistinctSessions() {
+  return [session("Capital"), session("capital", "2026-07-01T11:00:00.000Z")] as const;
+}
+
 function writeLegacyArtifact(directory: string, text = "legacy\n", name = "transcript.jsonl") {
   fs.mkdirSync(directory, { recursive: true });
   const file = path.join(directory, name);
@@ -290,10 +294,8 @@ it("keeps summary snapshot queries bound to the current session and persisted re
   const first = session("summary-first");
   const second = { ...session("summary-second"), title: "Second meeting" };
   const later = session("summary-first", "2026-07-02T10:00:00.000Z");
-  await store.writeSession(first);
-  await store.writeSession(second);
-  await store.appendUtteranceForSession(first, { text: "First speech" });
-  await store.appendUtteranceForSession(second, { text: "Second speech" });
+  await admit(first, ["First speech"]);
+  await admit(second, ["Second speech"]);
   await admit(later, ["Next day speech"]);
   const firstSnapshot = await expectSnapshot(first, ["First speech"]);
   await expectSnapshot(second, ["Second speech"]);
@@ -589,8 +591,7 @@ it.each(["exported", "concurrent"] as const)(
 );
 
 it("stores case-distinct sessions and rejects only unsafe export collisions", async () => {
-  const upper = session("Capital", "2026-07-01T10:00:00.000Z");
-  const lower = session("capital", "2026-07-01T11:00:00.000Z");
+  const [upper, lower] = caseDistinctSessions();
   await store.writeSession(lower);
   await store.materializeSessionArtifacts(lower, "metadata");
   await expect(store.writeSession(upper)).resolves.toMatchObject({
@@ -613,8 +614,7 @@ it("stores case-distinct sessions and rejects only unsafe export collisions", as
 });
 
 it("does not let a case-distinct SQLite owner mask a legacy directory", async () => {
-  const upper = session("Capital", "2026-07-01T10:00:00.000Z");
-  const lower = session("capital", "2026-07-01T11:00:00.000Z");
+  const [upper, lower] = caseDistinctSessions();
   await store.writeSession(upper);
   updateExports(upper, { export_pending_json: '["metadata.json","transcript.jsonl"]' });
   writeLegacyArtifact(store.sessionDir(lower));
@@ -622,8 +622,7 @@ it("does not let a case-distinct SQLite owner mask a legacy directory", async ()
 });
 
 it("recognizes case-variant artifact names only when the filesystem aliases them", async () => {
-  const upper = session("Capital", "2026-07-01T10:00:00.000Z");
-  const lower = session("capital", "2026-07-01T11:00:00.000Z");
+  const [upper, lower] = caseDistinctSessions();
   await store.writeSession(upper);
   expect(fs.existsSync(store.sessionDir(upper))).toBe(false);
   writeLegacyArtifact(store.sessionDir(lower), "legacy\n", "TRANSCRIPT.JSONL");

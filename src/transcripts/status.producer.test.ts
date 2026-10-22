@@ -26,6 +26,10 @@ import {
 import { transcriptSessionSelector, TranscriptsStore } from "./store.js";
 
 const fixture = useTranscriptStatusFixture();
+type Fixture = ReturnType<typeof fixture>;
+function spyStart(f: Fixture) {
+  return (f.provider.start = vi.fn(f.provider.start!));
+}
 
 describe("configured transcript source provenance", () => {
   it.each(["reorder", "title"] as const)(
@@ -69,12 +73,10 @@ describe("configured transcript source provenance", () => {
         await service.start(next).settled;
         const retained = await readTranscriptLibraryStatus(f.store, next);
         expect(
-          retained.configuredSources.find((source) => source.sessionId === "waiting"),
-        ).toMatchObject({ startDiagnostic: "retrying" });
-        expect(
-          retained.configuredSources.find((source) => source.sessionId === "ready"),
+          Object.fromEntries(retained.configuredSources.map((s) => [s.sessionId, s])),
         ).toMatchObject({
-          state: "armed",
+          waiting: { startDiagnostic: "retrying" },
+          ready: { state: "armed" },
         });
         expect(start).toHaveBeenCalledTimes(2);
 
@@ -99,138 +101,131 @@ describe("configured transcript source provenance", () => {
     },
   );
 
-  it.each([{ name: "title removal", titles: ["First title", undefined], unrelated: true }])(
-    "uses the published future title after $name with original routing authority",
-    async ({ titles, unrelated }) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const source = { ...room, title: "Before", sessionId: "future-title" };
-      const f = fixture({
-        logging: { level: "info" },
-        agents: { entries: { main: {}, notes: {}, other: {} } },
-        bindings: [{ agentId: "notes", match: { channel: "discord", accountId: room.accountId } }],
-        transcripts: { autoStart: [source] },
-      });
-      let current = f.ctx.config;
-      setRuntimeConfigSnapshot(current, current);
-      const publish = (candidate: OpenClawConfig, reloadPlugins = false) => {
-        const plan = buildGatewayReloadPlan(
-          diffGatewayReloadPaths(current, candidate, listConfigReloadRefinementPrefixes()),
-          {
-            previousConfig: current,
-            candidateConfig: candidate,
-          },
-        );
-        expect(plan.restartGateway).toBe(false);
-        expect(plan.reloadPlugins).toBe(reloadPlugins);
-        expect(isNoopGatewayReloadPlan(plan)).toBe(!reloadPlugins);
-        setRuntimeConfigSnapshot(candidate, candidate);
-        current = candidate;
-      };
-      f.setProviders([]);
-      const start = vi.fn(f.provider.start!);
-      f.provider.start = start;
-      const service = createTranscriptsAutoStartService(
-        { ...f.ctx, agentId: undefined },
-        () => getRuntimeConfigSnapshot() ?? undefined,
+  it("uses the published future title after title removal with original routing authority", async () => {
+    const titles = ["First title", undefined];
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const source = { ...room, title: "Before", sessionId: "future-title" };
+    const f = fixture({
+      logging: { level: "info" },
+      agents: { entries: { main: {}, notes: {}, other: {} } },
+      bindings: [{ agentId: "notes", match: { channel: "discord", accountId: room.accountId } }],
+      transcripts: { autoStart: [source] },
+    });
+    let current = f.ctx.config;
+    setRuntimeConfigSnapshot(current, current);
+    const publish = (candidate: OpenClawConfig, reloadPlugins = false) => {
+      const plan = buildGatewayReloadPlan(
+        diffGatewayReloadPaths(current, candidate, listConfigReloadRefinementPrefixes()),
+        {
+          previousConfig: current,
+          candidateConfig: candidate,
+        },
       );
-      try {
-        await service.start().settled;
-        expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe("retrying");
-        expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
-        expect(await f.store.listSessionEntries()).toHaveLength(0);
-        for (const [index, title] of titles.entries()) {
-          if (unrelated) {
-            publish({ ...current, logging: { level: index === 0 ? "debug" : "warn" } });
-            publish({
-              ...current,
-              bindings: [
-                { agentId: "other", match: { channel: "discord", accountId: room.accountId } },
-              ],
-            });
-          }
-          const { title: _title, ...intent } = source;
-          publish(
-            {
-              ...current,
-              transcripts: {
-                autoStart: [{ ...intent, ...(title === undefined ? {} : { title }) }],
-              },
+      expect(plan.restartGateway).toBe(false);
+      expect(plan.reloadPlugins).toBe(reloadPlugins);
+      expect(isNoopGatewayReloadPlan(plan)).toBe(!reloadPlugins);
+      setRuntimeConfigSnapshot(candidate, candidate);
+      current = candidate;
+    };
+    f.setProviders([]);
+    const start = spyStart(f);
+    const service = createTranscriptsAutoStartService(
+      { ...f.ctx, agentId: undefined },
+      () => getRuntimeConfigSnapshot() ?? undefined,
+    );
+    try {
+      await service.start().settled;
+      expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe("retrying");
+      expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
+      expect(await f.store.listSessionEntries()).toHaveLength(0);
+      for (const [index, title] of titles.entries()) {
+        publish({ ...current, logging: { level: index === 0 ? "debug" : "warn" } });
+        publish({
+          ...current,
+          bindings: [
+            { agentId: "other", match: { channel: "discord", accountId: room.accountId } },
+          ],
+        });
+        const { title: _title, ...intent } = source;
+        publish(
+          {
+            ...current,
+            transcripts: {
+              autoStart: [{ ...intent, ...(title === undefined ? {} : { title }) }],
             },
-            true,
-          );
-          await vi.advanceTimersByTimeAsync(5_000);
-          expect(start).not.toHaveBeenCalled();
-          expect(await f.store.listSessionEntries()).toHaveLength(0);
-        }
-        f.setProviders([f.provider]);
+          },
+          true,
+        );
         await vi.advanceTimersByTimeAsync(5_000);
-        await vi.waitFor(async () => expect((await f.read()).active).toHaveLength(1));
-        expect(start).toHaveBeenCalledTimes(1);
-        const request = start.mock.calls[0]![0];
-        expect(request.cfg).toBe(f.ctx.config);
-        expect(request.session).toMatchObject({
-          sessionId: source.sessionId,
-          title: titles.at(-1),
-          source: { ...room, agentId: "notes" },
-          metadata: { agentId: "notes" },
-        });
-        await expect(f.store.readSession(source.sessionId)).resolves.toEqual(request.session);
-      } finally {
-        await service.stop();
+        expect(start).not.toHaveBeenCalled();
+        expect(await f.store.listSessionEntries()).toHaveLength(0);
       }
-    },
-  );
-  it.each([["unknown provider field", { providerOptions: { mode: "other" } }]])(
-    "does not borrow a retry title from changed %s intent",
-    async (_name, changed) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const source = {
-        ...room,
-        sessionId: "original-intent",
-        title: "Before",
-        meetingUrl: "https://example.test/room?invitation=synthetic-private",
-        providerOptions: { mode: "original" },
-      };
-      const f = fixture({ transcripts: { autoStart: [source] } });
-      let current = f.ctx.config;
-      f.setProviders([]);
-      const start = vi.fn(f.provider.start!);
-      f.provider.start = start;
-      const service = createTranscriptsAutoStartService(f.ctx, () => current);
-      try {
-        await service.start().settled;
-        expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe("retrying");
-        expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
-        current = { transcripts: { autoStart: [{ ...source, ...changed, title: "Ineligible" }] } };
-        f.setProviders([f.provider]);
-        await vi.advanceTimersByTimeAsync(5_000);
-        await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
-        const request = start.mock.calls[0]![0];
-        expect(request.cfg).toBe(f.ctx.config);
-        expect(request.session).toMatchObject({
-          title: "Before",
-          source: { ...room, meetingUrl: source.meetingUrl, agentId: "main" },
-        });
-        await expect(f.store.readSession(source.sessionId)).resolves.toMatchObject({
-          title: "Before",
-          source: { ...room, meetingUrl: "https://example.test/room", agentId: "main" },
-        });
-      } finally {
-        await service.stop();
-      }
-    },
-  );
-  it.each([
-    { outcome: "throw", fixed: false, title: undefined, failures: 1 },
-    { outcome: "reject", fixed: false, title: undefined, failures: 12 },
-  ])(
-    "retains admission and notes after $outcome (fixed=$fixed, title=$title, failures=$failures)",
-    async ({ outcome, fixed, title, failures }) => {
-      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const source = { ...room, sessionId: fixed ? "failed-admission" : undefined, title };
-      const f = fixture({
-        transcripts: { autoStart: [source] },
+      f.setProviders([f.provider]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(async () => expect((await f.read()).active).toHaveLength(1));
+      expect(start).toHaveBeenCalledTimes(1);
+      const request = start.mock.calls[0]![0];
+      expect(request.cfg).toBe(f.ctx.config);
+      expect(request.session).toMatchObject({
+        sessionId: source.sessionId,
+        title: titles.at(-1),
+        source: { ...room, agentId: "notes" },
+        metadata: { agentId: "notes" },
       });
+      await expect(f.store.readSession(source.sessionId)).resolves.toEqual(request.session);
+    } finally {
+      await service.stop();
+    }
+  });
+  it("does not borrow a retry title from changed unknown provider field intent", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const source = {
+      ...room,
+      sessionId: "original-intent",
+      title: "Before",
+      meetingUrl: "https://example.test/room?invitation=synthetic-private",
+      providerOptions: { mode: "original" },
+    };
+    const f = fixture({ transcripts: { autoStart: [source] } });
+    let current = f.ctx.config;
+    f.setProviders([]);
+    const start = spyStart(f);
+    const service = createTranscriptsAutoStartService(f.ctx, () => current);
+    try {
+      await service.start().settled;
+      expect(readConfiguredTranscriptStarts()?.get(0)?.diagnostic).toBe("retrying");
+      expect((await f.read()).configuredSources[0]?.startDiagnostic).toBe("retrying");
+      current = {
+        transcripts: {
+          autoStart: [{ ...source, providerOptions: { mode: "other" }, title: "Ineligible" }],
+        },
+      };
+      f.setProviders([f.provider]);
+      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+      const request = start.mock.calls[0]![0];
+      expect(request.cfg).toBe(f.ctx.config);
+      expect(request.session).toMatchObject({
+        title: "Before",
+        source: { ...room, meetingUrl: source.meetingUrl, agentId: "main" },
+      });
+      await expect(f.store.readSession(source.sessionId)).resolves.toMatchObject({
+        title: "Before",
+        source: { ...room, meetingUrl: "https://example.test/room", agentId: "main" },
+      });
+    } finally {
+      await service.stop();
+    }
+  });
+  it.each([
+    { outcome: "throw", failures: 1 },
+    { outcome: "reject", failures: 12 },
+  ])(
+    "retains admission and notes after $outcome (failures=$failures)",
+    async ({ outcome, failures }) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      const source = { ...room, sessionId: undefined, title: undefined };
+      const f = fixture({ transcripts: { autoStart: [source] } });
       let current = f.ctx.config;
       const entered = createDeferred<TranscriptStartRequest>();
       const start = vi.fn(async (candidate: TranscriptStartRequest) => {
@@ -311,11 +306,7 @@ describe("configured transcript source provenance", () => {
     "retains failed startup cleanup custody after %s",
     async (fault) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-      const f = fixture({
-        transcripts: {
-          autoStart: [room],
-        },
-      });
+      const f = fixture();
       const start = vi.fn(async (request: TranscriptStartRequest) => {
         await request.onUtterance({ text: "Admitted note", final: true });
         return { ok: true as const, session: { ...request.session, title: "Room title" } };
@@ -871,8 +862,7 @@ describe("configured transcript occupancy diagnostics", () => {
       if (mode !== "unsupported") {
         f.provider.watchOccupancy = watch;
       }
-      const start = vi.fn(f.provider.start!);
-      f.provider.start = start;
+      const start = spyStart(f);
       f.setProviders([]);
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
@@ -916,8 +906,7 @@ it.each(["same date", "next date"] as const)(
     const startedAt = Date.parse("2026-09-05T10:00:00.000Z");
     vi.setSystemTime(startedAt);
     const f = fixture({ transcripts: { autoStart: [{ ...room, sessionId: "daily" }] } });
-    const start = vi.fn(f.provider.start!);
-    f.provider.start = start;
+    const start = spyStart(f);
     const service = createTranscriptsAutoStartService(f.ctx);
     try {
       await service.start().settled;
