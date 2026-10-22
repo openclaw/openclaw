@@ -57,12 +57,13 @@ async function installCountDiagnostics(context: BrowserContext, page: Page) {
     }
     return id;
   };
-  for (const event of ["frameattached", "framenavigated", "framedetached"] as const) {
-    page.on(event, (frame) => {
-      const parent = frame.parentFrame();
-      record({ event, at: Date.now(), frame: frameId(frame), parent: parent && frameId(parent) });
-    });
-  }
+  const recordFrameEvent = (event: string, frame: Frame) => {
+    const parent = frame.parentFrame();
+    record({ event, at: Date.now(), frame: frameId(frame), parent: parent && frameId(parent) });
+  };
+  page.on("frameattached", (frame) => recordFrameEvent("frameattached", frame));
+  page.on("framenavigated", (frame) => recordFrameEvent("framenavigated", frame));
+  page.on("framedetached", (frame) => recordFrameEvent("framedetached", frame));
   page.on("response", (response) => {
     if (new URL(response.url()).pathname === "/mcp-app-sandbox") {
       record({ event: "sandbox-response", csp: response.headers()["content-security-policy"] });
