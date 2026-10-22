@@ -1,4 +1,5 @@
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { t } from "../../../i18n/index.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
@@ -8,14 +9,14 @@ import {
 } from "../../sessions/session-capability.test-support.ts";
 import "./session-progress.tsx";
 
-function createContext() {
-  const { gateway, sessions, selection, connect } = createSubscriptionHydrationHarness(
+function createContext(progressRead: () => Promise<unknown> = async () => ({ card: null })) {
+  const { gateway, sessions, selection, connect, emitEvent } = createSubscriptionHydrationHarness(
     async (method) => {
       if (method === "sessions.list") {
         return sessionsResult([], 1);
       }
       if (method === "progressCard.get") {
-        return { card: null };
+        return progressRead();
       }
       throw new Error(`Unexpected request: ${method}`);
     },
@@ -38,6 +39,7 @@ function createContext() {
   return {
     context: { gateway, sessions, agentSelection: selection } as unknown as ApplicationContext,
     selection,
+    emitEvent,
     subscriptions: () => [active, subscribe.mock.calls.length],
   };
 }
@@ -61,6 +63,47 @@ async function ready(element: HTMLElementTagNameMap["openclaw-session-progress-w
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+});
+
+it("shows admitted loading, retries a failed read, and retains accepted progress on refresh failure", async () => {
+  const requests = Array.from({ length: 3 }, () => createDeferred<{ card: typeof card }>());
+  const card = {
+    sessionKey: "agent:main:progress-widget",
+    revision: 1,
+    updatedAt: 1,
+    markdown: "Accepted progress",
+  };
+  const read = vi.fn();
+  for (const request of requests) {
+    read.mockReturnValueOnce(request.promise);
+  }
+  const owner = createContext(read);
+  const { element } = mount(owner.context);
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() =>
+    expect(element.textContent).toContain(t("sessionProgressCard.widgetLoading")),
+  );
+
+  requests[0]!.reject(new Error("Unavailable"));
+  await vi.waitFor(() => expect(element.querySelector("[role=alert]")).not.toBeNull());
+  expect(element.textContent).not.toContain(t("sessionProgressCard.widgetLoading"));
+  element.querySelector<HTMLButtonElement>("button")!.click();
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(2));
+  requests[1]!.resolve({ card });
+  await vi.waitFor(() => expect(element.textContent).toContain("Accepted progress"));
+  expect(element.querySelector("[role=alert]")).toBeNull();
+
+  owner.emitEvent({
+    type: "event",
+    event: "progressCard.changed",
+    payload: { sessionKey: card.sessionKey, revision: 2 },
+  });
+  await vi.waitFor(() => expect(read).toHaveBeenCalledTimes(3));
+  expect(element.textContent).toContain("Accepted progress");
+  expect(element.textContent).not.toContain(t("sessionProgressCard.widgetLoading"));
+  requests[2]!.reject(new Error("Refresh unavailable"));
+  await vi.waitFor(() => expect(element.querySelector("[role=alert]")).not.toBeNull());
+  expect(element.textContent).toContain("Accepted progress");
 });
 
 it("does not reacquire a roster listener when a queued property update runs after removal", async () => {

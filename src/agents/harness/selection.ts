@@ -9,7 +9,6 @@ import {
   runWithDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { claimHeartbeatContextForUserRun } from "../../infra/heartbeat-outcome-store.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { hasGlobalHooks } from "../../plugins/hook-runner-global.js";
 import {
@@ -18,14 +17,12 @@ import {
   readRunOperatorAuthority,
   resolveAdmittedRunActiveAssertion,
 } from "../admitted-run-context.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
 import {
   isHostScopedAgentToolActive,
   runWithAgentRingZeroTools,
 } from "../agent-tools.ring-zero-context.js";
 import { isHeartbeatLifecycleRunKind } from "../bootstrap-mode.js";
 import type { EmbeddedRunAttemptInternalParams } from "../embedded-agent-runner/run/internal-params.js";
-import { appendCurrentInboundContext } from "../embedded-agent-runner/run/runtime-context-prompt.js";
 import type {
   EmbeddedRunAttemptParams,
   EmbeddedRunAttemptResult,
@@ -440,32 +437,7 @@ export async function runAgentHarnessAttempt(
                         ? { ...input, toolsAllow: [] }
                         : input;
                     },
-                (prepared) =>
-                  pluginAttempt.runWithHostScope(async () => {
-                    if (prepared.trigger !== "user" || !prepared.sessionKey) {
-                      return runPreparedAttempt(prepared);
-                    }
-                    const note = await claimHeartbeatContextForUserRun({
-                      ...prepared,
-                      agentId: resolveSessionAgentIds(prepared).sessionAgentId,
-                      storePath: prepared.sessionTarget?.storePath,
-                      detached: prepared.sessionPersistence === "detached",
-                      assertCurrent: resolveAdmittedRunActiveAssertion(
-                        internalParams.admittedRunContext,
-                        prepared.abortSignal,
-                      ),
-                    });
-                    if (!note) {
-                      return runPreparedAttempt(prepared);
-                    }
-                    return runPreparedAttempt({
-                      ...prepared,
-                      currentInboundContext: appendCurrentInboundContext(
-                        prepared.currentInboundContext,
-                        [{ kind: "heartbeat-outcome", text: note }],
-                      ),
-                    });
-                  }),
+                (prepared) => pluginAttempt.runWithHostScope(() => runPreparedAttempt(prepared)),
               ),
           );
         }),

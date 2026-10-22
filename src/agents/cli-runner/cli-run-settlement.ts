@@ -475,7 +475,6 @@ export function buildCliRunResult(params: {
   const replyExpectation = resolveReplyExpectation(runParams);
   const payloadsForVisibleCompletion = filterAgentRunTerminalPayloadsForPresentation({
     payloads: payloadsWithToolMedia,
-    isHeartbeatTrigger: runParams.trigger === "heartbeat" && !runParams.continuesConversation,
   });
   const unflushed = !sessionBindingDisabled && effectiveCliSessionId && bindingFlushOk === false;
   const terminalInterruption = output.terminalInterruption;

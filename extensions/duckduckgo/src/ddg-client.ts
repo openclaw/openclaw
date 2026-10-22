@@ -5,11 +5,10 @@ import { decodeHtmlEntities as decodeHtmlEntity } from "openclaw/plugin-sdk/html
 import { ProviderHttpError, readProviderTextResponse } from "openclaw/plugin-sdk/provider-http";
 import {
   externalContentStamp,
-  DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
   readCachedSearchPayload,
   readResponseText,
-  resolveCacheTtlMs,
+  resolveSearchCacheTtlMs,
   resolveSearchCount,
   resolveSiteName,
   resolveTimeoutSeconds,
@@ -143,10 +142,7 @@ export async function runDuckDuckGoSearch(params: {
     safeSearch = normalized === "strict" || normalized === "off" ? normalized : "moderate";
   }
   const timeoutSeconds = resolveTimeoutSeconds(params.timeoutSeconds, DEFAULT_TIMEOUT_SECONDS);
-  const cacheTtlMs = resolveCacheTtlMs(
-    params.config?.tools?.web?.search?.cacheTtlMinutes,
-    DEFAULT_CACHE_TTL_MINUTES,
-  );
+  const cacheTtlMs = resolveSearchCacheTtlMs(params.config?.tools?.web?.search);
   const cacheKey = JSON.stringify({
     provider: "duckduckgo",
     query: params.query,

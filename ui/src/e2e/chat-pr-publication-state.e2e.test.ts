@@ -107,14 +107,18 @@ suite.define(() => {
         .poll(() => page.locator(".link-reader-hovercard").textContent())
         .toContain("Merged");
       await page.keyboard.press("Escape");
-      await openDetailsPullRequests(page);
+      await openChatDetails(page);
       expect(await chip.getAttribute("data-link-reader-tone")).toBe("accent");
-      expect(await page.locator(".chat-prs").textContent()).not.toContain("Publishing");
+      expect(await page.locator(".chat-environment__branch").textContent()).not.toContain(
+        "Publishing",
+      );
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       await gateway.resolveDeferred(githubOptions);
       await openChatPublication(page);
-      await page.getByRole("button", { name: "Publish PR", exact: true }).waitFor();
-      expect(await page.locator(".chat-prs").textContent()).toContain("openclaw/review-request");
+      await page.getByRole("button", { name: "Create PR", exact: true }).waitFor();
+      expect(await page.locator(".chat-environment__branch").textContent()).toContain(
+        "openclaw/review-request",
+      );
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       expect(await gateway.getRequests(TEST_LINK_READER.linkReader.previewMethod!)).toHaveLength(1);
     });
@@ -156,9 +160,10 @@ suite.define(() => {
         pullRequests: [],
         status: "unavailable",
       });
-      await expect.poll(() => row.textContent()).toContain("feature/next-task");
-      expect(await row.textContent()).not.toContain("#43");
-      expect(await row.locator("article").getAttribute("data-state")).toBe("branch");
+      const environment = await openChatPublication(page);
+      await expect.poll(() => environment.textContent()).toContain("feature/next-task");
+      expect(await row.count()).toBe(0);
+      expect(await environment.locator(".chat-pr__warning").count()).toBe(1);
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
     });
   });
@@ -182,7 +187,7 @@ suite.define(() => {
       await page.goto(suite.server.baseUrl + "chat");
       await openChatDetails(page);
       const key = await waitForWatchedSessionKey(gateway);
-      await openDetailsPullRequests(page);
+      await openChatPublication(page);
       await page.getByText(failure.nextAction, { exact: true }).waitFor({ state: "attached" });
       await emitPrs(gateway, key, {
         pullRequests: [pullRequest(45, "feature/finished-task", "Completed task")],
@@ -192,20 +197,22 @@ suite.define(() => {
       await merged.waitFor();
       expect(await merged.textContent()).not.toContain(failure.nextAction);
       expect(await merged.locator("[data-publication-account]").count()).toBe(0);
-      const history = surface.locator("details.chat-pr__publication-history");
+      const environment = page.locator('[data-details-group="environment"]');
+      const history = environment.locator("details.chat-pr__publication-status");
       expect(await history.count()).toBe(1);
       expect(await history.evaluate((element) => element.closest("article") === null)).toBe(true);
       expect(await history.getAttribute("open")).toBeNull();
       const summary = history.locator("summary").first();
-      expect((await summary.textContent())?.trim()).toBe("Publication attempt failed");
+      expect((await summary.textContent())?.trim()).toBe("Publication failed");
       const guidance = history.getByText(failure.nextAction, { exact: true });
       expect(await guidance.isVisible()).toBe(false);
       await openChatPublication(page);
+      await summary.click();
       await guidance.waitFor();
-      const account = history.locator("[data-publication-account]");
+      const account = environment.locator("[data-publication-account]");
       expect(await account.textContent()).toContain("Publish as @agent-bot");
       expect(await account.textContent()).toContain("Agent override");
-      const refresh = history.getByRole("button", { name: "Refresh publication" });
+      const refresh = environment.getByRole("button", { name: "Refresh publication" });
       const tokens = await history.evaluate((element) => {
         const probe = document.createElement("span");
         element.append(probe);
@@ -221,9 +228,11 @@ suite.define(() => {
         probe.remove();
         return colors;
       });
-      expect(await summary.evaluate((element) => getComputedStyle(element).color)).toBe(
-        tokens.danger,
-      );
+      expect(
+        await summary
+          .locator(".chat-pr__publication-headline")
+          .evaluate((element) => getComputedStyle(element).color),
+      ).toBe(tokens.danger);
       for (const neutral of [account, guidance, refresh]) {
         const color = await neutral.evaluate((element) => getComputedStyle(element).color);
         expect(color).not.toBe(tokens.danger);
@@ -275,7 +284,8 @@ suite.define(() => {
           changedFiles: 1,
         },
       });
-      await surface.locator("article[data-state=branch]").waitFor();
+      await environment.locator(".chat-environment__branch").waitFor();
+      expect(await surface.count()).toBe(0);
       expect(await page.getByText(failure.nextAction, { exact: true }).count()).toBe(0);
       await gateway.setMethodResponse(
         githubOptions,
@@ -355,10 +365,15 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       await gateway.setMethodResponse(githubOptions, sharedOptions(published));
       await gateway.resolveDeferred("sessions.github.status", completed);
-      await page.getByRole("link", { name: "Open PR", exact: true }).waitFor();
+      const publishedGroup = await openDetailsPullRequests(page);
+      await publishedGroup.getByRole("link", { name: "Open PR", exact: true }).waitFor();
+      const environment = page.locator(".chat-environment__branch");
+      expect(
+        await environment.locator(".chat-pr__diff, .chat-pr__publication-actions").count(),
+      ).toBe(0);
       expect(await page.locator(".chat-pr__publication-outcome").count()).toBe(0);
       await expect.poll(async () => (await gateway.getRequests(githubOptions)).length).toBe(2);
-      expect(await page.locator(".chat-prs a.chat-pr__create").getAttribute("href")).toBe(
+      expect(await publishedGroup.locator("a.chat-pr__create").getAttribute("href")).toBe(
         published.url,
       );
       const beforeReconnect = (await gateway.getRequests(githubOptions)).length;
@@ -370,7 +385,7 @@ suite.define(() => {
         after: watchedBefore,
       });
       await showBranch();
-      await openChatPublication(page);
+      await openDetailsPullRequests(page);
       await gateway.waitForRequest(githubOptions, { after: beforeReconnect });
       await page.getByRole("link", { name: "Open PR", exact: true }).waitFor();
       await emitPrs(gateway, key, {
@@ -380,17 +395,20 @@ suite.define(() => {
       const rows = page.locator(".chat-prs .chat-pr");
       await expect.poll(() => rows.count()).toBe(1);
       await expect.poll(() => rows.getAttribute("data-state")).toBe("merged");
+      expect(
+        await environment.locator(".chat-pr__diff, .chat-pr__publication-actions").count(),
+      ).toBe(0);
       expect(await rows.textContent()).not.toContain("Publish as");
       expect(await page.getByRole("button", { name: "Choose a new publication" }).count()).toBe(0);
       const prName = "pull request synthetic/publication-demo#44";
       const actions = { name: `Actions for ${prName}`, exact: true };
-      const dismiss = { name: "Hide from this session", exact: true };
+      const dismiss = { name: "Hide", exact: true };
       await rows.getByRole("button", actions).click();
       await page.getByRole("menuitem", dismiss).click();
       await expect.poll(() => rows.count()).toBe(0);
       await showBranch();
       await openChatPublication(page);
-      await page.getByRole("button", { name: "Publish PR", exact: true }).waitFor();
+      await page.getByRole("button", { name: "Create PR", exact: true }).waitFor();
       expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
     });

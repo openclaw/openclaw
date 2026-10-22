@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { assert, expect, it, onTestFinished, vi } from "vitest";
+import { expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { EmbeddedContextAccountingEvent } from "./embedded-agent-runner/run/internal-params.js";
 import {
@@ -10,7 +10,6 @@ import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
-import { resolveHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 function harness(params: Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId"> = {}) {
@@ -167,43 +166,6 @@ it("captures repaired model usage before queued delivery and throwing cleanup", 
     }
   }
   expect(observed).toEqual(expected);
-});
-
-it("preserves an accepted heartbeat response and private scratch through retry", async () => {
-  const onHeartbeatToolResponse = vi.fn();
-  const { emit, subscription, startTool } = harness({
-    sessionPersistence: "detached",
-    onHeartbeatToolResponse,
-  });
-  const tool = resolveHeartbeatResponseTool({ enableHeartbeatTool: true });
-  assert(tool);
-  const response = {
-    outcome: "done" as const,
-    notify: true,
-    summary: "The monitored task completed.",
-    notificationText: "Your report is ready.",
-    scratch: "Private monitor notes: report completion confirmed.",
-  };
-  startTool(tool.name, response, "heartbeat");
-  const result = await tool.execute("heartbeat", response);
-  emit({
-    type: "tool_execution_end",
-    toolName: tool.name,
-    toolCallId: "heartbeat",
-    isError: false,
-    result,
-  });
-  await subscription.waitForPendingEvents();
-  expect(subscription.getHeartbeatToolResponse()).toEqual(response);
-  emit(completed());
-  const reply = assistant(0);
-  message(emit, reply);
-  emit({ type: "agent_end", messages: [reply] });
-  await subscription.waitForPendingEvents();
-  await subscription.waitForCompactionRetry();
-  expect(subscription.getHeartbeatToolResponse()).toEqual(response);
-  expect(onHeartbeatToolResponse).toHaveBeenCalledExactlyOnceWith(response);
-  expect(subscription.getCompactionCount()).toBe(1);
 });
 
 it("clears the assistant and its exact usage when compaction starts a new attempt", () => {

@@ -25,6 +25,7 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
     configLoading: false,
     configSaving: false,
     configDirty: false,
+    presentationRetired: Promise.withResolvers<void>().promise,
     catalog: null,
     readCatalog() {
       return this.catalog;
@@ -45,8 +46,8 @@ export function createBaseParams(overrides: Partial<Params> = {}): Params {
     onOpenGitHubConnections: vi.fn(),
     onProfileChange: () => undefined,
     onOverridesChange: () => undefined,
-    onConfigReload: () => undefined,
-    onConfigSave: () => undefined,
+    onConfigReload: async () => undefined,
+    onConfigSave: async () => undefined,
     ...overrides,
   };
 }

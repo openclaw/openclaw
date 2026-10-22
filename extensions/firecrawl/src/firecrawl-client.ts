@@ -13,10 +13,8 @@ import {
   readProviderJsonObjectResponse,
 } from "openclaw/plugin-sdk/provider-http";
 import {
-  DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
   readResponseText,
-  resolveCacheTtlMs,
   resolvePositiveTimeoutSeconds,
   withSelfHostedWebToolsEndpoint,
   withStrictWebToolsEndpoint,
@@ -24,6 +22,7 @@ import {
 import {
   externalContentStamp,
   readCachedSearchPayload,
+  resolveSearchCacheTtlMs,
   resolveSiteName,
   writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
@@ -447,10 +446,7 @@ export async function runFirecrawlSearch(
     country,
     scrapeResults,
   });
-  const cacheTtlMs = resolveCacheTtlMs(
-    params.cfg?.tools?.web?.search?.cacheTtlMinutes,
-    DEFAULT_CACHE_TTL_MINUTES,
-  );
+  const cacheTtlMs = resolveSearchCacheTtlMs(params.cfg?.tools?.web?.search);
   const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;

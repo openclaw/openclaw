@@ -236,7 +236,12 @@ describe("message tool discovery cache stability", () => {
             actions: ["send", "react"],
             schema: {
               visibility: "all-configured",
-              properties: { primaryLabel: Type.Optional(Type.String()) },
+              properties: {
+                primaryLabel: Type.Optional(Type.String()),
+                pollDurationSeconds: Type.Optional(Type.Number()),
+                pollAnonymous: Type.Optional(Type.Boolean()),
+                pollPublic: Type.Optional(Type.Boolean()),
+              },
             },
           }),
         },
@@ -303,6 +308,19 @@ describe("message tool discovery cache stability", () => {
         pollOption: ["Yes", "No"],
       }),
     ).toBe(true);
+    expect(
+      Value.Check(multi.schema, {
+        action: "poll",
+        pollQuestion: "Ready?",
+        pollOption: ["Yes", "No"],
+        pollDurationSeconds: 60,
+        pollAnonymous: true,
+        pollPublic: false,
+      }),
+    ).toBe(true);
+    expect(Value.Check(multi.schema, { action: "poll", pollDurationSeconds: "invalid" })).toBe(
+      false,
+    );
     expect(JSON.stringify(await discover(bindings.toReversed(), channels.toReversed()))).toBe(
       JSON.stringify(multi),
     );

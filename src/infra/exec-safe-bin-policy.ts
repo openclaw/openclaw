@@ -1,13 +1,464 @@
-// Safe-bin policy facade: profile metadata and argv validation live in split
-// modules, while callers import the stable aggregate surface from here.
-export {
-  DEFAULT_SAFE_BINS,
-  SAFE_BIN_PROFILES,
-  normalizeSafeBinProfileFixtures,
-  resolveSafeBinProfiles,
-  type SafeBinProfile,
-  type SafeBinProfileFixture,
-  type SafeBinProfileFixtures,
-} from "./exec-safe-bin-policy-profiles.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { parseExecArgvToken } from "./exec-command-resolution.js";
+import { validateSafeBinSemantics } from "./exec-safe-bin-semantics.js";
 
-export { validateSafeBinArgv } from "./exec-safe-bin-policy-validator.js";
+export type SafeBinProfile = {
+  minPositional?: number;
+  maxPositional?: number;
+  allowedValueFlags?: ReadonlySet<string>;
+  allowedBooleanFlags?: ReadonlySet<string>;
+  deniedFlags?: ReadonlySet<string>;
+  // Precomputed long-option metadata for GNU abbreviation resolution.
+  knownLongFlags?: readonly string[];
+  knownLongFlagsSet?: ReadonlySet<string>;
+  longFlagPrefixMap?: ReadonlyMap<string, string | null>;
+};
+
+export type SafeBinProfileFixture = {
+  minPositional?: number;
+  maxPositional?: number;
+  allowedValueFlags?: readonly string[];
+  deniedFlags?: readonly string[];
+};
+
+export type SafeBinProfileFixtures = Readonly<Record<string, SafeBinProfileFixture>>;
+
+type BuiltinSafeBinProfileFixture = SafeBinProfileFixture & {
+  allowedBooleanFlags?: readonly string[];
+};
+
+const NO_FLAGS: ReadonlySet<string> = new Set();
+
+export const DEFAULT_SAFE_BINS = ["cut", "uniq", "head", "tail", "tr", "wc"] as const;
+
+const toFlagSet = (flags?: readonly string[]): ReadonlySet<string> => {
+  if (!flags || flags.length === 0) {
+    return NO_FLAGS;
+  }
+  return new Set(flags);
+};
+
+function collectKnownLongFlags(
+  allowedValueFlags: ReadonlySet<string>,
+  deniedFlags: ReadonlySet<string>,
+  allowedBooleanFlags: ReadonlySet<string> = NO_FLAGS,
+): string[] {
+  const known = new Set<string>();
+  for (const flags of [allowedValueFlags, allowedBooleanFlags, deniedFlags]) {
+    for (const flag of flags) {
+      if (flag.startsWith("--")) {
+        known.add(flag);
+      }
+    }
+  }
+  return Array.from(known);
+}
+
+function buildLongFlagPrefixMap(
+  knownLongFlags: readonly string[],
+): ReadonlyMap<string, string | null> {
+  const prefixMap = new Map<string, string | null>();
+  for (const flag of knownLongFlags) {
+    if (!flag.startsWith("--") || flag.length <= 2) {
+      continue;
+    }
+    for (let length = 3; length <= flag.length; length += 1) {
+      const prefix = flag.slice(0, length);
+      const existing = prefixMap.get(prefix);
+      if (existing === undefined) {
+        prefixMap.set(prefix, flag);
+        continue;
+      }
+      if (existing !== flag) {
+        prefixMap.set(prefix, null);
+      }
+    }
+  }
+  return prefixMap;
+}
+
+function compileSafeBinProfile(fixture: BuiltinSafeBinProfileFixture): SafeBinProfile {
+  const allowedValueFlags = toFlagSet(fixture.allowedValueFlags);
+  const allowedBooleanFlags = toFlagSet(fixture.allowedBooleanFlags);
+  const deniedFlags = toFlagSet(fixture.deniedFlags);
+  const knownLongFlags = collectKnownLongFlags(allowedValueFlags, deniedFlags, allowedBooleanFlags);
+  return {
+    minPositional: fixture.minPositional,
+    maxPositional: fixture.maxPositional,
+    allowedValueFlags,
+    allowedBooleanFlags,
+    deniedFlags,
+    knownLongFlags,
+    knownLongFlagsSet: new Set(knownLongFlags),
+    longFlagPrefixMap: buildLongFlagPrefixMap(knownLongFlags),
+  };
+}
+
+function compileSafeBinProfiles(
+  fixtures: Record<string, BuiltinSafeBinProfileFixture>,
+): Record<string, SafeBinProfile> {
+  return Object.fromEntries(
+    Object.entries(fixtures).map(([name, fixture]) => [name, compileSafeBinProfile(fixture)]),
+  );
+}
+
+const HEAD_TAIL_PROFILE = {
+  maxPositional: 0,
+  allowedBooleanFlags: ["--quiet", "--silent", "--verbose", "--zero-terminated", "-q", "-v", "-z"],
+};
+
+const SAFE_BIN_PROFILE_FIXTURES: Record<string, BuiltinSafeBinProfileFixture> = {
+  jq: {
+    maxPositional: 1,
+    allowedValueFlags: ["--arg", "--argjson", "--argstr"],
+    deniedFlags: [
+      "--argfile",
+      "--rawfile",
+      "--slurpfile",
+      "--from-file",
+      "--library-path",
+      "-L",
+      "-f",
+    ],
+  },
+  grep: {
+    // Keep grep stdin-only: pattern must come from -e/--regexp.
+    // Allowing one positional is ambiguous because -e consumes the pattern and
+    // frees the positional slot for a filename.
+    maxPositional: 0,
+    allowedValueFlags: [
+      "--regexp",
+      "--max-count",
+      "--after-context",
+      "--before-context",
+      "--context",
+      "--devices",
+      "--binary-files",
+      "--exclude",
+      "--include",
+      "--label",
+      "-e",
+      "-m",
+      "-A",
+      "-B",
+      "-C",
+      "-D",
+    ],
+    deniedFlags: [
+      "--file",
+      "--exclude-from",
+      "--dereference-recursive",
+      "--directories",
+      "--recursive",
+      "-f",
+      "-d",
+      "-r",
+      "-R",
+    ],
+  },
+  cut: {
+    maxPositional: 0,
+    allowedValueFlags: [
+      "--bytes",
+      "--characters",
+      "--fields",
+      "--delimiter",
+      "--output-delimiter",
+      "-b",
+      "-c",
+      "-f",
+      "-d",
+    ],
+    allowedBooleanFlags: [
+      "--complement",
+      "--only-delimited",
+      "--zero-terminated",
+      "-n",
+      "-s",
+      "-z",
+    ],
+  },
+  sort: {
+    maxPositional: 0,
+    allowedValueFlags: [
+      "--key",
+      "--field-separator",
+      "--buffer-size",
+      "--parallel",
+      "--batch-size",
+      "-k",
+      "-t",
+      "-S",
+    ],
+    // --compress-program can invoke an external executable and breaks stdin-only guarantees.
+    // --random-source/--temporary-directory/-T are filesystem-dependent and not stdin-only.
+    deniedFlags: [
+      "--compress-program",
+      "--files0-from",
+      "--output",
+      "--random-source",
+      "--temporary-directory",
+      "-T",
+      "-o",
+    ],
+  },
+  uniq: {
+    maxPositional: 0,
+    allowedValueFlags: [
+      "--skip-fields",
+      "--skip-chars",
+      "--check-chars",
+      "--group",
+      "-f",
+      "-s",
+      "-w",
+    ],
+    allowedBooleanFlags: [
+      "--count",
+      "--repeated",
+      "--unique",
+      "--ignore-case",
+      "--zero-terminated",
+      "-c",
+      "-d",
+      "-u",
+      "-i",
+      "-z",
+    ],
+  },
+  head: {
+    ...HEAD_TAIL_PROFILE,
+    allowedValueFlags: ["--lines", "--bytes", "-n", "-c"],
+  },
+  tail: {
+    ...HEAD_TAIL_PROFILE,
+    allowedValueFlags: [
+      "--lines",
+      "--bytes",
+      "--sleep-interval",
+      "--max-unchanged-stats",
+      "--pid",
+      "-n",
+      "-c",
+    ],
+    // Follow/retry modes are unbounded and do not belong in auto-approved safe-bin use.
+    deniedFlags: ["--follow", "--retry", "-F", "-f"],
+  },
+  tr: {
+    minPositional: 1,
+    maxPositional: 2,
+    allowedBooleanFlags: [
+      "--complement",
+      "--delete",
+      "--squeeze-repeats",
+      "--truncate-set1",
+      "-C",
+      "-c",
+      "-d",
+      "-s",
+      "-t",
+    ],
+  },
+  wc: {
+    maxPositional: 0,
+    allowedBooleanFlags: [
+      "--bytes",
+      "--chars",
+      "--lines",
+      "--max-line-length",
+      "--words",
+      "-L",
+      "-c",
+      "-l",
+      "-m",
+      "-w",
+    ],
+    deniedFlags: ["--files0-from"],
+  },
+};
+
+export const SAFE_BIN_PROFILES: Record<string, SafeBinProfile> =
+  compileSafeBinProfiles(SAFE_BIN_PROFILE_FIXTURES);
+
+function normalizeSafeBinProfileName(raw: string): string | null {
+  const name = normalizeLowercaseStringOrEmpty(raw);
+  return name.length > 0 ? name : null;
+}
+
+function normalizeFixtureLimit(raw: number | undefined): number | undefined {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) {
+    return undefined;
+  }
+  const next = Math.trunc(raw);
+  return next >= 0 ? next : undefined;
+}
+
+function normalizeFixtureFlags(
+  flags: readonly string[] | undefined,
+): readonly string[] | undefined {
+  if (!Array.isArray(flags) || flags.length === 0) {
+    return undefined;
+  }
+  const normalized = Array.from(
+    new Set(flags.map((flag) => flag.trim()).filter((flag) => flag.length > 0)),
+  ).toSorted((a, b) => a.localeCompare(b));
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function normalizeSafeBinProfileFixture(fixture: SafeBinProfileFixture): SafeBinProfileFixture {
+  const minPositional = normalizeFixtureLimit(fixture.minPositional);
+  const maxPositionalRaw = normalizeFixtureLimit(fixture.maxPositional);
+  const maxPositional =
+    minPositional !== undefined &&
+    maxPositionalRaw !== undefined &&
+    maxPositionalRaw < minPositional
+      ? minPositional
+      : maxPositionalRaw;
+  return {
+    minPositional,
+    maxPositional,
+    allowedValueFlags: normalizeFixtureFlags(fixture.allowedValueFlags),
+    deniedFlags: normalizeFixtureFlags(fixture.deniedFlags),
+  };
+}
+
+export function normalizeSafeBinProfileFixtures(
+  fixtures?: SafeBinProfileFixtures | null,
+): Record<string, SafeBinProfileFixture> {
+  const normalized: Record<string, SafeBinProfileFixture> = {};
+  if (!fixtures) {
+    return normalized;
+  }
+  for (const [rawName, fixture] of Object.entries(fixtures)) {
+    const name = normalizeSafeBinProfileName(rawName);
+    if (!name) {
+      continue;
+    }
+    normalized[name] = normalizeSafeBinProfileFixture(fixture);
+  }
+  return normalized;
+}
+
+export function resolveSafeBinProfiles(
+  fixtures?: SafeBinProfileFixtures | null,
+): Record<string, SafeBinProfile> {
+  if (!fixtures || Object.keys(fixtures).length === 0) {
+    return SAFE_BIN_PROFILES;
+  }
+  return {
+    ...SAFE_BIN_PROFILES,
+    ...compileSafeBinProfiles(fixtures),
+  };
+}
+
+function isPathLikeToken(value: string): boolean {
+  const trimmed = value.trim();
+  return (
+    trimmed.startsWith("./") ||
+    trimmed.startsWith("../") ||
+    trimmed.startsWith("~") ||
+    trimmed.startsWith("/") ||
+    /^[A-Za-z]:[\\/]/.test(trimmed)
+  );
+}
+
+function isSafeLiteralToken(value: string): boolean {
+  // Safe bins are stdin-only; execution-time expansion is hardened separately.
+  return (
+    !/[*?[\]]/.test(value) &&
+    !/\$(?:[A-Za-z0-9_@*?!$#-]|\{|\(|\[)/.test(value) &&
+    !isPathLikeToken(value)
+  );
+}
+
+const NO_VALIDATOR_FLAGS: ReadonlySet<string> = new Set();
+
+export function validateSafeBinArgv(
+  args: string[],
+  profile: SafeBinProfile,
+  options?: { binName?: string },
+): boolean {
+  const allowedValueFlags = profile.allowedValueFlags ?? NO_VALIDATOR_FLAGS;
+  const allowedBooleanFlags = profile.allowedBooleanFlags ?? NO_VALIDATOR_FLAGS;
+  const deniedFlags = profile.deniedFlags ?? NO_VALIDATOR_FLAGS;
+  const knownLongFlags =
+    profile.knownLongFlags ??
+    collectKnownLongFlags(allowedValueFlags, deniedFlags, allowedBooleanFlags);
+  const knownLongFlagsSet = profile.knownLongFlagsSet ?? new Set(knownLongFlags);
+  const longFlagPrefixMap = profile.longFlagPrefixMap ?? buildLongFlagPrefixMap(knownLongFlags);
+
+  function consumeValue(index: number, inlineValue: string | undefined): number {
+    if (inlineValue !== undefined) {
+      return isSafeLiteralToken(inlineValue) ? index + 1 : -1;
+    }
+    const value = args[index + 1];
+    return value && isSafeLiteralToken(value) ? index + 2 : -1;
+  }
+
+  const positional: string[] = [];
+  let optionsEnded = false;
+  let i = 0;
+  while (i < args.length) {
+    const token = parseExecArgvToken(args[i] ?? "");
+    if (token.kind === "empty" || token.kind === "stdin") {
+      i += 1;
+      continue;
+    }
+    if (optionsEnded || token.kind === "positional") {
+      if (!isSafeLiteralToken(token.raw)) {
+        return false;
+      }
+      positional.push(token.raw);
+      i += 1;
+      continue;
+    }
+    if (token.kind === "terminator") {
+      optionsEnded = true;
+      i += 1;
+      continue;
+    }
+
+    let nextIndex = i + 1;
+    if (token.style === "long") {
+      const flag =
+        token.flag.length > 2
+          ? knownLongFlagsSet.has(token.flag)
+            ? token.flag
+            : longFlagPrefixMap.get(token.flag)
+          : undefined;
+      if (!flag || deniedFlags.has(flag)) {
+        return false;
+      }
+      if (allowedValueFlags.has(flag)) {
+        nextIndex = consumeValue(i, token.inlineValue);
+      } else if (token.inlineValue !== undefined) {
+        return false;
+      }
+    } else {
+      for (const [j, flag] of token.flags.entries()) {
+        if (deniedFlags.has(flag)) {
+          return false;
+        }
+        if (allowedValueFlags.has(flag)) {
+          nextIndex = consumeValue(i, token.cluster.slice(j + 1) || undefined);
+          break;
+        }
+        if (!allowedBooleanFlags.has(flag)) {
+          return false;
+        }
+      }
+    }
+    if (nextIndex < 0) {
+      return false;
+    }
+    i = nextIndex;
+  }
+
+  if (
+    positional.length < (profile.minPositional ?? 0) ||
+    (typeof profile.maxPositional === "number" && positional.length > profile.maxPositional)
+  ) {
+    return false;
+  }
+  return validateSafeBinSemantics({ binName: options?.binName, positional });
+}

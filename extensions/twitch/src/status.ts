@@ -13,59 +13,52 @@ export function collectTwitchStatusIssues(
       continue;
     }
 
+    const addIssue = (kind: ChannelStatusIssue["kind"], message: string, fix: string) =>
+      issues.push({ channel: "twitch", accountId, kind, message, fix });
+
     if (!entry.configured) {
-      issues.push({
-        channel: "twitch",
-        accountId,
-        kind: "config",
-        message: "Twitch account is not properly configured",
-        fix: "Add required fields: username, accessToken, and clientId to your account configuration",
-      });
+      addIssue(
+        "config",
+        "Twitch account is not properly configured",
+        "Add required fields: username, accessToken, and clientId to your account configuration",
+      );
       continue;
     }
 
     if (entry.enabled === false) {
-      issues.push({
-        channel: "twitch",
-        accountId,
-        kind: "config",
-        message: "Twitch account is disabled",
-        fix: "Set enabled: true in your account configuration to enable this account",
-      });
+      addIssue(
+        "config",
+        "Twitch account is disabled",
+        "Set enabled: true in your account configuration to enable this account",
+      );
       continue;
     }
 
     if (entry.lastError) {
-      issues.push({
-        channel: "twitch",
-        accountId,
-        kind: "runtime",
-        message: `Last error: ${entry.lastError}`,
-        fix: "Check your token validity and network connection. Check that the bot has the required OAuth scopes.",
-      });
+      addIssue(
+        "runtime",
+        `Last error: ${entry.lastError}`,
+        "Check your token validity and network connection. Check that the bot has the required OAuth scopes.",
+      );
     }
 
     if (!entry.running && !entry.lastStartAt && !entry.lastInboundAt && !entry.lastOutboundAt) {
-      issues.push({
-        channel: "twitch",
-        accountId,
-        kind: "runtime",
-        message: "Account has never connected successfully",
-        fix: "Start the Twitch gateway to begin receiving messages. Check logs for connection errors.",
-      });
+      addIssue(
+        "runtime",
+        "Account has never connected successfully",
+        "Start the Twitch gateway to begin receiving messages. Check logs for connection errors.",
+      );
     }
 
     if (entry.running && entry.lastStartAt) {
       const uptime = Date.now() - entry.lastStartAt;
       const daysSinceStart = uptime / (1000 * 60 * 60 * 24);
       if (daysSinceStart > 7) {
-        issues.push({
-          channel: "twitch",
-          accountId,
-          kind: "runtime",
-          message: `Connection has been running for ${Math.floor(daysSinceStart)} days`,
-          fix: "Consider restarting the connection periodically to refresh the connection. Twitch tokens may expire after long periods.",
-        });
+        addIssue(
+          "runtime",
+          `Connection has been running for ${Math.floor(daysSinceStart)} days`,
+          "Consider restarting the connection periodically to refresh the connection. Twitch tokens may expire after long periods.",
+        );
       }
     }
   }

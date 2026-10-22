@@ -243,7 +243,7 @@ describe("Agents effective-tools read", () => {
       .mockResolvedValue(effective("After save"));
     const view = mountEffective(read);
     await waitForSolid(() => expect(preview(view.container)).toContain("Before save"));
-    view.page.read().onConfigSave();
+    await view.page.read().onConfigSave();
     await waitForSolid(() => expect(preview(view.container)).toContain("After save"));
     expect(view.save).toHaveBeenCalledOnce();
     expect(view.calls()).toHaveLength(2);

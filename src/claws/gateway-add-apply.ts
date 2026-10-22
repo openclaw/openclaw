@@ -40,8 +40,8 @@ import {
 import type { ClawAddPlan } from "./types.js";
 
 export class ClawGatewayPlanChangedError extends Error {
-  constructor(message = "The Claw changed since review. Preview it again.") {
-    super(message);
+  constructor() {
+    super("The Claw changed since review. Preview it again.");
     this.name = "ClawGatewayPlanChangedError";
   }
 }

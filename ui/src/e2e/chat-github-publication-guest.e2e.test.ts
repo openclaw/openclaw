@@ -12,7 +12,11 @@ import {
   reconnectMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
-import { openChatDetails, openDetailsPullRequests } from "./chat-details.test-support.ts";
+import {
+  openChatDetails,
+  openChatPublication,
+  openDetailsPullRequests,
+} from "./chat-details.test-support.ts";
 import { publicationAction } from "./chat-github-publication-accounts.test-support.ts";
 import { publicationMethods } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -106,11 +110,11 @@ suite.define(() => {
       } satisfies SessionGitHubStatusResult;
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       await page.getByText(historyText, { exact: true }).waitFor();
-      await openDetailsPullRequests(page);
+      await openChatPublication(page);
       const discovered = await gateway.waitForRequest("sessions.github.options");
       expect(discovered.params).toEqual({ sessionKey, agentId: "main" });
-      await openDetailsPullRequests(page);
-      const publish = publicationAction(page, "Publish PR");
+      await openChatPublication(page);
+      const publish = publicationAction(page, "Create PR");
       await expect.poll(() => publish.count()).toBe(1);
       await expect.poll(() => publish.isEnabled()).toBe(true);
       await expectNoPersonalActions(page);
@@ -132,11 +136,20 @@ suite.define(() => {
         ...options,
         latestShared: receipt,
       });
+      await openChatPublication(page);
       await publicationAction(page, "Check publication").click();
       const status = await gateway.waitForRequest("sessions.github.status");
       expect(status.params).toEqual({ sessionKey, agentId: "main", requestId });
-      const openPr = page.getByRole("link", { name: "Open PR", exact: true });
+      const publishedGroup = await openDetailsPullRequests(page);
+      const openPr = publishedGroup.getByRole("link", { name: "Open PR", exact: true });
       await expect.poll(() => openPr.getAttribute("href")).toBe(receipt.result.url);
+      const environment = page.locator(".chat-environment__branch");
+      expect(
+        await environment.locator(".chat-pr__diff, .chat-pr__publication-actions").count(),
+      ).toBe(0);
+      expect(await environment.locator(".chat-environment__branch-name").textContent()).toBe(
+        "visitor/documentation",
+      );
 
       const previousOptions = (await gateway.getRequests("sessions.github.options")).length;
       await reconnectMockGateway(page, gateway);
@@ -148,7 +161,7 @@ suite.define(() => {
       expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
       expect(await gateway.getRequests(SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD)).toHaveLength(0);
       await page.reload();
-      await openDetailsPullRequests(page);
+      await openChatDetails(page);
       await gateway.waitForRequest("sessions.github.options");
       await openDetailsPullRequests(page);
       await expect.poll(() => openPr.getAttribute("href")).toBe(receipt.result.url);
@@ -170,7 +183,7 @@ suite.define(() => {
         await expect
           .poll(() => details.locator('[data-details-group="pull-requests"]').count())
           .toBe(0);
-        expect(await publicationAction(page, "Publish PR").count()).toBe(0);
+        expect(await publicationAction(page, "Create PR").count()).toBe(0);
         await expectNoPersonalActions(page);
         expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.github.confirm")).toHaveLength(0);
@@ -180,8 +193,8 @@ suite.define(() => {
           const previousOptions = (await gateway.getRequests("sessions.github.options")).length;
           await reconnectMockGateway(page, gateway);
           await gateway.waitForRequest("sessions.github.options", { after: previousOptions });
-          await openDetailsPullRequests(page);
-          await expect.poll(() => publicationAction(page, "Publish PR").count()).toBe(1);
+          await openChatPublication(page);
+          await expect.poll(() => publicationAction(page, "Create PR").count()).toBe(1);
           expect(await gateway.getRequests("sessions.github.publish")).toHaveLength(0);
         }
       });

@@ -9,6 +9,7 @@ import { ReasonedDisabledControl } from "./reasoned-disabled-control.tsx";
 type PluginLifecycleProps = {
   mutationBlockedReason: string | null;
   canMutate: boolean;
+  enabled: boolean;
   busy: Readonly<Record<string, PluginMutationAction>>;
   onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   onSettings: () => void;
@@ -24,7 +25,7 @@ export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCa
     const current = pending();
     return current === "enable" || current === "disable"
       ? current
-      : props.plugin.enabled
+      : props.enabled
         ? "disable"
         : "enable";
   };
@@ -58,16 +59,16 @@ export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCa
     );
   }
   // Keep the primary action first in visual and keyboard navigation order.
-  const askAction = () => renderPluginAskAction(props.onAskPlugin, props.plugin.enabled);
+  const askAction = () => renderPluginAskAction(props.onAskPlugin, props.enabled);
   return (
     <>
-      {props.plugin.enabled ? askAction() : null}
+      {props.enabled ? askAction() : null}
       <Action
         kind={enableAction()}
         label={t(
           enableAction() === "disable" ? "pluginsPage.detailDisable" : "pluginsPage.detailEnable",
         )}
-        class={props.plugin.enabled ? "oc-action-secondary" : "primary oc-action-primary"}
+        class={props.enabled ? "oc-action-secondary" : "primary oc-action-primary"}
         blockedReason={
           props.mutationBlockedReason ??
           (props.plugin.state === "needs-setup" ? t("pluginsPage.setupRequiredNotice") : null)
@@ -75,7 +76,7 @@ export function PluginLifecycle(props: PluginLifecycleProps & { plugin: PluginCa
         allowed={props.canMutate && props.plugin.state !== "needs-setup"}
         onClick={() => props.onSetEnabled(props.plugin.id, !props.plugin.enabled, key())}
       />
-      {!props.plugin.enabled ? askAction() : null}
+      {!props.enabled ? askAction() : null}
       {props.plugin.removable ? (
         <Action
           kind="uninstall"

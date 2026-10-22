@@ -131,26 +131,6 @@ function renderMessageList(
   }).trimEnd();
 }
 
-function extractDiscordSearchResultsMessages(results: unknown): unknown[] | null {
-  if (!results || typeof results !== "object") {
-    return null;
-  }
-  const raw = (results as { messages?: unknown }).messages;
-  if (!Array.isArray(raw)) {
-    return null;
-  }
-  // Discord search returns messages as array-of-array; first element is the message.
-  const flattened: unknown[] = [];
-  for (const entry of raw) {
-    if (Array.isArray(entry) && entry.length > 0) {
-      flattened.push(entry[0]);
-    } else if (entry && typeof entry === "object") {
-      flattened.push(entry);
-    }
-  }
-  return flattened;
-}
-
 function renderReactions(payload: unknown, opts: FormatOpts): string | null {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -360,7 +340,21 @@ export function formatMessageCliText(
 
   if (result.action === "search") {
     const results = (payload as { results?: unknown }).results;
-    let list = extractDiscordSearchResultsMessages(results);
+    let list: unknown[] | null = null;
+    if (results && typeof results === "object") {
+      const raw = (results as { messages?: unknown }).messages;
+      if (Array.isArray(raw)) {
+        list = [];
+        // Discord search returns messages as array-of-array; first element is the message.
+        for (const entry of raw) {
+          if (Array.isArray(entry) && entry.length > 0) {
+            list.push(entry[0]);
+          } else if (entry && typeof entry === "object") {
+            list.push(entry);
+          }
+        }
+      }
+    }
     if (list === null) {
       const messages = asOptionalObjectRecord(payload)?.messages;
       if (Array.isArray(messages)) {

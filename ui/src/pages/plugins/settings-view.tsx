@@ -62,6 +62,7 @@ type SharedProps = Omit<
   loading: boolean;
   error: string | null;
   busy: Readonly<Record<string, PluginMutationAction>>;
+  presentedEnabled?: (pluginId: string) => boolean | undefined;
   messages: Readonly<Record<string, PluginRowMessage>>;
   iconUrls: Readonly<Record<string, string>>;
   iconLoading?: (pluginId: string) => boolean;
@@ -574,6 +575,7 @@ function PluginOverview(props: DetailProps): JSX.Element {
                 settingsHref={props.settingsHref ?? "#configuration"}
                 onSettings={() => props.onTabChange("configuration")}
                 plugin={plugin()}
+                enabled={props.presentedEnabled?.(plugin().id) ?? plugin().enabled}
               />
             }
           >

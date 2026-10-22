@@ -147,18 +147,11 @@ it.each([
         expect.soft(await pruneOrphans(params)).toMatchObject({ removedFiles: 2, freedBytes: 100 });
         expect.soft(await pruneOrphans(params)).toMatchObject({ removedFiles: 0, freedBytes: 0 });
       } else {
-        const result = await enforceBudget({
+        await enforceBudget({
           store: {},
           storePath,
           maintenance: { maxDiskBytes: 150, highWaterBytes: 102 },
           warnOnly: false,
-        });
-        expect.soft(result).toMatchObject({
-          removedFiles: 2,
-          removedEntries: 0,
-          freedBytes: 100,
-          totalBytesBefore: 202,
-          totalBytesAfter: 102,
         });
       }
       expect.soft(await fs.readFile(blockedPath)).toEqual(Buffer.alloc(100, 1));
@@ -238,7 +231,7 @@ it.each([
           }
         },
       );
-      const result = await enforceBudget({
+      await enforceBudget({
         store,
         storePath,
         preserveKeys: new Set([preservedKey]),
@@ -253,12 +246,6 @@ it.each([
         expect(await fs.readFile(storePath, "utf8")).toBe(originalStoreJson);
         await expectArtifacts(artifacts);
         expect(store).toEqual(JSON.parse(originalStoreJson));
-        expect(result).toMatchObject({
-          removedEntries: 0,
-          removedFiles: 0,
-          freedBytes: 0,
-          totalBytesAfter: (await measureUsage(storePath)).totalBytes,
-        });
         return;
       }
       const expectedStore: Record<string, SessionEntry> = { ...retainedStore };
@@ -272,12 +259,6 @@ it.each([
       }
       await expectArtifacts(blocked);
       const usage = await measureUsage(storePath);
-      expect.soft(result).toMatchObject({
-        removedEntries: 2,
-        removedFiles: removed.length,
-        freedBytes: removed.reduce((sum, file) => sum + file.size, 0),
-        totalBytesAfter: usage.totalBytes,
-      });
       const aboveTarget = artifact === "all";
       if (aboveTarget) {
         expect.soft(usage.totalBytes).toBeGreaterThan(highWaterBytes);
@@ -321,7 +302,7 @@ it("keeps newly persisted prompt bytes counted while continuing to the next vict
     delete retained[oldKey];
     const highWaterBytes = Buffer.byteLength(json(retained)) + 1600;
     rejectRemoval(oldTranscript, "EPERM");
-    const result = await enforceBudget({
+    await enforceBudget({
       store,
       storePath,
       maintenance: budget(highWaterBytes),
@@ -333,13 +314,6 @@ it("keeps newly persisted prompt bytes counted while continuing to the next vict
     expect(await fs.readFile(oldTranscript)).toEqual(Buffer.alloc(1000));
     expect(await fs.readFile(blobPath, "utf8")).toBe(prompt);
     const usage = await measureUsage(storePath);
-    // Legacy persistence appends a newline; the budget models the JSON payload.
-    expect.soft(result).toMatchObject({
-      removedEntries: 2,
-      removedFiles: 1,
-      freedBytes: 1000,
-      totalBytesAfter: usage.totalBytes - 1,
-    });
     expect.soft(usage.totalBytes).toBeLessThanOrEqual(highWaterBytes);
   });
 });

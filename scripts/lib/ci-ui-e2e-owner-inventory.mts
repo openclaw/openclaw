@@ -376,11 +376,6 @@ const ownerWatches: readonly UiE2eOwnerWatch[] = [
     ["channels", "config"],
     ["ui/src/components/modal-dialog.tsx", "ui/src/components/select-picker.ts"],
   ),
-  pageWatch(
-    "ui/src/e2e/chat-active-cursor-replay.e2e.test.ts",
-    ["chat"],
-    ["ui/src/pages/chat/chat-pane.ts"],
-  ),
   pageWatch("ui/src/e2e/chat-agent-run-transcript.e2e.test.ts", ["chat"]),
   pageWatch(
     "ui/src/e2e/chat-async-questions.e2e.test.ts",

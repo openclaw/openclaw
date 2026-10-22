@@ -15,7 +15,10 @@ import {
 } from "../lib/sessions/session-capability.test-support.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../test-helpers/solid-application-context.tsx";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../test-helpers/solid-application-context.tsx";
 import { createControlUiPluginHost } from "./control-ui-host.ts";
 import { PluginManager } from "./control-ui-manager.solid.tsx";
 import type { ControlUiPluginOwner, ControlUiPluginRuntime } from "./control-ui-runtime.ts";
@@ -64,6 +67,7 @@ it("renders customization inline and recovers reload controls after failure or s
   // SAFETY: this fixture supplies the application services consumed by the manager.
   const provider = createSolidApplicationContextProvider({
     plugins,
+    gateway: createApplicationGateway().gateway,
     basePath: "/console",
     navigate,
   } as unknown as ApplicationContext);

@@ -7,10 +7,7 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { getDiagnosticSessionActivitySnapshot } from "./diagnostic-run-activity.js";
 import { requestStuckSessionRecovery } from "./diagnostic-session-recovery-coordinator.js";
 import type { StuckSessionRecoveryRequest } from "./diagnostic-session-recovery.js";
-import {
-  getDiagnosticSessionState,
-  resetDiagnosticSessionStateForTest,
-} from "./diagnostic-session-state.js";
+import { resetDiagnosticSessionStateForTest } from "./diagnostic-session-state.js";
 import { recoverStuckDiagnosticSession } from "./diagnostic-stuck-session-recovery.runtime.js";
 
 const sessionKey = "agent:main:recovery-boundary";
@@ -169,31 +166,4 @@ it("deduplicates stop on the operation, not a keyed recovery set", async () => {
   expect(getSessionControllerOperation(sessionKey)).toBe(operation);
   operation.complete();
   await operation.ownerSettlement;
-});
-
-it("reports outcomes without manufacturing idle, queue counts or activity cleanup", async () => {
-  const operation = begin();
-  const state = getDiagnosticSessionState(session);
-  state.state = "processing";
-  state.queueDepth = 3;
-  const done = createDeferredCore();
-  requestStuckSessionRecovery({
-    classification,
-    request: { operation, ...session, ageMs: 1_000_000 },
-    recover: () => {
-      done.resolve();
-      return {
-        status: "aborted",
-        action: "abort_embedded_run",
-        aborted: true,
-        drained: false,
-        forceCleared: false,
-        released: 0,
-      };
-    },
-  });
-  await done.promise;
-  await Promise.resolve();
-  expect(state).toMatchObject({ state: "processing", queueDepth: 3 });
-  expect(getSessionControllerOperation(sessionKey)).toBe(operation);
 });

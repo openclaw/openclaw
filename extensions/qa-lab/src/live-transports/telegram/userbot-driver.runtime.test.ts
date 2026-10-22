@@ -53,6 +53,7 @@ function entity(offset: number, length: number, type = "textEntityTypeCode") {
 }
 
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(drivers.splice(0).map((driver) => driver.close())).finally(() => {
     tempRoots.splice(0).forEach((root) => fs.rmSync(root, { recursive: true, force: true }));
   });
@@ -196,7 +197,8 @@ it("loads the selected repository skill from a different working directory", asy
     fs.mkdirSync(path.dirname(destination), { recursive: true });
     fs.cpSync(path.join(process.cwd(), relative), destination, { recursive: true });
   }
-  const runtime = await loadTelegramUserbotSkillRuntime({ repoRoot, env: {} });
+  vi.stubEnv("TELEGRAM_E2E_SKILL_DIR", undefined);
+  const runtime = await loadTelegramUserbotSkillRuntime({ repoRoot });
 
   expect(runtime.userDriverPath).toBe(path.join(repoRoot, skillPath, "scripts/user-driver.py"));
   expect(() => runtime.parseCredential({})).toThrow("unsupported schema or environment");

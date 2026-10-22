@@ -7,13 +7,10 @@ import {
 import { createSubsystemLogger, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type TelegramApiLogger = (message: string) => void;
-
 type TelegramApiLoggingParams<T> = {
   operation: string;
   fn: () => Promise<T>;
   runtime?: Pick<RuntimeEnv, "error">;
-  logger?: TelegramApiLogger;
   shouldLog?: (err: unknown) => boolean;
 };
 
@@ -46,7 +43,7 @@ export function formatTelegramTransportDiagnostics(error: unknown): string {
 export async function withTelegramApiErrorLogging<T>(
   params: TelegramApiLoggingParams<T>,
 ): Promise<T> {
-  const { operation, fn, runtime, logger, shouldLog } = params;
+  const { operation, fn, runtime, shouldLog } = params;
   try {
     return await fn();
   } catch (err) {
@@ -56,7 +53,7 @@ export async function withTelegramApiErrorLogging<T>(
         err instanceof HttpError || transport
           ? `network request failed${transport}`
           : formatErrorMessage(err);
-      const log = logger ?? runtime?.error ?? ((message: string) => fallbackLogger.error(message));
+      const log = runtime?.error ?? ((message: string) => fallbackLogger.error(message));
       log(`telegram ${operation} failed: ${errText}`);
     }
     throw err;

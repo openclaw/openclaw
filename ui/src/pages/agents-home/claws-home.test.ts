@@ -101,6 +101,45 @@ describe("Claws discovery", () => {
     }
   });
 
+  it("releases a closed preview before transport settles and isolates its replacement", async () => {
+    const { detail, request } = createDetail({ clawsEnabled: true });
+    await waitForSolid(() =>
+      expect(detail.querySelector(".claws-workspace-file__open")).not.toBeNull(),
+    );
+    const retired = createDeferredCore<unknown>();
+    request.mockReturnValueOnce(retired.promise);
+    detail.querySelector<HTMLButtonElement>(".claws-workspace-file__open")!.click();
+    await waitForSolid(() =>
+      expect(detail.querySelector("openclaw-file-preview-modal")).not.toBeNull(),
+    );
+    const preview = detail.querySelector("openclaw-file-preview-modal")!;
+    const readiness = preview.fileRequest();
+    expect(readiness).toBeDefined();
+    preview.dispatchEvent(new CustomEvent("file-preview-close", { bubbles: true }));
+    await readiness;
+    await waitForSolid(() =>
+      expect(detail.querySelector("openclaw-file-preview-modal")).toBeNull(),
+    );
+
+    const replacement = createDeferredCore<unknown>();
+    request.mockReturnValueOnce(replacement.promise);
+    detail.querySelector<HTMLButtonElement>(".claws-workspace-file__open")!.click();
+    await waitForSolid(() =>
+      expect(
+        detail.querySelector("openclaw-file-preview-modal .body")?.getAttribute("aria-busy"),
+      ).toBe("true"),
+    );
+    retired.resolve({ preview: { kind: "instruction", name: "SOUL.md", content: "Retired" } });
+    await nextTurn();
+    expect(detail.textContent).not.toContain("Retired");
+    replacement.resolve({
+      preview: { kind: "instruction", name: "SOUL.md", content: "Current preview" },
+    });
+    await waitForSolid(() =>
+      expect(detail.querySelector(".detail-body")?.textContent).toContain("Current preview"),
+    );
+  });
+
   it.each([
     "/claws",
     "/claws/workflow-operator",

@@ -544,7 +544,8 @@ export async function validateUpdateCandidateCanary(params: {
     progress.phase = "startup";
     await beginStep({ name: "candidate-gateway-startup", command: "gateway run" });
     startBudget();
-    remaining();
+    // Doctor attests the deployment; only the Gateway uses runtime overrides.
+    await rehearsal.prepareRuntime(remaining);
     const args = ["gateway", "run", ...UPDATE_CANARY_PROGRESS_ARGS, "--bind", "loopback"];
     const startup = readiness.observeUpdateCandidateStartup({ env, stateDir: params.stateDir });
     const processExit = new AbortController();

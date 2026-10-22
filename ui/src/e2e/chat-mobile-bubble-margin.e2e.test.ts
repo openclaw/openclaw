@@ -66,6 +66,12 @@ suite.define(() => {
           await installMockGateway(page, marginScenario(testCase));
           await page.bringToFront();
           await page.goto(`${suite.server.baseUrl}chat/main`, { waitUntil: "domcontentloaded" });
+          if (testCase.id === "clawhub") {
+            await expectBrowser(page.locator(".chat-thread .chat-clawhub-card")).toHaveAttribute(
+              "aria-busy",
+              "false",
+            );
+          }
           for (const theme of ["light", "dark"] as const) {
             await page.emulateMedia({ colorScheme: theme });
             await expectBrowser(page.locator("html")).toHaveAttribute("data-theme-mode", theme);

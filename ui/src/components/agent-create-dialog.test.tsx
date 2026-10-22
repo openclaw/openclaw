@@ -26,7 +26,10 @@ const picker = vi.hoisted(() => ({
 const selectedAvatar = "data:image/webp;base64,Ym90";
 registerEnglishCatalog(registerSettingsEnglish);
 // mock-isolation: exercise dialog selection/upload state without mounting the avatar generator.
-vi.mock("../pages/agents/avatar-image.ts", () => ({ fileToAvatarDataUrl: picker.convert }));
+vi.mock("../pages/agents/avatar-image.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../pages/agents/avatar-image.ts")>()),
+  fileToAvatarDataUrl: picker.convert,
+}));
 // mock-isolation: replace the entire picker with a controlled boundary for dialog-only upload tests.
 vi.mock("../pages/agents/avatar-picker.tsx", () => ({
   AvatarPicker: (props: {
@@ -144,7 +147,7 @@ it("keeps creation disabled during avatar conversion and recovers from an unusab
   expect(onCreate).not.toHaveBeenCalled();
   pending.resolve({ ok: false, reason: "too-detailed" });
   await waitForSolid(() => {
-    expect(view.container.querySelector('[role="alert"]')?.textContent).toBeTruthy();
+    expect(view.container.querySelector('[role="alert"]')?.textContent).toContain("too detailed");
     expect(create.disabled).toBe(false);
   });
 

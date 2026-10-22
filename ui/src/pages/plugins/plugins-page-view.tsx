@@ -128,6 +128,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     connected: page().gateway.connected,
     loading: page().loading,
     result: page().state.result,
+    presentedEnabled: props.page.presentedEnabled,
     error: page().state.error,
     busy: page().state.busy,
     messages: page().state.messages,
@@ -269,7 +270,11 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
       {page().surface === "discovery" && !page().state.catalogDetail && (
         <PluginsHubHeader
           active="plugins"
-          onSelect={(tab: PluginsHubTab) => page().selectHubTab(tab)}
+          onSelect={(tab: PluginsHubTab) => {
+            if (tab !== "plugins" || page().surface !== "discovery") {
+              page().context.navigate(tab);
+            }
+          }}
           secondaryAction={{
             label: t("pluginsPage.pluginSettings"),
             icon: <Icon name="settings" />,
@@ -412,7 +417,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
               mutationBlockedReason={page().accessBlockedReason(
                 page().state.result?.mutationAllowed,
               )}
-              busy={Object.values(page().state.busy).some(Boolean)}
+              busy={page().mutationSaving() || Object.values(page().state.busy).some(Boolean)}
               onCancel={() => page().consent.close()}
               onConfirm={() => page().consent.confirm()}
               onRetry={() => void page().consent.inspect()}

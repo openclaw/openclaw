@@ -13,7 +13,7 @@ import {
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
-import { waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createContext } from "./skill-workshop-page.test-support.ts";
 import { SkillWorkshopPage } from "./skill-workshop-page.tsx";
 
@@ -43,6 +43,10 @@ it("starts one ordinary session and opens its acknowledged run", async () => {
   context.sessions.createResult = vi.fn(() => creation.promise);
   button.click();
   button.click();
+  await waitForSolid(() => {
+    expect(button.disabled).toBe(true);
+    expect(button.textContent).toContain("Opening learning session");
+  });
 
   expect(context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(
     {
@@ -56,6 +60,8 @@ it("starts one ordinary session and opens its acknowledged run", async () => {
   expect(context.navigate).not.toHaveBeenCalled();
   creation.resolve({ key, initialRun: { status: "started", runId: "learning-run" } });
   await vi.waitFor(() => expect(context.navigate).toHaveBeenCalledOnce());
+  flush();
+  expect(button.disabled).toBe(false);
   expect(context.navigate).toHaveBeenCalledWith("chat", expect.any(Object));
   expect(context.chatSubmissions.retain).toHaveBeenCalledWith(retainedRun);
 });

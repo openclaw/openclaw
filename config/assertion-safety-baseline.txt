@@ -201,7 +201,6 @@ extensions/discord/src/internal/api.webhooks.ts	1
 extensions/discord/src/internal/command-comparison.ts	1
 extensions/discord/src/internal/command-deploy.ts	1
 extensions/discord/src/internal/commands.ts	1
-extensions/discord/src/internal/components.message.ts	1
 extensions/discord/src/internal/components.modal.ts	1
 extensions/discord/src/internal/entity-cache.ts	3
 extensions/discord/src/internal/gateway-dispatch.ts	5
@@ -881,7 +880,6 @@ extensions/xai/provider-models.ts	1
 extensions/xai/realtime-voice-bridge.ts	1
 extensions/xai/realtime-voice-config.ts	2
 extensions/xai/src/tool-auth-shared.ts	2
-extensions/xai/src/web-search-provider.runtime.ts	2
 extensions/xai/src/x-search-config.ts	3
 extensions/xai/stream.ts	3
 extensions/xai/tts.ts	1
@@ -1320,7 +1318,6 @@ src/agents/tools/dashboard-tool.ts	1
 src/agents/tools/embedded-gateway-stub.ts	7
 src/agents/tools/gateway-tool.ts	2
 src/agents/tools/goal-tools.ts	2
-src/agents/tools/heartbeat-response-tool.ts	1
 src/agents/tools/image-tool.helpers.ts	2
 src/agents/tools/in-process-gateway.ts	1
 src/agents/tools/message-tool-discovery.ts	2
@@ -1360,7 +1357,6 @@ src/auto-reply/chunk.ts	1
 src/auto-reply/command-auth.ts	3
 src/auto-reply/command-turn-context.ts	1
 src/auto-reply/heartbeat-filter.ts	2
-src/auto-reply/heartbeat-tool-response.ts	2
 src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts	1
 src/auto-reply/reply/acp-reset-target.ts	1
 src/auto-reply/reply/agent-lifecycle-terminal.ts	2
@@ -1479,7 +1475,7 @@ src/cli/capability-cli/image.ts	9
 src/cli/capability-cli/model.ts	3
 src/cli/capability-cli/tts.ts	6
 src/cli/capability-cli/video.ts	5
-src/cli/capability-cli/web.ts	5
+src/cli/capability-cli/web.ts	3
 src/cli/channel-auth.ts	4
 src/cli/channels-cli.ts	5
 src/cli/claws-cli.runtime.ts	1
@@ -1927,8 +1923,6 @@ src/infra/fs-safe-remove.ts	4
 src/infra/gateway-lock.ts	2
 src/infra/gateway-processes.ts	1
 src/infra/git-commit.ts	1
-src/infra/heartbeat-outcome-store.ts	1
-src/infra/heartbeat-runner-config.ts	1
 src/infra/heartbeat-visibility.ts	1
 src/infra/install-package-dir.ts	2
 src/infra/json-utf8-bytes.ts	4
@@ -2037,7 +2031,6 @@ src/logging/diagnostic-support-redaction.ts	1
 src/logging/json-console-line.ts	2
 src/logging/levels.ts	2
 src/logging/logger.ts	7
-src/logging/parse-log-line.ts	1
 src/logging/redact.ts	2
 src/logging/secret-redaction-registry.ts	1
 src/logging/state.ts	6
@@ -2080,7 +2073,6 @@ src/memory-host-sdk/events.ts	1
 src/model-catalog/bundled-catalog-stamp.ts	1
 src/node-host/config.ts	1
 src/node-host/invoke-agent-cli-claude-params.ts	1
-src/node-host/invoke-agent-cli-claude.ts	1
 src/node-host/invoke-payload.ts	3
 src/node-host/invoke.ts	1
 src/node-host/node-worker-transfer-client.ts	1
@@ -2238,7 +2230,6 @@ src/plugins/update-channel.ts	2
 src/plugins/update-config.ts	2
 src/plugins/update-installed.ts	5
 src/plugins/update-summary.ts	2
-src/plugins/web-search-credential-presence.ts	1
 src/plugins/web-search-install-catalog.ts	2
 src/poll-params.ts	1
 src/process/command-queue.ts	2

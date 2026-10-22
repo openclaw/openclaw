@@ -1,5 +1,9 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
+import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
 import { defaultRuntime } from "../../runtime.js";
 import { runCommandWithRuntime } from "../cli-utils.js";
@@ -9,19 +13,10 @@ import { emitJsonOrText, formatEnvelopeForText } from "./output.js";
 import { registerLocalProvidersCommand } from "./providers-command.js";
 
 function describeWebResultFailure(result: Record<string, unknown>): string | undefined {
-  const statusCode =
-    typeof result.statusCode === "number" && Number.isFinite(result.statusCode)
-      ? result.statusCode
-      : undefined;
+  const statusCode = asFiniteNumber(result.statusCode);
   const error = result.error;
   const errorMessage =
-    typeof error === "string"
-      ? error
-      : error &&
-          typeof error === "object" &&
-          typeof (error as { message?: unknown }).message === "string"
-        ? (error as { message: string }).message
-        : undefined;
+    readStringValue(error) ?? readStringValue(asOptionalObjectRecord(error)?.message);
   if (result.ok !== false && (statusCode === undefined || statusCode < 400) && !errorMessage) {
     return undefined;
   }

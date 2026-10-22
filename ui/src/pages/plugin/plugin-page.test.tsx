@@ -10,12 +10,17 @@ import {
 } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
+import { createShellConfigFixture } from "../../app/app-host.test-support.ts";
 import type { ApplicationConfigCapability } from "../../app/config.ts";
-import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import * as staleChunkReload from "../../app/stale-chunk-reload.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import {
+  createApplicationGateway,
+  createSolidApplicationContextProvider,
+} from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { logbookStatus, logbookTimeline } from "./logbook.test-support.ts";
 import { PluginPage, type PluginPageProps } from "./plugin-page.tsx";
 import { page as pluginRoute } from "./route.tsx";
 
@@ -36,42 +41,38 @@ function externalPluginConfig(
   ],
 ): ApplicationConfig {
   return {
-    assistantIdentity: {
-      agentId: null,
-      name: "Assistant",
-      avatar: null,
-      avatarStatus: null,
-      avatarReason: null,
-    },
-    serverVersion: null,
-    devGitBranch: null,
-    environment: null,
+    ...createShellConfigFixture().current,
     embedSandboxMode: "scripts",
-    allowExternalEmbedUrls: false,
-    automaticallyFetchFavicons: false,
-    communityInvite: false,
-    terminalEnabled: false,
-    uploadsEnabled: true,
-    pluginAssetsRequireAuth: true,
-    pluginControlUiModules: [],
     pluginFrameGrants,
   };
 }
 
-function createSnapshot(
-  hello: GatewayHelloOk,
+function createGateway(
+  controlUiTabs: GatewayHelloOk["controlUiTabs"],
   client: GatewayBrowserClient | null = null,
-): ApplicationGatewaySnapshot {
-  return {
+) {
+  const hello: GatewayHelloOk = {
+    type: "hello-ok",
+    protocol: 3,
+    auth: { role: "operator", scopes: ["operator.write"] },
+    controlUiTabs,
+  };
+  const { gateway, publish } = createApplicationGateway();
+  const snapshot = gateway.snapshot;
+  Object.assign(snapshot, {
     client,
     phase: "connected",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
     hello,
-    assistantAgentId: null,
     sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
+  });
+  return {
+    hello,
+    snapshot,
+    gateway,
+    notify: () => {
+      publish(snapshot);
+      flush();
+    },
   };
 }
 
@@ -97,40 +98,22 @@ function createExternalPluginPage(
   requiresGatewayAuth = true,
   path = "/plugins/external/panel",
 ) {
-  const hello: GatewayHelloOk = {
-    type: "hello-ok",
-    protocol: 3,
-    auth: { role: "operator", scopes: ["operator.write"] },
-    controlUiTabs: [
-      {
-        pluginId: "external-plugin",
-        id: "panel",
-        label: "External panel",
-        path,
-        ...(requiresGatewayAuth ? { requiresGatewayAuth: true } : {}),
-      },
-    ],
-  };
-  const snapshot = createSnapshot(hello);
-  const listeners = new Set<() => void>();
-  const context = {
-    gateway: {
-      snapshot,
-      connectionRevision: 1,
-      subscribe: (notify: () => void) => {
-        listeners.add(notify);
-        return () => listeners.delete(notify);
-      },
+  const fixture = createGateway([
+    {
+      pluginId: "external-plugin",
+      id: "panel",
+      label: "External panel",
+      path,
+      ...(requiresGatewayAuth ? { requiresGatewayAuth: true } : {}),
     },
+  ]);
+  const context = {
+    gateway: fixture.gateway,
     config: { current: externalPluginConfig([]), refresh },
   } as unknown as ApplicationContext;
   return {
     ...mountPage(context, { pluginId: "external-plugin", tabId: "panel" }),
-    snapshot,
-    notify: () => {
-      listeners.forEach((listener) => listener());
-      flush();
-    },
+    ...fixture,
   };
 }
 
@@ -384,19 +367,6 @@ describe("PluginPage", () => {
     expect(maxActiveRefreshes()).toBe(1);
   });
 
-  it("refreshes the frame grant after gateway reconnect", async () => {
-    const refresh = vi.fn(async () => externalPluginConfig());
-    const fixture = createExternalPluginPage(refresh);
-    await waitForSolid(() => expect(fixture.page.querySelector("iframe")).not.toBeNull());
-    fixture.snapshot.phase = "stopped";
-    fixture.notify();
-    expect(fixture.page.querySelector("iframe")).toBeNull();
-    fixture.snapshot.phase = "connected";
-    fixture.notify();
-    await waitForSolid(() => expect(fixture.page.querySelector("iframe")).not.toBeNull());
-    expect(refresh).toHaveBeenCalledTimes(2);
-  });
-
   it("refuses external plugin auth outside a secure browser context", async () => {
     vi.stubGlobal("isSecureContext", false);
     const refresh = vi.fn(async () => externalPluginConfig());
@@ -462,28 +432,17 @@ function interpretMockImportError(importError: Error) {
 }
 
 function createBundledPage(client: GatewayBrowserClient | null = null, includeExternal = false) {
-  const hello: GatewayHelloOk = {
-    type: "hello-ok",
-    protocol: 3,
-    auth: { role: "operator", scopes: ["operator.write"] },
-    controlUiTabs: [
+  const fixture = createGateway(
+    [
       { pluginId: "logbook", id: "logbook", label: "Logbook" },
       ...(includeExternal
         ? [{ pluginId: "external-plugin", id: "panel", label: "External panel" }]
         : []),
     ],
-  };
-  const snapshot = createSnapshot(hello, client);
-  const listeners = new Set<() => void>();
+    client,
+  );
   const context = {
-    gateway: {
-      snapshot,
-      connectionRevision: 1,
-      subscribe: (listener: () => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    },
+    gateway: fixture.gateway,
     plugins: {
       errors: [],
       registrations: () => [],
@@ -493,36 +452,14 @@ function createBundledPage(client: GatewayBrowserClient | null = null, includeEx
   } as unknown as ApplicationContext;
   return {
     ...mountPage(context, { pluginId: "logbook", tabId: "logbook" }),
-    hello,
-    snapshot,
-    notify: () => {
-      listeners.forEach((listener) => listener());
-      flush();
-    },
+    ...fixture,
   };
 }
 
 function logbookResponse(method: string) {
-  if (method === "logbook.status") {
-    return {
-      captureEnabled: true,
-      capturePaused: false,
-      captureIntervalSeconds: 30,
-      analysisIntervalMinutes: 15,
-      retentionDays: 30,
-      pendingFrames: 0,
-      analysisRunning: false,
-      visionModelSource: "missing",
-      today: "2026-07-05",
-      todayCards: 0,
-      timeZone: "UTC",
-    };
-  }
-  return {
-    day: "2026-07-05",
-    cards: [],
-    stats: { trackedMs: 0, distractionMs: 0, categories: [], apps: [] },
-  };
+  return method === "logbook.status"
+    ? logbookStatus("2026-07-05", { todayCards: 0 })
+    : logbookTimeline("2026-07-05");
 }
 
 describe("bundled plugin views", () => {

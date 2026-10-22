@@ -518,7 +518,6 @@ describe("scripts/test-projects changed-target routing", () => {
     ${"src/agents/cli-runner/bundle-mcp.user-config.test.ts"}                  | ${"agents-core-isolated"}             | ${undefined}                                   | ${undefined}
     ${"src/agents/subagents/spawn/subagent-spawn.production-boundary.test.ts"} | ${"agents-spawn-production-boundary"} | ${undefined}                                   | ${undefined}
     ${"src/agents/agent-command-local.test.ts"}                                | ${"cli-process"}                      | ${undefined}                                   | ${undefined}
-    ${"src/gateway/health/collector.queue-health.test.ts"}                     | ${"gateway-database-workers"}         | ${undefined}                                   | ${gatewayDatabaseWorkerTestFiles}
     ${"src/agents/command/session-store.test.ts"}                              | ${"infra"}                            | ${undefined}                                   | ${databaseWorkerCoreTestFiles}
     ${"src/auto-reply/reply/agent-runner-execution-auth-failures.test.ts"}     | ${"infra"}                            | ${undefined}                                   | ${undefined}
     ${"src/auto-reply/reply/agent-runner-execution-cli-admission.test.ts"}     | ${"infra"}                            | ${undefined}                                   | ${undefined}

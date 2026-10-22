@@ -206,14 +206,12 @@ export async function exchangeMSTeamsCodeForTokens(params: {
   clientSecret: string;
   code: string;
   verifier: string;
-  scopes?: readonly string[];
 }): Promise<MSTeamsDelegatedTokens> {
   return await requestMSTeamsDelegatedTokens({
     tenantId: params.tenantId,
     clientId: params.clientId,
     clientSecret: params.clientSecret,
     grantType: "authorization_code",
-    scopes: params.scopes,
     values: {
       code: params.code,
       redirect_uri: MSTEAMS_OAUTH_REDIRECT_URI,

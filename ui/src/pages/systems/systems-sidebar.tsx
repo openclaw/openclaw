@@ -1,12 +1,13 @@
-import { For, Show, createMemo, createUniqueId } from "solid-js";
+import { Errored, For, Loading, Show, createMemo, createUniqueId, latest } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import { Menu, type MenuItem } from "../../components/solid/menu.tsx";
+import { Menu, type MenuEntry, type MenuItem } from "../../components/solid/menu.tsx";
 import { registerSystemsEnglish } from "../../i18n/locales/en-systems.ts";
 import { prettifyPlatform } from "../../lib/platform-label.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import type { SystemsInventoryRow } from "./systems-data.ts";
+import { createSystemsRead } from "./systems-read.ts";
 import type { Systems, SystemsSortMode, SystemsStatusFilter } from "./systems-state.ts";
 import "../../styles/systems.css";
 
@@ -91,6 +92,11 @@ function SystemsSidebarContent(props: SystemsSidebarProps) {
 function SystemsInventory(props: { controller: Systems }) {
   const menuId = createUniqueId();
   const controller = () => props.controller;
+  const inventoryRead = createSystemsRead(() => controller().inventoryRead);
+  const readStatus = () => {
+    latest(inventoryRead.read);
+    return null;
+  };
   const query = createMemo(() => controller().state.query.trim().toLocaleLowerCase());
   const rows = createMemo(() => {
     const sortMode = controller().state.sortMode;
@@ -145,6 +151,29 @@ function SystemsInventory(props: { controller: Systems }) {
       </span>
     ),
   });
+  const filterItems = createMemo((): readonly MenuEntry[] => [
+    {
+      kind: "content",
+      id: "sort-heading",
+      content: <div class="sidebar-session-sort-menu__title">{t("systems.sortBy")}</div>,
+    },
+    ...sortOptions.map((option) =>
+      filterItem("sort", option, controller().state.sortMode === option.value),
+    ),
+    {
+      kind: "content",
+      id: "status-heading",
+      content: (
+        <>
+          <div class="session-menu__separator" role="separator" />
+          <div class="sidebar-session-sort-menu__title">{t("systems.status")}</div>
+        </>
+      ),
+    },
+    ...statusOptions.map((option) =>
+      filterItem("status", option, controller().state.statusFilter === option.value),
+    ),
+  ]);
   const renderRow = (row: SystemsInventoryRow) => {
     const online = row.environment.status === "available";
     const platform = systemPlatform(row);
@@ -201,29 +230,7 @@ function SystemsInventory(props: { controller: Systems }) {
           ]}
           triggerAttributes={{ title: t("systems.filterSort") }}
           trigger={<Icon name="listFilter" />}
-          items={[
-            {
-              kind: "content",
-              id: "sort-heading",
-              content: <div class="sidebar-session-sort-menu__title">{t("systems.sortBy")}</div>,
-            },
-            ...sortOptions.map((option) =>
-              filterItem("sort", option, controller().state.sortMode === option.value),
-            ),
-            {
-              kind: "content",
-              id: "status-heading",
-              content: (
-                <>
-                  <div class="session-menu__separator" role="separator" />
-                  <div class="sidebar-session-sort-menu__title">{t("systems.status")}</div>
-                </>
-              ),
-            },
-            ...statusOptions.map((option) =>
-              filterItem("status", option, controller().state.statusFilter === option.value),
-            ),
-          ]}
+          items={filterItems()}
           onSelect={(item) => {
             const value = item.id;
             const sort = sortOptions.find((option) => value === `sort:${option.value}`);
@@ -240,14 +247,21 @@ function SystemsInventory(props: { controller: Systems }) {
           class="systems-filter__refresh"
           aria-label={t("systems.refresh")}
           title={t("systems.refresh")}
-          disabled={controller().loading() || !controller().connected()}
+          disabled={inventoryRead.pending() || !controller().connected()}
           onClick={() => void controller().refresh("manual")}
         >
           <Icon name="refresh" />
         </button>
       </div>
-      <div class="systems-sidebar__list" aria-busy={controller().loading() ? "true" : "false"}>
-        {controller().loading() && !controller().state.inventory ? (
+      <Show when={inventoryRead.receipt()} keyed>
+        {(receipt) => (
+          <Errored fallback={null}>
+            <Loading on={receipt}>{readStatus()}</Loading>
+          </Errored>
+        )}
+      </Show>
+      <div class="systems-sidebar__list" aria-busy={inventoryRead.pending() ? "true" : "false"}>
+        {inventoryRead.pending() && !controller().state.inventory ? (
           <p class="systems-sidebar__empty" role="status">
             {t("systems.loading")}
           </p>
@@ -269,7 +283,7 @@ function SystemsInventory(props: { controller: Systems }) {
             );
           }}
         </For>
-        {!controller().loading() && rows().length === 0 ? (
+        {!inventoryRead.pending() && rows().length === 0 ? (
           <p class="systems-sidebar__empty">
             {t(
               query() || controller().state.statusFilter !== "all"

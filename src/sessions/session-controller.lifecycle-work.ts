@@ -22,12 +22,6 @@ import { abortSessionControllerInput } from "./session-controller.mailbox-source
 import { ownerContext } from "./session-controller.owner-context.js";
 import { targetFrom, type TargetInput } from "./session-controller.target.js";
 
-function releaseEffects(effects: readonly Effect[]): Promise<void> | undefined {
-  return effects.length
-    ? Promise.all(effects.map((effect) => effect.ref.released)).then(() => undefined)
-    : undefined;
-}
-
 export type { CapturedSessionControllerEffect } from "./session-controller.contracts.js";
 
 /** Captures acquired producers without acquiring another work or cancellation owner. */
@@ -114,30 +108,31 @@ export function getCompetingSessionWorkAdmissionRelease(params: {
   beforeClaim?: SessionControllerMailboxClaim;
 }) {
   const current = ownerContext.getStore();
-  return releaseEffects(
-    [...selectedEffects([targetFrom(params)])].filter((effect) => {
-      const input = effect.sourceInput;
-      const claim = params.beforeClaim;
-      // The selector already belongs to this claim. Unclaimed live sources on
-      // that mailbox can only run afterward; their preparation is not prior work.
-      if (
-        claim &&
-        input &&
-        input.mailbox === claim.mailbox &&
-        (claim.inputs.includes(input) ||
-          (!input.claim && !input.retirementRequested && input.phase !== "consumed"))
-      ) {
-        return false;
-      }
-      return (
-        !current?.effects.has(effect) &&
-        (params.owner === undefined || effect.owner === params.owner) &&
-        (!params.excludePendingOwner ||
-          effect.owner !== params.excludePendingOwner ||
-          effect.phase === "acquired")
-      );
-    }),
-  );
+  const effects = [...selectedEffects([targetFrom(params)])].filter((effect) => {
+    const input = effect.sourceInput;
+    const claim = params.beforeClaim;
+    // The selector already belongs to this claim. Unclaimed live sources on
+    // that mailbox can only run afterward; their preparation is not prior work.
+    if (
+      claim &&
+      input &&
+      input.mailbox === claim.mailbox &&
+      (claim.inputs.includes(input) ||
+        (!input.claim && !input.retirementRequested && input.phase !== "consumed"))
+    ) {
+      return false;
+    }
+    return (
+      !current?.effects.has(effect) &&
+      (params.owner === undefined || effect.owner === params.owner) &&
+      (!params.excludePendingOwner ||
+        effect.owner !== params.excludePendingOwner ||
+        effect.phase === "acquired")
+    );
+  });
+  return effects.length
+    ? Promise.all(effects.map((effect) => effect.ref.released)).then(() => undefined)
+    : undefined;
 }
 
 export function getTerminalSessionWorkAdmissionRelease(params: {

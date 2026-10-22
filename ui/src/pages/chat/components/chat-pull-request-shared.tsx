@@ -30,6 +30,8 @@ export type ChatPullRequestsProps = {
   publication?: GitHubPublicationView;
   /** Compact row in the user-opened Details surface; actions keep their owners. */
   compact?: boolean;
+  /** Keep publication work in Environment; only completed receipts and PRs belong here. */
+  publishedOnly?: boolean;
 };
 export const STATE_LABEL_KEYS = {
   merged: "chat.pullRequests.merged",

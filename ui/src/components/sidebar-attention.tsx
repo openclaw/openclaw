@@ -13,6 +13,7 @@ import { listen } from "../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../lib/reactive/scroll-state.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import "../styles/sidebar-attention-floating.css";
+import { createApprovalDecisionPresentation } from "./approval-decision-presentation.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { sidebarInboxTabCounts, type SidebarAttentionItem } from "./sidebar-attention-entries.ts";
 import type { SidebarAttentionFocus } from "./sidebar-attention-focus.ts";
@@ -39,6 +40,7 @@ const panelDismissals = new WeakMap<HTMLElement, () => boolean>();
 
 function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLElement) {
   const context = useApplication();
+  const approvalDecision = createApprovalDecisionPresentation();
   const gateway = projectGateway(context.gateway);
   const attention = projectSidebarAttention(context.sidebarAttention);
   context.sidebarAttention.activate(SidebarAttentionStoreOwner);
@@ -74,6 +76,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   );
 
   function closePanel(restoreFocus: boolean) {
+    approvalDecision.retire();
     const generation = ++panelGeneration;
     const scope = routeScope();
     const trigger = restoreFocus && panelOpen() ? panelTrigger?.element : null;
@@ -221,7 +224,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     const row = target.closest<HTMLElement>("[data-approval-id]");
     const rowIndex = focusOrder.findIndex((element) => row?.contains(element));
     const generation = panelGeneration;
-    await context.overlays.decideApproval(decision, approvalId);
+    await approvalDecision.run(context.overlays.decideApproval(decision, approvalId));
     onSettled(() => {
       if (disposed || generation !== panelGeneration || target.isConnected) {
         return;
@@ -240,7 +243,14 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     const stopPointer = listen(document, "pointerdown", handleOutsideInteraction, true);
     const stopKeydown = listen(document, "keydown", handleOutsideInteraction, true);
     const stopBlur = listen(window, "blur", handleWindowBlur);
+    const stopApprovals = context.overlays.subscribe((snapshot) => {
+      if (!snapshot.approvalBusy) {
+        approvalDecision.retire();
+      }
+    });
     return () => {
+      approvalDecision.retire();
+      stopApprovals();
       stopPointer();
       stopKeydown();
       stopBlur();
@@ -287,6 +297,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
         <Loading>
           <Panel
             entries={attention.read()}
+            approvalPending={approvalDecision.deciding()}
             onApprovalDecision={(event, id, decision) => void decideApproval(event, id, decision)}
             onClose={() => closePanel(true)}
             onDismiss={(dismissal) => context.sidebarAttention.dismiss(dismissal)}
@@ -327,6 +338,11 @@ export const SidebarAttention = defineSolidBridge<SidebarAttentionProps, Sidebar
       watchUpdateProgress: { default: undefined, attribute: false },
     },
     methods: { dismissPanel: (host) => panelDismissals.get(host)?.() ?? false },
+    propertyChanged: (host, key) => {
+      if (key === "activeRouteId") {
+        panelDismissals.get(host)?.();
+      }
+    },
     disconnected: (host) => {
       queueMicrotask(() => {
         // A same-turn sidebar move retains intent; a detached Inbox retires it.

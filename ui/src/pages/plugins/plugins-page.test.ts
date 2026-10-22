@@ -224,6 +224,35 @@ it("waits for uninstall confirmation and sends nothing when cancelled", async ()
   expect(calls).toContainEqual(["plugins.list", {}]);
 });
 
+it.each([false, true])(
+  "presents the requested enabled state and restores it after rejection (enabled=%s)",
+  async (enabled) => {
+    const pending = deferred<PluginMutationResult>();
+    const plugin = createPlugin({ enabled, state: enabled ? "enabled" : "disabled" });
+    const { client, request } = scriptedClient({
+      "plugins.setEnabled": () => pending.promise,
+      "plugins.list": () => createResult(plugin),
+    });
+    const { page } = await mountInventory(client, createResult(plugin));
+    const label = `${enabled ? "Disable" : "Enable"} Workboard`;
+    await clickPluginAction(page, label);
+    const action = () => page.querySelector<HTMLButtonElement>(`[aria-label="${label}"]`)!;
+    await waitForSolid(() => {
+      expect(action().disabled).toBe(true);
+      expect(action().getAttribute("aria-busy")).toBe("true");
+      expect(action().classList.contains("primary")).toBe(enabled);
+    });
+    action().click();
+    expect(methodCalls(request, "plugins.setEnabled")).toHaveLength(1);
+    pending.reject(new GatewayRequestError({ code: "UNAVAILABLE", message: "Change refused." }));
+    await waitForSolid(() => {
+      expect(page.textContent).toContain("Change refused.");
+      expect(action().disabled).toBe(false);
+      expect(action().classList.contains("primary")).toBe(!enabled);
+    });
+  },
+);
+
 it("keeps newer notices when an older uninstall completes", async () => {
   const uninstallResult = deferred<unknown>();
   const enabledPlugin = createPlugin({ enabled: true, state: "enabled" });
@@ -613,6 +642,10 @@ it("retains a failed uninstall, resumes inspection, and allows retry", async () 
   await clickPluginAction(page, "Uninstall Calendar");
   await waitForSolid(() =>
     expect(request).toHaveBeenCalledWith("plugins.uninstall", { pluginId: plugin.id }),
+  );
+  expect(page.textContent).toContain("Existing plugin");
+  expect(page.querySelector<HTMLButtonElement>('[aria-label="Uninstall Calendar"]')?.disabled).toBe(
+    true,
   );
   expect(inspectionReads).toBe(1);
   removing.reject(

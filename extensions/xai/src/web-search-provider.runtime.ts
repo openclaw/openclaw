@@ -1,4 +1,3 @@
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { buildTimeoutAbortSignal } from "openclaw/plugin-sdk/extension-shared";
 import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import {
@@ -10,15 +9,13 @@ import {
   resolveApiKeyForProvider,
 } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
-  DEFAULT_CACHE_TTL_MINUTES,
   formatCliCommand,
   getScopedCredentialValue,
   mergeScopedSearchConfig,
   normalizeCacheKey,
   readCache,
-  readPositiveIntegerParam,
-  readStringParam,
-  resolveCacheTtlMs,
+  readWebSearchQueryAndCount,
+  resolveSearchCacheTtlMs,
   resolveProviderWebSearchPluginConfig,
   resolveTimeoutSeconds,
   resolveWebSearchProviderCredential,
@@ -195,10 +192,9 @@ async function resolveXaiProviderAuthCredential(params: {
 }): Promise<XaiResolvedWebSearchAuth | undefined> {
   params.signal?.throwIfAborted();
   try {
-    const config = params.config as OpenClawConfig | undefined;
     const resolved = await resolveApiKeyForProvider({
       provider: XAI_PROVIDER_ID,
-      cfg: config,
+      cfg: params.config,
       agentDir: params.agentDir,
       signal: params.signal,
       ...(params.profileId
@@ -235,10 +231,9 @@ async function resolveXaiProviderApiKeyProfileFallback(params: {
   signal?: AbortSignal;
 }): Promise<XaiResolvedWebSearchAuth | undefined> {
   params.signal?.throwIfAborted();
-  const config = params.config as OpenClawConfig | undefined;
   const usableProfiles = await listUsableProviderAuthProfileIdsAsync({
     agentDir: params.agentDir,
-    cfg: config,
+    cfg: params.config,
     provider: XAI_PROVIDER_ID,
     profileTypes: ["api_key", "token"],
   });
@@ -371,11 +366,7 @@ export async function executeXaiWebSearchProviderTool(
       };
     }
 
-    const query = readStringParam(args, "query", { required: true });
-    void readPositiveIntegerParam(args, "count", {
-      max: 10,
-      message: "count must be an integer from 1 to 10.",
-    });
+    const { query } = readWebSearchQueryAndCount(args);
 
     const grok = asNonArrayRecord(searchConfig?.grok);
     const request = {
@@ -384,7 +375,7 @@ export async function executeXaiWebSearchProviderTool(
       endpoint: resolveXaiResponsesEndpoint(grok.baseUrl),
       timeoutSeconds,
       inlineCitations: grok.inlineCitations === true,
-      cacheTtlMs: resolveCacheTtlMs(searchConfig?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+      cacheTtlMs: resolveSearchCacheTtlMs(searchConfig),
       signal,
     };
     try {

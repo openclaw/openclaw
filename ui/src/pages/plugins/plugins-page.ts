@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, onSettled } from "solid-js";
+import { createEffect, createSignal, onSettled } from "solid-js";
 import type { PluginsUninstallResult } from "../../../../packages/gateway-protocol/src/schema/plugins.js";
 import {
   pathForRoute,
@@ -30,7 +30,7 @@ import { createPluginPageTargets } from "./plugin-removal-focus.ts";
 import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.tsx";
 import { pluginMutationWarnings, createPluginsConsent } from "./plugins-consent.ts";
 import { createPluginDetailReads } from "./plugins-detail-reads.ts";
-import type { PluginsHubTab } from "./plugins-hub.ts";
+import { createPluginsMutationPresentation } from "./plugins-mutation-presentation.ts";
 import { createPluginsPageIcons } from "./plugins-page-icons.ts";
 import {
   createPluginsPageState,
@@ -196,6 +196,15 @@ export function createPluginsPage(options: {
 
   const canMutate = () => state.result?.mutationAllowed === true && accessBlockedReason() === null;
 
+  const mutationPresentation = createPluginsMutationPresentation({
+    gateway,
+    read,
+    isActive: () => active,
+    lifetime: () => credentialPresentation.lifetime,
+    catalog,
+    setMessage,
+  });
+
   const consent = createPluginsConsent({
     gateway,
     getContext: () => context,
@@ -209,6 +218,7 @@ export function createPluginsPage(options: {
     closeDetails: skillPreview.close,
     applyMutationResult,
     refreshCatalogAfterMutation: refreshCatalog,
+    presentMutation: mutationPresentation.present,
     onChange: publish,
   });
   const catalogTask = createPageRequest(publish, {
@@ -222,12 +232,6 @@ export function createPluginsPage(options: {
     },
     onError: (error) => setState({ error: formatUiError(error) }),
   });
-  onCleanup(() => {
-    catalogTask.cancel();
-    details.inspection.release();
-    details.catalog.release();
-  });
-
   onSettled(() => {
     let configAutoSaveStatus = runtime.state.configAutoSaveStatus;
     // Preserve saving-to-saved receipts so plugin edits refresh the catalog even within one render turn.
@@ -252,6 +256,7 @@ export function createPluginsPage(options: {
       surface = nextSurface;
       gateway.refresh();
       if (previous !== routeData) {
+        credentialPresentation.retire();
         skillPreview.close();
         if (previous?.location.pathname !== routeData?.location.pathname) {
           installRequestGeneration += 1;
@@ -282,6 +287,9 @@ export function createPluginsPage(options: {
     return () => {
       stopKeydown();
       active = false;
+      catalogTask.cancel();
+      details.inspection.release();
+      details.catalog.release();
       icons.reset();
       gateway.dispose();
     };
@@ -554,12 +562,6 @@ export function createPluginsPage(options: {
     return catalogId ? showCatalogDetail(catalogId) : discovery.refresh();
   }
 
-  function selectHubTab(tab: PluginsHubTab) {
-    if (tab !== "plugins" || surface !== "discovery") {
-      context.navigate(tab);
-    }
-  }
-
   function accessBlockedReason(
     mutationAllowed?: boolean,
     connected = gateway.connected,
@@ -703,6 +705,8 @@ export function createPluginsPage(options: {
   }
   return {
     read,
+    presentedEnabled: mutationPresentation.enabled,
+    mutationSaving: mutationPresentation.saving,
     get state() {
       return read();
     },
@@ -736,7 +740,6 @@ export function createPluginsPage(options: {
     detailRead: details.catalog,
     setState,
     refreshCatalog,
-    selectHubTab,
     accessBlockedReason,
     canMutate,
     canEditConfig,
