@@ -221,10 +221,7 @@ it("projects three descendant receipts without mixing the parent's current branc
     throw new Error("offline");
   });
   await fixture.subscriptions.pollNow();
-  expect(latest()).toMatchObject({
-    status: "unavailable",
-    taskPullRequestCount: 3,
-  });
+  expect(latest()).toMatchObject({ status: "unavailable", taskPullRequestCount: 3 });
   expect(latest()?.taskPullRequests?.every((pr) => pr.pullRequest?.state === "closed")).toBe(true);
 });
 
@@ -240,10 +237,7 @@ it("counts branch PRs against the complete receipt set, not only the bounded pre
   expect(latest()?.taskPullRequests).toHaveLength(20);
   receipt(sessionKey, 40, "older-branch-receipt", { updated_at_ms: 1 });
   await vi.waitFor(() =>
-    expect(latest()).toMatchObject({
-      taskPullRequestCount: 26,
-      pullRequestCount: 26,
-    }),
+    expect(latest()).toMatchObject({ taskPullRequestCount: 26, pullRequestCount: 26 }),
   );
   expect(taskNumbers()?.includes(40)).toBe(false);
 });
