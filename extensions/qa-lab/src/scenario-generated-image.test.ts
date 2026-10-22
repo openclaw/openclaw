@@ -108,7 +108,15 @@ async function runImageScenario(
                     toolCallId: `image-${index}`,
                     toolName: "image_generate",
                     isError: false,
-                    details: action === "generate" ? { async: true, taskId } : undefined,
+                    content:
+                      action === "generate"
+                        ? [
+                            {
+                              type: "text",
+                              text: `Background task started for image generation (${taskId}). Do not call image_generate again for this request.`,
+                            },
+                          ]
+                        : [],
                   },
                 ];
               }),
@@ -201,7 +209,7 @@ async function runImageScenario(
 }
 
 describe("native image scenario delivery evidence", () => {
-  it("accepts one exact image after progress and completion", async () => {
+  it("correlates the public task receipt without private details after image completion", async () => {
     vi.useFakeTimers();
     const waiting = createDeferred<"waiting">();
     let active = true;

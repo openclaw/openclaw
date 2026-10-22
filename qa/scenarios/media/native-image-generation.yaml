@@ -191,7 +191,9 @@ flow:
             expr: "(await qaImport('openclaw/plugin-sdk/channel-outbound')).createOutboundPayloadPlan(persistedDeliveryPayloads ?? [])[0]?.parts.text"
         - set: generationTaskId
           value:
-            expr: "completedGenerations[0]?.result.details?.taskId ?? completedGenerations[0]?.result.details?.task?.taskId"
+            expr: >-
+              (await qaImport('./gateway-log-sentinel.js')).extractGatewayMessageText(completedGenerations[0]?.result ?? {})
+                .match(/^Background task started for image generation \(([^)\r\n]+)\)\./)?.[1]
         - set: completionTranscript
           value:
             expr: >-
