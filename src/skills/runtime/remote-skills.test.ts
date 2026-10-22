@@ -1,12 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createSyntheticSourceInfo } from "../../agents/sessions/source-info.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { buildWorkspaceSkillCommandSpecs } from "../discovery/command-specs.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
-import type { SkillEntry } from "../types.js";
+import { createFixtureSkillEntry as localEntry } from "../test-support/test-helpers.js";
 import { getSkillsSnapshotVersion } from "./refresh-state.js";
 import {
   mergeRemoteNodeSkillEntries,
@@ -33,22 +32,6 @@ function nodeSkill(name: string, description: string, body?: string) {
   return { name, description, content: content(name, description, body) };
 }
 const remoteEntries = () => mergeRemoteNodeSkillEntries([], { canExec: true });
-
-function localEntry(name: string): SkillEntry {
-  const filePath = `/local/${name}/SKILL.md`;
-  return {
-    skill: {
-      name,
-      description: `Local ${name}`,
-      filePath,
-      baseDir: `/local/${name}`,
-      source: "test",
-      sourceInfo: createSyntheticSourceInfo(filePath, { source: "test" }),
-      disableModelInvocation: false,
-    },
-    frontmatter: { name, description: `Local ${name}` },
-  };
-}
 
 beforeEach(resetRemoteNodeSkillsForTests);
 

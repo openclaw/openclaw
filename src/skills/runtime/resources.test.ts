@@ -108,12 +108,9 @@ it("reserves delivery slots for prompted and explicit skills before additional d
   });
   const delivery = await prepare(snapshot, [selected("zz-explicit", hidden)]);
   expect(delivery?.skills).toHaveLength(256);
-  expect(delivery?.skills.find((skill) => skill.name === "guide-000")).toMatchObject({
-    modelVisible: true,
-  });
-  expect(delivery?.skills.find((skill) => skill.name === "zz-explicit")).toMatchObject({
-    modelVisible: true,
-  });
+  expect(
+    delivery?.skills.filter((skill) => skill.modelVisible === true).map((skill) => skill.name),
+  ).toEqual(["guide-000", "zz-explicit"]);
   expect(delivery?.skills.some((skill) => skill.name === "guide-256")).toBe(false);
 });
 
@@ -346,9 +343,7 @@ it("materializes directory-name skills and contained aliases with exact bytes an
     instructionFiles.push("CLAUDE.md");
     scriptFiles.push("check.sh");
   }
-  const snapshot = await loadSnapshot();
-  const delivery = await prepare(snapshot);
-  const materialized = await materialize(delivery!);
+  const materialized = await materialize((await prepare(await loadSnapshot()))!);
   const skill = materialized.snapshot.resolvedSkills![0]!;
   expect(skill).toMatchObject({ name: "directory-name", description: "Workspace procedure" });
   expect(await read(skill.filePath)).toBe(markdown);
