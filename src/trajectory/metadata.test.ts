@@ -16,6 +16,7 @@ vi.mock("../infra/git-commit.js", async (importOriginal) => ({
   resolveCommitHash: () => "abcdef0",
 }));
 
+// mock-isolation: Export metadata uses a fixed plugin snapshot, independent of installed plugins.
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot,
 }));

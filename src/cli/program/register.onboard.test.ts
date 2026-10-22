@@ -45,10 +45,13 @@ vi.mock("../../plugins/provider-auth-choices.js", () => ({
 
 // mock-isolation: Setup routes use synthetic config and never run setup or read shared state.
 vi.mock("../../commands/setup.js", () => ({ setupCommand: setup }));
+// mock-isolation: Route parsing reads a synthetic config without opening shared state.
 vi.mock("../../config/config.js", () => ({ readConfigFileSnapshot: config }));
+// mock-isolation: Onboarding status comes from the route fixture, not the local database.
 vi.mock("../../state/local-onboarding-state.js", () => ({
   readLocalOnboardingStateForConfigAsync: onboardingState,
 }));
+// mock-isolation: Capture wizard dispatch without executing onboarding side effects.
 vi.mock("../../commands/onboard.js", () => ({ setupWizardCommand: wizard }));
 
 // mock-isolation: Capture dispatch without onboarding, inference, or recommendation state.
