@@ -15,7 +15,7 @@ import {
   ExecApprovalCard,
   resolveApprovalDecisions,
 } from "./exec-approval-card-solid.tsx";
-import "./modal-dialog.ts";
+import "./modal-dialog.tsx";
 
 export type ExecApprovalProps = {
   queue: readonly ExecApprovalRequest[];

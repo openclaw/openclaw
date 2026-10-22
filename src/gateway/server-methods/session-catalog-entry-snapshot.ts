@@ -142,7 +142,7 @@ export function createSessionCatalogRequestEntrySnapshot(params: {
             ? new Set([...(selectedKeysByAgentId.get(agentId) ?? [])].filter(Boolean))
             : undefined,
         },
-      ).entries();
+      ).entries("all");
       entriesByAgentId.set(
         agentId,
         Object.freeze(entries.map(([sessionKey, entry]) => Object.freeze({ sessionKey, entry }))),

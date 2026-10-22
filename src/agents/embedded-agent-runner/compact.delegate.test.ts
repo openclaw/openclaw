@@ -202,6 +202,24 @@ async function createFixture(operation: "summary" | "endpoint", globalAlias = fa
   const recordCompaction = vi.fn();
   accounting.attachCompactionAccountingRecorder(runtimeContext, { recordUsage, recordCompaction });
   return {
+    queuedParams: {
+      ...target,
+      sessionTarget: target,
+      sessionFile: target.sessionKey,
+      workspaceDir,
+      config: runtimeContext.config,
+      provider: model.provider,
+      model: model.id,
+      agentHarnessId: "openclaw",
+      trigger: "manual",
+      enqueue: async (task) => await task(),
+    } satisfies Parameters<typeof compactQueued>[0],
+    delegateParams: {
+      sessionId: target.sessionId,
+      sessionKey: target.sessionKey,
+      sessionTarget: target,
+      runtimeContext,
+    },
     target,
     decoy,
     originalEntries,
@@ -271,10 +289,7 @@ describe("direct compactor through the context-engine delegate", () => {
         compact: backend,
       });
       const result = await compactQueued({
-        ...fixture.target,
-        sessionTarget: fixture.target,
-        sessionFile: fixture.target.sessionKey,
-        workspaceDir,
+        ...fixture.queuedParams,
         config:
           limit === "no-config"
             ? undefined
@@ -285,12 +300,8 @@ describe("direct compactor through the context-engine delegate", () => {
                   defaults: { compaction: { enabled, maxActiveTranscriptBytes } },
                 },
               },
-        provider: model.provider,
-        model: model.id,
-        agentHarnessId: "openclaw",
         trigger,
         preflightCompactionTrigger: explicit,
-        enqueue: async (task) => await task(),
       });
       expect(result).toMatchObject({ ok: true, compacted: false });
       expect(backend).toHaveBeenCalledOnce();
@@ -345,18 +356,7 @@ describe("direct compactor through the context-engine delegate", () => {
       const effects = vi.spyOn(compactionHooks, "runPostCompactionSideEffects");
       try {
         const result = await compactQueued(
-          {
-            ...fixture.target,
-            sessionTarget: fixture.target,
-            sessionFile: fixture.target.sessionKey,
-            workspaceDir,
-            config: fixture.runtimeContext.config,
-            provider: model.provider,
-            model: model.id,
-            agentHarnessId: "openclaw",
-            trigger: "manual",
-            enqueue: async (task) => await task(),
-          },
+          fixture.queuedParams,
           preparation?.runtimeEntry
             ? {
                 preparedSession: { ...preparation, entry: preparation.runtimeEntry },
@@ -464,12 +464,7 @@ describe("direct compactor through the context-engine delegate", () => {
         }),
       );
 
-      const result = await delegate({
-        sessionId: fixture.target.sessionId,
-        sessionKey: fixture.target.sessionKey,
-        sessionTarget: fixture.target,
-        runtimeContext: fixture.runtimeContext,
-      });
+      const result = await delegate(fixture.delegateParams);
       expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
       expect(result.result?.details).toMatchObject({ compactionKind: "server-endpoint" });
       await databases.closeOpenClawAgentDatabasesAsync();
@@ -526,10 +521,8 @@ describe("direct compactor through the context-engine delegate", () => {
         return undefined;
       });
       const result = await delegate({
-        sessionId: target.sessionId,
-        sessionKey: target.sessionKey,
+        ...fixture.delegateParams,
         sessionTarget,
-        runtimeContext: fixture.runtimeContext,
       }).finally(sql.restore);
       expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
       expect(
@@ -646,10 +639,8 @@ describe("direct compactor through the context-engine delegate", () => {
         });
       }
       const pending = delegate({
-        sessionId: fixture.target.sessionId,
-        sessionKey: fixture.target.sessionKey,
+        ...fixture.delegateParams,
         sessionTarget: { ...fixture.target, threadId: 0 },
-        runtimeContext: fixture.runtimeContext,
         abortSignal: controller.signal,
       });
       await started.promise;
@@ -707,10 +698,7 @@ describe("direct compactor through the context-engine delegate", () => {
         },
         () =>
           delegate({
-            sessionId: fixture.target.sessionId,
-            sessionKey: fixture.target.sessionKey,
-            sessionTarget: fixture.target,
-            runtimeContext: fixture.runtimeContext,
+            ...fixture.delegateParams,
             abortSignal: controller.signal,
           }),
       );
@@ -817,17 +805,8 @@ describe("direct compactor through the context-engine delegate", () => {
       const work = new AsyncWorkScope();
       const pending = work.run(() =>
         compactQueued({
-          ...fixture.target,
-          sessionTarget: fixture.target,
-          sessionFile: fixture.target.sessionKey,
-          workspaceDir,
-          config: fixture.runtimeContext.config,
-          provider: model.provider,
-          model: model.id,
-          agentHarnessId: "openclaw",
-          trigger: "manual",
+          ...fixture.queuedParams,
           abortSignal: controller.signal,
-          enqueue: async (task) => await task(),
         }),
       );
       try {

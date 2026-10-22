@@ -288,7 +288,7 @@ export function buildNodeServiceEnvironment(
     // launchd manager variables outlive the installer. Worker snapshots scope
     // this host fence by the canonical managed-node service identity.
     NODE_DISABLE_COMPILE_CACHE: platform === "darwin" ? "1" : undefined,
-    ...resolveNodeServiceIdentityEnvironment(),
+    ...resolveNodeServiceIdentityEnvironment(env),
   };
 }
 

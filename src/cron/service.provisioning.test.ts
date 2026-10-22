@@ -37,7 +37,6 @@ async function createFixture(runSchedulerOwned?: CronServiceDeps["runSchedulerOw
     cronEnabled: true,
     log: logger,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(),
     runCommandJob,
     runSchedulerOwned,

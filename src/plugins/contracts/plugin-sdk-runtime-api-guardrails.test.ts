@@ -189,7 +189,7 @@ const RUNTIME_API_EXPORT_GUARDS: Record<string, readonly string[]> = {
     'export { handleWhatsAppAction, whatsAppActionRuntime } from "./src/action-runtime.js";',
     'export { createWhatsAppLoginTool } from "./src/agent-tools-login.js";',
     'export { formatWhatsAppWebAuthStatusState, getWebAuthAgeMs, hasWebCredsSync, logWebSelfId, logoutWeb, pickWebChannel, readCredsJsonRaw, readWebAuthExistsBestEffort, readWebAuthExistsForDecision, readWebAuthSnapshot, readWebAuthSnapshotBestEffort, readWebAuthState, readWebSelfId, readWebSelfIdentity, readWebSelfIdentityForDecision, resolveDefaultWebAuthDir, resolveWebCredsBackupPath, resolveWebCredsPath, restoreCredsFromBackupIfNeeded, webAuthExists, WA_WEB_AUTH_DIR, WHATSAPP_AUTH_UNSTABLE_CODE, WhatsAppAuthUnstableError, type WhatsAppWebAuthState } from "./src/auth-store.js";',
-    'export { DEFAULT_WEB_MEDIA_BYTES, HEARTBEAT_PROMPT, HEARTBEAT_TOKEN, monitorWebChannel, SILENT_REPLY_TOKEN, stripHeartbeatToken, type WebChannelStatus, type WebMonitorTuning } from "./src/auto-reply.js";',
+    'export { DEFAULT_WEB_MEDIA_BYTES, monitorWebChannel, SILENT_REPLY_TOKEN, type WebChannelStatus, type WebMonitorTuning } from "./src/auto-reply.js";',
     'export { extractContactContext, extractLocationData, extractText, monitorWebInbox, resetWebInboundDedupe, type WebInboundCallbackMessage, type WebInboundMessage, type WebListenerCloseReason, type WhatsAppInboundAdmission } from "./src/inbound.js";',
     'export { loginWeb } from "./src/login.js";',
     'export { getDefaultLocalRoots, loadWebMedia, loadWebMediaRaw, LocalMediaAccessError, optimizeImageToJpeg, optimizeImageToPng, type LocalMediaAccessErrorCode, type WebMediaResult } from "./src/media.js";',

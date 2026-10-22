@@ -46,12 +46,6 @@ export type AgentsState = ToolsEffectiveState &
 
 type AgentToolsState = Omit<AgentsState, "agentsLoading" | "agentsError">;
 
-type AgentsConfigCapability = {
-  readonly state: { configFormDirty: boolean };
-  save: (options?: { canDispatch?: () => boolean }) => Promise<boolean>;
-  stageDefaultAgent: (agentId: string) => boolean;
-};
-
 type AgentGateway = {
   readonly snapshot: GatewayConnectionSnapshot &
     Partial<Pick<ApplicationGatewaySnapshot, "hello" | "selfUser">>;
@@ -59,10 +53,20 @@ type AgentGateway = {
   subscribe: (listener: (snapshot: AgentGateway["snapshot"]) => void) => () => void;
 };
 
+export type AgentReadOutcome<T> =
+  | { result: T | null; error?: never }
+  | { error: string; result?: never };
+
+type AgentRead<T> = ReturnType<typeof Promise.withResolvers<AgentReadOutcome<T> | null>>;
+
 type AgentFilesStatus = {
   list: AgentsFilesListResult | null;
-  loading: boolean;
-  error: string | null;
+  readonly loading: boolean;
+  read: Promise<AgentReadOutcome<AgentsFilesListResult> | null> | null;
+};
+
+type AgentFilesRequestStatus = AgentFilesStatus & {
+  request: AgentRead<AgentsFilesListResult> | null;
 };
 
 type AgentCapabilityState = {
@@ -140,68 +144,46 @@ export async function loadToolsEffective(
   });
 }
 
-export async function setDefaultAgent(
-  config: AgentsConfigCapability,
-  agentId: string,
-  refreshAgents: () => Promise<unknown>,
-  canDispatch: () => boolean = () => true,
-): Promise<void> {
-  if (!canDispatch()) {
-    return;
-  }
-  const hadPendingConfigDraft = config.state.configFormDirty;
-  if (config.stageDefaultAgent(agentId) && !hadPendingConfigDraft && config.state.configFormDirty) {
-    const saved = await config.save({ canDispatch });
-    if (saved && canDispatch()) {
-      await refreshAgents();
-    }
-  }
-}
-
-type AgentIdentityUpdate = {
-  agentId: string;
-  name?: string;
-  emoji?: string;
-  avatar?: string;
-};
-
-/** Persist identity fields through the gateway; the handler also rewrites the
-    agent's workspace IDENTITY.md so agent and UI share one identity source. */
-export async function updateAgentIdentity(
-  client: GatewayBrowserClient,
-  update: AgentIdentityUpdate,
-): Promise<void> {
-  await client.request("agents.update", {
-    agentId: update.agentId,
-    ...(update.name ? { name: update.name } : {}),
-    ...(update.emoji ? { emoji: update.emoji } : {}),
-    ...(update.avatar ? { avatar: update.avatar } : {}),
-  });
-}
-
-function emptyAgentFilesStatus(): AgentFilesStatus {
-  return { list: null, loading: false, error: null };
+function emptyAgentFilesStatus(): AgentFilesRequestStatus {
+  return {
+    list: null,
+    get loading() {
+      return this.request !== null;
+    },
+    read: null,
+    request: null,
+  };
 }
 
 export function createAgentCapability(gateway: AgentGateway) {
   let presentationKey = gatewayPresentationScope(gateway).key;
+  let agentsRequest: AgentRead<AgentsListResult> | null = null;
+  let listRead: Promise<AgentReadOutcome<AgentsListResult> | null> | null = null;
   const state: AgentCapabilityState = {
     client: gateway.snapshot.client,
     connected: gateway.snapshot.phase === "connected",
-    agentsLoading: false,
+    get agentsLoading() {
+      return agentsRequest !== null;
+    },
     agentsError: null,
     agentsList: null,
   };
-  const files = new Map<string, AgentFilesStatus>();
-  const fileRequests = new Map<string, Promise<AgentsFilesListResult | null>>();
+  const files = new Map<string, AgentFilesRequestStatus>();
   const listeners = new Set<(state: AgentCapabilityState) => void>();
   let disposed = false;
-  let agentsRequest: Promise<AgentsListResult | null> | null = null;
   const creations = createAgentCreationRecovery();
 
   const retireAgentsRequest = () => {
+    // A closed connection can leave its transport pending; release native readers immediately.
+    agentsRequest?.resolve(null);
     agentsRequest = null;
-    state.agentsLoading = false;
+  };
+  const retireFileRequests = () => {
+    for (const status of files.values()) {
+      status.request?.resolve(null);
+      status.request = null;
+      status.read = null;
+    }
   };
 
   const publish = () => {
@@ -212,7 +194,7 @@ export function createAgentCapability(gateway: AgentGateway) {
       listener(state);
     }
   };
-  const fileStatus = (agentId: string): AgentFilesStatus => {
+  const fileStatus = (agentId: string): AgentFilesRequestStatus => {
     const existing = files.get(agentId);
     if (existing) {
       return existing;
@@ -228,58 +210,56 @@ export function createAgentCapability(gateway: AgentGateway) {
       return state.agentsList;
     }
     if (agentsRequest && !force) {
-      return agentsRequest;
+      return (await agentsRequest.promise)?.result ?? null;
     }
     if (state.agentsList && !state.agentsError && !force) {
       return state.agentsList;
     }
     const createdWhenRequested = state.recentlyCreatedAgentId;
-    state.agentsLoading = true;
+    retireAgentsRequest();
+    const request = Promise.withResolvers<AgentReadOutcome<AgentsListResult> | null>();
+    agentsRequest = request;
+    listRead = request.promise;
     state.agentsError = null;
+    const complete = (outcome: AgentReadOutcome<AgentsListResult>) => {
+      agentsRequest = null;
+      request.resolve(outcome);
+      publish();
+    };
     publish();
-    const request: Promise<AgentsListResult | null> = client
+    void client
       // New Session reads the placement policy from this roster instead of a second request.
       .request<AgentsListResult>("agents.list", { includeSessionPlacement: true })
-      .then((result) => {
-        const current = state.client === client && agentsRequest === request;
-        if (
-          current &&
-          state.recentlyCreatedAgentId &&
-          state.recentlyCreatedAgentId !== createdWhenRequested &&
-          !result.agents.some((agent) => agent.id === state.recentlyCreatedAgentId)
-        ) {
-          // This read predates a confirmed creation. Its original caller still
-          // needs the current roster to reconcile identity and workspace caches.
-          return loadList(true);
-        }
-        if (current) {
-          state.agentsList = result;
-          state.agentsError = null;
-        }
-        return current ? result : null;
-      })
-      .catch((err: unknown) => {
-        if (state.client === client && agentsRequest === request) {
-          if (isMissingOperatorReadScopeError(err)) {
-            state.agentsList = null;
-            files.clear();
+      .then(
+        (result) => {
+          if (agentsRequest === request) {
+            if (
+              state.recentlyCreatedAgentId &&
+              state.recentlyCreatedAgentId !== createdWhenRequested &&
+              !result.agents.some((agent) => agent.id === state.recentlyCreatedAgentId)
+            ) {
+              // Keep the original caller awaiting the roster that includes the confirmed creation.
+              agentsRequest = null;
+              void loadList(true).then((refreshed) => request.resolve({ result: refreshed }));
+              return;
+            }
+            state.agentsList = result;
+            complete({ result });
           }
-          state.agentsError = resolveAgentReadErrorMessage(err, "agent list");
-        }
-        return null;
-      })
-      .finally(() => {
-        const currentRequest = agentsRequest === request;
-        if (currentRequest) {
-          agentsRequest = null;
-        }
-        if (currentRequest && state.client === client) {
-          state.agentsLoading = false;
-          publish();
-        }
-      });
-    agentsRequest = request;
-    return request;
+        },
+        (err: unknown) => {
+          if (agentsRequest === request) {
+            if (isMissingOperatorReadScopeError(err)) {
+              state.agentsList = null;
+              retireFileRequests();
+              files.clear();
+            }
+            state.agentsError = resolveAgentReadErrorMessage(err, "agent list");
+            complete({ error: state.agentsError });
+          }
+        },
+      );
+    return (await request.promise)?.result ?? null;
   };
 
   const loadFiles = async (
@@ -295,41 +275,35 @@ export function createAgentCapability(gateway: AgentGateway) {
     if (status.list && !force) {
       return status.list;
     }
-    const activeRequest = fileRequests.get(agentId);
-    if (activeRequest && !force) {
-      return activeRequest;
+    if (status.request && !force) {
+      return (await status.request.promise)?.result ?? null;
     }
-    status.loading = true;
-    status.error = null;
+    status.request?.resolve(null);
+    const request = Promise.withResolvers<AgentReadOutcome<AgentsFilesListResult> | null>();
+    status.request = request;
+    status.read = request.promise;
+    const complete = (outcome: AgentReadOutcome<AgentsFilesListResult>) => {
+      status.request = null;
+      request.resolve(outcome);
+      publish();
+    };
     publish();
-    const request: Promise<AgentsFilesListResult | null> = client
-      .request<AgentsFilesListResult | null>("agents.files.list", { agentId })
-      .then((result) => {
-        const current = state.client === client && fileRequests.get(agentId) === request;
-        if (current && result) {
-          status.list = result;
-          status.error = null;
+    void client.request<AgentsFilesListResult | null>("agents.files.list", { agentId }).then(
+      (result) => {
+        if (status.request === request) {
+          if (result) {
+            status.list = result;
+          }
+          complete({ result: status.list });
         }
-        return current ? status.list : null;
-      })
-      .catch((err: unknown) => {
-        if (state.client === client && fileRequests.get(agentId) === request) {
-          status.error = formatUiError(err);
+      },
+      (err: unknown) => {
+        if (status.request === request) {
+          complete({ error: formatUiError(err) });
         }
-        return null;
-      })
-      .finally(() => {
-        const currentRequest = fileRequests.get(agentId) === request;
-        if (currentRequest) {
-          fileRequests.delete(agentId);
-        }
-        if (currentRequest && state.client === client) {
-          status.loading = false;
-          publish();
-        }
-      });
-    fileRequests.set(agentId, request);
-    return request;
+      },
+    );
+    return (await request.promise)?.result ?? null;
   };
 
   // Retire cached agent and file reads when connection or access authority changes.
@@ -350,18 +324,16 @@ export function createAgentCapability(gateway: AgentGateway) {
       state.pendingAgent = undefined;
       state.recentlyCreatedAgentId = undefined;
       retireAgentsRequest();
-      fileRequests.clear();
-      for (const status of files.values()) {
-        status.loading = false;
-      }
+      retireFileRequests();
       if (identityChanged || accessLost) {
         files.clear();
         state.agentsList = null;
         state.agentsError = null;
+        listRead = null;
       }
     }
     if (filesAccessLost) {
-      fileRequests.clear();
+      retireFileRequests();
       files.clear();
     }
     if (connectionChanged || accessLost || filesAccessLost) {
@@ -372,7 +344,7 @@ export function createAgentCapability(gateway: AgentGateway) {
         }
         if (!identityChanged) {
           for (const [agentId, status] of files) {
-            if (status.list && !fileRequests.has(agentId)) {
+            if (status.list && !status.request) {
               void loadFiles(agentId, true);
             }
           }
@@ -384,6 +356,9 @@ export function createAgentCapability(gateway: AgentGateway) {
   return {
     get state() {
       return state;
+    },
+    get listRead() {
+      return listRead;
     },
     ensureList: () => loadList(false),
     refreshList: () => loadList(true),
@@ -419,7 +394,7 @@ export function createAgentCapability(gateway: AgentGateway) {
         }
       }
     },
-    files(agentId: string | null | undefined) {
+    files(agentId: string | null | undefined): AgentFilesStatus {
       const normalized = normalizeOptionalString(agentId);
       return normalized
         ? (files.get(normalized) ?? emptyAgentFilesStatus())
@@ -428,8 +403,13 @@ export function createAgentCapability(gateway: AgentGateway) {
     invalidateFiles(agentIds: readonly (string | null | undefined)[]) {
       let changed = false;
       for (const agentId of normalizeUniqueTrimmedStringList(agentIds)) {
-        changed = files.delete(agentId) || changed;
-        changed = fileRequests.delete(agentId) || changed;
+        const status = files.get(agentId);
+        if (status) {
+          status.request?.resolve(null);
+          status.request = null;
+          files.delete(agentId);
+          changed = true;
+        }
       }
       if (changed) {
         publish();
@@ -447,7 +427,6 @@ export function createAgentCapability(gateway: AgentGateway) {
       }
       // A confirmed file result supersedes lists already in flight. Retain the
       // full canonical list so their awaiting callers can still read it.
-      fileRequests.delete(agentId);
       const entry = { ...file };
       delete entry.content;
       const entries = status.list.files;
@@ -457,8 +436,9 @@ export function createAgentCapability(gateway: AgentGateway) {
           ? entries.map((existing) => (existing.name === entry.name ? entry : existing))
           : [...entries, entry],
       };
-      status.loading = false;
-      status.error = null;
+      status.request?.resolve({ result: status.list });
+      status.request = null;
+      status.read = null;
       publish();
     },
     subscribe(listener: (state: AgentCapabilityState) => void) {
@@ -468,7 +448,7 @@ export function createAgentCapability(gateway: AgentGateway) {
       disposed = true;
       stopGateway();
       listeners.clear();
-      fileRequests.clear();
+      retireFileRequests();
       files.clear();
       creations.dispose();
       retireAgentsRequest();

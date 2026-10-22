@@ -147,12 +147,10 @@ it.each(["timer maintenance", "startup catch-up"] as const)(
       expect(persisted.enabled).toBe(0);
       order.push("notify");
     });
-    const requestHeartbeat = vi.fn();
     const state = createCronServiceState({
       storePath: store.storePath,
       nowMs: () => now,
       enqueueSessionEvent,
-      requestHeartbeat,
       runIsolatedAgentJob: createDefaultIsolatedRunner(),
     });
     if (path === "startup catch-up") {
@@ -162,7 +160,6 @@ it.each(["timer maintenance", "startup catch-up"] as const)(
     }
 
     expect(order).toEqual(["notify"]);
-    expect(requestHeartbeat).not.toHaveBeenCalled();
     expect(state.store?.jobs.find((job) => job.id === malformed.id)?.enabled).toBe(false);
     expect(
       (await loadCronStore(store.storePath)).jobs.find((job) => job.id === malformed.id),

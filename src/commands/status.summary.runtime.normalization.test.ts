@@ -120,88 +120,52 @@ describe("statusSummaryRuntime configured model normalization", () => {
 
   it("resolves agent-local aliases without model normalization", async () => {
     const { statusSummaryRuntime } = await import("../status/summary.runtime.js");
-    const cases: Array<{
-      name: string;
-      defaults: Record<string, { alias?: string }>;
-      models: Record<string, { alias?: string }>;
-      primary?: string;
-      runtime?: { type: "acp"; acp: { agent: string } };
-      expected: { provider: string; model: string };
-    }> = [
-      {
-        name: "agent-only alias",
-        defaults: {},
-        models: { "anthropic/fixture-local": { alias: "fast" } },
-        primary: "fast",
-        expected: { provider: "anthropic", model: "fixture-local" },
-      },
-      {
-        name: "agent alias shadows the global alias",
-        defaults: { "openai/fixture-global": { alias: "fast" } },
-        models: { "anthropic/fixture-local": { alias: "fast" } },
-        primary: "fast",
-        expected: { provider: "anthropic", model: "fixture-local" },
-      },
-      {
-        name: "inherited primary uses the agent alias",
-        defaults: { "openai/fixture-global": { alias: "fast" } },
-        models: { "anthropic/fixture-local": { alias: "fast" } },
-        expected: { provider: "anthropic", model: "fixture-local" },
-      },
-      {
-        name: "empty agent alias clears the inherited alias",
-        defaults: { "openai/fixture-global": { alias: "fast" } },
-        models: { "openai/fixture-global": { alias: "" } },
-        expected: { provider: "openai", model: "fast" },
-      },
-      {
-        name: "omitted agent alias keeps the inherited alias",
-        defaults: { "openai/fixture-global": { alias: "fast" } },
-        models: { "openai/fixture-global": {} },
-        expected: { provider: "openai", model: "fixture-global" },
-      },
-      {
-        name: "agent alias matching ignores case and whitespace",
-        defaults: {},
-        models: { "anthropic/fixture-local": { alias: " fast " } },
-        primary: "  FAST  ",
-        expected: { provider: "anthropic", model: "fixture-local" },
-      },
-      {
-        name: "provider-qualified agent alias",
-        defaults: { "openai/fixture-global": { alias: "fast" } },
-        models: { "anthropic/fixture-local": { alias: "fast" } },
-        primary: "anthropic/fast",
-        expected: { provider: "anthropic", model: "fixture-local" },
-      },
-      {
-        name: "profile-qualified agent alias",
-        defaults: {},
-        models: { "anthropic/fixture-local": { alias: "fast" } },
-        primary: "fast@work",
-        expected: { provider: "anthropic", model: "fixture-local" },
-      },
-      {
-        name: "bare model inferred from agent metadata",
-        defaults: {},
-        models: { "anthropic/fixture-local": {} },
-        primary: "fixture-local",
-        expected: { provider: "anthropic", model: "fixture-local" },
-      },
-      {
-        name: "ACP primary stays separate from the native fallback",
-        defaults: { "openai/fixture-global": { alias: "fast" } },
-        models: { "anthropic/fixture-local": { alias: "fast" } },
-        primary: "fast",
+    const globalAlias = { "openai/fixture-global": { alias: "fast" } };
+    const localAlias = { "anthropic/fixture-local": { alias: "fast" } };
+    type Agent = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
+    const aliasCase = (
+      name: string,
+      agent: Agent,
+      defaults: Record<string, { alias?: string }> = globalAlias,
+      expected = { provider: "anthropic", model: "fixture-local" },
+    ) => ({ name, agent, defaults, expected });
+    const cases = [
+      aliasCase("agent-only alias", { models: localAlias, model: "fast" }, {}),
+      aliasCase("shadows global", { models: localAlias, model: "fast" }),
+      aliasCase("inherited primary", { models: localAlias }),
+      aliasCase(
+        "clears inherited alias",
+        { models: { "openai/fixture-global": { alias: "" } } },
+        globalAlias,
+        { provider: "openai", model: "fast" },
+      ),
+      aliasCase("keeps inherited alias", { models: { "openai/fixture-global": {} } }, globalAlias, {
+        provider: "openai",
+        model: "fixture-global",
+      }),
+      aliasCase(
+        "ignores case and whitespace",
+        { models: { "anthropic/fixture-local": { alias: " fast " } }, model: "  FAST  " },
+        {},
+      ),
+      aliasCase("provider-qualified", { models: localAlias, model: "anthropic/fast" }),
+      aliasCase("profile-qualified", { models: localAlias, model: "fast@work" }, {}),
+      aliasCase(
+        "bare model",
+        { models: { "anthropic/fixture-local": {} }, model: "fixture-local" },
+        {},
+      ),
+      aliasCase("ACP primary", {
+        models: localAlias,
+        model: "fast",
         runtime: { type: "acp", acp: { agent: "fixture" } },
-        expected: { provider: "anthropic", model: "fixture-local" },
-      },
+      }),
     ];
-    for (const { name, defaults, models, primary, runtime, expected } of cases) {
+    for (const { name, defaults, agent, expected } of cases) {
       const cfg: OpenClawConfig = {
         agents: {
           defaults: { model: "fast", models: defaults },
-          entries: { work: { ...(primary ? { model: primary } : {}), models, runtime } },
+          entries: { work: agent },
         },
       };
 

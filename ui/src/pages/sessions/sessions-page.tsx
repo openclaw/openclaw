@@ -1,4 +1,12 @@
-import { createEffect, createMemo, untrack, Show } from "solid-js";
+import {
+  action,
+  createEffect,
+  createMemo,
+  createOptimistic,
+  onSettled,
+  untrack,
+  Show,
+} from "solid-js";
 import { AgentScopeControl } from "../../components/agent-scope-control.tsx";
 import { HubPageHeader } from "../../components/solid/hub-page-header.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -17,6 +25,27 @@ export function SessionsPageContent(props: { page: SessionsPageOwner }) {
     return props.page.view();
   });
   const menu = () => props.page.menu();
+  const [commandPending, setCommandPending] = createOptimistic(false);
+  const observeCommand = action(function* (completion: Promise<unknown>) {
+    setCommandPending(true);
+    yield completion;
+  });
+  let active = true;
+  onSettled(() => () => {
+    active = false;
+  });
+  function presentCommand(completion: Promise<unknown> | void) {
+    if (completion) {
+      const epoch = view().commandEpoch;
+      const observedCompletion = props.page.observeCommandCompletion(completion);
+      // Commit synchronous admission and confirmation UI before observing its completion.
+      onSettled(() => {
+        if (active && view().commandEpoch === epoch) {
+          void observeCommand(observedCompletion);
+        }
+      });
+    }
+  }
   return (
     <>
       <HubPageHeader<"sessions" | "worktrees">
@@ -52,9 +81,29 @@ export function SessionsPageContent(props: { page: SessionsPageOwner }) {
         }
       />
       <SettingsWorkspace id="sessions-hub-panel">
-        <SessionsView {...view()} />
+        <SessionsView
+          {...view()}
+          commandPending={commandPending()}
+          onDeleteSelected={() => presentCommand(view().onDeleteSelected())}
+          onDeleteAllArchived={() => presentCommand(view().onDeleteAllArchived())}
+          onPatch={(...args) => presentCommand(view().onPatch(...args))}
+          onAssignCategory={(...args) => presentCommand(view().onAssignCategory(...args))}
+        />
       </SettingsWorkspace>
-      <Show when={menu()}>{(current) => <SessionManagementMenu {...current()} />}</Show>
+      <Show when={menu()}>
+        {(current) => (
+          <SessionManagementMenu
+            {...current()}
+            onAction={(requested) => {
+              const completion = current().onAction(requested, presentCommand);
+              // Placement reports its admitted write after the chooser has completed.
+              if (requested.kind !== "move-session") {
+                presentCommand(completion);
+              }
+            }}
+          />
+        )}
+      </Show>
     </>
   );
 }

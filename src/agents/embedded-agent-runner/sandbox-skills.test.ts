@@ -51,6 +51,13 @@ function usagePath(name: string, skillFile = hostSkillPath) {
   };
 }
 
+const materializedSandbox = {
+  enabled: true,
+  workspaceAccess: "rw",
+  containerWorkdir: "/workspace",
+  skillsWorkspaceDir: "/state/sandbox-skills",
+} as const;
+
 async function writeSkill(root: string, name: string, metadata: string) {
   const dir = path.join(root, "skills", name);
   await fs.mkdir(dir, { recursive: true });
@@ -109,32 +116,13 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
   );
 
   it("maps materialized read paths while preserving original file identities", () => {
+    const original = usagePath("demo", "/agent-workspace/skills/demo/SKILL.md");
     expect(
       resolveSandboxSkillRuntimeInputs({
-        sandbox: {
-          enabled: true,
-          workspaceAccess: "rw",
-          containerWorkdir: "/workspace",
-          skillsWorkspaceDir: "/state/sandbox-skills",
-          skillUsagePaths: [
-            {
-              readPath: "/state/sandbox-skills/skills/demo/SKILL.md",
-              skillFile: "/agent-workspace/skills/demo/SKILL.md",
-              skillName: "demo",
-              skillSource: "workspace",
-            },
-          ],
-        },
+        sandbox: { ...materializedSandbox, skillUsagePaths: [original] },
         skillsAnchorWorkspace: "/workspace",
       }).skillUsagePaths,
-    ).toEqual([
-      {
-        readPath: "/workspace/.openclaw/sandbox-skills/skills/demo/SKILL.md",
-        skillFile: "/agent-workspace/skills/demo/SKILL.md",
-        skillName: "demo",
-        skillSource: "workspace",
-      },
-    ]);
+    ).toEqual([{ ...original, readPath: deliveredPath("demo") }]);
   });
 
   it("remaps workspace-hosted explicit references to the delivered sandbox copy", () => {
@@ -145,10 +133,7 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
     );
     const runtime = resolveSandboxSkillRuntimeInputs({
       sandbox: {
-        enabled: true,
-        workspaceAccess: "rw",
-        containerWorkdir: "/workspace",
-        skillsWorkspaceDir: "/state/sandbox-skills",
+        ...materializedSandbox,
         skillUsagePaths: [
           usagePath("demo"),
           usagePath("gateway-demo"),
@@ -207,12 +192,10 @@ describe("resolveSandboxSkillRuntimeInputs", () => {
 
     const runtime = resolveSandboxSkillRuntimeInputs({
       sandbox: {
-        enabled: true,
-        containerWorkdir: "/workspace",
+        ...materializedSandbox,
         skillsEligibility,
         skillsWorkspaceDir: materializedWorkspace,
         skillUsagePaths: [{ ...usagePath("demo"), readPath: path.join(skillDir, "SKILL.md") }],
-        workspaceAccess: "rw",
       },
       skillsAnchorWorkspace: effectiveWorkspace,
       skillsSnapshot,

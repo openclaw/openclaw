@@ -2,10 +2,11 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatGptImportResult, ChatGptRollbackResult } from "./chatgpt-import.js";
 import { registerWikiCli } from "./cli.js";
-import type { ResolvedMemoryWikiConfig } from "./config.js";
+import { resolveMemoryWikiAgentConfig, type ResolvedMemoryWikiConfig } from "./config.js";
 import type { RootMoveHooks } from "./guarded-root.test-support.js";
 import { parseWikiMarkdown, renderWikiMarkdown } from "./markdown.js";
 import {
@@ -13,7 +14,7 @@ import {
   type MemoryWikiDoctorReport,
   type MemoryWikiStatus,
 } from "./status.js";
-import { createMemoryWikiTestHarness } from "./test-helpers.js";
+import { createChatGptConversation, createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const callGatewayFromCliMock = vi.hoisted(() => vi.fn());
 const afterCompileHook = vi.hoisted<{ run?: () => Promise<void> }>(() => ({}));
@@ -135,27 +136,11 @@ describe("memory-wiki cli", () => {
   async function createChatGptExport(rootDir: string) {
     const exportDir = path.join(rootDir, "chatgpt-export");
     await fs.mkdir(exportDir, { recursive: true });
-    const message = (parent: string, role: string, text: string) => ({
-      parent,
-      message: { author: { role }, content: { parts: [text] } },
-    });
     const conversations = [
-      {
-        conversation_id: "12345678-1234-1234-1234-1234567890ab",
-        title: "Travel preference check",
-        create_time: 1_712_363_200,
-        update_time: 1_712_366_800,
-        current_node: "assistant-1",
-        mapping: {
-          root: {},
-          "user-1": message(
-            "root",
-            "user",
-            "I prefer aisle seats and I don't want a hotel far from the airport.",
-          ),
-          "assistant-1": message("user-1", "assistant", assistantReply),
-        },
-      },
+      createChatGptConversation(
+        "I prefer aisle seats and I don't want a hotel far from the airport.",
+        assistantReply,
+      ),
     ];
     await fs.writeFile(
       path.join(exportDir, "conversations.json"),
@@ -169,6 +154,11 @@ describe("memory-wiki cli", () => {
     const filePath = path.join(exportDir, "conversations.json");
     const json = await fs.readFile(filePath, "utf8");
     await fs.writeFile(filePath, json.replace(assistantReply, reply), "utf8");
+  }
+
+  async function createChatGptVault() {
+    const vault = await createCliVault({ initialize: true });
+    return { ...vault, exportDir: await createChatGptExport(vault.rootDir) };
   }
 
   async function findImportedSourceFile(rootDir: string): Promise<string> {
@@ -272,12 +262,9 @@ describe("memory-wiki cli", () => {
       "utf8",
     );
 
-    const program = createProgram(config);
-
-    await program.parseAsync(["wiki", "okf", "import", bundlePath, "--json"], { from: "user" });
-
-    const importOutput = String(stdoutWriteMock.mock.calls.at(-1)?.[0] ?? "");
-    const importResult = JSON.parse(importOutput) as {
+    const importResult = JSON.parse(
+      await runWiki(config, ["okf", "import", bundlePath, "--json"]),
+    ) as {
       importedCount: number;
       pagePaths: string[];
     };
@@ -288,11 +275,9 @@ describe("memory-wiki cli", () => {
       ]),
     );
 
-    stdoutWriteMock.mockClear();
-    await program.parseAsync(["wiki", "search", "completed order", "--json"], { from: "user" });
-
-    const searchOutput = String(stdoutWriteMock.mock.calls.at(-1)?.[0] ?? "");
-    const searchResults = JSON.parse(searchOutput) as Array<{ path: string; title: string }>;
+    const searchResults = JSON.parse(
+      await runWiki(config, ["search", "completed order", "--json"]),
+    ) as Array<{ path: string; title: string }>;
     expect(searchResults).toEqual(
       expect.arrayContaining([
         expect.objectContaining({
@@ -517,8 +502,7 @@ describe("memory-wiki cli", () => {
   it.each([false, true])(
     "rejects malformed UTF-8 ChatGPT exports (envelope: %s)",
     async (envelope) => {
-      const { rootDir, config } = await createCliVault({ initialize: true });
-      const exportDir = await createChatGptExport(rootDir);
+      const { rootDir, config, exportDir } = await createChatGptVault();
       const exportPath = path.join(exportDir, "conversations.json");
       const conversations = JSON.parse(await fs.readFile(exportPath, "utf8")) as Array<{
         title: string;
@@ -548,8 +532,7 @@ describe("memory-wiki cli", () => {
   );
 
   it("imports ChatGPT exports with dry-run, apply, and rollback", async () => {
-    const { rootDir, config } = await createCliVault({ initialize: true });
-    const exportDir = await createChatGptExport(rootDir);
+    const { rootDir, config, exportDir } = await createChatGptVault();
 
     const dryRun = await runChatGptImport(config, exportDir, "--dry-run");
     expect(dryRun).toMatchObject({ dryRun: true, createdCount: 1 });
@@ -601,8 +584,7 @@ describe("memory-wiki cli", () => {
   );
 
   it("preserves a user save after compile before the import run record is written", async () => {
-    const { rootDir, config } = await createCliVault({ initialize: true });
-    const exportDir = await createChatGptExport(rootDir);
+    const { rootDir, config, exportDir } = await createChatGptVault();
     let pagePath = "";
     let edited = "";
     afterCompileHook.run = async () => {
@@ -631,8 +613,7 @@ describe("memory-wiki cli", () => {
   });
 
   it("reports the rollback command when compilation fails after a ChatGPT import", async () => {
-    const { rootDir, config } = await createCliVault({ initialize: true });
-    const exportDir = await createChatGptExport(rootDir);
+    const { rootDir, config, exportDir } = await createChatGptVault();
     const firstApplied = await runChatGptImport(config, exportDir);
     const firstRunId = expectDefined(firstApplied.runId, "first ChatGPT import runId");
     const sourceFile = await findImportedSourceFile(rootDir);
@@ -666,8 +647,7 @@ describe("memory-wiki cli", () => {
   });
 
   it("preserves a page recreated between the rollback move-aside and the snapshot restore", async () => {
-    const { rootDir, config } = await createCliVault({ initialize: true });
-    const exportDir = await createChatGptExport(rootDir);
+    const { rootDir, config, exportDir } = await createChatGptVault();
     await runChatGptImport(config, exportDir);
     const sourceFile = await findImportedSourceFile(rootDir);
     const pagePath = path.join(rootDir, "sources", sourceFile);
@@ -722,8 +702,7 @@ describe("memory-wiki cli", () => {
   });
 
   it("imports ChatGPT exports with out-of-range Unix timestamps", async () => {
-    const { rootDir, config } = await createCliVault({ initialize: true });
-    const exportDir = await createChatGptExport(rootDir);
+    const { rootDir, config, exportDir } = await createChatGptVault();
     const conversationsPath = path.join(exportDir, "conversations.json");
     const conversations = JSON.parse(await fs.readFile(conversationsPath, "utf8")) as Array<
       Record<string, unknown>
@@ -738,5 +717,93 @@ describe("memory-wiki cli", () => {
     const pageContent = await fs.readFile(path.join(rootDir, "sources", sourceFile), "utf8");
     expect(pageContent).toContain("- Created: 2024-04-06T00:26:40.000Z");
     expect(pageContent).toContain("- Updated: 2024-04-06T00:26:40.000Z");
+  });
+
+  describe("memory-wiki agent-scoped cli", () => {
+    const appConfig = { agents: { entries: { support: {}, marketing: {} } } };
+    function stubWikiCommandAction(program: Command, commandPath: readonly string[]) {
+      let command = program.commands.find((candidate) => candidate.name() === "wiki");
+      for (const name of commandPath) {
+        command = command?.commands.find((candidate) => candidate.name() === name);
+      }
+      expect(command, `wiki ${commandPath.join(" ")} command`).toBeDefined();
+      command!.action(() => {});
+    }
+
+    function createAgentSelectionProgram(params: {
+      config: ResolvedMemoryWikiConfig;
+      appConfig: OpenClawConfig;
+      commandPath: readonly string[];
+    }) {
+      const resolveConfig = vi.fn((agentId?: string) =>
+        resolveMemoryWikiAgentConfig({
+          config: params.config,
+          appConfig: params.appConfig,
+          ...(agentId ? { agentId } : {}),
+        }),
+      );
+      const program = new Command().name("test").enablePositionalOptions().exitOverride();
+      program.configureOutput({ writeErr: () => {}, writeOut: () => {} });
+      registerWikiCli(program, {
+        config: params.config,
+        getAppConfig: () => params.appConfig,
+        resolveConfig,
+      });
+      stubWikiCommandAction(program, params.commandPath);
+      return { program, resolveConfig };
+    }
+
+    it("gives actionable agent-selection guidance for a multi-agent roster", async () => {
+      const { config } = await createCliVault({ config: { vault: { scope: "agent" } } });
+      const { program, resolveConfig } = createAgentSelectionProgram({
+        config,
+        appConfig,
+        commandPath: ["apply", "metadata"],
+      });
+
+      await expect(
+        program.parseAsync(["wiki", "apply", "metadata", "entity.alpha"], { from: "user" }),
+      ).rejects.toThrow(
+        "No default memory-wiki agent is configured. Pass --agent <id>, or add an agent with `openclaw agents add`.",
+      );
+      expect(resolveConfig).not.toHaveBeenCalled();
+    });
+
+    it("runs wiki doctor against explicitly selected agent-scoped vaults", async () => {
+      const { rootDir, config } = await createCliVault({ config: { vault: { scope: "agent" } } });
+      const run = async (args: string[]) => {
+        stdoutWriteMock.mockClear();
+        const program = new Command().name("test").enablePositionalOptions();
+        registerWikiCli(program, { config, getAppConfig: () => appConfig });
+        await program.parseAsync(["wiki", ...args], { from: "user" });
+        return stdoutWriteMock.mock.calls.map(([chunk]) => String(chunk)).join("");
+      };
+
+      await run(["init", "--agent", "marketing"]);
+      const explicitOutput = await run(["doctor", "--agent", "marketing"]);
+      await run(["init", "--agent", "support"]);
+      const supportOutput = await run(["doctor", "--agent", "support"]);
+
+      expect(explicitOutput).toContain("Wiki doctor: healthy");
+      expect(explicitOutput).toContain("Vault scope: agent (marketing)");
+      expect(explicitOutput).toContain(path.join(rootDir, "marketing"));
+      expect(supportOutput).toContain("Wiki doctor: healthy");
+      expect(supportOutput).toContain("Vault scope: agent (support)");
+      expect(supportOutput).toContain(path.join(rootDir, "support"));
+    });
+
+    it("does not require an agent to probe Obsidian CLI availability", async () => {
+      const { config } = await createCliVault({ config: { vault: { scope: "agent" } } });
+      const { program, resolveConfig } = createAgentSelectionProgram({
+        config,
+        appConfig: { agents: { entries: {} } },
+        commandPath: ["obsidian", "status"],
+      });
+
+      await expect(
+        program.parseAsync(["wiki", "obsidian", "status"], { from: "user" }),
+      ).resolves.toBeDefined();
+      expect(resolveConfig).not.toHaveBeenCalled();
+    });
   });
 });

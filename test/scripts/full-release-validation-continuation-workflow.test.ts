@@ -146,7 +146,7 @@ describe("full release metadata checkouts", () => {
     expect(steps.indexOf(setup)).toBeLessThan(
       steps.indexOf(step("evidence_reuse", "Find reusable validation evidence")),
     );
-    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.x" });
+    expect(setup.env).toMatchObject({ REQUESTED_NODE_VERSION: "24.22.1" });
     const setupPath = `${dirname(process.execPath)}${delimiter}${process.env.PATH ?? ""}`;
     const activeNodeVersion = execFileSync("node", ["-p", "process.versions.node"], {
       cwd: root,

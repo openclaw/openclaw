@@ -38,7 +38,7 @@ import { mintCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.j
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createSyntheticPluginRuntimeClient } from "../server-plugin-runtime-client.js";
 import { callCron, createHistoryJob, createReadService } from "./cron-read.test-support.js";
-import { requireRecord } from "./cron.validation.test-support.js";
+import { cronAccountPolicy, requireRecord } from "./cron.validation.test-support.js";
 import type { GatewayClient } from "./types.js";
 
 const sessionKey = "agent:main:discord:group:policy-adoption";
@@ -48,12 +48,7 @@ const cfg: OpenClawConfig = {
   agents: { entries: { main: {} } },
   commands: { ownerAllowFrom: ["discord:owner-1"] },
 };
-const accountPolicy = {
-  version: 1,
-  mode: "account",
-  ownerSessionKey: sessionKey,
-  ownerAccountId: accountId,
-} as const;
+const accountPolicy = cronAccountPolicy(sessionKey, accountId);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let stateDir: string | undefined;
 let cron: CronService | undefined;
@@ -136,7 +131,6 @@ function createFixture() {
     storePath,
     cronEnabled: false,
     enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
   });
   cron = service;

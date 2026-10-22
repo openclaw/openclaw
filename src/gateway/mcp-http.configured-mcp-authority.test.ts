@@ -11,7 +11,6 @@ import { setSessionMcpRuntimeScheduler } from "../agents/agent-bundle-mcp-manage
 import { disposeAllSessionMcpRuntimes } from "../agents/agent-bundle-mcp-tools.js";
 import { testing as cliBackendsTesting } from "../agents/cli-backends.test-support.js";
 import { buildDefaultTestCliBackend } from "../agents/cli-runner.test-helpers.js";
-import { createCliRunCurrentAssertion } from "../agents/cli-runner/execution-target.js";
 import { prepareCliRunContext } from "../agents/cli-runner/prepare.js";
 import {
   resetCliRunnerPrepareTestDeps,
@@ -33,18 +32,10 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { revokeMcpLoopbackClientGrant } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
-import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
+import * as mcp from "./mcp-http.test-support.js";
 
 // Guidance past the old 1,200-character metadata cap must still reach Claude.
 const PROBE_INSTRUCTIONS = "Probe usage guidance. ".repeat(80) + "PROBE_TAIL: one word per call.";
-
-type McpResponse = {
-  result?: {
-    instructions?: string;
-    content?: Array<{ type: string; text?: string }>;
-    isError?: boolean;
-  };
-};
 
 type ProbeMessage = {
   id?: number | string;
@@ -255,14 +246,7 @@ beforeAll(async () => {
       },
     ],
   });
-  setCliRunnerPrepareTestDeps({
-    isWorkspaceBootstrapPending: async () => false,
-    makeBootstrapWarn: () => () => {},
-    resolveBootstrapContextForRun: async () => ({ bootstrapFiles: [], contextFiles: [] }),
-    resolveOpenClawReferencePaths: async () => ({ docsPath: null, sourcePath: null }),
-    prepareClaudeCliSkillsPlugin: async () => ({ args: [], cleanup: async () => {} }),
-    loadManifestModelCatalog: () => [],
-  });
+  mcp.setMinimalCliPrepareDeps(setCliRunnerPrepareTestDeps);
   scheduler = createTestGatewayScheduler();
   await setSessionMcpRuntimeScheduler(scheduler);
   await ensureMcpLoopbackServer();
@@ -362,26 +346,7 @@ async function prepareTurn(
       : {}),
   });
   contexts.push(context);
-  const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "MCP loopback runtime");
-  const token = expectDefined(context.preparedBackend.env?.OPENCLAW_MCP_TOKEN, "CLI grant");
-  const captureKey = "capture-" + runId;
-  context.preparedBackend.mcpClientGrantCapture?.activate(
-    captureKey,
-    createCliRunCurrentAssertion(context.params),
-  );
-  const rpc = async (method: string, params?: Record<string, unknown>) => {
-    const response = await fetch("http://127.0.0.1:" + runtime.port + "/mcp", {
-      method: "POST",
-      signal,
-      headers: {
-        authorization: "Bearer " + token,
-        "content-type": "application/json",
-        "x-openclaw-cli-capture-key": captureKey,
-      },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, ...(params ? { params } : {}) }),
-    });
-    return { status: response.status, body: (await response.json()) as McpResponse };
-  };
+  const { token, rpc } = await mcp.connectPreparedCliTurn(context, signal);
   const call = async (tool: string, args: Record<string, unknown>) => {
     const response = await rpc("tools/call", { name: tool, arguments: args });
     expect(response.status).toBe(200);
@@ -423,6 +388,14 @@ const OPERATIONS = [
     text: "prompt:greet",
   },
 ];
+
+async function workshopDefinition(turn: Awaited<ReturnType<typeof prepareTurn>>) {
+  const listed = await turn.rpc("tools/list");
+  expect(listed.status).toBe(200);
+  return expectDefined(listed.body.result?.tools, "MCP catalog").find(
+    (tool) => tool.name === "skill_workshop",
+  );
+}
 
 it("serves complete configured-server instructions and bridged calls", async ({ signal }) => {
   const turn = await prepareTurn("allowed", false, signal);
@@ -483,14 +456,6 @@ it.for(["personal", "workspace"] as const)(
       },
     };
     const name = "workshop-" + defaultTarget;
-    const workshopDefinition = async (turn: Awaited<ReturnType<typeof prepareTurn>>) => {
-      const listed = await turn.rpc("tools/list");
-      expect(listed.status).toBe(200);
-      const result = listed.body.result as {
-        tools: Array<{ name: string; description?: string; inputSchema?: unknown }>;
-      };
-      return result.tools.find((tool) => tool.name === "skill_workshop");
-    };
     const humanTurn = await prepareTurn(name, false, signal, human);
     const humanDefinition = await workshopDefinition(humanTurn);
     const completionTurn = await prepareTurn(name, true, signal);
@@ -534,12 +499,6 @@ it.for([
     };
     const snapshot = async () =>
       (await fs.readdir(state.workspaceDir, { recursive: true })).map(String).toSorted();
-    const workshopDefinition = async (turn: Awaited<ReturnType<typeof prepareTurn>>) => {
-      const result = (await turn.rpc("tools/list")).body.result as {
-        tools: Array<{ name: string; description?: string; inputSchema?: unknown }>;
-      };
-      return result.tools.find((tool) => tool.name === "skill_workshop");
-    };
     const before = await snapshot();
     const name = "workshop-" + agentId;
     const humanDefinition = await workshopDefinition(

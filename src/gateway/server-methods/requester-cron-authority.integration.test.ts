@@ -141,8 +141,8 @@ async function withSuccessor<T>(admin: boolean | "channel-owner", run: Requester
       runId,
       admission(runId, createSyntheticPluginRuntimeClient(), child.childSessionKey),
       async (identity, admittedRun, creator) => {
-        // Queue acceptance retires the committed outbox before tools finish.
-        // Its fresh admitted run must now own management and revocation.
+        // Explicitly remove the old cohort to exercise bound-scope independence.
+        // This lifetime regression does not model queue ACK retiring a product outbox.
         expect(creator?.callerScopedCreation).toBeUndefined();
         if (admin) {
           const management = bindCronManagementGrant(runId);

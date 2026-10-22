@@ -7,7 +7,7 @@ read_when:
   - "npm install -g fails with permissions or PATH issues"
 ---
 
-OpenClaw requires **Node 24.16+ or Node 26.1+** with a WAL-reset-safe linked SQLite library. **Node 26 is the recommended runtime** — it starts the Gateway noticeably faster and uses less memory than Node 24. The installer provisions Node 26 on macOS and the supported Node 24 LTS line on Linux when Node is missing; CI and release workflows also pin Node 24. On RPM-based Linux, the installer preserves a supported distro-owned Node package that links unsafe SQLite and uses a user-space Node runtime for OpenClaw instead. Node 22, 23, and 25 are unsupported. The [installer script](/install#recommended-installer-script) detects and installs Node automatically — use this page when you want to set up Node yourself (versions, PATH, global installs).
+OpenClaw requires **Node 24.22.1+ or Node 26.12.1+** with a WAL-reset-safe linked SQLite library. **Node 26 is the recommended runtime** — it starts the Gateway noticeably faster and uses less memory than Node 24. The installer provisions Node 26 on macOS and the supported Node 24 LTS line on Linux when Node is missing; CI and release workflows also pin Node 24. On RPM-based Linux, the installer preserves a supported distro-owned Node package that links unsafe SQLite and uses a user-space Node runtime for OpenClaw instead. Node 22, 23, and 25 are unsupported. The [installer script](/install#recommended-installer-script) detects and installs Node automatically — use this page when you want to set up Node yourself (versions, PATH, global installs).
 
 ## Check your version
 
@@ -15,7 +15,7 @@ OpenClaw requires **Node 24.16+ or Node 26.1+** with a WAL-reset-safe linked SQL
 node -v
 ```
 
-`v26.1.0` or newer is the recommended default. `v24.16.0` or newer 24.x is also supported and is the LTS line used by CI. Node 22, 23, 25, Node 24 before 24.16.0, and Node 26 before 26.1.0 are unsupported. If Node is missing or outside this range, pick an install method below.
+`v26.12.1` or newer is the recommended default. `v24.22.1` or newer 24.x is also supported and is the LTS line used by CI. These releases reject the keys compromised in the October 2026 eMudhra incident. Node 22, 23, 25, Node 24 before 24.22.1, and Node 26 before 26.12.1 are unsupported. If Node is missing or outside this range, pick an install method below.
 
 Node 27 is accepted, including well-formed development labels such as
 `v27.0.0-head` and `27.0.0-nightly20261018f88a1d25e9`. Prereleases on majors
@@ -170,9 +170,10 @@ fnm use 26
 
 ### Homebrew upgrades while the Gateway is running
 
-If Homebrew removes the running Gateway's Node executable, command relays and
-their process-group anchors use the formula's available stable Homebrew path for
-new launches. They keep using the original executable while it exists. Workers
+If Homebrew removes the running Gateway's Node executable, command relays,
+their process-group anchors, and managed Codex JavaScript launchers use the
+formula's available stable Homebrew path for new launches without searching
+`PATH`. They keep using the original executable while it exists. Workers
 that share native modules or V8 messages, including the spawn broker, keep the
 exact runtime and report a restart action if it is gone. Restart the Gateway
 after upgrading Node to move the Gateway itself onto the new runtime.

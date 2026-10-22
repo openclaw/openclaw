@@ -20,12 +20,12 @@ import {
   compactServiceEnvPlanValueSources,
   createMutableServiceEnvPlan,
 } from "../daemon/service-env-plan.js";
-import { applyManagedServiceEnvRenderPolicy } from "../daemon/service-env-render-policy.js";
 import { buildServiceEnvironment } from "../daemon/service-env.js";
 import {
   formatManagedServiceEnvKeys,
   readEnvironmentValueSource,
   readManagedServiceEnvKeysFromEnvironment,
+  writeManagedServiceEnvKeysToEnvironment,
 } from "../daemon/service-managed-env.js";
 import { mergeServicePath } from "../daemon/service-path-policy.js";
 import {
@@ -489,15 +489,36 @@ async function buildGatewayInstallEnvironment(params: {
       authProfileEnvironment,
     ],
   );
-  applyManagedServiceEnvRenderPolicy({
-    plan,
-    managedServiceEnvKeys,
-    serviceEnvironment: params.serviceEnvironment,
-    platform: params.platform,
-    existingSecretRefEnvironment: existingSecretRefRenderEnvironment,
-    stateDirDotEnvEnvironment: stateDirDotEnvRenderEnvironment,
-    configSecretRefEnvironment,
+  const { serviceEnvironment, platform } = params;
+  const launchAgent =
+    platform === "darwin" && Boolean(serviceEnvironment.OPENCLAW_LAUNCHD_LABEL?.trim());
+  writeManagedServiceEnvKeysToEnvironment(plan.environment, managedServiceEnvKeys);
+  if (plan.environment.OPENCLAW_SERVICE_MANAGED_ENV_KEYS) {
+    plan.environmentValueSources.OPENCLAW_SERVICE_MANAGED_ENV_KEYS = "inline";
+  }
+  const managedKeys = readManagedServiceEnvKeysFromEnvironment({
+    OPENCLAW_SERVICE_MANAGED_ENV_KEYS: managedServiceEnvKeys,
   });
+  if (managedKeys.size > 0) {
+    // Preserve installed values for active SecretRefs, migrating legacy inline values
+    // into the supervisor's owner-only env file before the service is rewritten.
+    if (launchAgent || platform === "linux") {
+      addServiceEnvPlanEntries(plan, existingSecretRefRenderEnvironment, {
+        includeKeys: managedKeys,
+        valueSource: "file",
+      });
+    }
+    if (launchAgent) {
+      addServiceEnvPlanEntries(plan, stateDirDotEnvRenderEnvironment, {
+        includeKeys: managedKeys,
+        valueSource: "inline",
+      });
+    }
+    addServiceEnvPlanEntries(plan, configSecretRefEnvironment, {
+      includeKeys: managedKeys,
+      valueSource: platform === "linux" ? "file" : "inline",
+    });
+  }
   addServiceEnvPlanEntries(plan, params.serviceEnvironment, {
     includeRawKeys: true,
   });

@@ -23,7 +23,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { MattermostPost } from "./client.js";
 import type { MattermostEventPayload } from "./monitor-websocket.js";
 import { FakeWebSocket, mattermostPostEvent } from "./monitor-websocket.test-support.js";
-import { registerMattermostBlockProgressTests } from "./monitor.block-progress.test-support.js";
 import { registerMattermostIngressDebounceTests } from "./monitor.ingress-debounce.test-support.js";
 import { monitorMattermostProvider } from "./monitor.js";
 import { registerMattermostPreviewDeliveryTests } from "./monitor.preview-delivery.test-support.js";
@@ -1017,6 +1016,5 @@ describe("mattermost inbound user posts", () => {
 
   const harness = { testConfig, createRuntimeCore: installRuntime, receivePost, mockState };
   registerMattermostPreviewPolicyTests(harness);
-  registerMattermostBlockProgressTests(harness);
   registerMattermostPreviewDeliveryTests(harness);
 });

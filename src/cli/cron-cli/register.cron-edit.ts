@@ -4,7 +4,6 @@ import {
   readNonBlankString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
-import { isSystemMonitorDeclaration } from "../../cron/system-owned-declaration.js";
 import type { CronJob } from "../../cron/types.js";
 import { normalizeHttpWebhookUrl } from "../../cron/webhook-url.js";
 import { sanitizeAgentId } from "../../routing/session-key.js";
@@ -476,13 +475,6 @@ export function registerCronEditCommand(cron: Command) {
             payloadKind = existingJob.payload.kind;
             if (hasTimeoutSeconds) {
               assertCronTimeoutSupported(payloadKind);
-            }
-            if (isSystemMonitorDeclaration(existingJob.declarationKey)) {
-              throw new CronCliError(
-                hasTimeoutSeconds
-                  ? `--timeout-seconds is not supported for ${payloadKind} jobs.`
-                  : "System-owned cron jobs cannot be edited by cron clients.",
-              );
             }
           } else if (requestedPayloadKinds.length > 1) {
             throw new CronCliError("Choose at most one payload change");
