@@ -38,13 +38,7 @@ const baseStatusUpdate = {
   registry: { latestVersion: "2026.4.10" },
 } as never;
 
-export const baseStatusExpectedUpdateChannelInfo = {
-  channel: "stable",
-  source: "config",
-  label: "stable (config)",
-} as const;
-
-export const baseStatusExpectedUpdateChannelLabel = baseStatusExpectedUpdateChannelInfo.label;
+export const baseStatusExpectedUpdateChannelLabel = "stable (config)";
 
 export const baseStatusGatewaySnapshot = {
   gatewayMode: "remote",

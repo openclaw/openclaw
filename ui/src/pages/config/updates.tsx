@@ -6,6 +6,7 @@ import {
   action,
   createMemo,
   createOptimistic,
+  createSignal,
   Errored,
   For,
   isPending,
@@ -13,13 +14,7 @@ import {
   Loading,
   Show,
 } from "solid-js";
-import { isAcknowledgedAbandonedUpdateRun } from "../../../../src/infra/update-run-record.ts";
-import {
-  classifyUpdateOutcome,
-  isReportableUpdateRun,
-} from "../../../../src/shared/update-outcome.ts";
 import type { UpdateScheduleState } from "../../api/types.ts";
-import type { UpdateFailureReportNotice } from "../../app/overlays-types.ts";
 import {
   formatUpdateCampaignLabel,
   getUpdateGitComparison,
@@ -36,208 +31,21 @@ import {
   SettingsValue,
 } from "../../components/solid/settings-ui.tsx";
 import { UpdateGitRevisions } from "../../components/solid/update-git-revisions.tsx";
-import { UpdateRunView } from "../../components/update-run-view.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
 import { getLocale, registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { DeviceUpdates } from "./updates-device.tsx";
+import { RecordedAttempt } from "./updates-recorded-attempt.tsx";
 import { UpdatesStatus } from "./updates-status.tsx";
-import { UPDATES_CHANNELS, type UpdatesChannel, type UpdatesViewProps } from "./updates-types.ts";
+import {
+  UPDATES_CHANNELS,
+  type UpdatesChannel,
+  type UpdatesViewProps,
+  type UpdatesCommandPresentation,
+} from "./updates-types.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
-
-function RecordedAttempt(props: UpdatesViewProps & { confirming: boolean; checking: boolean }) {
-  const [reporting, setReporting] = createOptimistic(false);
-  const reportFailure = action(function* (attemptId: string) {
-    setReporting(true);
-    yield props.onReportFailure(attemptId);
-  });
-  const run = () => props.update.updateRun;
-  const failed = () => {
-    const currentRun = run();
-    return currentRun
-      ? !isAcknowledgedAbandonedUpdateRun(currentRun) && isReportableUpdateRun(currentRun)
-      : !props.update.recordedUpdateAttempt ||
-          classifyUpdateOutcome(props.update.recordedUpdateAttempt) !== "noop";
-  };
-  const canRetry = () =>
-    props.canUpdate &&
-    !props.updateBusy &&
-    !props.update.updateStatusRefreshing &&
-    !props.confirming;
-  return (
-    <Show when={run() || props.update.updateStatusBanner}>
-      <SettingsSection title={t("updates.page.latestAttempt")}>
-        <Show
-          when={run()}
-          fallback={
-            <Show
-              when={
-                props.update.updateStatusBanner &&
-                !props.updateBusy &&
-                (props.update.updateStatusRefreshing || props.update.updateStatusCheckBanner)
-              }
-            >
-              <SettingsRow
-                title={t("updates.page.failedStep")}
-                description={props.update.updateStatusBanner?.text}
-              />
-            </Show>
-          }
-        >
-          <div class="settings-row settings-row--stacked">
-            <UpdateRunView run={run()} connected={props.connected} />
-          </div>
-        </Show>
-        <Show when={failed() || props.update.updateStatusBanner?.source === "read"}>
-          <SettingsRow
-            title={t("updates.page.recoveryActions")}
-            control={
-              <div class="updates-status-control">
-                <button
-                  class="btn btn--sm"
-                  type="button"
-                  title={props.canCheckStatus ? "" : t("updates.adminRequired")}
-                  disabled={
-                    !props.canCheckStatus ||
-                    props.updateBusy ||
-                    props.update.updateStatusRefreshing ||
-                    props.checking
-                  }
-                  onClick={() => void props.onCheckStatus()}
-                >
-                  {t("updates.page.checkStatus")}
-                </button>
-                <Show when={props.update.diagnosableUpdateFailureId}>
-                  <button
-                    class="btn btn--sm"
-                    type="button"
-                    title={props.canDiagnose ? "" : t("updates.adminRequired")}
-                    disabled={
-                      !props.canDiagnose ||
-                      props.updateBusy ||
-                      props.update.updateStatusRefreshing ||
-                      props.update.updateFailureReportBusy ||
-                      reporting()
-                    }
-                    onClick={() =>
-                      props.onDiagnoseFailure(props.update.diagnosableUpdateFailureId!)
-                    }
-                  >
-                    {t("updates.page.diagnoseFailure")}
-                  </button>
-                </Show>
-                <Show when={failed()}>
-                  <button
-                    class="btn btn--sm primary"
-                    type="button"
-                    title={canRetry() ? "" : t("updates.adminRequired")}
-                    disabled={!canRetry()}
-                    onClick={() => void props.onUpdateNow()}
-                  >
-                    {t("updates.page.retryUpdate")}
-                  </button>
-                </Show>
-                <Show when={failed() && props.update.reportableUpdateFailureId}>
-                  <button
-                    class="btn btn--sm"
-                    type="button"
-                    title={props.canReport ? "" : t("updates.page.reportOwnerRequired")}
-                    disabled={
-                      !props.canReport ||
-                      props.updateBusy ||
-                      props.update.updateStatusRefreshing ||
-                      props.update.updateFailureReportBusy ||
-                      reporting()
-                    }
-                    onClick={() => void reportFailure(props.update.reportableUpdateFailureId!)}
-                  >
-                    {props.update.updateFailureReportBusy || reporting()
-                      ? t("updates.page.reportSubmitting")
-                      : t("updates.page.reportFailure")}
-                  </button>
-                </Show>
-              </div>
-            }
-          />
-          <Show when={failed() && run()?.target.installationMethod !== "ocm"}>
-            <SettingsRow
-              title={t("updates.page.cliFallback")}
-              description={t("updates.triage.hostHint")}
-              stacked
-              control={
-                <details class="updates-attempt-details">
-                  <summary>{t("updates.page.showCliFallback")}</summary>
-                  <pre>
-                    <code>openclaw triage</code>
-                  </pre>
-                </details>
-              }
-            />
-          </Show>
-        </Show>
-        <Show when={props.update.updateFailureReportNotice}>
-          {(notice) => <UpdateFailureReportNoticeView notice={notice()} />}
-        </Show>
-      </SettingsSection>
-    </Show>
-  );
-}
-
-function UpdateFailureReportNoticeView(props: { notice: UpdateFailureReportNotice }) {
-  const result = () => props.notice.result;
-  const label = () =>
-    t(
-      {
-        created: "updates.page.reportCreated",
-        fallback: "updates.page.reportFallback",
-        pending: "updates.page.reportPending",
-        retryable: "updates.page.reportRetryable",
-        duplicate: "updates.page.reportDuplicate",
-        error: "updates.page.reportError",
-      }[result().status],
-    );
-  const links = () => {
-    const value = result();
-    return [
-      { href: "url" in value ? value.url : null, labelKey: "updates.page.openIssue" },
-      {
-        href: "fallbackUrl" in value ? value.fallbackUrl : null,
-        labelKey: "updates.page.openPrefilledIssue",
-      },
-    ];
-  };
-  const message = () => {
-    const value = result();
-    return "message" in value ? value.message : null;
-  };
-  return (
-    <SettingsRow
-      title={t("updates.page.reportResult")}
-      stacked
-      control={
-        <div class="updates-attempt-details" role="status">
-          <div>{label()}</div>
-          <For each={links()} keyed={(link) => link.labelKey}>
-            {(link) => (
-              <Show when={link().href}>
-                {(href) => (
-                  <div>
-                    <a href={href()} target="_blank" rel="noreferrer">
-                      {t(link().labelKey)}
-                    </a>
-                  </div>
-                )}
-              </Show>
-            )}
-          </For>
-          <Show when={message()}>{(text) => <div>{text()}</div>}</Show>
-        </div>
-      }
-    />
-  );
-}
 
 function readUpdatesSettings(
   configObject: Record<string, unknown>,
@@ -380,10 +188,25 @@ function CommitList(props: UpdatesViewProps) {
 
 function GatewayUpdates(props: UpdatesViewProps) {
   const [confirming, setConfirming] = createOptimistic(false);
-  const updateNow = action(function* () {
-    setConfirming(true);
-    yield props.onUpdateNow();
+  const [confirmation, setConfirmation] = createSignal<Promise<void> | null>(null);
+  const confirmationOutcome = createMemo(async () => confirmation());
+  const presentConfirmation = action(function* (
+    view: UpdatesCommandPresentation,
+    pending: Promise<void>,
+  ) {
+    if (view.isCurrent()) {
+      setConfirming(true);
+    }
+    // The receipt below owns errors; this action only owns the pending affordance.
+    yield pending.catch(() => {});
   });
+  const updateNow = async () => {
+    const view = props.captureCommandPresentation();
+    const pending = Promise.race([props.onUpdateNow(), view.retired]);
+    void setConfirmation(() => pending);
+    await Promise.resolve();
+    return presentConfirmation(view, pending);
+  };
   // Seed only the first paint so checking does not suspend the surrounding settings.
   const completion = createMemo<boolean | null>(async () => (await props.statusRead) ?? false, {
     loadingValue: null,
@@ -396,10 +219,22 @@ function GatewayUpdates(props: UpdatesViewProps) {
     return isPending(completion) || latest(completion) === null;
   };
   const [holdingCampaignId, setHoldingCampaignId] = createOptimistic<string | null>(null);
-  const holdUpdate = action(function* (campaignId: string) {
-    setHoldingCampaignId(campaignId);
-    yield props.onHoldUpdate();
+  const presentHold = action(function* (
+    view: UpdatesCommandPresentation,
+    pending: Promise<boolean>,
+    campaignId: string,
+  ) {
+    if (view.isCurrent()) {
+      setHoldingCampaignId(campaignId);
+    }
+    yield Promise.race([pending, view.retired]);
   });
+  const holdUpdate = async (campaignId: string) => {
+    const view = props.captureCommandPresentation();
+    const pending = props.onHoldUpdate();
+    await Promise.resolve();
+    return presentHold(view, pending, campaignId);
+  };
   const run = () => (props.update.updateRun?.status === "running" ? props.update.updateRun : null);
   const step = () => {
     const currentRun = run();
@@ -593,9 +428,9 @@ function GatewayUpdates(props: UpdatesViewProps) {
                   type="button"
                   class="btn btn--sm"
                   disabled={
+                    holdingCampaignId() === campaign()?.id ||
                     props.updateBusy ||
-                    props.update.updateStatusRefreshing ||
-                    holdingCampaignId() === campaign()?.id
+                    props.update.updateStatusRefreshing
                   }
                   onClick={() => void holdUpdate(campaign()!.id)}
                 >
@@ -665,8 +500,8 @@ function GatewayUpdates(props: UpdatesViewProps) {
               class="btn primary"
               title={updateButtonTitle()}
               disabled={
-                props.updateBusy ||
                 confirming() ||
+                props.updateBusy ||
                 props.update.updateStatusRefreshing ||
                 !props.canUpdate ||
                 checkRequired()
@@ -684,6 +519,25 @@ function GatewayUpdates(props: UpdatesViewProps) {
           {t("updates.page.troubleshoot")}
         </a>
       </p>
+      <Errored
+        fallback={(error, reset) => (
+          <div class="callout danger" role="alert">
+            {formatUiError(error())}
+            <button
+              class="btn btn--sm"
+              type="button"
+              onClick={() => {
+                reset();
+                void updateNow();
+              }}
+            >
+              {t("common.retry")}
+            </button>
+          </div>
+        )}
+      >
+        <Loading>{latest(confirmationOutcome) ?? null}</Loading>
+      </Errored>
     </>
   );
 }
@@ -693,7 +547,12 @@ export function Updates(props: UpdatesViewProps) {
     <div id="config-section-update">
       <SettingsPage>
         <Show when={props.nativeDeviceSettings} keyed>
-          {(capability) => <DeviceUpdates capability={capability} />}
+          {(capability) => (
+            <DeviceUpdates
+              capability={capability}
+              captureCommandPresentation={props.captureCommandPresentation}
+            />
+          )}
         </Show>
         <Show when={props.commandScope ?? props} keyed>
           {(_scope) => <GatewayUpdates {...props} />}

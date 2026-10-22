@@ -509,9 +509,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
       onDeliveryResult,
     });
 
-    expect(delivered.requesterContinuationSettled).toBe(true);
-    const [field, expected] = Object.entries(result)[0]!;
-    expect(delivered).toHaveProperty(field, expected);
+    expect(delivered).toMatchObject({ ...result, requesterContinuationSettled: true });
     expect(onDeliveryResult).toHaveBeenCalledOnce();
     expect(onDeliveryResult).toHaveBeenCalledWith(delivered, expect.any(Array));
     expect(buildRestartRecoveryTerminalDeliveryEvidence(delivered)).toEqual({
@@ -533,10 +531,7 @@ describe("deliverAgentCommandResult payload normalization", () => {
       sentTarget: { mediaUrls: ["/tmp/generated-image.png"] },
     });
 
-    expect(outboundArgs().identity).toEqual({
-      name: "Default",
-      emoji: ":robot_face:",
-    });
+    expect(outboundArgs().identity).toEqual({ name: "Default", emoji: ":robot_face:" });
     expect(delivered.deliverySucceeded).toBe(true);
     expectOutboundPayloads({ mediaUrls: ["/tmp/generated-image.png"], delivery });
   });

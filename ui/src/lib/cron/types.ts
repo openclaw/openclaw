@@ -113,6 +113,8 @@ export type CronJobsState<Row = CronJob> = {
   connected: boolean;
   cronLoading: boolean;
   cronJobsError: string | null;
+  /** A rejected inventory read, independent of the last connection advertisement. */
+  cronJobsReadDenied?: boolean;
   cronJobsLoadingMore: boolean;
   cronJobsReloadPending: boolean;
   cronJobsReloadPendingTableFilters: boolean;

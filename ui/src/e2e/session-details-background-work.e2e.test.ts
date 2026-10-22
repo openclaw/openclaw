@@ -424,6 +424,25 @@ suite.define(() => {
                   agentId: "main",
                 });
                 await expect.poll(() => processGroup.locator("[data-process-id]").count()).toBe(4);
+                await gateway.deferNext("sessions.processes.list");
+                await gateway.emitGatewayEvent("sessions.processes.changed", {
+                  sessionKey: parentKey,
+                  agentId: "main",
+                });
+                await gateway.rejectDeferred("sessions.processes.list", {
+                  code: "UNAVAILABLE",
+                  message: "Connection temporarily unavailable",
+                });
+                await expect
+                  .poll(() =>
+                    processGroup.locator(".chat-details-processes").getAttribute("aria-busy"),
+                  )
+                  .toBe("false");
+                expect(await processGroup.locator("[data-process-id]").count()).toBe(4);
+                expect(await processGroup.getByRole("alert").count()).toBe(0);
+                expect(
+                  await processGroup.getByRole("button", { name: "Retry", exact: true }).count(),
+                ).toBe(0);
                 await gateway.setMethodResponse("sessions.processes.list", {
                   sessionId: "details-background",
                   processes: [],
@@ -447,12 +466,9 @@ suite.define(() => {
                 const listError = details.getByRole("alert").filter({
                   hasText: "Process list temporarily unavailable",
                 });
-                await listError.waitFor();
+                expect(await listError.count()).toBe(0);
                 expect(await processGroup.count()).toBe(0);
-                await capture(`processes-list-error-${colorScheme}`, details, [listError]);
-                await listError.getByRole("button", { name: "Retry", exact: true }).click();
-                await listError.waitFor({ state: "detached" });
-                expect(await processGroup.count()).toBe(0);
+                await capture(`processes-list-error-${colorScheme}`, details, [subagents]);
                 await gateway.setMethodResponse("sessions.processes.list", {
                   sessionId: "details-background",
                   processes,

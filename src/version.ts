@@ -154,7 +154,6 @@ export function resolveRuntimeServiceCommit(): string | null {
 
 export function resolveCompatibilityHostVersion(
   env: RuntimeVersionEnv = process.env as RuntimeVersionEnv,
-  fallback = RUNTIME_SERVICE_VERSION_FALLBACK,
 ): string {
   const explicitCompatibilityVersion = firstNonEmpty(env.OPENCLAW_COMPATIBILITY_HOST_VERSION);
   if (explicitCompatibilityVersion) {
@@ -163,7 +162,7 @@ export function resolveCompatibilityHostVersion(
   return resolveVersionFromRuntimeSources({
     env,
     runtimeVersion: resolveUsableRuntimeVersion(VERSION),
-    fallback,
+    fallback: RUNTIME_SERVICE_VERSION_FALLBACK,
     preference: env === (process.env as RuntimeVersionEnv) ? "runtime-first" : "env-first",
   });
 }

@@ -2,26 +2,97 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Server } from "@modelcontextprotocol/server";
 import { expect, it, vi } from "vitest";
 import { z } from "zod";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
+import type { AgentHarnessQuestionGatewayCall } from "./harness/gateway-question-dispatch.js";
 import {
   bindMcpClientElicitation,
+  createMcpClientElicitationHandler,
   runWithMcpElicitationHandler,
   type McpElicitationHandler,
 } from "./mcp-client-elicitation.js";
-import { prepareMcpCaps } from "./mcp-metadata.js";
+import { buildMcpClientCapabilities } from "./mcp-metadata.js";
 const accepted = { action: "accept" as const };
 
+it.each([
+  ["form", false],
+  ["form", true],
+  ["url", false],
+  ["url", true],
+] as const)("settles %s input only for the current caller (revoked: %s)", async (mode, revoked) => {
+  const entered = createDeferred();
+  const answer = createDeferred();
+  let questionId: string | undefined;
+  const gatewayCall: AgentHarnessQuestionGatewayCall = async (method, _options, raw) => {
+    if (method === "question.request") {
+      const request = z
+        .object({ id: z.string(), questions: z.array(z.object({ questionId: z.string() })) })
+        .parse(raw);
+      questionId = request.questions[0]?.questionId;
+      return { id: request.id };
+    }
+    if (method === "question.waitAnswer") {
+      entered.resolve();
+      await answer.promise;
+      if (!questionId) {
+        throw new Error("Elicitation did not register a question");
+      }
+      return {
+        status: "answered",
+        answers: {
+          answers: { [questionId]: [mode === "url" ? "I've completed this step" : "blue"] },
+        },
+      };
+    }
+    if (method === "question.resolve") {
+      return { status: "cancelled" };
+    }
+    throw new Error(`Unexpected elicitation method: ${method}`);
+  };
+  const caller = {
+    sessionKey: "agent:main:elicitation",
+    current: true,
+    assertCurrent() {
+      if (!this.current) {
+        throw new Error("Elicitation caller closed");
+      }
+    },
+    gatewayCall,
+  };
+  const result = createMcpClientElicitationHandler(caller)({
+    method: "elicitation/create",
+    params:
+      mode === "url"
+        ? { mode: "url", url: "https://example.test/authorize", elicitationId: "auth-1" }
+        : {
+            requestedSchema: {
+              type: "object",
+              properties: { color: { type: "string" } },
+              required: ["color"],
+            },
+          },
+    signal: new AbortController().signal,
+  });
+  await awaitGateBeforeSettlement(entered.promise, result, "Elicitation did not ask for input");
+  caller.current = !revoked;
+  answer.resolve();
+  if (revoked) {
+    await expect(result).rejects.toThrow("Elicitation caller closed");
+  } else {
+    await expect(result).resolves.toEqual({
+      action: "accept",
+      content: mode === "url" ? {} : { color: "blue" },
+    });
+  }
+});
+
 async function fixture() {
-  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   const client = new Client(
     { name: "test", version: "1" },
-    {
-      capabilities: prepareMcpCaps({ transport: clientTransport }, undefined, true),
-      versionNegotiation: { mode: "legacy" },
-    },
+    { capabilities: buildMcpClientCapabilities(true), versionNegotiation: { mode: "legacy" } },
   );
   const server = new Server({ name: "test", version: "1" }, { capabilities: { tools: {} } });
   const call = bindMcpClientElicitation(client);
+  const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await Promise.all([client.connect(clientTransport), server.connect(serverTransport)]);
   return {
     client,

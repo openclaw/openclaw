@@ -39,7 +39,7 @@ function samePullRequest(
 }
 
 /** The conversation as preparation and adoption compare it, including its skills snapshot. */
-export function preparePullRequestSession(
+function preparePullRequestSession(
   sessionKey: string,
   options: { agentId?: string; assertCurrent: () => void },
 ) {

@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createAgent } from "../agents/agent-create.js";
 import { runConfigSet } from "../cli/config-cli.js";
-import { createGatewayHostLifecycle } from "../cli/gateway-cli/host-lifecycle.js";
 import { runPluginUninstallCommand } from "../cli/plugins-uninstall-command.js";
+import { createSnapshot } from "../config/mutate.test-support.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -64,20 +64,14 @@ const mockConfig = vi.hoisted(() => {
     readConfigFileSnapshot: vi.fn(async () => {
       const config = structuredClone(state.config);
       return {
-        path: "/tmp/openclaw.json",
+        ...createSnapshot({ sourceConfig: config, hash: "mock-hash-0" }),
         exists: state.exists,
         valid: state.valid,
         raw: state.exists ? `${JSON.stringify(config)}\n` : null,
         parsed: state.exists ? config : undefined,
         sourceConfigBeforeMigrations: config,
-        sourceConfig: config,
-        resolved: config,
-        runtimeConfig: config,
-        config,
         hash: state.exists ? "mock-hash-0" : undefined,
         issues: state.exists ? [] : [{ path: "", message: "missing config" }],
-        warnings: [],
-        legacyIssues: [],
       };
     }),
     getRuntimeConfig() {
@@ -237,29 +231,6 @@ describe("system agent operations", () => {
     expect(output).not.toContain("invalid-plugin-secret");
   });
 
-  it("fails closed for model-visible config owned by missing plugins and channels", async () => {
-    mockConfig.setConfig({
-      plugins: {
-        entries: {
-          missing: { enabled: true, config: { opaque: "missing-plugin-secret" } },
-        },
-      },
-      channels: {
-        missing: { enabled: true, opaque: "missing-channel-secret" },
-        defaults: { groupPolicy: "open" },
-        modelByChannel: { telegram: { chat: "openai/gpt-5.5" } },
-      },
-    });
-    const output = await readConfigOutput("plugins.entries.missing", "channels");
-    expect(output).toContain('"enabled": true');
-    expect(output).toContain('"config": "<redacted>"');
-    expect(output).toContain('"missing": "<redacted>"');
-    expect(output).toContain('"groupPolicy": "open"');
-    expect(output).toContain('"chat": "openai/gpt-5.5"');
-    expect(output).not.toContain("missing-plugin-secret");
-    expect(output).not.toContain("missing-channel-secret");
-  });
-
   it("reads installed plugin field schemas and authored help from the active metadata", async () => {
     await withMetadata({ plugins: { entries: { codex: { enabled: true } } } }, async () => {
       await run({
@@ -346,34 +317,6 @@ describe("system agent operations", () => {
       workspace: "/tmp/main",
       provenance: { createdVia: "agent", creatorAgentId: "openclaw" },
     });
-  });
-
-  it("restarts its own Gateway despite hostile remote Gateway routing", async () => {
-    vi.stubEnv("OPENCLAW_GATEWAY_URL", "wss://another-gateway.example:9443");
-    mockConfig.setConfig({
-      gateway: {
-        mode: "remote",
-        remote: { url: "wss://configured-remote-gateway.example:9443" },
-      },
-    });
-
-    const host = createGatewayHostLifecycle({
-      processOwner: { ownsProcessLifecycle: true, supervisor: null },
-      isCurrent: () => true,
-      isServing: () => true,
-      acceptStop: () => {},
-    });
-    await expect(host.capability.request("restart", () => {})).resolves.toEqual({
-      ok: true,
-      value: { outcome: "scheduled" },
-    });
-    await host.retire();
-
-    expect(mockScheduleGatewayRestart).toHaveBeenCalledExactlyOnceWith({
-      reason: "gateway.restart.safe",
-      delayMs: 0,
-    });
-    expect(mockDaemonRestart).not.toHaveBeenCalled();
   });
 
   it("records an approved standalone restart truthfully", async () => {

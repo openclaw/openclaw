@@ -14,6 +14,7 @@ import {
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
 import { flushLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { controllerGate as gate } from "./controller-core.test-support.js";
 import { logSessionControllerPhase as logPhase } from "./session-controller.diagnostics.js";
 import {
   beginSessionEffect as beginEffect,
@@ -77,17 +78,9 @@ async function advance(ms: number) {
   await vi.advanceTimersByTimeAsync(ms);
 }
 
-function gate(onEnter?: () => void) {
-  const [entered, release] = [createDeferred(), createDeferred()];
-  return {
-    entered: entered.promise,
-    release: release.resolve,
-    run: async () => {
-      onEnter?.();
-      entered.resolve();
-      await release.promise;
-    },
-  };
+async function finish(releases: (() => void)[], ...work: Promise<unknown>[]) {
+  releases.forEach((release) => release());
+  await Promise.allSettled(work);
 }
 
 async function expectRecords(kind: RecordKind, rows: Record<string, unknown>[], unordered = false) {
@@ -135,12 +128,7 @@ function hold(
           assertAllowed: held.run,
           revalidateAllowed: () => {},
         }).then((lease) => lease.release())
-      : runMutation({
-          ...target,
-          run: held.run,
-          policy: "wait",
-          diagnosticLabel: "sharing",
-        }),
+      : runMutation({ ...target, run: held.run, policy: "wait", diagnosticLabel: "sharing" }),
   );
   return { ...held, promise };
 }
@@ -261,9 +249,7 @@ it("reports the current holder after turnover and preserves the waiter's trace a
     expectPrivate([row], target);
     expect(order).toEqual(["first", "second"]);
   } finally {
-    firstGate.release();
-    secondGate.release();
-    await Promise.allSettled([first, second, waiter]);
+    await finish([firstGate.release, secondGate.release], first, second, waiter);
   }
   expect(order).toEqual(["first", "second", "waiter"]);
   const completed = await expectRecords(
@@ -306,10 +292,12 @@ it("distinguishes mutation and lifecycle holders of the same normalized identity
     expect(waiting).toHaveLength(2);
     expect(new Set(waiting.map((record) => record.identityHash)).size).toBe(1);
   } finally {
-    lifecycle.release();
-    mutation.release();
-    waiter.release();
-    await Promise.allSettled([lifecycle.promise, mutation.promise, waiter.promise]);
+    await finish(
+      [lifecycle.release, mutation.release, waiter.release],
+      lifecycle.promise,
+      mutation.promise,
+      waiter.promise,
+    );
   }
 });
 
@@ -347,9 +335,7 @@ it("leaves the holder unknown while waiting on a turn instead of naming an unrel
       queueKind: "lifecycle",
     });
   } finally {
-    turn.complete();
-    unrelated.release();
-    await Promise.allSettled([unrelated.promise, waiter]);
+    await finish([() => turn.complete(), unrelated.release], unrelated.promise, waiter);
   }
 });
 
@@ -366,10 +352,7 @@ it.each([true, false])(
       run: async () => {
         outerStarted.resolve();
         await beginNested.promise;
-        await mutate(target, traces.second, {
-          diagnosticLabel: "delete",
-          run: nested.run,
-        });
+        await mutate(target, traces.second, { diagnosticLabel: "delete", run: nested.run });
         nestedDone.resolve();
         await releaseOuter.promise;
       },
@@ -391,11 +374,11 @@ it.each([true, false])(
       expect(row.holderTraceId).toBe(initiallyEnabled ? traces.first.traceId : undefined);
       expect(row.holderTraceId).not.toBe(traces.second.traceId);
     } finally {
-      beginNested.resolve();
-      nested.release();
-      releaseOuter.resolve();
-      waiter.release();
-      await Promise.allSettled([outer, waiter.promise]);
+      await finish(
+        [beginNested.resolve, nested.release, releaseOuter.resolve, waiter.release],
+        outer,
+        waiter.promise,
+      );
     }
   },
 );
@@ -424,10 +407,7 @@ it("measures prepare and finalize separately while successors wait for real fina
       holderPhase: "finalize",
     });
   } finally {
-    prepare.release();
-    finalize.release();
-    waiter.release();
-    await Promise.allSettled([first, waiter.promise]);
+    await finish([prepare.release, finalize.release, waiter.release], first, waiter.promise);
   }
   await expectRecords(
     "slow",
@@ -438,10 +418,7 @@ it("measures prepare and finalize separately while successors wait for real fina
         mutationQueueWaitMs: 0,
         lifecycleQueueWaitMs: 0,
       },
-      {
-        operationTraceId: traces.waiter.traceId,
-        mutationQueueWaitMs: 1_000,
-      },
+      { operationTraceId: traces.waiter.traceId, mutationQueueWaitMs: 1_000 },
     ],
     true,
   );
@@ -477,19 +454,11 @@ it("keeps canceled validator custody visible until the real callback returns", a
       queueKind: "lifecycle",
     });
   } finally {
-    validator.release();
-    waiter.release();
-    await Promise.allSettled([effect, waiter.promise]);
+    await finish([validator.release, waiter.release], effect, waiter.promise);
   }
   await expectRecords(
     "slow",
-    [
-      {
-        operationTraceId: traces.first.traceId,
-        signalAborted: true,
-        elapsedMs: 1_000,
-      },
-    ],
+    [{ operationTraceId: traces.first.traceId, signalAborted: true, elapsedMs: 1_000 }],
     true,
   );
 });
@@ -547,14 +516,11 @@ it("bounds holder, timer and warning state without inventing a holder", async ()
       ),
     ).toBe(true);
   } finally {
-    unobserved.release();
-    holders.forEach((holder) => holder.release());
-    waiters.forEach((waiter) => waiter.release());
-    await Promise.allSettled([
-      unobserved.promise,
-      ...holders.map((holder) => holder.promise),
-      ...waiters.map((waiter) => waiter.promise),
-    ]);
+    const held = [unobserved, ...holders, ...waiters];
+    await finish(
+      held.map((holder) => holder.release),
+      ...held.map((holder) => holder.promise),
+    );
   }
   const waiting = await records("waiting");
   const completed = await records("slow");

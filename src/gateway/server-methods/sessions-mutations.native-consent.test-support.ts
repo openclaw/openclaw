@@ -50,6 +50,17 @@ export function registerSessionNativeRuntimeConsentTests(support: {
   const { catalogSnapshot, client, context, patchSession, queueRuntimeSelection } = support;
   const selectModel = { model: `${nativeModel.provider}/${nativeModel.id}` };
   const harness = nativeHarness;
+  const nativeSelection = {
+    providerOverride: "anthropic",
+    modelOverride: "claude-sonnet-4-6",
+    agentRuntimeOverride: "claude-cli",
+  };
+  const readyRuntime = (validate: () => string | undefined = () => undefined) => ({
+    kind: "ready" as const,
+    runtimeId: harness.id,
+    harness,
+    validate,
+  });
   let nextConsentSession = 0;
   const nativeContext = () => {
     const requestContext = context();
@@ -83,20 +94,13 @@ export function registerSessionNativeRuntimeConsentTests(support: {
       lifecycleRevision: "native-consent-generation",
       updatedAt: 1,
       label: "Keep this chat",
-      providerOverride: nativeModel.provider,
-      modelOverride: nativeModel.id,
-      agentRuntimeOverride: harness.id,
+      ...nativeSelection,
       permissionMode: "workspace",
       ...entry,
     });
     const before = loadSessionEntry(scope);
     const requestContext = nativeContext();
-    support.prepareRuntime.mockResolvedValue({
-      kind: "ready",
-      runtimeId: harness.id,
-      harness,
-      validate: () => undefined,
-    });
+    support.prepareRuntime.mockResolvedValue(readyRuntime());
     const patch = {
       key: sessionKey,
       nativeRuntimeConsent: harness.id,
@@ -233,7 +237,7 @@ export function registerSessionNativeRuntimeConsentTests(support: {
     if (late) {
       support.prepareRuntime.mockImplementation(async () => {
         revoke();
-        return { kind: "ready", runtimeId: harness.id, harness, validate: () => undefined };
+        return readyRuntime();
       });
     } else {
       support.getConfig().agents!.entries = { main: { nativeRuntimeConsent: [harness.id] } };
@@ -279,29 +283,23 @@ export function registerSessionNativeRuntimeConsentTests(support: {
     support.getConfig().tools = { deny: ["browser"] };
     const sessionKey = `agent:main:model-only-${stale}`;
     const requestContext = nativeContext();
-    support.prepareRuntime.mockResolvedValue({
-      kind: "ready",
-      runtimeId: "claude-cli",
-      harness: nativeHarness,
-      validate: vi
-        .fn<() => string | undefined>()
-        .mockReturnValueOnce(undefined)
-        .mockReturnValue(stale ? "Native owner replaced" : undefined),
-    });
+    support.prepareRuntime.mockResolvedValue(
+      readyRuntime(
+        vi
+          .fn<() => string | undefined>()
+          .mockReturnValueOnce(undefined)
+          .mockReturnValue(stale ? "Native owner replaced" : undefined),
+      ),
+    );
     const create = createNative(sessionKey, requestContext);
     if (stale) {
       await expect(create).rejects.toThrow("Native owner replaced");
       expect(loadSessionEntry({ agentId: "main", sessionKey })).toBeUndefined();
     } else {
       await expect(create).resolves.toMatchObject({ ok: true });
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-        agentRuntimeOverride: "claude-cli",
-      });
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey })?.nativeRuntimeConsent,
-      ).toBeUndefined();
+      const stored = loadSessionEntry({ agentId: "main", sessionKey });
+      expect(stored).toMatchObject(nativeSelection);
+      expect(stored?.nativeRuntimeConsent).toBeUndefined();
     }
   });
 
@@ -331,14 +329,9 @@ export function registerSessionNativeRuntimeConsentTests(support: {
       );
       expect(response[0]).toBe(true);
       expect(queued).toMatchObject({ provider: "anthropic", model: "claude-sonnet-4-6" });
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
-        providerOverride: "anthropic",
-        modelOverride: "claude-sonnet-4-6",
-        agentRuntimeOverride: "claude-cli",
-      });
-      expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty(
-        "nativeRuntimeConsent",
-      );
+      const stored = loadSessionEntry({ agentId: "main", sessionKey });
+      expect(stored).toMatchObject(nativeSelection);
+      expect(stored).not.toHaveProperty("nativeRuntimeConsent");
     } finally {
       clearFollowupQueue(sessionKey);
     }
