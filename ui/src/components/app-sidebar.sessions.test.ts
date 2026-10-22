@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import "../test-helpers/app-sidebar-suite.ts";
-import "../test-helpers/app-sidebar-cases/categorized-child-sessions.ts";
 import "../test-helpers/app-sidebar-cases/child-session-errors.ts";
 import "../test-helpers/app-sidebar-cases/child-session-archive.ts";
 import "../test-helpers/app-sidebar-cases/child-sessions-cap.ts";

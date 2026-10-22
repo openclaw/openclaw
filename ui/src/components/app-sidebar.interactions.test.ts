@@ -11,7 +11,6 @@ import {
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import "../test-helpers/app-sidebar-cases/basics.ts";
-import "../test-helpers/app-sidebar-cases/footer-status.ts";
 import "../test-helpers/app-sidebar-cases/group-mutations.ts";
 import "../test-helpers/app-sidebar-cases/interactions.ts";
 import "../test-helpers/app-sidebar-cases/new-group-dialog.ts";

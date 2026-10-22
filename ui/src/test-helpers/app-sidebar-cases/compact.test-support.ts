@@ -59,12 +59,7 @@ export async function mountCatalog(
   } = {},
 ) {
   const gateway = catalogGateway(client, options.snapshot);
-  const mounted = await mountSidebar(
-    gateway.gateway,
-    options.sessions ?? createSessions("main", ["agent:main:main"]),
-    "panel",
-    options.agents,
-  );
+  const mounted = await mountSidebarFixture(gateway.gateway, options.sessions, options.agents);
   await startCatalog(mounted.sidebar);
   return { ...mounted, gateway };
 }
