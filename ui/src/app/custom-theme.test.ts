@@ -10,9 +10,7 @@ import type { ImportedCustomTheme } from "./custom-theme.ts";
 
 beforeEach(() => vi.stubGlobal("fetch", vi.fn()));
 
-afterEach(() => {
-  vi.unstubAllGlobals();
-});
+afterEach(() => vi.unstubAllGlobals());
 
 function createResponse(
   body = JSON.stringify(createTweakcnPayload()),
@@ -80,41 +78,27 @@ describe("custom theme import helpers", () => {
     expect(firstFetchCall()[0]).toBe(fetchUrl);
   });
 
-  it("rejects oversized tweakcn theme responses before parsing", async () => {
-    const response = createResponse("{}", {
-      headers: { "content-length": "200001" },
-    });
-    await expect(importTheme(response)).rejects.toThrow("too large");
+  it.each([
+    [{ headers: { "content-length": "200001" } }, "too large"],
+    [{ body: null }, "unreadable theme payload"],
+    [{ url: "https://example.com/r/themes/foreign-theme" }, "Unexpected redirect"],
+  ] as const)("rejects unreadable or untrusted responses (%j)", async (options, error) => {
+    const response = createResponse(undefined, options);
+    await expect(importTheme(response)).rejects.toThrow(error);
+    expect(response.text).not.toHaveBeenCalled();
   });
 
   it("rejects unsafe tweakcn content-length values before acquiring the body reader", async () => {
-    const cancel = vi.fn(() => Promise.resolve());
-    const getReader = vi.fn(() => {
+    const response = createResponse("{}", {
+      headers: { "content-length": "9007199254740993" },
+    });
+    const cancel = vi.spyOn(response.body!, "cancel");
+    const getReader = vi.spyOn(response.body!, "getReader").mockImplementation(() => {
       throw new Error("reader should not be acquired");
     });
-    const response = {
-      ok: true,
-      status: 200,
-      headers: new Headers({ "content-length": "9007199254740993" }),
-      body: { cancel, getReader },
-      url: "",
-    } as unknown as Response;
     await expect(importTheme(response)).rejects.toThrow("too large");
     expect(getReader).not.toHaveBeenCalled();
     expect(cancel).toHaveBeenCalledOnce();
-  });
-
-  it("rejects tweakcn theme responses without a bounded body stream", async () => {
-    const response = createResponse(undefined, { body: null });
-    await expect(importTheme(response)).rejects.toThrow("unreadable theme payload");
-    expect(response["text"]).not.toHaveBeenCalled();
-  });
-
-  it("rejects redirected tweakcn import responses", async () => {
-    const response = createResponse(undefined, {
-      url: "https://example.com/r/themes/cmlhfpjhw000004l4f4ax3m7z",
-    });
-    await expect(importTheme(response)).rejects.toThrow("Unexpected redirect");
   });
 
   it.each([
@@ -145,11 +129,7 @@ describe("custom theme import helpers", () => {
   it("parses stored imported themes and rejects malformed records", () => {
     const imported = createImportedTheme();
 
-    const parsed = parseImportedCustomTheme(imported);
-    if (!parsed) {
-      throw new Error("Expected imported custom theme to parse");
-    }
-    expect(parsed.themeId).toBe("cmlhfpjhw000004l4f4ax3m7z");
+    expect(parseImportedCustomTheme(imported)?.themeId).toBe(themeId);
     expect(parseImportedCustomTheme({ ...imported, themeId: "claude" })?.themeId).toBe("claude");
     expect(parseImportedCustomTheme({ ...imported, light: {} })).toBeNull();
   });
@@ -159,12 +139,12 @@ describe("custom theme import helpers", () => {
     const remove = vi.fn();
     const style = { id: "", textContent: "", remove } as unknown as HTMLStyleElement;
     const createElement = vi.fn(() => style);
-    const documentStub = {
+    const getElementById = vi.fn<() => HTMLStyleElement | null>(() => null);
+    vi.stubGlobal("document", {
       head: { appendChild },
       createElement,
-      getElementById: vi.fn(() => null),
-    } as unknown as Document;
-    vi.stubGlobal("document", documentStub);
+      getElementById,
+    });
 
     syncCustomThemeStyleTag(createImportedTheme());
 
@@ -172,11 +152,7 @@ describe("custom theme import helpers", () => {
     expect(style.id).toBe("openclaw-custom-theme");
     expect(style.textContent).toContain(':root[data-theme="custom"]');
 
-    vi.stubGlobal("document", {
-      head: documentStub.head,
-      createElement,
-      getElementById: vi.fn(() => style),
-    } as unknown as Document);
+    getElementById.mockReturnValue(style);
     syncCustomThemeStyleTag(null);
     expect(remove).toHaveBeenCalledOnce();
   });

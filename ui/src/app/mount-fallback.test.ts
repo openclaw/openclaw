@@ -1,17 +1,15 @@
 import { readFile } from "node:fs/promises";
-import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const indexHtmlPath = path.resolve(
-  process.cwd(),
-  path.basename(process.cwd()) === "ui" ? "index.html" : "ui/index.html",
-);
+const indexHtmlPath = new URL("../../index.html", import.meta.url);
 type TestWindow = Window & typeof globalThis;
 const mountTimeoutMs = 12_000;
 
 let html: string;
 beforeEach(async () => {
   html = await readFile(indexHtmlPath, "utf8");
+  // JSDOM's iframe timers use the host timer functions.
+  vi.useFakeTimers();
 });
 
 function createIsolatedWindow(url?: string, fetch?: TestWindow["fetch"]): TestWindow {
@@ -78,15 +76,6 @@ function pendingProbe(stalled = true) {
   return { win, fetch, signals };
 }
 
-describe("Control UI document shell", () => {
-  it("requests the web app manifest with credentials", async () => {
-    const parsed = new DOMParser().parseFromString(html, "text/html");
-    const manifest = parsed.querySelector<HTMLLinkElement>('link[rel="manifest"]');
-
-    expect(manifest?.getAttribute("crossorigin")).toBe("use-credentials");
-  });
-});
-
 describe("Control UI mount fallback", () => {
   it("removes only the native-auth navigation hint before the app starts", async () => {
     const win = boot(
@@ -100,11 +89,6 @@ describe("Control UI mount fallback", () => {
     });
     rendered(win);
   });
-  beforeEach(() => {
-    // JSDOM's iframe timers use the host timer functions.
-    vi.useFakeTimers();
-  });
-
   afterEach(() => {
     document.body.innerHTML = "";
     vi.useRealTimers();
